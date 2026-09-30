@@ -206,7 +206,7 @@ class FoxOneScraper(MvpdCooldownMixin, BaseScraper):
             'home_zip_code',
             'Home ZIP code',
             placeholder='10001',
-            help_text='Optional. Sets your home market for regional blackouts and which local FOX station shows up. Left blank, FOX guesses from this server\'s location.',
+            help_text='Optional. Picks your local FOX station and regional blackouts; left blank, FOX guesses from this server\'s location.',
         ),
         ConfigField(
             'signin_method',

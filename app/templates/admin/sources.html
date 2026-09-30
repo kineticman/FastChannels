@@ -412,7 +412,21 @@
       width: 100%; background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
       padding: 0.5rem 0.7rem; color: var(--text); font-size: 0.84rem; outline: none;
     }
-    .field input:focus { border-color: var(--focus-accent); }
+    .field select:not([multiple]) {
+      width: 100%; background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
+      padding: 0.5rem 0.7rem; color: var(--text); font-size: 0.84rem; outline: none;
+    }
+    .field input:focus, .field select:focus { border-color: var(--focus-accent); }
+    .signin-box {
+      margin-top: 0.9rem; padding: 0.8rem 0.9rem; border: 1px solid var(--border);
+      border-radius: 8px; background: var(--surface-2);
+    }
+    .signin-box-row { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; margin-top: 0.55rem; }
+    .signin-box-row .spacer { flex: 1; }
+    .subfields {
+      margin-top: 0.9rem; padding-left: 0.85rem; border-left: 2px solid var(--border);
+    }
+    .subfields .fields-grid { margin-top: 0.5rem; }
     .field .help { font-size: 0.76rem; color: var(--text-muted); margin-top: 0.32rem; line-height: 1.45; }
     .config-toggle-field {
       display: flex; align-items: center; justify-content: space-between; gap: 1rem;
@@ -3719,8 +3733,8 @@
       const lastSignIn = _epochAgo(info.last_signed_in_at);
       const errorAt = _epochAgo(info.signin_error_at);
       let statusHtml = lastSignIn
-        ? `<div class="help" style="color:var(--success-soft);">✓ Last signed in: ${lastSignIn}</div>`
-        : `<div class="help">Not signed in yet.</div>`;
+        ? `<div style="color:var(--success-soft);font-size:0.84rem;">✓ Signed in ${lastSignIn}</div>`
+        : `<div style="color:var(--text-muted);font-size:0.84rem;">Not signed in yet.</div>`;
       if (info.signin_error) {
         statusHtml += `<div class="help" style="color:var(--danger);">Last sign-in problem${errorAt ? ` (${errorAt})` : ''}: ${escapeHtml(info.signin_error)}</div>`;
       }
@@ -3729,37 +3743,38 @@
 
       return `
         <div class="config-title">FOX One Settings</div>
-        <div class="config-note">FOX One signs in through a TV provider. Most providers' login pages need a real browser, so after the first sign-in you may occasionally need to click "Sign in to FOX One" again.</div>
+        <div class="config-note">FOX One signs in with a TV provider account (cable, satellite or live-TV streaming), not a FOX One subscription email.</div>
         <div class="fields-grid">
-          ${input('home_zip_code')}
           <div class="field">
             <label for="cfg-${sourceId}-signin_method">${escapeHtml(byKey.signin_method?.label || 'Sign in with')}</label>
             <select id="cfg-${sourceId}-signin_method" data-key="signin_method"
                     onchange="foxOneMethodChanged(${sourceId}, this.value)">${methodOpts}</select>
             <div class="help" id="foxone-shared-note-${sourceId}" ${own ? 'style="display:none"' : ''}>${sharedNote}</div>
           </div>
+          ${input('home_zip_code')}
         </div>
-        <div id="foxone-own-${sourceId}" style="margin-top:0.75rem;${own ? '' : 'display:none'}">
-          <div class="config-note">A different TV-provider account used only for FOX One (still a cable/streaming TV login, not a FOX One subscription email). It signs in in its own browser profile, so it never mixes with the TV provider under Settings → TV Everywhere. The username and password only fill in the provider's sign-in page — you can leave them blank and type into the sign-in window instead.</div>
+        <div class="subfields" id="foxone-own-${sourceId}" ${own ? '' : 'style="display:none"'}>
           <div class="fields-grid">
-            <div class="field">
+            <div class="field field-full">
               <label for="cfg-${sourceId}-mvpd_provider_id">TV provider</label>
               <select id="cfg-${sourceId}-mvpd_provider_id" data-key="mvpd_provider_id">${providerOpts}</select>
             </div>
             ${input('mvpd_username')}
             ${input('mvpd_password', 'password')}
           </div>
+          <div class="config-note" style="margin:0.45rem 0 0">Used only for FOX One, in its own browser profile, so it never mixes with Settings → TV Everywhere. The username and password fill in the provider's page for "Sign in for me"; you can also leave them blank and type there.</div>
         </div>
-        <div class="fields-grid">
-          <div class="field field-full" style="margin:0.25rem 0 0.5rem;">
-            <button class="btn btn-run" type="button" onclick="openFoxOneLoginModal(${sourceId})">Sign in to FOX One</button>
-            <button class="btn btn-run" type="button" onclick="openFoxOneLinkModal(${sourceId})" title="Get a link (and QR code) to sign in to your TV provider on your own phone or computer">Sign in on my phone</button>
+        <div class="signin-box">
+          ${statusHtml}
+          ${blocked}
+          <div class="signin-box-row">
+            <button class="btn btn-run" type="button" onclick="openFoxOneLoginModal(${sourceId})" title="Opens the TV provider's real sign-in page in a window here">Sign in for me</button>
+            <button class="btn btn-run" type="button" onclick="openFoxOneLinkModal(${sourceId})" title="Get a link and QR code to sign in on your own phone or computer">Sign in on my phone</button>
+            <span class="spacer"></span>
             <button class="btn btn-cancel" type="button" onclick="foxOneClearSignin(${sourceId})" ${lastSignIn ? '' : 'disabled'}>Clear sign-in</button>
-            <div class="help">"Sign in to FOX One" saves these settings, then opens the TV provider's real sign-in page right here (solve a captcha yourself if one is shown). "Sign in on my phone" gives you a link and QR code to sign in on your own device instead.</div>
-            ${blocked}
-            <div id="foxone-clear-status-${sourceId}"></div>
-            ${statusHtml}
           </div>
+          <div class="config-note" style="margin:0.45rem 0 0">Either one saves these settings first. Sign-ins last a while, but FOX may occasionally ask you to sign in again.</div>
+          <div id="foxone-clear-status-${sourceId}"></div>
         </div>
         <div class="config-actions">
           <span class="config-status" id="config-status-${sourceId}"></span>
