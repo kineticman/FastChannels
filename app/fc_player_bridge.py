@@ -499,9 +499,11 @@ def _adb_state_for(address: str) -> tuple[str, str]:
     if state.returncode == 0 and (state.stdout or '').strip() == 'device':
         return 'device', 'Authorized — reachable over adb from FastChannels.'
     if 'unauthorized' in blob:
-        return 'unauthorized', ("Reachable, but this FastChannels container's adb key isn't "
-                                'approved on the device yet — trigger an action and approve the '
-                                'prompt on the TV.')
+        # Checking the state already ran `adb connect`, which is what puts the
+        # prompt on the TV, so there's nothing else to trigger.
+        return 'unauthorized', ("Reachable, but not approved yet. On the TV, tick \"Always allow "
+                                'from this computer" and choose Allow on the "Allow USB debugging?" '
+                                'prompt, then check again.')
     if 'offline' in blob:
         return 'offline', 'Connected but offline — power-cycle the device or re-approve adb.'
     return 'unreachable', ("No adb connection — check the IP, that the device is powered on, and "
