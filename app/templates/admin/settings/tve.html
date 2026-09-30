@@ -37,6 +37,10 @@
             ⚠️ Cox is being folded into Spectrum. If your Cox account has moved to Spectrum, use your Spectrum username/password: sign-in then happens on Spectrum's own login page in the browser window. If Spectrum says to select "Cox Spectrum" (error IDLI-4213), that's this Cox option — FastChannels switches to it automatically and retries. Discovery TVE can't use Spectrum's login in the browser, but "Sign in on my phone" works for it.
           </div>
           <div id="tve-google-signin-row" style="display:none;margin-top:0.5rem">
+            <div id="tve-google-phone-note" style="display:none;margin-bottom:0.4rem;color:var(--text-muted);font-size:0.78rem">
+              Not needed with "Sign in on my phone": you sign in to Google on your phone as part of each network's sign-in.
+              This button only helps "Sign in for me".
+            </div>
             <button class="btn btn-audit" type="button" onclick="openMvpdLoginModal('google', null)">Sign in with Google</button>
             <div style="margin-top:0.3rem;color:var(--text-muted);font-size:0.78rem">One-time sign-in directly with Google — independent of any single network. Once signed in, every YouTube TV network below can authorize silently without opening a browser again.</div>
             <div style="margin-top:0.3rem;color:var(--text-muted);font-size:0.78rem">🧪 Beta — YouTube TV as a provider is less thoroughly tested than Xfinity/Comcast and Cox; entitlement and session refresh can be less reliable.</div>

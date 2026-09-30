@@ -726,6 +726,7 @@ function updateTveProviderFields() {
   if (coxRetiringNotice) coxRetiringNotice.style.display = isCox ? '' : 'none';
   const googleRow = document.getElementById('tve-google-signin-row');
   if (googleRow) googleRow.style.display = provider.id === 'YouTubeTV' ? '' : 'none';
+  _updateTveGoogleRowForMethod();
   if (select) select.dataset.previousProvider = provider.id;
 }
 
@@ -2576,6 +2577,7 @@ async function saveTveSigninMethod(method) {
     const d = await r.json().catch(() => ({}));
     if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
     el.dataset.method = d.signin_method;
+    _updateTveGoogleRowForMethod();
     status.className = 'save-status ok';
     status.textContent = 'Saved';
   } catch (e) {
@@ -2585,6 +2587,14 @@ async function saveTveSigninMethod(method) {
     document.querySelectorAll('input[name="tve-signin-method"]').forEach(i => { i.checked = i.value === current; });
   }
   setTimeout(() => { status.textContent = ''; }, 2500);
+}
+
+// YouTube TV's "Sign in with Google" only helps the browser flow (it signs
+// our browser in to Google once); on a phone, Google's sign-in is part of
+// each network's link. Say so in phone mode instead of hiding the button.
+function _updateTveGoogleRowForMethod() {
+  const note = document.getElementById('tve-google-phone-note');
+  if (note) note.style.display = _tveSigninMethod() === 'phone' ? '' : 'none';
 }
 
 // Back to the browser view — called by the browser-mode openers.
