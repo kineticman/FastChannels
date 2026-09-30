@@ -802,9 +802,8 @@ def run_stream_audit(source_name: str):
             logger.info('[audit] %s: stream audit not enabled for this source, skipping', source_name)
             return
 
-        _required = getattr(scraper_cls, 'audit_requires_config', [])
-        _cfg = source.config or {}
-        _missing = [k for k in _required if not (_cfg.get(k) or '').strip()]
+        from app.scrapers.base import missing_audit_config
+        _missing = missing_audit_config(scraper_cls, source.config)
         if _missing:
             _skip_msg = f"Required config missing: {', '.join(_missing)}"
             logger.warning('[audit] %s: %s — skipping audit', source_name, _skip_msg)

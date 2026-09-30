@@ -24,29 +24,49 @@ Each linear network has one stable BAM channelId across all its airings, so a
 network is an ordinary 24/7 channel here; the airing is only needed to mint a
 playbackId, and the resulting manifest is the network's linear feed.
 
-Cable subscribers without an ESPN plan would need Adobe Pass (requestor
-`ESPN`), and ESPN+ events are event-based — neither is handled here yet.
 ESPN Unlimited that a TV provider adds to the MyDisney account works like a
 direct plan: the test account's Unlimited comes from DirecTV (isWholesaleUser,
 wholesaleUserProvider=DIRECTV_US) and plays here. An account whose only link
 is a TV-provider sign-in in the ESPN app gets not-entitled, since the BAM
-token carries no plan (forum report 2026-09-29, post #3292). If Adobe Pass is
-added, the same report found (tested via HENA) that the ESPN app's NFL
-Network doesn't play with a TV-provider login, so it stays tied to a plan.
+token carries no plan (forum report 2026-09-29, post #3292).
+
+That case is the second sign-in: the TV provider itself, through Adobe Pass v2
+(requestor `ESPN`). No headless browser — Adobe's authenticate link for a
+session opens in any browser (no token or cookies needed), so the user signs
+in to their provider on their own phone while a job polls /profiles/<mvpd>.
+The legacy regcode API 401s for ESPN's web software statement; v2 works.
+The statement comes from espn.com's watch bundle at sign-in time. Adobe ties
+the sign-in to the client that made it (~90 days), so the client's id and
+secret are kept and its ~6h access token refreshed, never re-registered.
+
+TV-provider playback uses an ANONYMOUS BAM token: /v7/playback/dtc-tve/
+ctr-regular with a tveAuth block (Adobe client token + device fingerprint +
+an RSS resource naming the network and airing); the Widevine license takes
+the same anonymous token. ESPN, ESPN2, SEC and ACC played this way
+(2026-09-29, ESPN2 on a Fire Stick). NFL Network and MLB Network answer 403
+adobe-pass-failed-authorization — they need an ESPN plan, which matches the
+same forum report (tested via HENA). With both sign-ins, the account is tried
+first and the TV provider covers what its plan doesn't.
+
+ESPN+ events are event-based and aren't handled here yet.
 """
 
 from __future__ import annotations
 
+import base64
 import json
 import logging
+import re
 import time
 import uuid
 from datetime import datetime, timedelta, timezone
+from urllib.parse import urljoin
+from xml.sax.saxutils import escape
 
 import requests
 
 from ..gracenote_map import resolve_gracenote
-from ..tve.adobe_pass import TVENotAuthorizedError
+from ..tve.adobe_pass import TVEAuthError, TVENotAuthorizedError, refresh_adobe_client_token
 from .base import BaseScraper, ChannelData, ConfigField, ProgramData
 
 logger = logging.getLogger(__name__)
@@ -88,14 +108,15 @@ _BAM_HEADERS = {
 # played with an Unlimited account and no cable login (confirmed 2026-09-26).
 # gracenote = the national HD feed's station ID (DirecTV's; Deportes supplied
 # by the maintainer). The community CSV (key = network id) can override.
+# tve = a TV-provider sign-in can play it (NFL/MLB Network need an ESPN plan).
 NETWORKS = {
-    'espn1': {'name': 'ESPN', 'gracenote': '32645'},
-    'espn2': {'name': 'ESPN2', 'gracenote': '45507'},
-    'espnu': {'name': 'ESPNU', 'gracenote': '60696'},
-    'espnews': {'name': 'ESPNews', 'gracenote': '59976'},
-    'espndeportes': {'name': 'ESPN Deportes', 'gracenote': '25595', 'language': 'es'},
-    'sec': {'name': 'SEC Network', 'gracenote': '89714'},
-    'acc': {'name': 'ACC Network', 'gracenote': '111871'},
+    'espn1': {'name': 'ESPN', 'gracenote': '32645', 'tve': True},
+    'espn2': {'name': 'ESPN2', 'gracenote': '45507', 'tve': True},
+    'espnu': {'name': 'ESPNU', 'gracenote': '60696', 'tve': True},
+    'espnews': {'name': 'ESPNews', 'gracenote': '59976', 'tve': True},
+    'espndeportes': {'name': 'ESPN Deportes', 'gracenote': '25595', 'language': 'es', 'tve': True},
+    'sec': {'name': 'SEC Network', 'gracenote': '89714', 'tve': True},
+    'acc': {'name': 'ACC Network', 'gracenote': '111871', 'tve': True},
     'nfl_network_domestic': {'name': 'NFL Network', 'gracenote': '45399'},
     'mlb_network': {'name': 'MLB Network', 'gracenote': '62081'},
 }
@@ -287,6 +308,186 @@ def run_activation(plate: dict) -> None:
         set_status('success')
 
 
+# ── TV-provider sign-in (Adobe Pass v2) ──────────────────────────────────────
+
+_ADOBE_BASE = 'https://sp.auth.adobe.com'
+_ADOBE_REQUESTOR = 'ESPN'
+_ADOBE_REDIRECT = 'https://www.espn.com/watch/'
+_ADOBE_TOKEN_MAX_AGE = 5 * 3600     # client tokens last ~6h; the sign-in ~90 days
+_ADOBE_SIGNIN_TIMEOUT = 30 * 60
+_ADOBE_POLL_SECONDS = 3.0
+_ADOBE_POLL_MAX_SECONDS = 15.0
+_ANON_TOKEN_TTL = 4 * 3600
+_TVE_PLAYBACK_URL = 'https://espn.playback.edge.bamgrid.com/v7/playback/dtc-tve/ctr-regular'
+ADOBE_STATUS_KEY = 'espn:adobe:status'
+
+# Source config keys the TV-provider sign-in owns (sign-out drops them all).
+ADOBE_CONFIG_KEYS = (
+    'adobe_mvpd', 'adobe_mvpd_name', 'adobe_client_id', 'adobe_client_secret',
+    'adobe_access_token', 'adobe_token_at', 'adobe_device_fingerprint',
+    'adobe_signed_in_at', 'adobe_expires_at',
+)
+
+
+def _jwt_claims(token: str) -> dict:
+    try:
+        part = token.split('.')[1]
+        return json.loads(base64.urlsafe_b64decode(part + '=' * (-len(part) % 4)))
+    except (IndexError, ValueError):
+        return {}
+
+
+def _software_statements() -> list[str]:
+    """Adobe software statements in espn.com's watch bundle, in page order.
+    The bundle carries more than one (checked 2026-09-29), so the caller
+    registers with each until Adobe accepts one."""
+    s = requests.Session()
+    s.headers.update({'User-Agent': _UA})
+    html = s.get(_ADOBE_REDIRECT, timeout=30).text
+    found: list[str] = []
+    for src in re.findall(r'src="([^"]+\.js[^"]*)"', html):
+        try:
+            text = s.get(urljoin(_ADOBE_REDIRECT, src), timeout=20).text
+        except requests.RequestException:
+            continue
+        for jwt in re.findall(r'eyJhbGciOiJSUzI1NiJ9\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+', text):
+            if jwt not in found and _jwt_claims(jwt).get('iss') == 'auth.adobe.com':
+                found.append(jwt)
+    return found
+
+
+def _adobe_client(device_fingerprint: str, creds: dict | None = None):
+    from .nbc_tve import AdobePassV2Client
+    client = AdobePassV2Client(_ADOBE_REQUESTOR, '', _ADOBE_REDIRECT, device_fingerprint, client_creds=creds)
+    client.session.headers.update({'Origin': 'https://www.espn.com', 'Referer': 'https://www.espn.com/'})
+    return client
+
+
+def start_adobe_signin(mso_id: str) -> dict:
+    """Register an Adobe client and open a sign-in session for `mso_id`.
+    Returns {code, url, mso_id, mso_name} plus the client details the waiting
+    job needs; `url` is the link the user opens on their own device."""
+    fingerprint = uuid.uuid4().hex
+    client = _adobe_client(fingerprint)
+    statements = _software_statements()
+    for statement in statements:
+        client.software_statement = statement
+        try:
+            client._register_client()
+            break
+        except TVEAuthError:
+            continue
+    else:
+        raise ESPNAuthError(f'Adobe Pass: none of the {len(statements)} settings found on espn.com '
+                            'were accepted — ESPN may have changed its site.')
+
+    mvpds: dict[str, str] = {}
+    try:
+        r = client.session.get(f'{_ADOBE_BASE}/api/v2/{_ADOBE_REQUESTOR}/configuration',
+                               headers=client._bearer_headers(), timeout=20)
+        if r.ok:
+            mvpds = {m.get('id'): m.get('displayName') or m.get('id')
+                     for m in ((r.json() or {}).get('requestor') or {}).get('mvpds') or []}
+    except (requests.RequestException, ValueError):
+        pass
+    if mvpds and mso_id not in mvpds:
+        raise ESPNAuthError(f'ESPN doesn\'t accept "{mso_id}" as a TV provider.')
+
+    try:
+        r = client._post(
+            f'{_ADOBE_BASE}/api/v2/{_ADOBE_REQUESTOR}/sessions',
+            data={'mvpd': mso_id, 'redirectUrl': _ADOBE_REDIRECT, 'domainName': 'espn.com'},
+            headers={**client._bearer_headers(), 'Content-Type': 'application/x-www-form-urlencoded'},
+        )
+        data = r.json()
+    except (TVEAuthError, ValueError) as exc:
+        raise ESPNAuthError(f'Adobe Pass: could not start a {mso_id} sign-in: {exc}') from exc
+    if data.get('actionName') != 'authenticate' or not data.get('url'):
+        raise ESPNAuthError(f'Adobe Pass: unexpected session reply ({data.get("actionName")}).')
+    return {
+        'code': data.get('code'), 'url': _ADOBE_BASE + data['url'],
+        'mso_id': mso_id, 'mso_name': mvpds.get(mso_id) or mso_id,
+        'client_id': client.client_id, 'client_secret': client.client_secret,
+        'access_token': client.access_token, 'device_fingerprint': fingerprint,
+    }
+
+
+def adobe_status(pending: dict, state: str, message: str = '') -> dict:
+    """The status blob the card polls — never carries the client secret."""
+    return {'state': state, 'message': message, 'code': pending.get('code'),
+            'url': pending.get('url'), 'mso_name': pending.get('mso_name')}
+
+
+def run_adobe_signin(pending: dict) -> None:
+    """RQ job: wait for the user to finish signing in to their TV provider at
+    pending['url'], then save the Adobe client onto the espn source. Quits
+    quietly once ADOBE_STATUS_KEY names a different code or is gone."""
+    import redis
+
+    from app.worker import flask_app
+    from ..extensions import db
+    from ..models import Source
+
+    with flask_app.app_context():
+        r = redis.from_url(flask_app.config['REDIS_URL'])
+        code, mso_id = pending['code'], pending['mso_id']
+
+        def superseded() -> bool:
+            raw = r.get(ADOBE_STATUS_KEY)
+            return not raw or json.loads(raw).get('code') != code
+
+        def set_status(state: str, message: str = '') -> None:
+            if not superseded():
+                r.setex(ADOBE_STATUS_KEY, _ADOBE_SIGNIN_TIMEOUT + 120,
+                        json.dumps(adobe_status(pending, state, message)))
+
+        client = _adobe_client(pending['device_fingerprint'], {
+            'client_id': pending['client_id'], 'client_secret': pending['client_secret'],
+            'access_token': pending['access_token']})
+        client._register_client()   # adopts the cached creds, no network
+        url = f'{_ADOBE_BASE}/api/v2/{_ADOBE_REQUESTOR}/profiles/{mso_id}'
+        deadline = time.monotonic() + _ADOBE_SIGNIN_TIMEOUT
+        delay = _ADOBE_POLL_SECONDS
+        profile = None
+        while time.monotonic() < deadline:
+            if superseded():
+                return
+            try:
+                resp = client.session.get(url, headers=client._bearer_headers(), timeout=20)
+                if resp.status_code == 401:
+                    client.refresh_access_token()
+                elif resp.ok:
+                    profile = ((resp.json() or {}).get('profiles') or {}).get(mso_id)
+                    if profile:
+                        break
+            except (requests.RequestException, ValueError, TVEAuthError) as exc:
+                logger.info('[espn] TV-provider sign-in poll failed, retrying: %s', exc)
+            time.sleep(delay)
+            delay = min(delay * 1.3, _ADOBE_POLL_MAX_SECONDS)
+        if not profile:
+            set_status('expired', 'The sign-in link expired before the sign-in finished.')
+            return
+
+        src = Source.query.filter_by(name='espn').first()
+        if not src:
+            set_status('error', 'ESPN source no longer exists.')
+            return
+        not_after = profile.get('notAfter')
+        cfg = dict(src.config or {})
+        cfg.update({
+            'adobe_mvpd': mso_id, 'adobe_mvpd_name': pending.get('mso_name') or mso_id,
+            'adobe_client_id': client.client_id, 'adobe_client_secret': client.client_secret,
+            'adobe_access_token': client.access_token, 'adobe_token_at': int(time.time()),
+            'adobe_device_fingerprint': pending['device_fingerprint'],
+            'adobe_signed_in_at': int(time.time()),
+            'adobe_expires_at': int(not_after / 1000) if isinstance(not_after, (int, float)) else None,
+        })
+        src.config = cfg
+        db.session.commit()
+        logger.info('[espn] signed in with TV provider %s', mso_id)
+        set_status('success')
+
+
 # ── scraper ──────────────────────────────────────────────────────────────────
 
 class ESPNScraper(BaseScraper):
@@ -301,7 +502,8 @@ class ESPNScraper(BaseScraper):
     # on not-entitled, which the audit records as NotAuthorized and re-checks
     # every run, so a later plan upgrade brings the channel back.
     stream_audit_enabled = True
-    audit_requires_config = ['refresh_token']
+    # Either sign-in (a tuple = any of these keys).
+    audit_requires_config = [('refresh_token', 'adobe_client_id')]
     license_url = _LICENSE_URL
     # Widevine-CENC on every channel — the HLS master looks clear to the generic
     # audit, so bridge from the first scrape rather than waiting for detection.
@@ -325,6 +527,28 @@ class ESPNScraper(BaseScraper):
         for key, value in token_config(_refresh_bam_token(self.config['refresh_token'])).items():
             self._update_config(key, value)
         return self.config['access_token']
+
+    def _anon_access_token(self) -> str:
+        """Anonymous BAM token for TV-provider playback and its license."""
+        if (self.config.get('anon_access_token')
+                and time.time() < float(self.config.get('anon_expires_at') or 0) - _ACCESS_REFRESH_MARGIN):
+            return self.config['anon_access_token']
+        self._update_config('anon_access_token', _anonymous_token())
+        self._update_config('anon_expires_at', int(time.time()) + _ANON_TOKEN_TTL)
+        return self.config['anon_access_token']
+
+    def _adobe_access_token(self, force: bool = False) -> str:
+        """Access token for the Adobe client the TV-provider sign-in belongs to.
+        Refreshed for the same client: a new one wouldn't carry the sign-in."""
+        if not force and time.time() - float(self.config.get('adobe_token_at') or 0) < _ADOBE_TOKEN_MAX_AGE:
+            return self.config['adobe_access_token']
+        try:
+            token = refresh_adobe_client_token(self.config['adobe_client_id'], self.config['adobe_client_secret'])
+        except TVEAuthError as exc:
+            raise ESPNAuthError(f'ESPN: could not renew the TV-provider sign-in: {exc}') from exc
+        self._update_config('adobe_access_token', token)
+        self._update_config('adobe_token_at', int(time.time()))
+        return token
 
     # ── channels / EPG ──
 
@@ -407,7 +631,7 @@ class ESPNScraper(BaseScraper):
 
     # ── playback ──
 
-    def _current_playback_id(self, network_id: str) -> str:
+    def _current_airing(self, network_id: str) -> dict:
         now = datetime.now(timezone.utc)
         today = now.date()
         fallback = None
@@ -418,17 +642,34 @@ class ESPNScraper(BaseScraper):
                 pid = (a.get('source') or {}).get('playbackId')
                 start, end = _parse_time(a.get('startDateTime')), _parse_time(a.get('endDateTime'))
                 if pid and start and end and start <= now < end:
-                    return pid
+                    return a
                 # Any airing's playbackId carries the network's stable channelId,
                 # so a neighbouring one still tunes the linear feed if the guide
                 # has a gap right now.
-                fallback = fallback or pid
+                if pid and not fallback:
+                    fallback = a
         if fallback:
             return fallback
         raise RuntimeError(f'ESPN: no airing found for {network_id}')
 
     def _mint(self, network_id: str) -> dict:
-        return self._mint_playback(self._current_playback_id(network_id), network_id)
+        airing = self._current_airing(network_id)
+        playback_id = airing['source']['playbackId']
+        tve = bool(self.config.get('adobe_client_id')) and NETWORKS.get(network_id, {}).get('tve')
+        if self.config.get('refresh_token'):
+            try:
+                return self._mint_playback(playback_id, network_id)
+            except (TVENotAuthorizedError, ESPNAuthError):
+                if not tve:
+                    raise
+                # The account's plan doesn't cover it (or its session lapsed):
+                # the TV-provider sign-in may still.
+        if tve:
+            return self._mint_tve(playback_id, airing, network_id)
+        if self.config.get('adobe_client_id'):
+            raise TVENotAuthorizedError(f'ESPN: {NETWORKS.get(network_id, {}).get("name", network_id)} '
+                                        'needs an ESPN plan; a TV-provider sign-in doesn\'t include it')
+        raise ESPNAuthError('ESPN is not signed in — use the Sources page to sign in.')
 
     # Groundwork for ESPN+ events played on behalf of an external lane planner
     # (FruitDeepLinks / ESPN4CC4C): nothing routes here yet. The stream is
@@ -458,9 +699,9 @@ class ESPNScraper(BaseScraper):
         entry = (config.get('espn_streams') or {}).get(channel_id or '') or {}
         return entry.get('license_url') or cls.license_url
 
-    def _mint_playback(self, playback_id: str, label: str) -> dict:
-        access_token = self._access_token()
-        body = {
+    @staticmethod
+    def _playback_body(playback_id: str) -> dict:
+        return {
             'playbackId': playback_id,
             'playback': {
                 'attributes': {
@@ -479,25 +720,63 @@ class ESPNScraper(BaseScraper):
             'allowedCreatives': [],
             'targeting': {'device': {'deviceOsName': 'windows', 'playerFrameworkName': 'HiVE-DMP'}},
         }
-        r = self.session.post(_PLAYBACK_URL, json=body, timeout=20, headers={
-            **_BAM_HEADERS, 'Authorization': 'Bearer ' + access_token,
+
+    def _post_playback(self, url: str, body: dict, token: str) -> requests.Response:
+        return self.session.post(url, json=body, timeout=20, headers={
+            **_BAM_HEADERS, 'Authorization': 'Bearer ' + token,
             'Content-Type': 'application/json', 'Accept': 'application/vnd.media-service+json',
             'x-dss-edge-accept': 'vnd.dss.edge+json; version=2', 'x-dss-feature-filtering': 'true',
             'x-request-id': str(uuid.uuid4()),
         })
-        data = r.json() if r.content else {}
+
+    def _mint_playback(self, playback_id: str, label: str) -> dict:
+        access_token = self._access_token()
+        r = self._post_playback(_PLAYBACK_URL, self._playback_body(playback_id), access_token)
+        return self._parse_playback(r, label, 'account')
+
+    def _mint_tve(self, playback_id: str, airing: dict, label: str) -> dict:
+        """Mint through the TV-provider sign-in: anonymous BAM token + tveAuth."""
+        anon = self._anon_access_token()
+        resource = ("<rss version='2.0' xmlns:media='http://search.yahoo.com/mrss/'><channel>"
+                    f"<title>{escape(label)}</title><item><title>{escape(airing.get('name') or '')}</title>"
+                    f"<guid>{escape(airing.get('id') or '')}</guid>"
+                    "<media:rating scheme='urn:v-chip'></media:rating></item></channel></rss>")
+        fingerprint = base64.b64encode(self.config['adobe_device_fingerprint'].encode()).decode()
+        for attempt in range(2):
+            body = {**self._playback_body(playback_id), 'tveAuth': {
+                'tokenType': 'ADOBE', 'resource': resource,
+                'accessToken': self._adobe_access_token(force=attempt > 0),
+                'deviceIdentifier': 'fingerprint ' + fingerprint, 'mvpd': self.config['adobe_mvpd'],
+            }}
+            r = self._post_playback(_TVE_PLAYBACK_URL, body, anon)
+            # 401 adobe-pass-unauthorized: usually just a stale client token.
+            rejected = r.status_code == 401 and _error(r).get('code') == 'adobe-pass-unauthorized'
+            if not rejected:
+                break
+        if rejected:
+            raise ESPNAuthError('ESPN: the TV-provider sign-in was rejected — sign in again on the Sources page.')
+        return self._parse_playback(r, label, 'anon')
+
+    def _parse_playback(self, r: requests.Response, label: str, license_auth: str) -> dict:
+        try:
+            data = r.json() if r.content else {}
+        except ValueError:
+            data = {}
         stream = data.get('stream') or {}
         sources = sorted(stream.get('sources') or [], key=lambda s: s.get('priority') or 99)
         manifest_url = next((((s.get('slide') or s.get('complete')) or {}).get('url')
                              for s in sources if (s.get('slide') or s.get('complete'))), None)
         ctx = (stream.get('playbackRights') or {}).get('playbackRightsContext')
         err = (data.get('errors') or [{}])[0]
-        if r.status_code == 403 and err.get('code') == 'not-entitled':
+        if r.status_code == 403 and err.get('code') in ('not-entitled', 'adobe-pass-failed-authorization'):
             raise TVENotAuthorizedError(f'ESPN: this account is not entitled to {NETWORKS.get(label, {}).get("name", label)}')
         if not r.ok or not manifest_url or not ctx:
             raise RuntimeError(f'ESPN playback {label}: HTTP {r.status_code} '
                                f'{err.get("code", "")} {err.get("description", "")}'.strip())
-        return {'manifest_url': manifest_url, 'rights_ctx': ctx, 'cached_at': time.time()}
+        # The license must carry the same kind of BAM token the stream was
+        # minted with; prepare_license_request reads the current one.
+        return {'manifest_url': manifest_url, 'rights_ctx': ctx, 'license_auth': license_auth,
+                'cached_at': time.time()}
 
     def resolve(self, raw_url: str) -> str:
         network_id = raw_url.removeprefix(SCHEME)
@@ -524,12 +803,20 @@ class ESPNScraper(BaseScraper):
     ) -> tuple[bytes, dict]:
         # No "Bearer " prefix on this call, unlike every other BAM request.
         headers = {**_BAM_HEADERS, 'Content-Type': 'application/octet-stream'}
-        if config.get('access_token'):
-            headers['Authorization'] = config['access_token']
         entry = (config.get('espn_streams') or {}).get(channel_id or '') or {}
+        token = config.get('anon_access_token' if entry.get('license_auth') == 'anon' else 'access_token')
+        if token:
+            headers['Authorization'] = token
         if entry.get('rights_ctx'):
             headers['x-playback-rights-authorization'] = entry['rights_ctx']
         return challenge, headers
+
+
+def _error(r: requests.Response) -> dict:
+    try:
+        return ((r.json() or {}).get('errors') or [{}])[0]
+    except (ValueError, AttributeError):
+        return {}
 
 
 def _parse_time(value: str | None) -> datetime | None:

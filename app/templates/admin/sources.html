@@ -3342,14 +3342,17 @@
 
     function renderEspnConfig(sourceId, schema, values, cfg) {
       const info = (cfg && cfg.espn) || {};
+      const tveProvider = info.tve_mvpd_name || info.settings_mvpd_name;
       return `
         <div class="config-title">ESPN Settings</div>
         <div class="config-note">
-          Sign in the same way as ESPN's TV apps: get a code here, then enter it at espn.com/activate
-          on any device where you're signed in to your ESPN (MyDisney) account. Needs ESPN Unlimited on
-          that account, bought directly or included by your TV provider; plain ESPN+ doesn't include
-          the linear networks. A TV-provider sign-in inside the ESPN app, without ESPN Unlimited on the
-          account, isn't supported yet. Playback goes through the DRM bridge.
+          Two ways to sign in; use either or both. Playback goes through the DRM bridge.
+        </div>
+        <div class="config-subtitle" style="margin-top:.75rem;font-weight:600">ESPN account</div>
+        <div class="config-note">
+          For ESPN Unlimited on your ESPN (MyDisney) account, bought directly or included by your TV
+          provider. Get a code here, then enter it at espn.com/activate on any device where you're
+          signed in. Plain ESPN+ doesn't include the linear networks.
         </div>
         <div class="amazon-autologin-panel" id="espn-login-${sourceId}">
           <div class="amazon-autologin-header">
@@ -3361,7 +3364,89 @@
           <span class="amazon-status-text" id="espn-status-${sourceId}">
             ${info.signed_in ? `<span style="color:var(--success-soft)">&#10003; Signed in</span>` : ''}
           </span>
+        </div>
+        <div class="config-subtitle" style="margin-top:1rem;font-weight:600">TV provider</div>
+        <div class="config-note">
+          For cable or streaming TV subscribers without ESPN Unlimited: plays whichever of ESPN, ESPN2,
+          ESPNU, ESPNews, ESPN Deportes, SEC Network and ACC Network your TV package includes (the
+          stream audit switches off the rest). NFL Network and MLB Network need an ESPN plan. Get a sign-in link here, open it on your phone or computer, and sign in to your
+          TV provider there.
+          ${info.settings_mvpd_id ? '' : `<br>Choose your TV provider under
+            <a href="/admin/settings#settings-card-tve">Settings → TV Everywhere</a> first.`}
+        </div>
+        <div class="amazon-autologin-panel" id="espn-tve-${sourceId}">
+          <div class="amazon-autologin-header">
+            <button class="btn btn-run" type="button" id="espn-tve-btn-${sourceId}"
+                    ${info.settings_mvpd_id ? '' : 'disabled'}
+                    onclick="espnTveStart(${sourceId})">${info.tve_signed_in ? 'Sign in again' : 'Get sign-in link'}</button>
+            ${info.tve_signed_in ? `<button class="btn btn-cancel btn-sm" type="button"
+                    onclick="espnTveClear(${sourceId})">Sign out</button>` : ''}
+          </div>
+          <span class="amazon-status-text" id="espn-tve-status-${sourceId}">
+            ${info.tve_signed_in
+              ? `<span style="color:var(--success-soft)">&#10003; Signed in with ${escapeHtml(tveProvider || 'your TV provider')}</span>`
+              : (tveProvider ? `<span style="color:var(--text-muted)">Provider: ${escapeHtml(tveProvider)}</span>` : '')}
+          </span>
         </div>`;
+    }
+
+    async function espnTveStart(sourceId) {
+      const btn      = document.getElementById(`espn-tve-btn-${sourceId}`);
+      const statusEl = document.getElementById(`espn-tve-status-${sourceId}`);
+      btn.disabled = true;
+      statusEl.innerHTML = '<span style="color:var(--text-muted)">Getting a sign-in link…</span>';
+      try {
+        const r = await fetch(`/api/sources/${sourceId}/espn-tve/start`, { method: 'POST' });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok) {
+          statusEl.innerHTML = `<span style="color:var(--danger-soft)">${escapeHtml(d.error || 'Could not get a sign-in link.')}</span>`;
+          return;
+        }
+        espnTveShowLink(statusEl, d);
+        espnTvePoll(sourceId);
+      } catch (e) {
+        statusEl.innerHTML = '<span style="color:var(--danger-soft)">Network error getting a sign-in link.</span>';
+      } finally {
+        btn.disabled = false;
+      }
+    }
+
+    function espnTveShowLink(statusEl, d) {
+      const url = d.url || '';
+      statusEl.innerHTML = `
+        Open this link on your phone or computer and sign in to ${escapeHtml(d.mso_name || 'your TV provider')}:<br>
+        <a href="${escapeHtml(url)}" target="_blank" rel="noopener" style="word-break:break-all;font-family:monospace">${escapeHtml(url)}</a>
+        <button class="btn btn-sm" type="button" onclick="navigator.clipboard && navigator.clipboard.writeText(${escapeHtml(JSON.stringify(url))}); this.textContent='Copied'">Copy link</button>
+        <br><span style="color:var(--text-muted)">Waiting for the sign-in… (the link works for about 30 minutes)</span>`;
+    }
+
+    function espnTvePoll(sourceId) {
+      clearTimeout(_espnPollTimers[`tve-${sourceId}`]);
+      _espnPollTimers[`tve-${sourceId}`] = setTimeout(async () => {
+        const statusEl = document.getElementById(`espn-tve-status-${sourceId}`);
+        if (!statusEl) return;  // panel closed
+        let d = {};
+        try {
+          d = await (await fetch(`/api/sources/${sourceId}/espn-tve/state`)).json();
+        } catch (e) {
+          espnTvePoll(sourceId);
+          return;
+        }
+        if (d.state === 'waiting') {
+          espnTvePoll(sourceId);
+        } else if (d.state === 'success') {
+          statusEl.innerHTML = '<span style="color:var(--success-soft)">&#10003; Signed in</span>';
+          setTimeout(() => loadSourceConfig(sourceId, 'espn'), 600);
+        } else if (d.state === 'expired' || d.state === 'error') {
+          statusEl.innerHTML = `<span style="color:var(--danger-soft)">${escapeHtml(d.message || 'Sign-in failed.')} Get a new link to try again.</span>`;
+        }
+      }, 3000);
+    }
+
+    async function espnTveClear(sourceId) {
+      if (!confirm('Sign out of your TV provider for ESPN? Channels that need it stop playing until you sign in again.')) return;
+      await fetch(`/api/sources/${sourceId}/espn-tve-auth`, { method: 'DELETE' }).catch(() => {});
+      loadSourceConfig(sourceId, 'espn');
     }
 
     async function espnStartActivation(sourceId) {
