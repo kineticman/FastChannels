@@ -1379,6 +1379,27 @@ def _watch_spectrum_auth_results(page, log_tag: str) -> None:
         pass
 
 
+def _spectrum_outage_code(page) -> str | None:
+    """Spectrum's own login backend failing, not a rejection: password/auth
+    answering HTTP 5xx. Seen in a forum report (post #3292, 2026-09-29):
+    500 result_code 3107, rendered as "We're sorry, we are experiencing
+    technical issues ... IDID-3107", lasting a couple of hours and cleared
+    on its own. Nothing on our side or the user's fixes it, and resubmitting
+    only adds password attempts toward the reCAPTCHA reject (IDID-4000), so
+    callers stop with a "try later" message instead of retrying or waiting
+    out their timeout. Returns the code for the message, else None."""
+    auth = getattr(page, '_fc_spectrum_auth_result', None) or {}
+    status = auth.get('status') or 0
+    if status < 500:
+        return None
+    return f"IDID-{auth['code']}" if auth.get('code') else f'HTTP {status}'
+
+
+def _spectrum_outage_message(label: str, code: str) -> str:
+    return (f'{label}: Spectrum\'s sign-in is having technical issues on their side ({code}, '
+            f'"we are experiencing technical issues"). Try again in an hour or two.')
+
+
 def _retry_spectrum_after_thmx_reject(page, label: str) -> bool:
     """Reload Spectrum's login page and resubmit the saved credentials once.
 
@@ -1456,6 +1477,11 @@ def _spectrum_signin_error_message(page, label: str, mso_id: str | None = None) 
     if last_auth.get('status') == 403 and 'THMX' in (last_auth.get('name') or '') \
             and _retry_spectrum_after_thmx_reject(page, label):
         return None
+    outage = _spectrum_outage_code(page)
+    if outage:
+        logger.warning('[mvpd-login] %s: Spectrum sign-in backend error (%s) — stopping, not retrying',
+                       label, outage)
+        return _spectrum_outage_message(label, outage)
     url = _safe_page_url(page)
     code = _detect_spectrum_feature_unavailable(page)
     if code and not (code == 'IDID-unknown' and 'spectrum.net' not in url):

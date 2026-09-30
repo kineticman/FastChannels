@@ -60,6 +60,8 @@ from app.worker import flask_app
 from app.tve.browser_login.common import (
     _watch_spectrum_auth_results,
     _detect_spectrum_feature_unavailable,
+    _spectrum_outage_code,
+    _spectrum_outage_message,
     _safe_page_url,
     _relay_input_and_screenshot,
     _set_expected_spectrum_username,
@@ -782,6 +784,12 @@ def run_spectrum_signin():
                                 _debug_log('page navigated: %s -> %s', last_seen_url, current_url)
                                 last_seen_url = current_url
                             last_debug_url_log = now
+                    outage = _spectrum_outage_code(page)
+                    if outage:
+                        logger.warning('[spectrum-signin] Spectrum sign-in backend error (%s) — '
+                                       'stopping, not retrying', outage)
+                        set_status('error', _spectrum_outage_message('Spectrum', outage))
+                        return
                     idid_code = _detect_spectrum_feature_unavailable(page)
                     if idid_code:
                         # Confirmed live 2026-09-23: Spectrum's own "Feature
