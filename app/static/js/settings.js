@@ -2657,6 +2657,7 @@ function skipTveLink() {
 function _tveLinkRunOne(family, requestorId, status, onSteps) {
   return new Promise((resolve) => {
     let runId = null;
+    let startedAt = 0;
     const poll = () => {
       if (!_mvpdLoginActive) { resolve({ ok: false, message: 'cancelled' }); return; }
       fetch(`${MVPD_LOGIN_FAMILIES.link.base}/state`)
@@ -2675,6 +2676,10 @@ function _tveLinkRunOne(family, requestorId, status, onSteps) {
             _showTveLink(label, d.url);
           } else if (d.state === 'waiting') {
             status.textContent = `Checking ${label}…`;
+          } else if (d.state === 'starting' && Date.now() - startedAt > 10000) {
+            // One background worker runs these; another job (a scrape's
+            // follow-up, a guide refresh) can hold it for a bit.
+            status.textContent = 'Waiting for the background worker to pick this up…';
           }
           if (d.state === 'success' || d.state === 'error') {
             document.getElementById('mvpd-link-panel').style.display = 'none';
@@ -2694,6 +2699,7 @@ function _tveLinkRunOne(family, requestorId, status, onSteps) {
       .then(({ ok, status: httpStatus, d }) => {
         if (!ok) { resolve({ ok: false, message: (d && d.error) || `HTTP ${httpStatus}` }); return; }
         runId = d.run_id;
+        startedAt = Date.now();
         poll();
       })
       .catch(() => resolve({ ok: false, message: 'could not reach the server to start sign-in' }));

@@ -244,6 +244,18 @@ class _Amcn:
         return str(response.url), {'channel': channel, 'client': client, 'code': code, 'headers': headers}
 
     def poll(self, ctx):
+        from ..scrapers.amcn_tve import ADOBE_BASE
+        # Check for the profile quietly first: _adobe_decision_finish logs a
+        # warning with the whole response whenever the profile is empty,
+        # which is just "not signed in yet" for as long as the user takes.
+        try:
+            r = ctx['client'].session.get(
+                f"{ADOBE_BASE}/api/v2/{ctx['channel'].requestor_id}/profiles/code/{ctx['code']}",
+                headers={**ctx['headers'], 'Content-Type': 'application/json'}, timeout=30)
+            if not r.ok or not ((r.json() or {}).get('profiles') or {}).get(self.mso_id):
+                return None
+        except (requests.RequestException, ValueError):
+            return None
         try:
             return self.scraper._adobe_decision_finish(
                 ctx['client'].session, ctx['channel'], ctx['code'], self.mso_id, ctx['headers'])
