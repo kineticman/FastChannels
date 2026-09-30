@@ -1,14 +1,14 @@
 <!-- FastChannels Player Fire TV / Android TV controls -->
 <div class="modal-overlay" id="fc-player-device-controls-modal" onclick="if(event.target===this)closeFcPlayerDeviceControls()">
   <div class="modal-box" style="max-width:600px;max-height:85vh;overflow-y:auto">
-    <h3 style="margin:0 0 0.35rem">Fire TV Device Controls</h3>
-    <p style="color:var(--text-subtle);margin:0 0 1rem;line-height:1.5">Live ADB status and display settings for the device FastChannels Player controls.</p>
+    <h3 style="margin:0 0 0.35rem">Device Controls: <span id="fc-player-device-controls-title"></span></h3>
+    <p style="color:var(--text-subtle);margin:0 0 1rem;line-height:1.5">Live ADB status and display settings for this FastChannels Player device.</p>
     <div id="fc-player-device-controls-status" style="margin-bottom:1rem;line-height:1.55">Loading&hellip;</div>
     <div style="display:flex;gap:0.5rem;flex-wrap:wrap;margin-bottom:1.25rem">
       <button class="btn btn-secondary" onclick="wakeFcPlayerDevice()">Wake now</button>
       <button class="btn btn-primary" onclick="applyFcPlayerHeadlessPreset()">Apply headless preset</button>
       <button class="btn btn-secondary" id="fc-player-device-restore" onclick="restoreFcPlayerDeviceSettings()" disabled>Restore previous settings</button>
-      <button class="btn btn-primary" id="fc-player-device-update" onclick="installFcPlayer()" hidden>Update FastChannels Player</button>
+      <button class="btn btn-primary" id="fc-player-device-update" onclick="updateFcPlayerFromDeviceControls()" hidden>Update FastChannels Player</button>
     </div>
     <details>
       <summary style="cursor:pointer;font-weight:600">Advanced display settings</summary>

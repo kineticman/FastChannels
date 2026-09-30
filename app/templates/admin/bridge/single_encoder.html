@@ -11,18 +11,6 @@
   </div>
   <div class="source-body open">
     <div class="help" style="color:var(--warning-soft)">Best for one concurrent stream. The FastChannels Player companion app runs on a Fire TV or Android TV device; its HDMI output is captured back into your DVR through a fixed encoder URL.</div>
-    <div class="toggle-row">
-      <div class="toggle-row-text">
-        <div class="toggle-row-label">Enable hardware capture</div>
-        <div class="toggle-row-help">Enables the FastChannels Player companion app used by HDMI Capture and ah4c Capture. It only applies to verified DRM sources: Sling, NBCUniversal TVE, PBS, Amazon Prime (free), DirecTV Stream, Vidaa, Philo, Roku, and Fubo.</div>
-      </div>
-      <div class="toggle-row-control">
-        <label class="toggle-switch">
-          <input type="checkbox" id="fc-player-enabled" {% if fc_player_enabled %}checked{% endif %} onchange="saveFcPlayerToggles()">
-          <span class="toggle-slider"></span>
-        </label>
-      </div>
-    </div>
     <div class="fields-grid" style="max-width:480px">
       <div class="field field-full">
         <label for="fc-player-ip">HDMI Capture device IP</label>
@@ -32,11 +20,9 @@
     </div>
     <div class="field-actions">
       <span class="save-status" id="fc-player-status"></span>
-      <button class="btn btn-secondary" onclick="installFcPlayer()">Install FastChannels Player</button>
-      <button class="btn btn-secondary" onclick="openFcPlayerDeviceControls()">Fire TV Device Controls</button>
       <button class="btn btn-primary" onclick="saveFcPlayerDeviceSettings()">Save</button>
     </div>
-    <div class="help">Install pushes the app over ADB; it requires the device IP to be saved and ADB debugging enabled on the device.</div>
+    <div class="help">Install or update the player and change its sleep settings from the FastChannels Player devices card above; this device is listed there once saved.</div>
 
     <div class="toggle-row" style="margin-top:12px">
       <div class="toggle-row-text">
@@ -44,13 +30,6 @@
         <div class="toggle-row-help">For HDMI Capture, stop playback after about five minutes without Channels DVR activity or a FastChannels <code>/watch</code> heartbeat. Leave this off for third-party clients pointed straight at an M3U. ah4c stops its assigned device through its own disconnect hook.</div>
       </div>
       <div class="toggle-row-control"><label class="toggle-switch"><input type="checkbox" id="fc-player-idle-stop-enabled" {% if fc_player_idle_stop_enabled %}checked{% endif %} onchange="saveFcPlayerIdleStopToggle()"><span class="toggle-slider"></span></label></div>
-    </div>
-    <div class="toggle-row" style="margin-top:12px">
-      <div class="toggle-row-text">
-        <div class="toggle-row-label">Show captions when available</div>
-        <div class="toggle-row-help">Renders an English subtitle/CC track when available. Takes effect on the next tune.</div>
-      </div>
-      <div class="toggle-row-control"><label class="toggle-switch"><input type="checkbox" id="fc-player-captions-enabled" {% if fc_player_captions_enabled %}checked{% endif %} onchange="saveFcPlayerCaptionsToggle()"><span class="toggle-slider"></span></label></div>
     </div>
 
     <div class="bridge-method-config">

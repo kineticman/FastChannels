@@ -714,12 +714,14 @@ def _adb_shell(address: str, *command: str, timeout: int = _ADB_TIMEOUT) -> tupl
     return result.returncode == 0, text
 
 
-def _device_connected() -> tuple[bool, str, str | None]:
-    """Connect to the configured device and return its adb address if usable."""
-    try:
-        address = _adb_address()
-    except FcPlayerNotConfigured:
-        return False, 'Set a Fire TV / Android TV IP address first.', None
+def _device_connected(address: str | None = None) -> tuple[bool, str, str | None]:
+    """Connect to `address` (the configured HDMI Capture device when omitted)
+    and return its adb address if usable."""
+    if not address:
+        try:
+            address = _adb_address()
+        except FcPlayerNotConfigured:
+            return False, 'Set a Fire TV / Android TV IP address first.', None
     try:
         subprocess.run(['adb', 'connect', address], capture_output=True,
                        timeout=_ADB_TIMEOUT, check=False)
@@ -753,14 +755,14 @@ _PLAYER_SESSION_RE = re.compile(
 )
 
 
-def device_controls_status() -> dict:
+def device_controls_status(address: str | None = None) -> dict:
     """Return lightweight, user-facing diagnostics for the Device Controls modal.
 
     This deliberately uses only standard adb shell commands: it works for both
     Fire OS and Android TV, and does not require the bridge feature toggle itself
     to be enabled.
     """
-    connected, message, address = _device_connected()
+    connected, message, address = _device_connected(address)
     if not connected:
         return {'ok': False, 'message': message}
 
@@ -803,8 +805,8 @@ def device_controls_status() -> dict:
     return result
 
 
-def wake_device() -> tuple[bool, str]:
-    connected, message, address = _device_connected()
+def wake_device(address: str | None = None) -> tuple[bool, str]:
+    connected, message, address = _device_connected(address)
     if not connected:
         return False, message
     ok, output = _adb_shell(address, 'input', 'keyevent', 'KEYCODE_WAKEUP')
@@ -812,13 +814,13 @@ def wake_device() -> tuple[bool, str]:
 
 
 def set_device_power_settings(*, stay_awake: bool, screen_off_timeout: int,
-                              sleep_timeout: int) -> tuple[bool, str, dict | None]:
+                              sleep_timeout: int, address: str | None = None) -> tuple[bool, str, dict | None]:
     """Apply explicit display settings and return the values they replaced."""
     if (not isinstance(screen_off_timeout, int) or not isinstance(sleep_timeout, int)
             or screen_off_timeout < 0 or sleep_timeout < 0
             or screen_off_timeout > _NEVER_TIMEOUT_MS or sleep_timeout > _NEVER_TIMEOUT_MS):
         return False, 'Invalid display timeout.', None
-    connected, message, address = _device_connected()
+    connected, message, address = _device_connected(address)
     if not connected:
         return False, message, None
     previous = {
@@ -838,16 +840,17 @@ def set_device_power_settings(*, stay_awake: bool, screen_off_timeout: int,
     return True, 'Device power settings saved.', previous
 
 
-def headless_power_settings() -> tuple[bool, str, dict | None]:
+def headless_power_settings(address: str | None = None) -> tuple[bool, str, dict | None]:
     """Apply the safe headless preset: stay awake on power plus max timeouts."""
     return set_device_power_settings(
         stay_awake=True,
         screen_off_timeout=_NEVER_TIMEOUT_MS,
         sleep_timeout=_NEVER_TIMEOUT_MS,
+        address=address,
     )
 
 
-def restore_device_power_settings(previous: dict) -> tuple[bool, str]:
+def restore_device_power_settings(previous: dict, address: str | None = None) -> tuple[bool, str]:
     """Restore the exact settings snapshot saved before a headless preset."""
     if not isinstance(previous, dict):
         return False, 'No saved device settings are available to restore.'
@@ -856,7 +859,7 @@ def restore_device_power_settings(previous: dict) -> tuple[bool, str]:
         ('system', 'screen_off_timeout', previous.get('screen_off_timeout')),
         ('secure', 'sleep_timeout', previous.get('sleep_timeout')),
     )
-    connected, message, address = _device_connected()
+    connected, message, address = _device_connected(address)
     if not connected:
         return False, message
     for namespace, name, value in mapping:

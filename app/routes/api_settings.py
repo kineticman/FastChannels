@@ -639,12 +639,12 @@ def bridge_healthcheck():
             device_status = fc_player_bridge.device_controls_status()
             if not device_status.get('player_installed'):
                 add('warn', 'FastChannels Player version', 'FastChannels Player is not installed on this device.',
-                    'Click Install FastChannels Player above.')
+                    'Install it from the FastChannels Player devices card above.')
             elif device_status.get('update_available'):
                 add('warn', 'FastChannels Player version',
                     f"Installed {device_status.get('player_version')}, but {device_status.get('bundled_version')} "
                     'is bundled in this FastChannels image.',
-                    'Open Fire TV Device Controls and click Update FastChannels Player.')
+                    'Click Update on this device in the FastChannels Player devices card above.')
             elif device_status.get('bundled_version_code') is None:
                 add('skip', 'FastChannels Player version',
                     f"Installed {device_status.get('player_version')}. "
@@ -884,29 +884,77 @@ def install_fc_player_on_device():
     return jsonify({'ok': ok, 'message': message})
 
 
-def _remember_fc_player_device_settings(previous: dict | None) -> None:
-    """Save the pre-headless snapshot only once, so Restore stays meaningful."""
-    if not previous:
-        return
+def _device_controls_target():
+    """The device a Device Controls call acts on: `address` from the query
+    string or JSON body (any device the devices card lists), else the HDMI
+    Capture device. Returns (address or None, error response or None)."""
+    from .. import bridge_devices
+    raw = request.args.get('address') or (request.get_json(silent=True) or {}).get('address')
+    if not raw:
+        return None, None
+    address = bridge_devices.normalize_address(raw)
+    if not address or not bridge_devices.is_known(address):
+        return None, (jsonify({'ok': False, 'message': 'Unknown device.'}), 404)
+    return address, None
+
+
+def _device_settings_backup_key(address: str | None) -> str | None:
+    from .. import bridge_devices
+    return bridge_devices.normalize_address(address or AppSettings.get().effective_fc_player_bridge_adb_address())
+
+
+def _device_settings_backups() -> dict:
+    """Pre-headless power snapshots keyed by device address. Before Device
+    Controls worked per device this held one bare snapshot, which belongs to
+    the HDMI Capture device."""
+    try:
+        data = json.loads(AppSettings.get().fc_player_device_settings_backup or '')
+    except (TypeError, ValueError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    if {'stay_on_while_powered', 'screen_off_timeout', 'sleep_timeout'} & data.keys():
+        key = _device_settings_backup_key(None)
+        return {key: data} if key else {}
+    return data
+
+
+def _save_device_settings_backups(backups: dict) -> None:
     row = AppSettings.get()
-    if not row.fc_player_device_settings_backup:
-        row.fc_player_device_settings_backup = json.dumps(previous, separators=(',', ':'))
-        db.session.commit()
+    row.fc_player_device_settings_backup = json.dumps(backups, separators=(',', ':')) if backups else None
+    db.session.commit()
+
+
+def _remember_fc_player_device_settings(address: str | None, previous: dict | None) -> None:
+    """Save each device's pre-headless snapshot only once, so Restore stays meaningful."""
+    key = _device_settings_backup_key(address)
+    if not previous or not key:
+        return
+    backups = _device_settings_backups()
+    if key not in backups:
+        backups[key] = previous
+        _save_device_settings_backups(backups)
 
 
 @settings_bp.route('/settings/fc-player/device-controls', methods=['GET'])
 def fc_player_device_controls_status():
-    """Live ADB diagnostics for the settings page's Fire TV Device Controls modal."""
+    """Live ADB diagnostics for the Bridge page's Device Controls modal."""
     from .. import fc_player_bridge
-    status = fc_player_bridge.device_controls_status()
-    status['restore_available'] = bool(AppSettings.get().fc_player_device_settings_backup)
+    address, error = _device_controls_target()
+    if error:
+        return error
+    status = fc_player_bridge.device_controls_status(address)
+    status['restore_available'] = _device_settings_backup_key(address) in _device_settings_backups()
     return jsonify(status), (200 if status.get('ok') else 400)
 
 
 @settings_bp.route('/settings/fc-player/device-controls/wake', methods=['POST'])
 def wake_fc_player_device():
     from .. import fc_player_bridge
-    ok, message = fc_player_bridge.wake_device()
+    address, error = _device_controls_target()
+    if error:
+        return error
+    ok, message = fc_player_bridge.wake_device(address)
     return jsonify({'ok': ok, 'message': message}), (200 if ok else 400)
 
 
@@ -914,6 +962,9 @@ def wake_fc_player_device():
 def save_fc_player_device_power():
     """Apply explicit power settings, retaining the first pre-change snapshot."""
     from .. import fc_player_bridge
+    address, error = _device_controls_target()
+    if error:
+        return error
     data = request.get_json(silent=True) or {}
     stay_awake = data.get('stay_awake')
     screen_off_timeout = data.get('screen_off_timeout')
@@ -924,33 +975,37 @@ def save_fc_player_device_power():
         stay_awake=stay_awake,
         screen_off_timeout=screen_off_timeout,
         sleep_timeout=sleep_timeout,
+        address=address,
     )
     if ok:
-        _remember_fc_player_device_settings(previous)
+        _remember_fc_player_device_settings(address, previous)
     return jsonify({'ok': ok, 'message': message}), (200 if ok else 400)
 
 
 @settings_bp.route('/settings/fc-player/device-controls/headless', methods=['POST'])
 def apply_fc_player_headless_preset():
     from .. import fc_player_bridge
-    ok, message, previous = fc_player_bridge.headless_power_settings()
+    address, error = _device_controls_target()
+    if error:
+        return error
+    ok, message, previous = fc_player_bridge.headless_power_settings(address)
     if ok:
-        _remember_fc_player_device_settings(previous)
+        _remember_fc_player_device_settings(address, previous)
     return jsonify({'ok': ok, 'message': message}), (200 if ok else 400)
 
 
 @settings_bp.route('/settings/fc-player/device-controls/restore', methods=['POST'])
 def restore_fc_player_device_power():
     from .. import fc_player_bridge
-    row = AppSettings.get()
-    try:
-        previous = json.loads(row.fc_player_device_settings_backup or '')
-    except (TypeError, ValueError):
-        previous = None
-    ok, message = fc_player_bridge.restore_device_power_settings(previous)
+    address, error = _device_controls_target()
+    if error:
+        return error
+    key = _device_settings_backup_key(address)
+    backups = _device_settings_backups()
+    ok, message = fc_player_bridge.restore_device_power_settings(backups.get(key), address)
     if ok:
-        row.fc_player_device_settings_backup = None
-        db.session.commit()
+        backups.pop(key, None)
+        _save_device_settings_backups(backups)
     return jsonify({'ok': ok, 'message': message}), (200 if ok else 400)
 
 

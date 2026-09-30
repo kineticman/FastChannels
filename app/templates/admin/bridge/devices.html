@@ -10,7 +10,27 @@
     </div>
   </div>
   <div class="source-body open">
-    <div class="fc-devices-toolbar">
+    <div class="toggle-row">
+      <div class="toggle-row-text">
+        <div class="toggle-row-label">Enable hardware capture</div>
+        <div class="toggle-row-help">Enables the FastChannels Player companion app used by HDMI Capture and ah4c Capture on every device. It only applies to verified DRM sources: Sling, NBCUniversal TVE, PBS, Amazon Prime (free), DirecTV Stream, Vidaa, Philo, Roku, and Fubo.</div>
+      </div>
+      <div class="toggle-row-control">
+        <label class="toggle-switch">
+          <input type="checkbox" id="fc-player-enabled" {% if fc_player_enabled %}checked{% endif %} onchange="saveFcPlayerToggles()">
+          <span class="toggle-slider"></span>
+        </label>
+      </div>
+    </div>
+    <div class="toggle-row" style="margin-top:12px">
+      <div class="toggle-row-text">
+        <div class="toggle-row-label">Show captions when available</div>
+        <div class="toggle-row-help">Renders an English subtitle/CC track when available. Takes effect on the next tune.</div>
+      </div>
+      <div class="toggle-row-control"><label class="toggle-switch"><input type="checkbox" id="fc-player-captions-enabled" {% if fc_player_captions_enabled %}checked{% endif %} onchange="saveFcPlayerCaptionsToggle()"><span class="toggle-slider"></span></label></div>
+    </div>
+    <div class="save-status" id="fc-player-toggles-status" style="display:block"></div>
+    <div class="fc-devices-toolbar" style="margin-top:12px">
       <div class="help" id="fc-devices-bundled" style="margin:0"></div>
       <div class="fc-devices-toolbar-actions">
         <button class="btn btn-secondary" onclick="toggleBridgeDeviceAdd()">Add device</button>

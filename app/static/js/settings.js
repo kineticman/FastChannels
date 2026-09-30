@@ -215,7 +215,7 @@ async function savePrismcastSettings() {
 
 async function saveFcPlayerToggles() {
   const enabled = document.getElementById('fc-player-enabled').checked;
-  const ok = await saveSettings({fc_player_enabled: enabled}, 'fc-player-status');
+  const ok = await saveSettings({fc_player_enabled: enabled}, 'fc-player-toggles-status');
   // "Enable" affects whether the feed-URL guidance block (server-rendered) shows.
   if (ok) setTimeout(() => location.reload(), 700);
 }
@@ -345,7 +345,7 @@ async function saveFcPlayerIdleStopToggle() {
 
 async function saveFcPlayerCaptionsToggle() {
   const enabled = document.getElementById('fc-player-captions-enabled').checked;
-  await saveSettings({fc_player_captions_enabled: enabled}, 'fc-player-status');
+  await saveSettings({fc_player_captions_enabled: enabled}, 'fc-player-toggles-status');
 }
 
 async function saveFcPlayerAh4cToggle() {
@@ -493,24 +493,6 @@ async function checkAh4cTuners() {
   }
 }
 
-async function installFcPlayer() {
-  const statusEl = document.getElementById('fc-player-status');
-  statusEl.textContent = 'Installing…';
-  statusEl.className = 'save-status';
-  try {
-    const resp = await fetch('/api/settings/fc-player/install', {method: 'POST'});
-    const data = await resp.json();
-    statusEl.textContent = data.message || (data.ok ? 'Installed.' : 'Install failed.');
-    statusEl.className = 'save-status ' + (data.ok ? 'ok' : 'error');
-    if (data.ok && document.getElementById('fc-player-device-controls-modal').classList.contains('open')) {
-      await refreshFcPlayerDeviceControls();
-    }
-  } catch (e) {
-    statusEl.textContent = 'Install failed.';
-    statusEl.className = 'save-status error';
-  }
-}
-
 const FC_PLAYER_NEVER_TIMEOUT = 2147483647;
 
 function fcPlayerTimeoutLabel(value) {
@@ -544,9 +526,19 @@ function closeFcPlayerDeviceControls() {
   document.getElementById('fc-player-device-controls-modal').classList.remove('open');
 }
 
-async function openFcPlayerDeviceControls() {
+// The device the Device Controls modal acts on — opened from a tile in the
+// FastChannels Player devices card (bridge_devices.js).
+let fcPlayerDeviceAddress = null;
+
+async function openFcPlayerDeviceControls(address, title) {
+  fcPlayerDeviceAddress = address;
+  document.getElementById('fc-player-device-controls-title').textContent = title || address;
   document.getElementById('fc-player-device-controls-modal').classList.add('open');
   await refreshFcPlayerDeviceControls();
+}
+
+async function updateFcPlayerFromDeviceControls() {
+  if (await _bdInstall(fcPlayerDeviceAddress)) await refreshFcPlayerDeviceControls();
 }
 
 async function refreshFcPlayerDeviceControls() {
@@ -554,7 +546,7 @@ async function refreshFcPlayerDeviceControls() {
   body.textContent = 'Loading…';
   fcPlayerDeviceMessage('');
   try {
-    const resp = await fetch('/api/settings/fc-player/device-controls');
+    const resp = await fetch('/api/settings/fc-player/device-controls?address=' + encodeURIComponent(fcPlayerDeviceAddress));
     const data = await resp.json();
     if (!data.ok) {
       body.textContent = data.message || 'Could not read device status.';
@@ -590,11 +582,11 @@ async function refreshFcPlayerDeviceControls() {
 
 async function fcPlayerDevicePost(path, payload = null) {
   try {
-    const options = {method: 'POST', headers: {}};
-    if (payload !== null) {
-      options.headers['Content-Type'] = 'application/json';
-      options.body = JSON.stringify(payload);
-    }
+    const options = {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({...(payload || {}), address: fcPlayerDeviceAddress}),
+    };
     const resp = await fetch(`/api/settings/fc-player/device-controls/${path}`, options);
     const data = await resp.json();
     fcPlayerDeviceMessage(data.message || (data.ok ? 'Saved.' : 'Action failed.'), !!data.ok);

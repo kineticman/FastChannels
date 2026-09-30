@@ -130,6 +130,9 @@ function _bdRender(address) {
       actions.push(`<button class="btn btn-secondary btn-sm" data-act="install" ${entry.busy ? 'disabled' : ''}>Reinstall</button>`);
     }
   }
+  if (probe && probe.authorized) {
+    actions.push('<button class="btn btn-secondary btn-sm" data-act="controls">Device controls</button>');
+  }
   actions.push('<button class="btn btn-secondary btn-sm" data-act="rename">Rename</button>');
   if (info.remembered && !info.roles.length) {
     actions.push('<button class="btn btn-secondary btn-sm" data-act="forget">Forget</button>');
@@ -322,6 +325,7 @@ document.addEventListener('click', (event) => {
   const address = btn.closest('.fc-device').dataset.address;
   const act = btn.dataset.act;
   if (act === 'install') _bdInstall(address);
+  else if (act === 'controls') openFcPlayerDeviceControls(address, _bdTitle(bridgeDevices.get(address)));
   else if (act === 'rename') _bdRename(address);
   else if (act === 'forget') _bdForget(address);
 });
