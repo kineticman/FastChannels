@@ -230,7 +230,7 @@
     }
 
     function initPlayer() {
-      emitWatchDebug('init', { mode: PLAYBACK_MODE, type: STREAM_TYPE, has_license: Boolean(LICENSE_URL), max_height: MAX_HEIGHT });
+      emitWatchDebug('init', { viewport: `${window.innerWidth}x${window.innerHeight}`, mode: PLAYBACK_MODE, type: STREAM_TYPE, has_license: Boolean(LICENSE_URL), max_height: MAX_HEIGHT });
       if (PLAYBACK_MODE === 'unsupported' || !PLAY_URL) return;
       _shaka = FCPlayer.load({
         video,
@@ -263,7 +263,7 @@
     function activateFullscreen() {
       if (PLAYBACK_MODE === 'unsupported' || !PLAY_URL) return;
       if (overlay.classList.contains('hidden')) return;
-      emitWatchDebug('activate-fullscreen');
+      emitWatchDebug('activate-fullscreen', { viewport: `${window.innerWidth}x${window.innerHeight}`, screen: `${screen.width}x${screen.height}`, visibility: document.visibilityState, activation: Boolean(navigator.userActivation && navigator.userActivation.isActive) });
       video.muted = false;
       video.volume = 1.0;
       // This click is the user gesture that lets an unmuted element play, so it
@@ -271,8 +271,9 @@
       // fc_player.js), and without this the video sits paused on one frame.
       video.play().catch((e) => emitWatchDebug('play-rejected', { msg: String(e && e.message || e) }));
       const el = document.documentElement;
-      if (el.requestFullscreen) el.requestFullscreen();
-      else if (el.webkitRequestFullscreen) el.webkitRequestFullscreen();
+      if (el.requestFullscreen) {
+        el.requestFullscreen().catch((e) => emitWatchDebug('fullscreen-rejected', { msg: String(e && e.message || e) }));
+      } else if (el.webkitRequestFullscreen) el.webkitRequestFullscreen();
       overlay.classList.add('hidden');
     }
 
@@ -286,7 +287,19 @@
     });
 
     document.addEventListener('fullscreenchange', () => {
+      emitWatchDebug('fullscreenchange', {
+        active: Boolean(document.fullscreenElement),
+        viewport: `${window.innerWidth}x${window.innerHeight}`,
+        screen: `${screen.width}x${screen.height}`,
+        visibility: document.visibilityState,
+      });
       if (!document.fullscreenElement) overlay.classList.remove('hidden');
+    });
+    window.addEventListener('resize', () => {
+      emitWatchDebug('resize', { viewport: `${window.innerWidth}x${window.innerHeight}`, fullscreen: Boolean(document.fullscreenElement) });
+    });
+    document.addEventListener('visibilitychange', () => {
+      emitWatchDebug('visibilitychange', { visibility: document.visibilityState, fullscreen: Boolean(document.fullscreenElement) });
     });
 
     let captionsOn = false;
@@ -316,7 +329,16 @@
           error_message: video.error && video.error.message,
         }));
       });
-      setInterval(() => emitWatchDebug('heartbeat'), 5000);
+      setInterval(() => {
+        const rc = video.getBoundingClientRect();
+        emitWatchDebug('heartbeat', {
+          viewport: `${window.innerWidth}x${window.innerHeight}`,
+          video_box: `${Math.round(rc.width)}x${Math.round(rc.height)}@${Math.round(rc.left)},${Math.round(rc.top)}`,
+          fullscreen: Boolean(document.fullscreenElement),
+          overlay_hidden: overlay.classList.contains('hidden'),
+          visibility: document.visibilityState,
+        });
+      }, 5000);
 
       // With the debug build loaded above, shaka.log is real — turn it up and
       // mirror warnings/errors to the server. Shaka's own diagnostics (why it
