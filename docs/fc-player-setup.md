@@ -351,7 +351,11 @@ build or maintain on the ah4c side.
    dedicated one) per tuner, and either `ENCODERn_URL` or `CMDn`/`CMDn_DEVICE`
    for your capture hardware. `IPADDRESS` should be set to wherever ah4c
    itself is reachable from — the same address you'll enter in FastChannels
-   below. Multiple tuners each with their own `TUNERn_IP` and encoder are
+   below. Also set `CHANNELSIP` to your Channels DVR server (e.g.
+   `192.168.1.20:8089`); newer ah4c versions open a setup wizard instead of
+   their home page until it's set. Those versions also want a persistent
+   folder mounted at `/opt/config` for their settings, and warn in the log
+   until one is added. Multiple tuners each with their own `TUNERn_IP` and encoder are
    supported: ah4c allocates a tuner per tune and the exported `bmitune.sh`
    passes that tuner's device to FastChannels, so concurrent tunes each trigger
    their own streaming stick.
