@@ -721,6 +721,13 @@ def _try_autofill_credentials(
                 continue
 
             pw_field.press('Enter')
+            try:
+                # A "Sign in with another account" click that led here is
+                # handled — the Spectrum loop must not re-run autofill for
+                # it and submit the password a second time.
+                page._fc_spectrum_changed_account = False
+            except Exception:  # noqa: BLE001
+                pass
             logger.info('[%s] autofill: filled and submitted credentials for %s (attempt %d)', log_tag, _mask_username(username), fill_attempt)
             return True
 
@@ -1086,7 +1093,7 @@ def _set_expected_spectrum_username(page, username: str) -> None:
     """Record which Spectrum account this sign-in is FOR, so
     _autofill_spectrum_sso_confirm can tell a "You're signing in as: <user>"
     screen for the right account (click Continue) from one for some other
-    account (click Change account instead). Stored on the browser context,
+    account (click "Sign in with another account" instead). Stored on the browser context,
     not the page, so popups opened during the same login inherit it. A
     blank username leaves any earlier value alone. Never raises."""
     username = (username or '').strip()
@@ -1103,7 +1110,7 @@ def _spectrum_identity_matches(shown: str, expected: str) -> bool:
     shows and the configured username. Case-insensitive; tolerates the
     screen showing only an email's local part (or the reverse) and a masked
     value like "jo****82". Deliberately loose: a false MISMATCH only costs
-    a click on Change account followed by a normal credential autofill,
+    a click on "Sign in with another account" followed by a normal credential autofill,
     while a false MATCH signs in as the wrong account."""
     shown = shown.strip().strip('"\'.,').lower()
     expected = expected.strip().lower()
@@ -1120,7 +1127,65 @@ def _spectrum_identity_matches(shown: str, expected: str) -> bool:
     return False
 
 
-_SPECTRUM_SIGNING_IN_AS_RE = _re.compile(r"signing in as:?\s*(\S+)", _re.IGNORECASE)
+# Spectrum's AutoAccessInterstitialComponent (id.spectrum.net's JS bundle,
+# read 2026-09-29) has two copy sets: "You're signing in as:" (new design)
+# and "You're signed in as:" (old design), plus Spanish. Only a fallback —
+# the account itself is read from its own element first.
+_SPECTRUM_SIGNING_IN_AS_RE = _re.compile(
+    r"(?:signing in as|signed in as|iniciando sesi[oó]n como|iniciaste sesi[oó]n como):?\s*(\S+)",
+    _re.IGNORECASE)
+_SPECTRUM_SSO_USERNAME_SELECTOR = '[data-e2etest="idm-aai-username-text"]'
+# The component's own fallback text while the account name hasn't loaded.
+_SPECTRUM_SSO_USERNAME_PLACEHOLDER = 'spectrum user'
+_SPECTRUM_SSO_PLACEHOLDER_WAIT_SECONDS = 5.0
+# Real control: <kite-link data-e2etest="idm-aai-signin-another-account-link"
+# routerLink="/login">Sign in with another account</kite-link>, rendering a
+# plain <a href="/login">. The older wording guesses are kept as fallbacks.
+_SPECTRUM_OTHER_ACCOUNT_SELECTOR = '[data-e2etest="idm-aai-signin-another-account-link"]'
+_SPECTRUM_OTHER_ACCOUNT_RE = _re.compile(
+    r'another account|different account|change account|switch account|not you|otra cuenta', _re.I)
+_EMAIL_LIKE_RE = _re.compile(r'[\w.+-]+@[\w-]+(?:\.[\w-]+)+')
+
+
+def _spectrum_sso_shown_account(page) -> str:
+    """The account a Spectrum signing-in-as screen names, or '' if this
+    isn't that screen."""
+    try:
+        loc = page.locator(_SPECTRUM_SSO_USERNAME_SELECTOR)
+        if loc.count() > 0:
+            return (loc.first.inner_text(timeout=1000) or '').strip()
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        body_text = page.inner_text('body', timeout=1000)
+    except Exception:  # noqa: BLE001
+        return ''
+    match = _SPECTRUM_SIGNING_IN_AS_RE.search(body_text or '')
+    return match.group(1) if match else ''
+
+
+def _log_spectrum_sso_controls_snapshot(page, shown: str, expected: str) -> None:
+    """Debug-only: log the clickable elements on a signing-in-as screen
+    where no "Sign in with another account" control was found, so a user's
+    rerun with debug logging on shows what the real control looks like.
+    Account identifiers are masked — this log is mirrored into the UI
+    activity feed that users screenshot publicly. Never raises."""
+    try:
+        if not _browser_debug_enabled():
+            return
+        items = page.evaluate("""() => Array.from(document.querySelectorAll(
+                'a, button, [role=button], [role=link], kite-link, kite-button, [data-e2etest]'))
+            .slice(0, 40).map(el => el.outerHTML.replace(/\\s+/g, ' ').slice(0, 300))""")
+        text = '\n'.join(items or [])
+        text = _EMAIL_LIKE_RE.sub(lambda m: _mask_username(m.group(0)), text)
+        # Then bare (non-email) usernames — masked emails no longer contain them.
+        for ident in {shown.split('@')[0], expected.split('@')[0]}:
+            if len(ident) > 2:
+                text = _re.sub(_re.escape(ident), _mask_username(ident), text, flags=_re.I)
+        logger.info('[mvpd-login][debug] Spectrum SSO-confirm clickable elements url=%s:\n%s',
+                    _safe_page_url(page), text)
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def _autofill_spectrum_sso_confirm(page) -> bool:
@@ -1164,24 +1229,31 @@ def _autofill_spectrum_sso_confirm(page) -> bool:
         # account that has TV, got this screen for their home internet
         # account — Spectrum identifies them by their home network, so
         # clearing cookies doesn't make it go away — and this helper clicked
-        # Continue before they could reach "Change account", signing them in
+        # Continue before they could reach "Change account" (the real control
+        # says "Sign in with another account"), signing them in
         # as the internet-only account. When we know which account this
         # login is for and the screen names a different one, click Change
         # account instead so the normal credential autofill takes over.
         expected = getattr(page.context, '_fc_expected_spectrum_username', '') or ''
         if expected:
-            try:
-                body_text = page.inner_text('body', timeout=1000)
-            except Exception:  # noqa: BLE001
-                body_text = ''
-            match = _SPECTRUM_SIGNING_IN_AS_RE.search(body_text or '')
-            shown = match.group(1) if match else ''
+            shown = _spectrum_sso_shown_account(page)
+            if shown.lower() == _SPECTRUM_SSO_USERNAME_PLACEHOLDER:
+                # Account name not loaded yet — never Continue on a screen we
+                # can't check. Wait a few ticks; if it never loads, treat it
+                # as someone else's account (another-account costs a
+                # password login, Continue could sign in as the wrong one).
+                first_seen = page.evaluate(
+                    "() => window.__fcSpectrumPlaceholderSince || (window.__fcSpectrumPlaceholderSince = Date.now())")
+                if page.evaluate("s => Date.now() - s", first_seen) < _SPECTRUM_SSO_PLACEHOLDER_WAIT_SECONDS * 1000:
+                    return False
             if shown and not _spectrum_identity_matches(shown, expected):
                 change = None
                 for locator in (
-                    page.get_by_role('button', name=_re.compile(r'change account|not you|different account|switch account', _re.I)),
-                    page.get_by_role('link', name=_re.compile(r'change account|not you|different account|switch account', _re.I)),
-                    page.get_by_text(_re.compile(r'change account|not you\??|use a different account|switch account', _re.I)),
+                    page.locator(f'{_SPECTRUM_OTHER_ACCOUNT_SELECTOR} a'),
+                    page.locator(_SPECTRUM_OTHER_ACCOUNT_SELECTOR),
+                    page.get_by_role('link', name=_SPECTRUM_OTHER_ACCOUNT_RE),
+                    page.get_by_role('button', name=_SPECTRUM_OTHER_ACCOUNT_RE),
+                    page.get_by_text(_SPECTRUM_OTHER_ACCOUNT_RE),
                 ):
                     try:
                         if locator.count() > 0:
@@ -1192,12 +1264,20 @@ def _autofill_spectrum_sso_confirm(page) -> bool:
                 if change is None:
                     # Never fall through to Continue here — that would sign
                     # in as the wrong account. Leave the screen up so the
-                    # human can pick in the remote view.
-                    logger.warning(
-                        '[mvpd-login] Spectrum SSO-confirm shows account %r but %r is configured, '
-                        'and no "Change account" control was found — not clicking Continue url=%s',
-                        shown, expected, _safe_page_url(page))
+                    # human can pick in the remote view. Logged once per
+                    # page load: this runs on every poll tick.
+                    if not page.evaluate("() => !!window.__fcSpectrumNoOtherAccountLogged"):
+                        page.evaluate("() => { window.__fcSpectrumNoOtherAccountLogged = true; }")
+                        logger.warning(
+                            '[mvpd-login] Spectrum SSO-confirm shows account %s but %s is configured, '
+                            'and no "Sign in with another account" control was found — not clicking '
+                            'Continue url=%s',
+                            _mask_username(shown), _mask_username(expected), _safe_page_url(page))
+                        _log_spectrum_sso_controls_snapshot(page, shown, expected)
                     return False
+                # Captured before the click: the link is an in-app route
+                # change, so the URL has already moved once click() returns.
+                start_url = page.url
                 change.click(timeout=2000)
                 page.evaluate("() => { window.__fcSpectrumContinueClicked = true; }")
                 try:
@@ -1207,13 +1287,18 @@ def _autofill_spectrum_sso_confirm(page) -> bool:
                 except Exception:  # noqa: BLE001
                     pass
                 logger.info(
-                    '[mvpd-login] Spectrum SSO-confirm showed account %r but %r is configured — '
-                    'clicked "Change account" instead of Continue url=%s',
-                    shown, expected, _safe_page_url(page))
+                    '[mvpd-login] Spectrum SSO-confirm showed account %s but %s is configured — '
+                    'clicked "Sign in with another account" instead of Continue url=%s',
+                    _mask_username(shown), _mask_username(expected), _safe_page_url(page))
                 deadline = time.monotonic() + 5
-                start_url = page.url
                 while time.monotonic() < deadline and page.url == start_url:
                     page.wait_for_timeout(150)
+                # The link starts a new ThreatMetrix session on Spectrum's
+                # side (onSignInWithAnotherAccount → generateSessionId). Give
+                # its device profiling a moment before autofill types into
+                # the login form — a precaution, not a confirmed cause of
+                # the IDID-4000 reCAPTCHA reject.
+                page.wait_for_timeout(2500)
                 return True
         # Not assumed to be a native <button> — try several shapes rather
         # than guessing one exact element type/role.
@@ -1233,11 +1318,11 @@ def _autofill_spectrum_sso_confirm(page) -> bool:
         if btn is None:
             logger.debug('[mvpd-login] spectrum SSO-confirm: no Continue element found url=%s', _safe_page_url(page))
             return False
+        start_url = page.url
         btn.click(timeout=2000)
         page.evaluate("() => { window.__fcSpectrumContinueClicked = true; }")
         logger.info('[mvpd-login] clicked Spectrum SSO "Continue" confirmation url=%s', _safe_page_url(page))
         deadline = time.monotonic() + 5
-        start_url = page.url
         while time.monotonic() < deadline and page.url == start_url:
             page.wait_for_timeout(150)
         return True
@@ -1568,6 +1653,22 @@ def _spectrum_signin_error_message(page, label: str, mso_id: str | None = None) 
     return None
 
 
+def _browser_debug_enabled() -> bool:
+    """Debug logging on (FC_DEBUG or the Settings toggle, see
+    app/debug_flag.py), checked from inside a browser session. Never raises."""
+    try:
+        from app.debug_flag import env_flag_enabled, settings_flag_enabled
+        if env_flag_enabled():
+            return True
+        # Short-lived context, popped before touching the page again —
+        # every caller runs with its own context already popped (see
+        # _prime_google_session's docstring on why).
+        with flask_app.app_context():
+            return settings_flag_enabled()
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def _log_signin_timeout_snapshot(page, log_tag: str) -> None:
     """Record what the browser was actually showing when a TVE sign-in wait
     timed out. Found 2026-09-24 via a forum report (community thread post
@@ -1588,15 +1689,7 @@ def _log_signin_timeout_snapshot(page, log_tag: str) -> None:
         title = '<unreadable>'
     logger.info('[%s] timed out — final page url=%s title=%r', log_tag, _url_for_log(_safe_page_url(page)), title)
     try:
-        from app.debug_flag import env_flag_enabled, settings_flag_enabled
-        enabled = env_flag_enabled()
-        if not enabled:
-            # Short-lived context, popped before touching the page again —
-            # every caller runs with its own context already popped (see
-            # _prime_google_session's docstring on why).
-            with flask_app.app_context():
-                enabled = settings_flag_enabled()
-        if not enabled:
+        if not _browser_debug_enabled():
             return
         text =_re.sub(r'\s+', ' ', page.inner_text('body')).strip()[:300]
         logger.info('[%s][debug] timed out — final page text=%r', log_tag, text)
