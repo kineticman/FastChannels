@@ -2612,8 +2612,28 @@ function _showTveLink(label, url) {
     a.setAttribute('href', url);
     a.textContent = url;
     document.getElementById('mvpd-link-copy').textContent = 'Copy link';
+    renderQrCode(document.getElementById('mvpd-link-qr'), url);
   }
   panel.style.display = 'block';
+}
+
+// QR code for a sign-in link (vendored qrcode-generator, drawn in the page —
+// no server or network involved). Leaves the box empty if the library
+// didn't load; the link and Copy button still work.
+function renderQrCode(el, text) {
+  if (!el) return;
+  el.innerHTML = '';
+  if (typeof qrcode !== 'function' || !text) return;
+  try {
+    const qr = qrcode(0, 'M');
+    qr.addData(text);
+    qr.make();
+    el.innerHTML = qr.createSvgTag({ cellSize: 4, margin: 0, scalable: true });
+    const svg = el.querySelector('svg');
+    if (svg) { svg.style.width = '100%'; svg.style.height = '100%'; svg.style.display = 'block'; }
+  } catch (e) {
+    el.innerHTML = '';
+  }
 }
 
 function copyTveLink() {

@@ -121,6 +121,7 @@ window.FC_SETTINGS_BOOTSTRAP = {
   channelsDvrUrlFromEnv: {{ 'true' if channels_dvr_url_from_env else 'false' }},
 };
 </script>
+<script src="{{ url_for('static', filename='js/vendor/qrcode-generator-1.4.4.js') }}"></script>
 <script src="{{ url_for('static', filename='js/settings.js') }}"></script>
   {% include 'admin/_update_modal.html' %}
 </body>

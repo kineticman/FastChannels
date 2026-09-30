@@ -3414,10 +3414,29 @@
     function espnTveShowLink(statusEl, d) {
       const url = d.url || '';
       statusEl.innerHTML = `
-        Open this link on your phone or computer and sign in to ${escapeHtml(d.mso_name || 'your TV provider')}:<br>
+        <div class="espn-tve-qr" style="width:200px;height:200px;background:#fff;border-radius:6px;padding:6px;box-sizing:border-box;margin:0.4rem 0"></div>
+        Scan the code with your phone, or open this link on your phone or computer, and sign in to ${escapeHtml(d.mso_name || 'your TV provider')}:<br>
         <a href="${escapeHtml(url)}" target="_blank" rel="noopener" style="word-break:break-all;font-family:monospace">${escapeHtml(url)}</a>
         <button class="btn btn-sm" type="button" onclick="navigator.clipboard && navigator.clipboard.writeText(${escapeHtml(JSON.stringify(url))}); this.textContent='Copied'">Copy link</button>
         <br><span style="color:var(--text-muted)">Waiting for the sign-in… (the link works for about 30 minutes)</span>`;
+      renderQrCode(statusEl.querySelector('.espn-tve-qr'), url);
+    }
+
+    // Same helper as settings.js's (vendored qrcode-generator, drawn in the page).
+    function renderQrCode(el, text) {
+      if (!el) return;
+      el.innerHTML = '';
+      if (typeof qrcode !== 'function' || !text) return;
+      try {
+        const qr = qrcode(0, 'M');
+        qr.addData(text);
+        qr.make();
+        el.innerHTML = qr.createSvgTag({ cellSize: 4, margin: 0, scalable: true });
+        const svg = el.querySelector('svg');
+        if (svg) { svg.style.width = '100%'; svg.style.height = '100%'; svg.style.display = 'block'; }
+      } catch (e) {
+        el.innerHTML = '';
+      }
     }
 
     function espnTvePoll(sourceId) {
@@ -5300,6 +5319,7 @@
 <script src="https://cdn.jsdelivr.net/npm/shaka-player@4/dist/shaka-player.compiled.js"></script>
 <script src="{{ url_for('static', filename='js/fc_player.js') }}?v={{ app_version }}"></script>
 <script src="{{ url_for('static', filename='js/admin_theme.js') }}"></script>
+<script src="{{ url_for('static', filename='js/vendor/qrcode-generator-1.4.4.js') }}"></script>
   {% include 'admin/_update_modal.html' %}
 </body>
 </html>

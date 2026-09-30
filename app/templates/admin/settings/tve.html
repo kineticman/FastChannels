@@ -94,7 +94,10 @@
       <div id="mvpd-login-log" style="display:none;max-height:120px;overflow-y:auto;background:var(--bg-hover,rgba(0,0,0,0.25));border:1px solid var(--border);border-radius:4px;padding:0.4rem 0.6rem;margin:0 0 0.75rem;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:0.72rem;line-height:1.55;color:var(--text-subtle);white-space:pre-wrap;word-break:break-word"></div>
       <div id="mvpd-link-panel" style="display:none;margin:0 0 0.75rem;padding:0.8rem 0.9rem;border:1px solid var(--border);border-radius:6px;background:var(--bg-hover,rgba(0,0,0,0.2))">
         <div id="mvpd-link-label" style="font-weight:600;margin-bottom:0.35rem"></div>
-        <div style="font-size:0.85rem;color:var(--text-subtle);margin-bottom:0.45rem">Open this link on your phone or computer and sign in to your TV provider there. This window updates by itself once you're done.</div>
+        <div style="display:flex;flex-wrap:wrap;gap:0.9rem;align-items:center;margin-bottom:0.45rem">
+          <div id="mvpd-link-qr" style="width:200px;height:200px;flex:none;background:#fff;border-radius:6px;padding:6px;box-sizing:border-box"></div>
+          <div style="flex:1;min-width:220px;font-size:0.85rem;color:var(--text-subtle)">Scan the code with your phone's camera, or open the link below on any phone or computer, and sign in to your TV provider there. This window updates by itself once you're done.</div>
+        </div>
         <div style="display:flex;flex-wrap:wrap;align-items:center;gap:0.5rem">
           <a id="mvpd-link-url" href="#" target="_blank" rel="noopener" style="font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:0.8rem;word-break:break-all"></a>
           <button class="btn btn-sm" type="button" id="mvpd-link-copy" onclick="copyTveLink()">Copy link</button>
