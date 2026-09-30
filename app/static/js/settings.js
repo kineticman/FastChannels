@@ -725,7 +725,7 @@ function updateTveProviderFields() {
   const coxRetiringNotice = document.getElementById('tve-cox-retiring-notice');
   if (coxRetiringNotice) coxRetiringNotice.style.display = isCox ? '' : 'none';
   const googleRow = document.getElementById('tve-google-signin-row');
-  if (googleRow) googleRow.style.display = provider.id === 'YouTubeTV' ? '' : 'none';
+  if (googleRow) googleRow.dataset.youtubeTv = provider.id === 'YouTubeTV' ? '1' : '';
   _updateTveGoogleRowForMethod();
   if (select) select.dataset.previousProvider = provider.id;
 }
@@ -2591,10 +2591,11 @@ async function saveTveSigninMethod(method) {
 
 // YouTube TV's "Sign in with Google" only helps the browser flow (it signs
 // our browser in to Google once); on a phone, Google's sign-in is part of
-// each network's link. Say so in phone mode instead of hiding the button.
+// each network's link — so show the row only for YouTube TV + browser mode.
 function _updateTveGoogleRowForMethod() {
-  const note = document.getElementById('tve-google-phone-note');
-  if (note) note.style.display = _tveSigninMethod() === 'phone' ? '' : 'none';
+  const row = document.getElementById('tve-google-signin-row');
+  if (!row) return;
+  row.style.display = row.dataset.youtubeTv && _tveSigninMethod() !== 'phone' ? '' : 'none';
 }
 
 // Back to the browser view — called by the browser-mode openers.
