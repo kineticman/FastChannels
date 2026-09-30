@@ -1647,6 +1647,9 @@ def bridge():
     return render_template(
         'admin/bridge.html',
         request_base_url=request.host_url.rstrip('/'),
+        # The LAN address M3Us use; the ah4c modal pre-fills it because ah4c runs
+        # elsewhere, where this browser's own origin (often localhost) is wrong.
+        ah4c_scripts_default_url=public_base_url(),
         prismcast_url=app_settings.effective_prismcast_url() or '',
         prismcast_inner_url=app_settings.prismcast_inner_url or '',
         prismcast_max_height=int(app_settings.prismcast_max_height or 0),

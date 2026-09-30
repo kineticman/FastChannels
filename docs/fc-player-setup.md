@@ -360,7 +360,8 @@ build or maintain on the ah4c side.
    - Enter ah4c's **server URL** (e.g. `http://192.168.1.30:7654`) — the same
      address as `IPADDRESS` above. Click **Save**.
    - Only if your ah4c image doesn't include `scripts/firetv/fastchannels`
-     yet (see step 3), click **Export ah4c scripts**. A modal asks for this
+     yet (see step 3), click **Update ah4c scripts** and use **Other ways to
+     install → download the scripts**. The modal asks for this
      FastChannels server's own address, as reachable from the machine running
      ah4c (it's pre-filled from your browser's address, but confirm it — the
      two machines aren't always the same one). Downloading produces
@@ -396,10 +397,11 @@ build or maintain on the ah4c side.
    instead. Restart the ah4c container to pick up the change.
 
    Each tune reports its script version, and the tuner check's **Scripts**
-   column shows it after a tuner's next tune. **No version** means an older
-   script set that works but lacks later fixes. To update, run a newer ah4c
-   image with `UPDATE_SCRIPTS=true` (which refreshes the selected scripts on
-   start), or re-export.
+   column shows **Up to date** or **Update recommended** after a tuner's next
+   tune. Older scripts still work but lack later fixes. To update, click
+   **Update ah4c scripts** and run the one-line command it shows on the ah4c
+   host (no restart needed), or restart a newer ah4c image once with
+   `UPDATE_SCRIPTS=true`. The column only changes after the next tune.
 4. Confirm that you installed FastChannels Player in Step 4. The same app is
    used by both capture methods; ah4c changes only how tuning and HDMI capture
    are orchestrated.

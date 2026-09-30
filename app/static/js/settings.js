@@ -439,18 +439,16 @@ function renderAh4cTuners(tuners) {
       addBadge(playerCell, '? Unknown', 'warn');
     }
 
-    // Reported by bmitune.sh on each tune — independent of adb reachability.
+    // Reported by bmitune.sh on each tune — independent of adb reachability, and
+    // only as fresh as the last tune, so an update shows after the next one.
     const scriptsCell = row.insertCell();
+    const staleNote = 'Tuning still works, but fixes are missing. Use Update ah4c scripts; this rechecks on the next tune.';
     if (t.scripts_status === 'current') {
-      addBadge(scriptsCell, '✓ ' + t.scripts_version, 'ok');
-    } else if (t.scripts_status === 'outdated') {
-      addBadge(scriptsCell, '⬆ ' + t.scripts_version, 'warn',
-        `Update ah4c's scripts or re-export (current ${t.scripts_current_version})`);
-    } else if (t.scripts_status === 'unversioned') {
-      addBadge(scriptsCell, 'No version', '',
-        `Older set; update ah4c's scripts or re-export (current ${t.scripts_current_version})`);
+      addBadge(scriptsCell, '✓ Up to date', 'ok');
+    } else if (t.scripts_status === 'outdated' || t.scripts_status === 'unversioned') {
+      addBadge(scriptsCell, '⬆ Update recommended', t.scripts_status === 'outdated' ? 'warn' : '', staleNote);
     } else {
-      addBadge(scriptsCell, '? Not seen yet', '', 'Known after its next ah4c tune');
+      addBadge(scriptsCell, '? Not used yet', '', 'Shown after this tuner’s first ah4c tune');
     }
   });
   box.appendChild(table);
@@ -635,9 +633,10 @@ function openAh4cScriptsModal() {
   // Suggested only — the ah4c container may run on a different machine/network
   // than whoever is loading this settings page, so this is a starting point for
   // the user to confirm or override, never submitted as-is without their eyes on it.
-  document.getElementById('ah4c-scripts-url').value = window.location.origin;
-  updateAh4cScriptsCommand();
+  const urlInput = document.getElementById('ah4c-scripts-url');
+  urlInput.value = urlInput.dataset.default || window.location.origin;
   document.getElementById('ah4c-scripts-modal').classList.add('open');
+  updateAh4cScriptsCommand();
 }
 
 function _ah4cScriptsExportUrl(serverUrl) {
@@ -653,6 +652,9 @@ function updateAh4cScriptsCommand() {
   box.value = url
     ? `docker exec ah4c sh -c 'cd /opt && curl -fsS "${_ah4cScriptsExportUrl(url)}" | tar xz -C "$STREAMER_APP"'`
     : '';
+  // Grow to fit so the whole command shows at any width (it wraps more on phones).
+  box.style.height = 'auto';
+  box.style.height = box.scrollHeight + 'px';
 }
 
 async function copyAh4cScriptsCommand() {
@@ -663,6 +665,11 @@ async function copyAh4cScriptsCommand() {
   } catch (e) {
     box.select();
     document.execCommand('copy');
+  }
+  const btn = document.getElementById('ah4c-scripts-copy-btn');
+  if (btn) {
+    btn.textContent = 'Copied';
+    setTimeout(() => { btn.textContent = 'Copy command'; }, 1500);
   }
 }
 

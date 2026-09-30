@@ -716,7 +716,6 @@ def bridge_healthcheck():
 
                 # Known only from bmitune.sh's own report on a real tune (ah4c has no
                 # API to read its script files), so an untuned tuner stays unknown.
-                current = tuners[0]['scripts_current_version']
                 by_status = {}
                 for t in tuners:
                     by_status.setdefault(t['scripts_status'], []).append(t)
@@ -724,32 +723,24 @@ def bridge_healthcheck():
                 def _nums(rows):
                     return '#' + ', #'.join(str(t['index']) for t in rows)
 
-                update_hint = ('Update ah4c and restart it with UPDATE_SCRIPTS=true so it refreshes '
-                               'scripts/firetv/fastchannels, or click "Export ah4c scripts".')
-                outdated = by_status.get('outdated', [])
-                unversioned = by_status.get('unversioned', [])
+                update_hint = ('On the Bridge page, click "Update ah4c scripts" and run the command it '
+                               'shows. This rechecks on each tuner\'s next tune.')
+                stale = by_status.get('outdated', []) + by_status.get('unversioned', [])
                 unseen = by_status.get('unknown', [])
-                if outdated:
-                    add('warn', 'ah4c scripts',
-                        f'{len(outdated)}/{len(tuners)} tuner(s) last tuned with an older ah4c script set '
-                        f'(tuner {_nums(outdated)}; current is {current}).', update_hint)
-                if unversioned:
-                    # What every ah4c image from before the upstream versioning ships,
-                    # so it's not a misconfiguration; the tunes still work.
+                if stale:
+                    # 'unversioned' alone is what every ah4c image from before upstream
+                    # script versioning ships, so it's informational, not a misconfiguration.
+                    add('warn' if by_status.get('outdated') else 'info', 'ah4c scripts',
+                        f'{len(stale)}/{len(tuners)} tuner(s) use older ah4c scripts (tuner {_nums(stale)}). '
+                        'Tuning still works, but they are missing fixes.', update_hint)
+                elif len(unseen) == len(tuners):
                     add('info', 'ah4c scripts',
-                        f'{len(unversioned)}/{len(tuners)} tuner(s) last tuned with ah4c scripts from before '
-                        f'script versioning (tuner {_nums(unversioned)}). They work, but lack fixes in {current}.',
-                        update_hint)
-                if not outdated and not unversioned:
-                    if len(unseen) == len(tuners):
-                        add('info', 'ah4c scripts',
-                            f'No ah4c tunes recorded yet, so the deployed script version is unknown (current is {current}).')
-                    elif unseen:
-                        add('ok', 'ah4c scripts',
-                            f'Tuners seen tuning are on script set {current} or newer; '
-                            f'tuner {_nums(unseen)} not seen yet.')
-                    else:
-                        add('ok', 'ah4c scripts', f'All ah4c tuners are on script set {current} or newer.')
+                        'No ah4c tunes yet, so FastChannels can\'t tell whether its scripts are up to date.')
+                elif unseen:
+                    add('ok', 'ah4c scripts',
+                        f'ah4c scripts are up to date; tuner {_nums(unseen)} hasn\'t tuned yet.')
+                else:
+                    add('ok', 'ah4c scripts', 'ah4c scripts are up to date on every tuner.')
         except fc_player_bridge.FcPlayerNotConfigured:
             add('warn', 'ah4c tuners', 'ah4c is not fully configured.', 'Save the ah4c server URL and retry.')
         except (ValueError, _req.RequestException):

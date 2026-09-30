@@ -66,7 +66,7 @@ def build_ah4c_scripts_tarball(fastchannels_url: str) -> bytes:
                     raise RuntimeError('bundled bmitune.sh has no TUNERIP="$2" line')
                 content = content.replace(
                     _URL_ANCHOR,
-                    _URL_ANCHOR + '# Default added by FastChannels\' "Export ah4c scripts".\n'
+                    _URL_ANCHOR + '# Default added by FastChannels\' "Update ah4c scripts".\n'
                     f'FASTCHANNELS_URL="${{FASTCHANNELS_URL:-{fastchannels_url}}}"\n', 1)
             data = content.encode('utf-8')
             info = tarfile.TarInfo(name=name)

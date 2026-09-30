@@ -29,10 +29,10 @@
     <div class="field-actions">
       <button class="btn btn-secondary" style="margin-right:auto" onclick="checkAh4cTuners()">Check tuner authorization(s)</button>
       <span class="save-status" id="fc-player-ah4c-status"></span>
-      <button class="btn btn-secondary" onclick="openAh4cScriptsModal()">Export ah4c scripts</button>
+      <button class="btn btn-secondary" onclick="openAh4cScriptsModal()">Update ah4c scripts</button>
       <button class="btn btn-primary" onclick="saveFcPlayerAh4cSettings()">Save</button>
     </div>
-    <div class="help" style="margin-top:8px">Export the script set after updating FastChannels. It tells ah4c how to trigger the FastChannels Player companion app on its assigned device and confirm playback started.</div>
+    <div class="help" style="margin-top:8px">After updating FastChannels, use <strong>Update ah4c scripts</strong> so ah4c keeps starting FastChannels Player correctly. The Scripts column in the tuner check shows whether each tuner is up to date.</div>
     <details class="bridge-fallback-details">
       <summary>Advanced: HDMI Capture device fallback</summary>
       <div class="help">Normal ah4c operation uses its own <code>TUNERn_IP</code> values. The HDMI Capture device in the <a href="#bridge-card-single-encoder">HDMI Capture</a> card remains a compatibility fallback for an ah4c script that does not provide a tuner address.</div>
