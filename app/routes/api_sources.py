@@ -1162,6 +1162,56 @@ def fox_one_browser_login_stop(source_id):
     return err or mvpd_browser_login_stop()
 
 
+# Phone-link sign-in for FOX One: the provider login happens on the user's
+# own device (app/tve/link_login.py). Status/stop are the TVE link-login ones.
+
+@sources_bp.route('/sources/<int:source_id>/fox-one-link-login/start', methods=['POST'])
+def fox_one_link_login_start(source_id):
+    import uuid
+    import redis as _redis
+    from ..scrapers.fox_one import FoxOneScraper
+    from ..tve.link_login import STATUS_KEY, job_timeout
+    from ..tve.providers import unsupported_network_reason
+    from .tasks import get_fast_queue
+
+    source, err = _fox_one_source_or_400(source_id)
+    if err:
+        return err
+    scraper = FoxOneScraper(config=dict(source.config or {}))
+    login = scraper._mvpd_login()
+    if not login:
+        if scraper._signin_method() == 'own':
+            return jsonify({'error': 'Choose a TV provider for FOX One\'s separate login and save first.'}), 400
+        return jsonify({'error': 'Set up your TV provider under Settings > TV Everywhere first, '
+                                 'or give FOX One a separate login.'}), 400
+    reason = unsupported_network_reason('foxone', login.mso_id)
+    if reason:
+        return jsonify({'error': reason}), 400
+    run_id = uuid.uuid4().hex
+    status = {'run_id': run_id, 'family': 'foxone', 'requestor_id': None, 'mso_id': login.mso_id,
+              'state': 'starting', 'message': 'Getting a sign-in link…', 'steps': []}
+    _redis.from_url(current_app.config['REDIS_URL']).setex(STATUS_KEY, 900, json.dumps(status))
+    get_fast_queue().enqueue('app.tve.link_login.run_link_login', 'foxone', None, login.mso_id, run_id,
+                             job_timeout=job_timeout('foxone'))
+    return jsonify(status)
+
+
+@sources_bp.route('/sources/<int:source_id>/fox-one-link-login/state')
+def fox_one_link_login_state(source_id):
+    from .api_tve import tve_link_login_state
+
+    _, err = _fox_one_source_or_400(source_id)
+    return err or tve_link_login_state()
+
+
+@sources_bp.route('/sources/<int:source_id>/fox-one-link-login/stop', methods=['POST'])
+def fox_one_link_login_stop(source_id):
+    from .api_tve import tve_link_login_stop
+
+    _, err = _fox_one_source_or_400(source_id)
+    return err or tve_link_login_stop()
+
+
 @sources_bp.route('/sources/<int:source_id>/fox-one-auth', methods=['DELETE'])
 def clear_fox_one_auth(source_id):
     """Forget FOX One's saved sign-in (tokens, device id, cached location)

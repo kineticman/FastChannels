@@ -1102,6 +1102,14 @@
     <div class="modal" onclick="event.stopPropagation()" style="max-width:1340px;">
       <h2>Sign in to FOX One</h2>
       <p id="foxone-login-status" style="margin-bottom:0.75rem;">Launching browser…</p>
+      <div id="foxone-link-panel" style="display:none;margin-bottom:0.75rem;padding:0.8rem 0.9rem;border:1px solid var(--border);border-radius:6px">
+        <div style="display:flex;flex-wrap:wrap;gap:0.9rem;align-items:center;margin-bottom:0.45rem">
+          <div id="foxone-link-qr" style="width:200px;height:200px;flex:none;background:#fff;border-radius:6px;padding:6px;box-sizing:border-box"></div>
+          <div style="flex:1;min-width:220px;font-size:0.85rem">Scan the code with your phone's camera, or open the link below on any phone or computer, and sign in to your TV provider there. This window updates by itself once you're done.</div>
+        </div>
+        <a id="foxone-link-url" href="#" target="_blank" rel="noopener" style="font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:0.8rem;word-break:break-all"></a>
+        <div class="help" style="margin-top:0.5rem">Use a private/incognito tab if that browser is already signed in to a different TV provider account. If Spectrum says to select "Cox Spectrum" (IDLI-4213), choose Cox as the TV provider and start again. The link works for about 10 minutes.</div>
+      </div>
       <img id="foxone-login-frame" alt="FOX One TV provider sign-in" tabindex="0" draggable="false"
            onmousedown="foxOneLoginFrameMouse(event, 'mousedown')" onkeydown="foxOneLoginFrameKeydown(event)"
            onmousemove="foxOneLoginFrameMousemove(event)" ondragstart="return false;"
@@ -3745,8 +3753,9 @@
         <div class="fields-grid">
           <div class="field field-full" style="margin:0.25rem 0 0.5rem;">
             <button class="btn btn-run" type="button" onclick="openFoxOneLoginModal(${sourceId})">Sign in to FOX One</button>
+            <button class="btn btn-run" type="button" onclick="openFoxOneLinkModal(${sourceId})" title="Get a link (and QR code) to sign in to your TV provider on your own phone or computer">Sign in on my phone</button>
             <button class="btn btn-cancel" type="button" onclick="foxOneClearSignin(${sourceId})" ${lastSignIn ? '' : 'disabled'}>Clear sign-in</button>
-            <div class="help">Saves these settings, then opens the TV provider's real sign-in page right here. Solve a captcha yourself if one is shown.</div>
+            <div class="help">"Sign in to FOX One" saves these settings, then opens the TV provider's real sign-in page right here (solve a captcha yourself if one is shown). "Sign in on my phone" gives you a link and QR code to sign in on your own device instead.</div>
             ${blocked}
             <div id="foxone-clear-status-${sourceId}"></div>
             ${statusHtml}
@@ -3776,6 +3785,85 @@
       }
     }
 
+    let _foxOneLinkMode = false;  // the modal is showing a phone link, not the browser
+
+    // Phone-link sign-in: same modal, but a link + QR code instead of the
+    // live browser view. The job (app/tve/link_login.py) saves the sign-in
+    // exactly where the browser flow does.
+    async function openFoxOneLinkModal(sourceId) {
+      _foxOneLoginSourceId = sourceId;
+      _foxOneLoginDone = false;
+      _foxOneLinkMode = true;
+      if (_foxOneLoginPollTimer) { clearTimeout(_foxOneLoginPollTimer); _foxOneLoginPollTimer = null; }
+      const frame = document.getElementById('foxone-login-frame');
+      const status = document.getElementById('foxone-login-status');
+      const panel = document.getElementById('foxone-link-panel');
+      frame.removeAttribute('src');
+      frame.style.display = 'none';
+      panel.style.display = 'none';
+      document.getElementById('foxone-link-url').removeAttribute('href');
+      status.className = '';
+      status.textContent = 'Saving…';
+      document.getElementById('foxone-login-modal').classList.add('open');
+      try { await saveSourceConfig(sourceId); } catch (e) { /* fall through with what's saved */ }
+      status.textContent = 'Getting a sign-in link…';
+      let runId = null;
+      try {
+        const r = await fetch(`/api/sources/${sourceId}/fox-one-link-login/start`, { method: 'POST' });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok) {
+          _foxOneLoginDone = true;
+          status.className = 'error';
+          status.textContent = '✗ ' + (d.error || 'Could not start sign-in.');
+          return;
+        }
+        runId = d.run_id;
+      } catch (e) {
+        _foxOneLoginDone = true;
+        status.className = 'error';
+        status.textContent = '✗ Could not reach the server to start sign-in.';
+        return;
+      }
+      const startedAt = Date.now();
+      const poll = async () => {
+        if (_foxOneLoginSourceId !== sourceId || !_foxOneLinkMode) return;
+        try {
+          const d = await (await fetch(`/api/sources/${sourceId}/fox-one-link-login/state`)).json();
+          if (_foxOneLoginSourceId !== sourceId) return;
+          if (d.run_id === runId) {
+            if (d.state === 'waiting' && d.url) {
+              status.textContent = 'Waiting for you to sign in…';
+              const a = document.getElementById('foxone-link-url');
+              if (a.getAttribute('href') !== d.url) {
+                a.setAttribute('href', d.url);
+                a.textContent = d.url;
+                renderQrCode(document.getElementById('foxone-link-qr'), d.url);
+              }
+              panel.style.display = 'block';
+            } else if (d.state === 'starting' && Date.now() - startedAt > 10000) {
+              status.textContent = 'Waiting for the background worker to pick this up…';
+            } else if (d.state === 'success' || d.state === 'error') {
+              _foxOneLoginDone = true;
+              panel.style.display = 'none';
+              status.className = d.state === 'success' ? 'success' : 'error';
+              status.textContent = (d.state === 'success' ? '✓ ' : '✗ ') + (d.message || '');
+              if (d.state === 'success') setTimeout(() => _closeFoxOneLoginModal(false), 1800);
+              return;
+            }
+          } else if (d.state === 'idle') {
+            _foxOneLoginDone = true;
+            panel.style.display = 'none';
+            status.textContent = 'Sign-in stopped.';
+            return;
+          }
+        } catch (e) {
+          // transient — keep polling
+        }
+        _foxOneLoginPollTimer = setTimeout(poll, 2000);
+      };
+      poll();
+    }
+
     let _foxOneLoginSourceId = null;
     let _foxOneLoginPollTimer = null;
     let _foxOneLoginDone = false;
@@ -3788,6 +3876,9 @@
       if (_foxOneLoginPollTimer) { clearTimeout(_foxOneLoginPollTimer); _foxOneLoginPollTimer = null; }
       const frame = document.getElementById('foxone-login-frame');
       const status = document.getElementById('foxone-login-status');
+      _foxOneLinkMode = false;
+      document.getElementById('foxone-link-panel').style.display = 'none';
+      frame.style.display = '';
       frame.removeAttribute('src');
       frame.style.visibility = 'hidden';
       status.className = '';
@@ -3825,7 +3916,8 @@
       const sourceId = _foxOneLoginSourceId;
       _foxOneLoginSourceId = null;
       if (cancel && !_foxOneLoginDone && sourceId) {
-        fetch(`/api/sources/${sourceId}/fox-one-browser-login/stop`, { method: 'POST' }).catch(() => {});
+        const which = _foxOneLinkMode ? 'fox-one-link-login' : 'fox-one-browser-login';
+        fetch(`/api/sources/${sourceId}/${which}/stop`, { method: 'POST' }).catch(() => {});
       }
       if (sourceId) loadSourceConfig(sourceId, 'fox_one');
     }

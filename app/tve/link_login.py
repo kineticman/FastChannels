@@ -280,7 +280,59 @@ class _Amcn:
         return 'authorized'
 
 
-_ADAPTERS = {'legacy': _Legacy, 'nbc': _Nbc, 'fox': _Fox, 'amcn': _Amcn}
+class _FoxOne:
+    """FOX One — FOX's id.fox.com regcode wrapper around an Adobe v2 link.
+    Signs in with whichever login FOX One is set up for (the shared TV
+    provider or its own separate one — see FoxOneScraper._mvpd_login), so
+    `mso_id` comes from that, not the caller. Completion has no status to
+    poll: like the browser flow, we call the finish step (requests/complete
+    + checkauthn) until FOX stops answering 404 — confirmed 2026-09-30 to
+    work for a sign-in done on a phone, without our browser ever seeing
+    FOX's callback page."""
+    error_key = 'foxone'
+
+    def __init__(self, account, mso_id: str, requestor_id: str | None):
+        from ..models import Source
+        from ..scrapers.fox_one import FoxOneScraper
+        self.source = Source.query.filter_by(name='fox_one').first()
+        if not self.source:
+            raise TVEAuthError('FOX One source not found.')
+        self.scraper = FoxOneScraper(config=dict(self.source.config or {}))
+        self.login = self.scraper._mvpd_login()
+        if not self.login:
+            raise TVEAuthError('FOX One has no TV provider login set up.')
+        self.mso_id = self.login.mso_id
+
+    def targets(self):
+        return ['FOX One']
+
+    def _persist(self):
+        from ..config_store import persist_source_config_updates
+        persist_source_config_updates(self.source.id, self.scraper._pending_config_updates)
+        self.scraper._pending_config_updates = {}
+
+    def start(self, label):
+        session, request_id, device_id, _mso_url, response = self.scraper._foxone_mvpd_register(self.mso_id)
+        self._persist()  # a freshly minted device_id
+        return str(response.url), {'session': session, 'request_id': request_id, 'device_id': device_id}
+
+    def poll(self, ctx):
+        try:
+            return self.scraper._foxone_mvpd_finish(ctx['session'], ctx['request_id'], ctx['device_id'], self.mso_id)
+        except Exception:  # noqa: BLE001 — 404 until the sign-in lands
+            return None
+
+    def save(self, ctx, result):
+        access_token, expires_at = result
+        self.scraper._update_config('access_token', access_token)
+        self.scraper._update_config('access_expires_at', expires_at)
+        self.scraper._update_config('access_token_captured_at', int(time.time()))
+        self.scraper.record_signin_result(self.login, None, how=' (phone sign-in)')
+        self._persist()
+        return 'authorized'
+
+
+_ADAPTERS = {'legacy': _Legacy, 'nbc': _Nbc, 'fox': _Fox, 'amcn': _Amcn, 'foxone': _FoxOne}
 
 
 # ── job ──────────────────────────────────────────────────────────────────────
@@ -311,7 +363,8 @@ def run_link_login(family: str, requestor_id: str | None, mso_id: str, run_id: s
                     {**base, 'state': state, 'message': message, 'steps': steps, **extra}))
 
         account = TVEAccount.query.filter_by(provider_id='mvpd').first()
-        if not account:
+        # FOX One can sign in with its own separate login, without a shared account.
+        if not account and family != 'foxone':
             set_status('error', 'Set up your TV provider under Settings → TV Everywhere first.')
             return
         adapter = None
@@ -335,7 +388,7 @@ def run_link_login(family: str, requestor_id: str | None, mso_id: str, run_id: s
                 steps[i].update(state='failed', message=str(exc)[:160])
                 continue
             set_status('waiting', f'Sign in for {label}', label=label, url=url or '')
-            logger.info('[link-login] %s: waiting for the %s sign-in', label, mso_id)
+            logger.info('[link-login] %s: waiting for the %s sign-in', label, getattr(adapter, 'mso_id', mso_id))
 
             result, denied = None, None
             deadline = time.monotonic() + _PER_TARGET_TIMEOUT
@@ -364,7 +417,7 @@ def run_link_login(family: str, requestor_id: str | None, mso_id: str, run_id: s
                 try:
                     message = adapter.save(ctx, result)
                     steps[i].update(state='done', message=message)
-                    logger.info('[link-login] %s: signed in via %s (%s)', label, mso_id, message)
+                    logger.info('[link-login] %s: signed in via %s (%s)', label, getattr(adapter, 'mso_id', mso_id), message)
                 except Exception as exc:  # noqa: BLE001
                     logger.exception('[link-login] %s: save failed', label)
                     steps[i].update(state='failed', message=f'save failed: {str(exc)[:120]}')
@@ -378,5 +431,9 @@ def run_link_login(family: str, requestor_id: str | None, mso_id: str, run_id: s
             set_status('success', message)
         else:
             message = '; '.join(failed) or 'Sign-in failed.'
-            _record_tve_login_error(adapter.error_key, message)
+            if family == 'foxone':
+                adapter.scraper.record_signin_result(adapter.login, message)
+                adapter._persist()
+            else:
+                _record_tve_login_error(adapter.error_key, message)
             set_status('error', message)

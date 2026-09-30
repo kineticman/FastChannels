@@ -29,6 +29,7 @@ _SUPPRESS_PATTERNS = (
     'tve/link-login/state',     # admin UI polls every ~2s while waiting on a phone-link sign-in
     'espn-tve/state',           # ESPN card polls every 3s while waiting on a TV-provider link sign-in
     'espn-activation/state',    # ESPN card polls every 3s while waiting on an activation code
+    'fox-one-link-login/state', # FOX One card polls every ~2s while waiting on a phone-link sign-in
     '/api/custom-channels/detect/', # stream detection status polling
     '/images/proxy',           # per-image cache hits — too noisy
     '/logos/',                 # cached logo file hits — too noisy
