@@ -287,7 +287,10 @@ def run_activation(plate: dict) -> None:
             payload = wait_for_activation(plate, should_stop=superseded)
             token = _exchange_id_token(payload['id_token'])
         except TimeoutError as exc:
-            if str(exc) != 'stopped':
+            if str(exc) == 'stopped':
+                logger.info('[espn] activation code %s',
+                            'replaced by a newer one' if r.get(ACTIVATION_STATUS_KEY) else 'stopped')
+            else:
                 set_status('expired', 'The code expired before it was entered.')
             return
         except Exception as exc:  # noqa: BLE001
@@ -451,6 +454,8 @@ def run_adobe_signin(pending: dict) -> None:
         profile = None
         while time.monotonic() < deadline:
             if superseded():
+                logger.info('[espn] TV-provider sign-in %s',
+                            'replaced by a newer one' if r.get(ADOBE_STATUS_KEY) else 'stopped')
                 return
             try:
                 resp = client.session.get(url, headers=client._bearer_headers(), timeout=20)

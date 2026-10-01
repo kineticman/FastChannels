@@ -446,6 +446,14 @@ def run_link_login(family: str, requestor_id: str | None, mso_id: str, run_id: s
             raw = r.get(STATUS_KEY)
             return not raw or json.loads(raw).get('run_id') != run_id
 
+        def quit_if_superseded(label: str) -> bool:
+            """superseded(), logging why the job is quitting."""
+            if not superseded():
+                return False
+            why = 'replaced by a newer sign-in' if r.get(STATUS_KEY) else 'stopped'
+            logger.info('[link-login] %s: %s', label, why)
+            return True
+
         def set_status(state: str, message: str = '', **extra) -> None:
             if not superseded():
                 r.setex(STATUS_KEY, _PER_TARGET_TIMEOUT + 300, json.dumps(
@@ -467,7 +475,7 @@ def run_link_login(family: str, requestor_id: str | None, mso_id: str, run_id: s
         steps.extend({'label': label, 'state': 'pending'} for label in targets)
 
         for i, label in enumerate(targets):
-            if superseded():
+            if quit_if_superseded(label):
                 return
             steps[i]['state'] = 'running'
             try:
@@ -484,7 +492,7 @@ def run_link_login(family: str, requestor_id: str | None, mso_id: str, run_id: s
             deadline = time.monotonic() + _PER_TARGET_TIMEOUT
             delay = _POLL_SECONDS
             while time.monotonic() < deadline:
-                if superseded():
+                if quit_if_superseded(label):
                     return
                 try:
                     result = adapter.poll(ctx)
