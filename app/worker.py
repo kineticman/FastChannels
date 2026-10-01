@@ -3319,8 +3319,8 @@ def _schedule_due_scrapes():
         # session; nothing is lost, since this sweep just runs again in 60s
         # and always re-evaluates every source's actual elapsed interval
         # rather than tracking "missed" ticks.
-        from app.routes.tasks import _mvpd_tve_profile_busy, get_fast_queue
-        if _mvpd_tve_profile_busy(get_fast_queue()):
+        from app.routes.tasks import _mvpd_tve_profile_busy, get_signin_queue
+        if _mvpd_tve_profile_busy(get_signin_queue()):
             logger.debug('[scheduler] TVE browser-login in progress — skipping this due-scrape sweep')
             return
 

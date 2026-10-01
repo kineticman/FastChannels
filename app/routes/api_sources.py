@@ -916,7 +916,7 @@ def pbs_remove_manual_feed(source_id):
 
 # ── Sling interactive browser login ─────────────────────────────────────────
 # A real, human-operated sign-in: a Camoufox (anti-detect Firefox) tab loads
-# sling.com in the 'fast' RQ worker, auto-fills the saved credentials, and the
+# sling.com in the sign-in (maintenance) RQ worker, auto-fills the saved credentials, and the
 # admin UI streams periodic screenshots of it and forwards the admin's own
 # clicks/keystrokes back — so a real person solves the real hCaptcha
 # challenge. The job captures the OAuth token from the auth-callback URL (or
@@ -1176,7 +1176,7 @@ def fox_one_link_login_start(source_id):
     from ..scrapers.fox_one import FoxOneScraper
     from ..tve.link_login import STATUS_KEY, job_timeout
     from ..tve.providers import unsupported_network_reason
-    from .tasks import get_fast_queue
+    from .tasks import get_signin_queue
 
     source, err = _fox_one_source_or_400(source_id)
     if err:
@@ -1195,7 +1195,7 @@ def fox_one_link_login_start(source_id):
     status = {'run_id': run_id, 'family': 'foxone', 'requestor_id': None, 'mso_id': login.mso_id,
               'state': 'starting', 'message': 'Getting a sign-in link…', 'steps': []}
     _redis.from_url(current_app.config['REDIS_URL']).setex(STATUS_KEY, 900, json.dumps(status))
-    get_fast_queue().enqueue('app.tve.link_login.run_link_login', 'foxone', None, login.mso_id, run_id,
+    get_signin_queue().enqueue('app.tve.link_login.run_link_login', 'foxone', None, login.mso_id, run_id,
                              job_timeout=job_timeout('foxone'))
     return jsonify(status)
 
@@ -1378,7 +1378,7 @@ def espn_activation_start(source_id):
     import redis as _redis
     import requests as _requests
     from ..scrapers.espn import ACTIVATION_STATUS_KEY, ACTIVATE_URL, ESPNAuthError, request_activation_code
-    from .tasks import get_fast_queue
+    from .tasks import get_signin_queue
 
     source = Source.query.get_or_404(source_id)
     if source.name != 'espn':
@@ -1391,7 +1391,7 @@ def espn_activation_start(source_id):
     # still waiting on an older code (run_activation watches this key).
     _redis.from_url(current_app.config['REDIS_URL']).setex(ACTIVATION_STATUS_KEY, 720, json.dumps(
         {'state': 'waiting', 'code': plate['pairingCode'], 'url': ACTIVATE_URL}))
-    get_fast_queue().enqueue('app.scrapers.espn.run_activation', plate, job_timeout=660)
+    get_signin_queue().enqueue('app.scrapers.espn.run_activation', plate, job_timeout=660)
     return jsonify({'status': 'waiting', 'code': plate['pairingCode'], 'url': ACTIVATE_URL})
 
 
@@ -1442,7 +1442,7 @@ def espn_tve_start(source_id):
     import requests as _requests
     from ..scrapers.espn import (ADOBE_STATUS_KEY, _ADOBE_SIGNIN_TIMEOUT, ESPNAuthError,
                                  adobe_status, start_adobe_signin)
-    from .tasks import get_fast_queue
+    from .tasks import get_signin_queue
 
     source = Source.query.get_or_404(source_id)
     if source.name != 'espn':
@@ -1464,7 +1464,7 @@ def espn_tve_start(source_id):
     # on an older one (run_adobe_signin watches this key).
     _redis.from_url(current_app.config['REDIS_URL']).setex(
         ADOBE_STATUS_KEY, _ADOBE_SIGNIN_TIMEOUT + 120, json.dumps(status))
-    get_fast_queue().enqueue('app.scrapers.espn.run_adobe_signin', pending,
+    get_signin_queue().enqueue('app.scrapers.espn.run_adobe_signin', pending,
                              job_timeout=_ADOBE_SIGNIN_TIMEOUT + 60)
     return jsonify(status)
 

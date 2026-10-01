@@ -1078,6 +1078,12 @@ function _mvpdLoginBeginRequest(cfg, requestorId, attempt = 1) {
           + 'Force-stop it and retry</a> if it looks stuck, or wait for it to finish on its own.';
         return;
       }
+      // Closed while the start was in flight: the Cancel's stop went out
+      // before this job existed, so stop it now rather than leave it waiting.
+      if (!_mvpdLoginActive) {
+        fetch(`${cfg.base}/stop`, { method: 'POST' }).catch(() => {});
+        return;
+      }
       _pollMvpdLoginModal();
     })
     .catch(() => {
@@ -1137,6 +1143,14 @@ function _closeMvpdLoginModal(cancel) {
     fetch(`${MVPD_LOGIN_FAMILIES[_mvpdLoginFamily].base}/stop`, { method: 'POST' }).catch(() => {});
   }
 }
+
+// Leaving the page with a sign-in open abandons it the same as Cancel —
+// otherwise its job keeps the sign-in worker waiting for up to 30 minutes.
+window.addEventListener('pagehide', () => {
+  if (_mvpdLoginActive && !_mvpdLoginDone && MVPD_LOGIN_FAMILIES[_mvpdLoginFamily]) {
+    navigator.sendBeacon(`${MVPD_LOGIN_FAMILIES[_mvpdLoginFamily].base}/stop`);
+  }
+});
 
 const MVPD_STEP_LABELS = {
   HISTORY: 'History', AETV: 'A&E', LIFETIME: 'Lifetime', FYI: 'FYI',
@@ -2722,8 +2736,8 @@ function _tveLinkRunOne(family, requestorId, status, onSteps) {
           } else if (d.state === 'waiting') {
             status.textContent = `Checking ${label}…`;
           } else if (d.state === 'starting' && Date.now() - startedAt > 10000) {
-            // One background worker runs these; another job (a scrape's
-            // follow-up, a guide refresh) can hold it for a bit.
+            // Sign-ins share the maintenance worker; a nightly job or a bulk
+            // channel update can hold it for a bit.
             status.textContent = 'Waiting for the background worker to pick this up…';
           }
           if (d.state === 'success' || d.state === 'error') {
@@ -2743,6 +2757,12 @@ function _tveLinkRunOne(family, requestorId, status, onSteps) {
       .then(r => r.json().then(d => ({ ok: r.ok, status: r.status, d })))
       .then(({ ok, status: httpStatus, d }) => {
         if (!ok) { resolve({ ok: false, message: (d && d.error) || `HTTP ${httpStatus}` }); return; }
+        // Closed while the start was in flight (see openMvpdLoginModal).
+        if (!_mvpdLoginActive) {
+          fetch(`${MVPD_LOGIN_FAMILIES.link.base}/stop`, { method: 'POST' }).catch(() => {});
+          resolve({ ok: false, message: 'cancelled' });
+          return;
+        }
         runId = d.run_id;
         startedAt = Date.now();
         poll();

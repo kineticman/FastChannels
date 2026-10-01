@@ -311,7 +311,7 @@ def tve_link_login_start():
     import redis as _redis
     from ..tve.link_login import LINK_FAMILIES, STATUS_KEY, job_timeout
     from ..tve.providers import tve_account_mso_id
-    from .tasks import get_fast_queue
+    from .tasks import get_signin_queue
 
     data = request.get_json(force=True) or {}
     family = (data.get('family') or '').strip()
@@ -329,7 +329,7 @@ def tve_link_login_start():
               'state': 'starting', 'message': 'Getting a sign-in link…', 'steps': []}
     # A new run_id in the status retires any job still waiting on an older link.
     _redis.from_url(current_app.config['REDIS_URL']).setex(STATUS_KEY, 900, json.dumps(status))
-    get_fast_queue().enqueue('app.tve.link_login.run_link_login', family, requestor_id, mso_id, run_id,
+    get_signin_queue().enqueue('app.tve.link_login.run_link_login', family, requestor_id, mso_id, run_id,
                              job_timeout=job_timeout(family))
     return jsonify(status)
 

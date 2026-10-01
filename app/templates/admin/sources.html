@@ -1346,6 +1346,7 @@
       if (!row) return;
       const isOpen = row.style.display !== 'none';
       row.style.display = isOpen ? 'none' : '';
+      if (isOpen) espnAbandon(sourceId);  // no-op unless an ESPN sign-in is waiting here
       document.querySelectorAll(`.configure-btn-display[data-source-id="${sourceId}"]`).forEach(btn => {
         btn.textContent = isOpen ? 'Configure ▾' : 'Configure ▴';
         btn.classList.toggle('open', !isOpen);
@@ -3362,6 +3363,46 @@
     // ── ESPN activation-code sign-in (same flow as ESPN's TV apps) ───────────
     const _espnPollTimers = {};
 
+    // Waits in progress, keyed `${kind}-${sourceId}` (kind: 'tve' link or
+    // 'activation' code). Each holds the sign-in worker for up to 30 minutes,
+    // so Cancel, closing the card and leaving the page all stop them.
+    const _espnActive = {};
+    const _espnStopUrl = (sourceId, kind) =>
+      `/api/sources/${sourceId}/${kind === 'tve' ? 'espn-tve' : 'espn-activation'}/stop`;
+    const _espnTimerKey = (sourceId, kind) => (kind === 'tve' ? `tve-${sourceId}` : sourceId);
+
+    function _espnPanelOpen(sourceId) {
+      const row = document.getElementById(`config-panel-row-${sourceId}`);
+      return !!row && row.style.display !== 'none';
+    }
+
+    function _espnStop(sourceId, kind) {
+      const key = `${kind}-${sourceId}`;
+      clearTimeout(_espnPollTimers[_espnTimerKey(sourceId, kind)]);
+      if (!_espnActive[key]) return;
+      delete _espnActive[key];
+      fetch(_espnStopUrl(sourceId, kind), { method: 'POST' }).catch(() => {});
+    }
+
+    function espnCancel(sourceId, kind) {
+      _espnStop(sourceId, kind);
+      const statusEl = document.getElementById(kind === 'tve' ? `espn-tve-status-${sourceId}` : `espn-status-${sourceId}`);
+      if (statusEl) statusEl.innerHTML = '<span style="color:var(--text-muted)">Cancelled.</span>';
+    }
+
+    // Closing the card abandons any ESPN wait on it (called by toggleConfigPanel).
+    function espnAbandon(sourceId) {
+      _espnStop(sourceId, 'tve');
+      _espnStop(sourceId, 'activation');
+    }
+
+    window.addEventListener('pagehide', () => {
+      for (const key of Object.keys(_espnActive)) {
+        const [kind, sourceId] = key.split('-');
+        navigator.sendBeacon(_espnStopUrl(sourceId, kind));
+      }
+    });
+
     function renderEspnConfig(sourceId, schema, values, cfg) {
       const info = (cfg && cfg.espn) || {};
       const tveProvider = info.tve_mvpd_name || info.settings_mvpd_name;
@@ -3441,7 +3482,9 @@
           statusEl.innerHTML = `<span style="color:var(--danger-soft)">${escapeHtml(d.error || 'Could not get a sign-in link.')}</span>`;
           return;
         }
-        espnTveShowLink(statusEl, d);
+        _espnActive[`tve-${sourceId}`] = true;
+        if (!_espnPanelOpen(sourceId)) { _espnStop(sourceId, 'tve'); return; }  // closed meanwhile
+        espnTveShowLink(statusEl, d, sourceId);
         espnTvePoll(sourceId);
       } catch (e) {
         statusEl.innerHTML = '<span style="color:var(--danger-soft)">Network error getting a sign-in link.</span>';
@@ -3450,13 +3493,14 @@
       }
     }
 
-    function espnTveShowLink(statusEl, d) {
+    function espnTveShowLink(statusEl, d, sourceId) {
       const url = d.url || '';
       statusEl.innerHTML = `
         <div class="espn-tve-qr" style="width:200px;height:200px;background:#fff;border-radius:6px;padding:6px;box-sizing:border-box;margin:0.4rem 0"></div>
         Scan the QR code with your phone, or open this link on your phone or computer, and sign in to ${escapeHtml(d.mso_name || 'your TV provider')}:<br>
         <a href="${escapeHtml(url)}" target="_blank" rel="noopener" style="word-break:break-all;font-family:monospace">${escapeHtml(url)}</a>
         <button class="btn btn-sm" type="button" onclick="navigator.clipboard && navigator.clipboard.writeText(${escapeHtml(JSON.stringify(url))}); this.textContent='Copied'">Copy link</button>
+        <button class="btn btn-cancel btn-sm" type="button" onclick="espnCancel(${sourceId}, 'tve')">Cancel</button>
         <br><span style="color:var(--text-muted)">Waiting for the sign-in… (the link works for about 30 minutes)</span>`;
       renderQrCode(statusEl.querySelector('.espn-tve-qr'), url);
     }
@@ -3482,7 +3526,7 @@
       clearTimeout(_espnPollTimers[`tve-${sourceId}`]);
       _espnPollTimers[`tve-${sourceId}`] = setTimeout(async () => {
         const statusEl = document.getElementById(`espn-tve-status-${sourceId}`);
-        if (!statusEl) return;  // panel closed
+        if (!statusEl) { _espnStop(sourceId, 'tve'); return; }  // panel gone
         let d = {};
         try {
           d = await (await fetch(`/api/sources/${sourceId}/espn-tve/state`)).json();
@@ -3492,7 +3536,10 @@
         }
         if (d.state === 'waiting') {
           espnTvePoll(sourceId);
-        } else if (d.state === 'success') {
+          return;
+        }
+        delete _espnActive[`tve-${sourceId}`];
+        if (d.state === 'success') {
           statusEl.innerHTML = '<span style="color:var(--success-soft)">&#10003; Signed in</span>';
           setTimeout(() => loadSourceConfig(sourceId, 'espn'), 600);
         } else if (d.state === 'expired' || d.state === 'error') {
@@ -3519,7 +3566,9 @@
           statusEl.innerHTML = `<span style="color:var(--danger-soft)">${escapeHtml(d.error || 'Could not get a code.')}</span>`;
           return;
         }
-        espnShowCode(statusEl, d.code, d.url);
+        _espnActive[`activation-${sourceId}`] = true;
+        if (!_espnPanelOpen(sourceId)) { _espnStop(sourceId, 'activation'); return; }  // closed meanwhile
+        espnShowCode(statusEl, d.code, d.url, sourceId);
         espnPoll(sourceId);
       } catch (e) {
         statusEl.innerHTML = '<span style="color:var(--danger-soft)">Network error getting a code.</span>';
@@ -3528,18 +3577,19 @@
       }
     }
 
-    function espnShowCode(statusEl, code, url) {
+    function espnShowCode(statusEl, code, url, sourceId) {
       statusEl.innerHTML = `
         Go to <a href="${escapeHtml(url)}" target="_blank" rel="noopener">${escapeHtml(url.replace(/^https?:\/\/(www\.)?/, ''))}</a>
         and enter <b style="font-size:1.4em;letter-spacing:.15em;font-family:monospace">${escapeHtml(code)}</b>
-        <span style="color:var(--text-muted)">— waiting…</span>`;
+        <span style="color:var(--text-muted)">— waiting…</span>
+        <button class="btn btn-cancel btn-sm" type="button" onclick="espnCancel(${sourceId}, 'activation')">Cancel</button>`;
     }
 
     function espnPoll(sourceId) {
       clearTimeout(_espnPollTimers[sourceId]);
       _espnPollTimers[sourceId] = setTimeout(async () => {
         const statusEl = document.getElementById(`espn-status-${sourceId}`);
-        if (!statusEl) return;  // panel closed
+        if (!statusEl) { _espnStop(sourceId, 'activation'); return; }  // panel gone
         let d = {};
         try {
           d = await (await fetch(`/api/sources/${sourceId}/espn-activation/state`)).json();
@@ -3549,7 +3599,10 @@
         }
         if (d.state === 'waiting') {
           espnPoll(sourceId);
-        } else if (d.state === 'success') {
+          return;
+        }
+        delete _espnActive[`activation-${sourceId}`];
+        if (d.state === 'success') {
           statusEl.innerHTML = '<span style="color:var(--success-soft)">&#10003; Signed in</span>';
           setTimeout(() => loadSourceConfig(sourceId, 'espn'), 600);
         } else if (d.state === 'expired' || d.state === 'error') {
@@ -3838,6 +3891,7 @@
       status.textContent = 'Saving…';
       document.getElementById('foxone-login-modal').classList.add('open');
       try { await saveSourceConfig(sourceId); } catch (e) { /* fall through with what's saved */ }
+      if (_foxOneLoginSourceId !== sourceId) return;  // closed during the save
       status.textContent = 'Getting a sign-in link…';
       let runId = null;
       try {
@@ -3847,6 +3901,12 @@
           _foxOneLoginDone = true;
           status.className = 'error';
           status.textContent = '✗ ' + (d.error || 'Could not start sign-in.');
+          return;
+        }
+        // Closed while the start was in flight: the Cancel's stop went out
+        // before this job existed, so stop it now.
+        if (_foxOneLoginSourceId !== sourceId) {
+          fetch(`/api/sources/${sourceId}/fox-one-link-login/stop`, { method: 'POST' }).catch(() => {});
           return;
         }
         runId = d.run_id;
@@ -3918,6 +3978,7 @@
       document.getElementById('foxone-login-modal').classList.add('open');
       // The sign-in job reads the saved config, not these inputs.
       try { await saveSourceConfig(sourceId); } catch (e) { /* fall through with what's saved */ }
+      if (_foxOneLoginSourceId !== sourceId) return;  // closed during the save
       status.textContent = 'Launching browser…';
       try {
         const r = await fetch(`/api/sources/${sourceId}/fox-one-browser-login/start`, { method: 'POST' });
@@ -3930,6 +3991,10 @@
         }
         if (d.status === 'already_running') {
           status.textContent = 'Another TV-provider sign-in is still running — showing it here.';
+        } else if (_foxOneLoginSourceId !== sourceId) {
+          // Closed while the start was in flight — stop the job just started.
+          fetch(`/api/sources/${sourceId}/fox-one-browser-login/stop`, { method: 'POST' }).catch(() => {});
+          return;
         }
       } catch (e) {
         // transient — polling shows the real state
@@ -4083,9 +4148,16 @@
       } catch (e) {
         // ignore — see comment above
       }
+      if (_spectrumLoginSourceId !== sourceId) return;  // closed during the save
       status.textContent = 'Launching browser…';
       fetch(`/api/sources/${sourceId}/spectrum-browser-login/start`, { method: 'POST' })
         .then(r => r.json())
+        .then(d => {
+          // Closed while the start was in flight — stop the job just started.
+          if (d && d.status === 'started' && _spectrumLoginSourceId !== sourceId) {
+            fetch(`/api/sources/${sourceId}/spectrum-browser-login/stop`, { method: 'POST' }).catch(() => {});
+          }
+        })
         .catch(() => {})
         .finally(() => _pollSpectrumLoginModal());
     }
@@ -4223,6 +4295,12 @@
       modal.classList.add('open');
       fetch(`/api/sources/${sourceId}/sling-browser-login/start`, { method: 'POST' })
         .then(r => r.json())
+        .then(d => {
+          // Closed while the start was in flight — stop the job just started.
+          if (d && d.status === 'started' && _slingLoginSourceId !== sourceId) {
+            fetch(`/api/sources/${sourceId}/sling-browser-login/stop`, { method: 'POST' }).catch(() => {});
+          }
+        })
         .catch(() => {})
         .finally(() => _pollSlingLoginModal());
     }
@@ -4241,6 +4319,21 @@
         fetch(`/api/sources/${sourceId}/sling-browser-login/stop`, { method: 'POST' }).catch(() => {});
       }
     }
+
+    // Leaving the page with a sign-in modal open abandons it the same as
+    // Cancel — otherwise its job keeps the sign-in worker waiting.
+    window.addEventListener('pagehide', () => {
+      if (_foxOneLoginSourceId && !_foxOneLoginDone) {
+        const which = _foxOneLinkMode ? 'fox-one-link-login' : 'fox-one-browser-login';
+        navigator.sendBeacon(`/api/sources/${_foxOneLoginSourceId}/${which}/stop`);
+      }
+      if (_spectrumLoginSourceId && !_spectrumLoginDone) {
+        navigator.sendBeacon(`/api/sources/${_spectrumLoginSourceId}/spectrum-browser-login/stop`);
+      }
+      if (_slingLoginSourceId && !_slingLoginDone) {
+        navigator.sendBeacon(`/api/sources/${_slingLoginSourceId}/sling-browser-login/stop`);
+      }
+    });
 
     async function _pollSlingLoginModal() {
       if (!_slingLoginSourceId) return;
