@@ -61,6 +61,7 @@ import requests
 from .base import (BaseScraper, ChannelData, ConfigField, ProgramData,
                     ScrapeSkipError, StreamDeadError, infer_language_from_metadata)
 from .category_utils import category_for_channel, infer_category_from_name
+from ..gracenote_map import resolve_gracenote
 from ..tve.adobe_pass import TVENotAuthorizedError
 
 logger = logging.getLogger(__name__)
@@ -405,6 +406,7 @@ class SpectrumScraper(BaseScraper):
                 # by this, not by the playback/entitlement id. Read back in
                 # fetch_epg() via each ChannelData's own .guide_key.
                 guide_key=tms_guide_id,
+                gracenote_id=resolve_gracenote('spectrum', upstream_id=tms_guide_id, lookup_key=str(entitlement_id)),
             ))
         travel = self._fetch_travel_channels(location, channels, home_by_network)
         logger.info('[spectrum] %d channels fetched (%d travel), %d excluded as unavailable '
@@ -516,6 +518,7 @@ class SpectrumScraper(BaseScraper):
                 stream_type='dash',
                 number=(home.get('channelNumbers') or [None])[0],
                 guide_key=tms_id,
+                gracenote_id=resolve_gracenote('spectrum', upstream_id=tms_id, lookup_key=ncs_id),
             ))
             taken_ids.add(ncs_id)
             taken_guide_keys.add(tms_id)
