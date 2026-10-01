@@ -502,11 +502,15 @@ def _espn_tv_provider() -> tuple[str, str]:
 
 def _espn_tve_info(saved: dict) -> dict:
     """What the ESPN card needs for its TV-provider sign-in."""
+    from ..tve.providers import ytdlp_adobe_mso_providers
     mso_id, mso_name = _espn_tv_provider()
+    providers = ytdlp_adobe_mso_providers()
     return {'tve_signed_in': bool(saved.get('adobe_client_id')),
+            'tve_mvpd_id': saved.get('adobe_mvpd'),
             'tve_mvpd_name': saved.get('adobe_mvpd_name') or saved.get('adobe_mvpd'),
             'tve_signed_in_at': saved.get('adobe_signed_in_at'),
             'tve_expires_at': saved.get('adobe_expires_at'),
+            'providers': [{'id': p['id'], 'name': p['name']} for p in providers],
             'settings_mvpd_id': mso_id, 'settings_mvpd_name': mso_name}
 
 
@@ -1443,9 +1447,14 @@ def espn_tve_start(source_id):
     source = Source.query.get_or_404(source_id)
     if source.name != 'espn':
         return jsonify({'error': 'not an espn source'}), 400
-    mso_id, _ = _espn_tv_provider()
+    # The card may pick a provider just for ESPN; otherwise fall back to the
+    # shared one from Settings → TV Everywhere. start_adobe_signin validates
+    # the choice against ESPN's own accepted-provider list.
+    mso_id = ((request.get_json(silent=True) or {}).get('provider_id') or '').strip()
     if not mso_id:
-        return jsonify({'error': 'Choose your TV provider under Settings → TV Everywhere first.'}), 400
+        mso_id, _ = _espn_tv_provider()
+    if not mso_id:
+        return jsonify({'error': 'Choose a TV provider first.'}), 400
     try:
         pending = start_adobe_signin(mso_id)
     except (ESPNAuthError, _requests.RequestException) as e:

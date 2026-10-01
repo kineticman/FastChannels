@@ -3365,6 +3365,11 @@
     function renderEspnConfig(sourceId, schema, values, cfg) {
       const info = (cfg && cfg.espn) || {};
       const tveProvider = info.tve_mvpd_name || info.settings_mvpd_name;
+      const defaultMvpd = info.tve_mvpd_id || info.settings_mvpd_id;
+      const provOpts = ['<option value="">Choose your TV provider…</option>'].concat(
+        (info.providers || []).map(p =>
+          `<option value="${escapeHtml(p.id)}" ${p.id === defaultMvpd ? 'selected' : ''}>${escapeHtml(p.name)}</option>`)
+      ).join('');
       return `
         <div class="config-title">ESPN Settings</div>
         <div class="config-note">
@@ -3391,15 +3396,18 @@
         <div class="config-note">
           For cable or streaming TV subscribers without ESPN Unlimited: plays whichever of ESPN, ESPN2,
           ESPNU, ESPNews, ESPN Deportes, SEC Network and ACC Network your TV package includes (the
-          stream audit switches off the rest). NFL Network and MLB Network need an ESPN plan. Get a sign-in link here, open it on your phone or computer, and sign in to your
-          TV provider there.
-          ${info.settings_mvpd_id ? '' : `<br>Choose your TV provider under
-            <a href="/admin/settings#settings-card-tve">Settings → TV Everywhere</a> first.`}
+          stream audit switches off the rest). NFL Network and MLB Network need an ESPN plan. Pick your
+          TV provider, get a sign-in link here, open it on your phone or computer, and sign in there.
+          ${info.settings_mvpd_id ? '' : `<br>Defaults to the provider from
+            <a href="/admin/settings#settings-card-tve">Settings → TV Everywhere</a> — none is set, so choose one here.`}
+        </div>
+        <div class="field field-full" style="max-width:360px;margin:0.4rem 0 0.6rem">
+          <label for="espn-tve-provider-${sourceId}">TV provider</label>
+          <select id="espn-tve-provider-${sourceId}">${provOpts}</select>
         </div>
         <div class="amazon-autologin-panel" id="espn-tve-${sourceId}">
           <div class="amazon-autologin-header">
             <button class="btn btn-run" type="button" id="espn-tve-btn-${sourceId}"
-                    ${info.settings_mvpd_id ? '' : 'disabled'}
                     onclick="espnTveStart(${sourceId})">${info.tve_signed_in ? 'Sign in again' : 'Get sign-in link'}</button>
             ${info.tve_signed_in ? `<button class="btn btn-cancel btn-sm" type="button"
                     onclick="espnTveClear(${sourceId})">Sign out</button>` : ''}
@@ -3415,10 +3423,19 @@
     async function espnTveStart(sourceId) {
       const btn      = document.getElementById(`espn-tve-btn-${sourceId}`);
       const statusEl = document.getElementById(`espn-tve-status-${sourceId}`);
+      const provider = (document.getElementById(`espn-tve-provider-${sourceId}`)?.value || '').trim();
+      if (!provider) {
+        statusEl.innerHTML = '<span style="color:var(--danger-soft)">Choose your TV provider first.</span>';
+        return;
+      }
       btn.disabled = true;
       statusEl.innerHTML = '<span style="color:var(--text-muted)">Getting a sign-in link…</span>';
       try {
-        const r = await fetch(`/api/sources/${sourceId}/espn-tve/start`, { method: 'POST' });
+        const r = await fetch(`/api/sources/${sourceId}/espn-tve/start`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ provider_id: provider }),
+        });
         const d = await r.json().catch(() => ({}));
         if (!r.ok) {
           statusEl.innerHTML = `<span style="color:var(--danger-soft)">${escapeHtml(d.error || 'Could not get a sign-in link.')}</span>`;
