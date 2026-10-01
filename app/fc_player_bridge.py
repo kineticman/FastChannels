@@ -457,24 +457,27 @@ def _ah4c_base_url() -> str:
     return base
 
 
-def ah4c_tuner_ips() -> list[str]:
-    """The tuner device addresses ah4c has configured (its TUNERn_IP values), read
-    from ah4c's own GET /api/status JSON ("Tuners": [{"Tunerip": ...}, ...]).
+def ah4c_tuner_ips() -> list[tuple[int, str]]:
+    """(tuner number, address) for each tuner device ah4c has configured (its
+    TUNERn_IP values), read from ah4c's own GET /api/status JSON
+    ("Tuners": [{"Tunerip": ...}, ...]).
 
-    Returned in ah4c's own tuner order, as ah4c reports them — a bare host or a
-    host:port, whatever was put in TUNERn_IP — with blanks and duplicates dropped.
+    The number is the entry's position in that list, which is how ah4c itself
+    numbers tuners in its logs (0-based, so TUNER1_IP is tuner 0); blanks and
+    duplicates are dropped without renumbering the rest. The address is as ah4c
+    reports it — a bare host or a host:port, whatever was put in TUNERn_IP.
     Raises FcPlayerNotConfigured if no ah4c URL is set; lets requests/JSON errors
     propagate so the caller can tell the user why it couldn't ask ah4c."""
     resp = requests.get(f'{_ah4c_base_url()}/api/status', timeout=_AH4C_STATUS_TIMEOUT)
     resp.raise_for_status()
     tuners = resp.json().get('Tuners') or []
     seen: set[str] = set()
-    out: list[str] = []
-    for entry in tuners:
+    out: list[tuple[int, str]] = []
+    for idx, entry in enumerate(tuners):
         ip = str((entry or {}).get('Tunerip') or '').strip()
         if ip and ip not in seen:
             seen.add(ip)
-            out.append(ip)
+            out.append((idx, ip))
     return out
 
 
@@ -672,7 +675,7 @@ def verify_ah4c_tuners() -> list[dict]:
     FastChannels Player version after confirming installation for the active
     Android user; ah4c can drive a stick that never got the player sideloaded."""
     results: list[dict] = []
-    for idx, ip in enumerate(ah4c_tuner_ips(), start=1):
+    for idx, ip in ah4c_tuner_ips():
         # ah4c stores TUNERn_IP as a bare host or host:port; the container's adb
         # keys are always host:5555 (see prebmitune.sh's own optional-port match).
         address = ip if ':' in ip.rsplit(']', 1)[-1] else f'{ip}:5555'
