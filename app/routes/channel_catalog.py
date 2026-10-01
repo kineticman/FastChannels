@@ -7,6 +7,19 @@
 
 CHANNEL_CATALOG = [
     {
+        "network": "KTLA",
+        "channels": [
+            {
+                "name": "KTLA 5 Live",
+                "stream_url": "https://ktla.com/on-air/live-streaming/",
+                "logo_url": "https://ktla.com/wp-content/uploads/sites/4/2023/01/KTLA-LOGO_LAS-VERY-OWN-logo.png",
+                "category": "News",
+                "language": "en",
+                "redetect_on_play": True,
+            },
+        ],
+    },
+    {
         "network": "Kaloopy",
         "channels": [
             {
