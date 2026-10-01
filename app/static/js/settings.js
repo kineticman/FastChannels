@@ -369,6 +369,7 @@ function renderAh4cTuners(tuners) {
   ['ah4c tuner', 'TUNERx_IP', 'Authorized in FastChannels', 'Android / Fire OS', 'Sleep disabled', 'FC Player', 'Scripts'].forEach((label) => {
     const th = document.createElement('th');
     th.textContent = label;
+    if (label === 'ah4c tuner') th.title = 'Numbered as in ah4c’s logs, which start at 0: TUNER1_IP is tuner #0.';
     // Keep the literal env-var name as-is; the other headers get uppercased by CSS.
     if (label === 'TUNERx_IP') th.className = 'no-transform';
     head.appendChild(th);
@@ -398,6 +399,12 @@ function renderAh4cTuners(tuners) {
     const ipCell = row.insertCell();
     ipCell.textContent = t.tuner_ip;
     ipCell.className = 'mono';
+    // ah4c's log numbers are 0-based, its env vars 1-based; name the env var so
+    // "#0" beside TUNER1_IP's address doesn't read as a mismatch.
+    const envNote = document.createElement('div');
+    envNote.className = 'ah4c-tuner-note';
+    envNote.textContent = 'TUNER' + (t.index + 1) + '_IP';
+    ipCell.appendChild(envNote);
 
     const [text, cls] = badges[t.state] || ['✕ ' + t.state, 'error'];
     addBadge(row.insertCell(), text, cls, t.message);
