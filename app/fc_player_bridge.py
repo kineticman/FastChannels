@@ -320,7 +320,8 @@ def is_configured() -> bool:
 
 
 def hdmi_capture_configured(settings=None) -> bool:
-    """Whether the fixed, single-stream HDMI Capture path is usable."""
+    """Whether the fixed, single-stream HDMI Capture path is usable. Its own
+    toggle is folded into the effective encoder URL (None while it's off)."""
     settings = settings or AppSettings.get()
     return bool(
         settings.fc_player_bridge_enabled

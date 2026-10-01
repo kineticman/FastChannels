@@ -338,6 +338,13 @@ async function createFcPlayerCaptureSource() {
   }
 }
 
+async function saveFcPlayerHdmiToggle() {
+  const enabled = document.getElementById('fc-player-hdmi-enabled').checked;
+  const ok = await saveSettings({fc_player_hdmi_enabled: enabled}, 'fc-player-status');
+  // Affects whether the HDMI Capture M3U option shows up on the Feeds page.
+  if (ok) setTimeout(() => location.reload(), 700);
+}
+
 async function saveFcPlayerIdleStopToggle() {
   const enabled = document.getElementById('fc-player-idle-stop-enabled').checked;
   await saveSettings({fc_player_idle_stop_enabled: enabled}, 'fc-player-status');

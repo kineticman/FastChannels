@@ -239,6 +239,10 @@ In the **FastChannels Player devices** card:
 
 In the **HDMI Capture** card, complete:
 
+- **Enable HDMI Capture:** Turns on the single-stream HDMI path and its M3U.
+  Installs that already had a capture stream URL saved before this toggle
+  existed are switched on automatically when they upgrade.
+
 - **HDMI Capture device IP:** Enter the IP address found in step 2.
   FastChannels adds ADB port `5555` automatically. This is the device the
   HDMI Capture path always triggers. ah4c Capture triggers whichever

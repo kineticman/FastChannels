@@ -364,6 +364,8 @@ def app_settings():
             if data.get('fc_player_encoder_url') and not encoder_url:
                 return jsonify({'error': 'Invalid HDMI capture stream URL.'}), 422
             row.fc_player_bridge_encoder_url = encoder_url
+        if 'fc_player_hdmi_enabled' in data:
+            row.fc_player_bridge_hdmi_enabled = bool(data['fc_player_hdmi_enabled'])
         if 'fc_player_idle_stop_enabled' in data:
             row.fc_player_bridge_idle_stop_enabled = bool(data['fc_player_idle_stop_enabled'])
         if 'fc_player_captions_enabled' in data:
@@ -372,6 +374,14 @@ def app_settings():
             row.fc_player_bridge_ah4c_enabled = bool(data['fc_player_ah4c_enabled'])
         if 'fc_player_ah4c_url' in data:
             row.fc_player_bridge_ah4c_url = _normalize_server_url(data['fc_player_ah4c_url'], default_port=None)
+        # Both hardware methods run through the FastChannels Player app, so switching
+        # either one on switches the shared hardware-capture toggle on with it — a
+        # method toggle that silently does nothing is the trap this avoids. Turning
+        # hardware capture off still leaves the method toggles as they were.
+        if ((data.get('fc_player_hdmi_enabled') is True or data.get('fc_player_ah4c_enabled') is True)
+                and not row.fc_player_bridge_enabled):
+            row.fc_player_bridge_enabled = True
+            bridge_mode_changed = True
         bridge_mode_changed |= hardware_capture_was_active != fc_player_bridge.hardware_bridge_active(row)
         bridge_mode_changed |= prismcast_was_active != row.prismcast_capture_configured()
         if bridge_mode_changed:
@@ -410,7 +420,8 @@ def app_settings():
         'drm_bridge_enabled': bool(row.bridge_enabled),  # deprecated API alias
         'fc_player_enabled': bool(row.fc_player_bridge_enabled),
         'fc_player_ip': _fc_player_ip_display,
-        'fc_player_encoder_url': row.effective_fc_player_bridge_encoder_url() or '',
+        'fc_player_encoder_url': row.saved_fc_player_bridge_encoder_url() or '',
+        'fc_player_hdmi_enabled': bool(row.fc_player_bridge_hdmi_enabled),
         'fc_player_idle_stop_enabled': bool(row.fc_player_bridge_idle_stop_enabled),
         'fc_player_captions_enabled': bool(row.fc_player_bridge_captions_enabled),
         'fc_player_ah4c_enabled': bool(row.fc_player_bridge_ah4c_enabled),
@@ -435,7 +446,8 @@ def test_fc_player():
     if not ok:
         return jsonify({'ok': False, 'message': message})
 
-    encoder_url = AppSettings.get().effective_fc_player_bridge_encoder_url()
+    # Saved, not effective: the test should work before HDMI Capture is switched on.
+    encoder_url = AppSettings.get().saved_fc_player_bridge_encoder_url()
     if not encoder_url:
         return jsonify({
             'ok': True,
@@ -653,7 +665,9 @@ def bridge_healthcheck():
                 add('ok', 'FastChannels Player version', f"Installed {device_status.get('player_version')} — up to date.")
 
         encoder_url = settings.effective_fc_player_bridge_encoder_url()
-        if not encoder_url:
+        if not settings.fc_player_bridge_hdmi_enabled:
+            add('skip', 'HDMI Capture stream', 'HDMI Capture is disabled.')
+        elif not encoder_url:
             add('skip', 'HDMI Capture stream', 'No fixed encoder stream is configured.')
         else:
             add('info', 'HDMI Capture endpoint',

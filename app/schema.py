@@ -1,3 +1,5 @@
+import os
+
 from sqlalchemy import text
 
 from .extensions import db
@@ -284,6 +286,18 @@ def ensure_runtime_schema() -> None:
                 # front end for the bridge; unrelated installs shouldn't get a new M3U/DVR-push
                 # option they never asked for.
                 conn.execute(text("ALTER TABLE app_settings ADD COLUMN fc_player_bridge_ah4c_enabled BOOLEAN NOT NULL DEFAULT 0"))
+            if "fc_player_bridge_hdmi_enabled" not in cols:
+                # HDMI Capture used to be implied by a saved capture stream URL. Keep it
+                # on for every install that has one (in the DB or via the env var), so
+                # an upgrade never drops a working HDMI bridge; off for everyone else.
+                conn.execute(text("ALTER TABLE app_settings ADD COLUMN fc_player_bridge_hdmi_enabled BOOLEAN NOT NULL DEFAULT 0"))
+                if (os.environ.get("FC_PLAYER_BRIDGE_ENCODER_URL") or "").strip().rstrip("/"):
+                    conn.execute(text("UPDATE app_settings SET fc_player_bridge_hdmi_enabled = 1"))
+                else:
+                    conn.execute(text(
+                        "UPDATE app_settings SET fc_player_bridge_hdmi_enabled = 1 "
+                        "WHERE TRIM(COALESCE(fc_player_bridge_encoder_url, '')) != ''"
+                    ))
             if "fc_player_bridge_ah4c_url" not in cols:
                 conn.execute(text("ALTER TABLE app_settings ADD COLUMN fc_player_bridge_ah4c_url TEXT"))
             if "fc_player_device_settings_backup" not in cols:
