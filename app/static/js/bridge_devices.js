@@ -133,6 +133,12 @@ function _bdRender(address) {
   if (probe && probe.authorized) {
     actions.push('<button class="btn btn-secondary btn-sm" data-act="controls">Device controls</button>');
   }
+  if (probe && !probe.authorized) {
+    // A plain refresh reuses adb's existing connection; this opens a fresh one,
+    // which is what makes an unapproved device show its approval prompt again.
+    const label = state === 'unauthorized' ? 'Request approval' : 'Try connecting';
+    actions.push(`<button class="btn btn-primary btn-sm" data-act="reconnect" ${entry.busy ? 'disabled' : ''}>${label}</button>`);
+  }
   actions.push('<button class="btn btn-secondary btn-sm" data-act="rename">Rename</button>');
   if (info.remembered && !info.roles.length) {
     actions.push('<button class="btn btn-secondary btn-sm" data-act="forget">Forget</button>');
@@ -176,9 +182,9 @@ function _bdUpdateToolbar() {
   }
 }
 
-async function _bdProbe(address, seq) {
+async function _bdProbe(address, seq, reconnect = false) {
   try {
-    const {data} = await _bdPost('/api/settings/fc-player/devices/probe', {address});
+    const {data} = await _bdPost('/api/settings/fc-player/devices/probe', {address, reconnect});
     if (seq !== bridgeDevicesLoadSeq) return;
     const entry = bridgeDevices.get(address);
     if (!entry) return;
@@ -251,6 +257,15 @@ async function _bdInstall(address, {force = false, silent = false} = {}) {
   _bdRender(address);
   if (result.data.ok) await _bdProbe(address, bridgeDevicesLoadSeq);
   return !!result.data.ok;
+}
+
+async function _bdReconnect(address) {
+  const entry = bridgeDevices.get(address);
+  if (!entry || entry.busy) return;
+  entry.probe = null;  // back to "Checking…" while adb reconnects
+  entry.message = '';
+  _bdRender(address);
+  await _bdProbe(address, bridgeDevicesLoadSeq, true);
 }
 
 async function updateAllBridgeDevices() {
@@ -326,6 +341,7 @@ document.addEventListener('click', (event) => {
   const act = btn.dataset.act;
   if (act === 'install') _bdInstall(address);
   else if (act === 'controls') openFcPlayerDeviceControls(address, _bdTitle(bridgeDevices.get(address)));
+  else if (act === 'reconnect') _bdReconnect(address);
   else if (act === 'rename') _bdRename(address);
   else if (act === 'forget') _bdForget(address);
 });

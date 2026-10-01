@@ -482,12 +482,22 @@ def ah4c_tuner_ips() -> list[tuple[int, str]]:
     return out
 
 
-def _adb_state_for(address: str) -> tuple[str, str]:
+def _adb_state_for(address: str, *, reconnect: bool = False) -> tuple[str, str]:
     """(state, human-readable message) for one device address, from this container's
     own adb client — connects first (same first step a real tune takes), then asks
     adb for the device state. state is one of: 'device' (reachable + this
-    container's adb key is authorized), 'unauthorized', 'offline', 'unreachable'."""
+    container's adb key is authorized), 'unauthorized', 'offline', 'unreachable'.
+
+    reconnect=True drops any existing connection first. `adb connect` is a no-op on
+    a connection adb is already holding — including an unauthorized one — and the
+    device only raises its "Allow USB debugging?" prompt on a fresh connection, so
+    this is the only way to bring back a prompt that was missed or dismissed."""
     try:
+        if reconnect:
+            subprocess.run(
+                ['adb', 'disconnect', address],
+                capture_output=True, timeout=_ADB_TIMEOUT, check=False,
+            )
         subprocess.run(
             ['adb', 'connect', address],
             capture_output=True, timeout=_ADB_TIMEOUT, check=False,
@@ -503,11 +513,14 @@ def _adb_state_for(address: str) -> tuple[str, str]:
     if state.returncode == 0 and (state.stdout or '').strip() == 'device':
         return 'device', 'Authorized — reachable over adb from FastChannels.'
     if 'unauthorized' in blob:
-        # Checking the state already ran `adb connect`, which is what puts the
-        # prompt on the TV, so there's nothing else to trigger.
-        return 'unauthorized', ("Reachable, but not approved yet. On the TV, tick \"Always allow "
-                                'from this computer" and choose Allow on the "Allow USB debugging?" '
-                                'prompt, then check again.')
+        if reconnect:
+            return 'unauthorized', ('Approval prompt sent. On the TV, tick "Always allow from this '
+                                    'computer" and choose Allow, then use Refresh. If nothing '
+                                    "appeared, wake the device and try again, or switch ADB "
+                                    'Debugging off and on in its Developer Options.')
+        return 'unauthorized', ("Reachable, but not approved yet. Use Request approval to put the "
+                                '"Allow USB debugging?" prompt on the TV, then tick "Always allow '
+                                'from this computer" and choose Allow.')
     if 'offline' in blob:
         return 'offline', 'Connected but offline — power-cycle the device or re-approve adb.'
     return 'unreachable', ("No adb connection — check the IP, that the device is powered on, and "

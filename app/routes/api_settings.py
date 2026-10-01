@@ -828,12 +828,15 @@ def list_fc_player_devices():
 
 @settings_bp.route('/settings/fc-player/devices/probe', methods=['POST'])
 def probe_fc_player_device():
-    """Live adb status for one device; the page probes each device in parallel."""
+    """Live adb status for one device; the page probes each device in parallel.
+    `reconnect` is the card's Request approval / Try connecting button."""
     from .. import bridge_devices
-    address = bridge_devices.normalize_address((request.get_json(silent=True) or {}).get('address'))
+    data = request.get_json(silent=True) or {}
+    address = bridge_devices.normalize_address(data.get('address'))
     if not address:
         return jsonify({'ok': False, 'message': 'Invalid device address.'}), 400
-    return jsonify({'ok': True, 'device': bridge_devices.probe(address)})
+    reconnect = bool(data.get('reconnect')) and bridge_devices.is_known(address)
+    return jsonify({'ok': True, 'device': bridge_devices.probe(address, reconnect=reconnect)})
 
 
 @settings_bp.route('/settings/fc-player/devices', methods=['POST'])
