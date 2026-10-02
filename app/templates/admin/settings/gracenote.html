@@ -40,17 +40,6 @@
           <span class="save-status" id="gn-remote-status"></span>
         </div>
       </div>
-      <div class="toggle-row" id="gn-contribution-row">
-        <div class="toggle-row-text">
-          <div class="toggle-row-label">Contribution Webhook URL</div>
-          <div class="toggle-row-help">Where user contributions are sent when they click Contribute in the Community Map. Defaults to the FastChannels community webhook — leave blank to use the default.</div>
-          <div style="margin-top:0.5rem;display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap">
-            <input type="url" id="gn-contribution-url" style="flex:1;min-width:260px;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:0.82rem;padding:0.35rem 0.6rem" placeholder="Default Make.com webhook (leave blank to use default)" value="{{ gracenote_contribution_url }}">
-            <button class="btn btn-secondary" onclick="saveContributionUrl()">Save URL</button>
-          </div>
-          <span class="save-status" id="gn-contribution-status"></span>
-        </div>
-      </div>
       <div style="padding: 0.75rem 0 0.25rem; display:flex; gap:0.5rem; flex-wrap:wrap; align-items:center">
         <button class="btn btn-audit" onclick="openCommunityMap()">Browse Community Map</button>
         <button class="btn btn-danger" onclick="document.getElementById('gracenote-clear-modal').classList.add('open')">Disable &amp; Clear All Gracenote</button>

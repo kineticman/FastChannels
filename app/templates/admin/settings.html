@@ -42,6 +42,7 @@
     <a href="#settings-section-guide">Guide Data</a>
     <a href="#settings-section-credentials">Credentials</a>
     <a href="#settings-section-maintenance">Maintenance</a>
+    <a href="#settings-section-advanced">Advanced</a>
   </nav>
 
   <section class="settings-section" id="settings-section-setup">
@@ -60,10 +61,9 @@
     <div class="settings-section-header">
       <div>
         <h2>Playback</h2>
-        <p>Controls that affect playlist output, stream routing, and image delivery.</p>
+        <p>Controls how channel logos and guide artwork are delivered.</p>
       </div>
     </div>
-    {% include 'admin/settings/experimental_output.html' %}
     {% include 'admin/settings/image_proxy.html' %}
   </section>
 
@@ -97,6 +97,16 @@
     </div>
     {% include 'admin/settings/backup.html' %}
     {% include 'admin/settings/system_stats.html' %}
+  </section>
+
+  <section class="settings-section" id="settings-section-advanced">
+    <div class="settings-section-header">
+      <div>
+        <h2>Advanced</h2>
+        <p>Optional playlist behavior and diagnostic logging.</p>
+      </div>
+    </div>
+    {% include 'admin/settings/advanced.html' %}
   </section>
 
   {% include 'admin/settings/modals.html' %}

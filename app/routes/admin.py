@@ -1681,8 +1681,7 @@ def settings():
                                'home_zip_code': '',
                                'xfinity_cookie_jar_captured_at': None,
                            },
-                           drm_bridge_recoverable_count=_drm_bridge_recoverable_count(),
-                           gracenote_contribution_url=app_settings.gracenote_contribution_url or '')
+                           drm_bridge_recoverable_count=_drm_bridge_recoverable_count())
 
 
 @admin_bp.route('/bridge')

@@ -2510,18 +2510,6 @@ async function loadSystemStats() {
   }
 }
 
-async function saveContributionUrl() {
-  const url = document.getElementById('gn-contribution-url').value.trim();
-  const st = document.getElementById('gn-contribution-status');
-  st.textContent = 'Saving…'; st.className = 'save-status';
-  try {
-    const cr = await fetch('/api/settings', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({gracenote_contribution_url: url}) });
-    if (!cr.ok) throw new Error(`HTTP ${cr.status}`);
-    st.textContent = 'Saved'; st.className = 'save-status saved';
-  } catch(e) { st.textContent = 'Error'; st.className = 'save-status error'; }
-  setTimeout(() => { st.textContent = ''; }, 3000);
-}
-
 initSettingsSectionNav();
 if (document.getElementById('system-stats-body')) loadSystemStats();
 if (document.getElementById('tve-provider')) updateTveProviderFields();
