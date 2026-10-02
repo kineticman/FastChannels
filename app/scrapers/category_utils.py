@@ -1300,6 +1300,7 @@ _NAME_OVERRIDES: dict[str, str] = {
     # Seasonal Yule-log loop; Pluto only files it under the rotating
     # "Christmas In July" promo bucket, so no genre reaches us upstream.
     'festive fireplace':                    'Ambiance',
+    'roku fireside':                        'Ambiance',
 
     # ── Nature ───────────────────────────────────────────────────────────────
     'bbc travel':                           'Travel',
