@@ -3118,6 +3118,13 @@ def play_fc_player_bridge(source_name: str, channel_id: str):
         return _unavailable_response()
 
     adb_override = _fc_player_adb_override(request.args.get('adb'))
+    if not adb_override and not settings.effective_fc_player_bridge_adb_address():
+        # ah4c-only setups have no saved device IP; the tuner's address has to
+        # arrive as ?adb= from bmitune.sh.
+        logger.error('[fc-player] play request for %s/%s without ?adb= and no saved device IP',
+                     source_name, channel_id)
+        return Response('No device address: the request had no ?adb= and no device IP is saved.\n',
+                        status=503, mimetype='text/plain')
     triggered = fc_player_bridge.trigger_channel(
         manifest_url, license_url, name=channel.name or 'FastChannels',
         channel_key=f'{source_name}:{channel_id}',

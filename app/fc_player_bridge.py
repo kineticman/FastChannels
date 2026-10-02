@@ -331,11 +331,11 @@ def hdmi_capture_configured(settings=None) -> bool:
 
 
 def ah4c_capture_configured(settings=None) -> bool:
-    """Whether the ah4c multi-tuner Capture path is usable."""
+    """Whether the ah4c multi-tuner Capture path is usable. Doesn't need the saved
+    device IP: ah4c's bmitune.sh passes the tuner's address on every tune (?adb=)."""
     settings = settings or AppSettings.get()
     return bool(
         settings.fc_player_bridge_enabled
-        and settings.effective_fc_player_bridge_adb_address()
         and settings.fc_player_bridge_ah4c_enabled
         and settings.effective_fc_player_bridge_ah4c_url()
     )

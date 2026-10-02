@@ -1493,8 +1493,7 @@ def _bridge_methods(settings) -> list[dict]:
                             _fc_player_bridge.ah4c_capture_configured(settings)),
             'missing': _missing([('hardware capture toggle', player_on),
                                  ('ah4c Capture toggle', settings.fc_player_bridge_ah4c_enabled),
-                                 ('ah4c server URL', ah4c_url),
-                                 ('a Player device', adb)]),
+                                 ('ah4c server URL', ah4c_url)]),
         },
         {
             'key': 'hdmi',
@@ -1656,11 +1655,7 @@ def settings():
                                and app_settings.effective_fc_player_bridge_adb_address()
                                and app_settings.effective_fc_player_bridge_encoder_url()
                            ),
-                           fc_player_ah4c_configured=bool(
-                               app_settings.fc_player_bridge_enabled
-                               and app_settings.effective_fc_player_bridge_adb_address()
-                               and app_settings.effective_fc_player_bridge_ah4c_url()
-                           ),
+                           fc_player_ah4c_configured=_fc_player_bridge.ah4c_capture_configured(app_settings),
                            tve_provider_choices=tve_provider_choices,
                            tve_account=tve_account.to_safe_dict() if tve_account else {
                                'provider_id': 'mvpd',
@@ -1716,11 +1711,7 @@ def bridge():
             and app_settings.effective_fc_player_bridge_adb_address()
             and app_settings.effective_fc_player_bridge_encoder_url()
         ),
-        fc_player_ah4c_configured=bool(
-            app_settings.fc_player_bridge_enabled
-            and app_settings.effective_fc_player_bridge_adb_address()
-            and app_settings.effective_fc_player_bridge_ah4c_url()
-        ),
+        fc_player_ah4c_configured=_fc_player_bridge.ah4c_capture_configured(app_settings),
     )
 
 
