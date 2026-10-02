@@ -1076,6 +1076,19 @@ def check_ah4c_tuners():
     return jsonify({'ok': True, 'tuners': tuners})
 
 
+@settings_bp.route('/settings/fc-player/ah4c-activity', methods=['GET'])
+def get_ah4c_activity():
+    """Read-only activity summary for the ah4c Bridge card; no ADB probes."""
+    try:
+        return jsonify({'ok': True, **fc_player_bridge.ah4c_activity()})
+    except fc_player_bridge.FcPlayerNotConfigured:
+        return jsonify({'ok': False, 'message': 'Save an ah4c server URL to see activity.'}), 400
+    except (ValueError, TypeError):
+        return jsonify({'ok': False, 'message': 'ah4c returned invalid status data.'}), 502
+    except _req.RequestException:
+        return jsonify({'ok': False, 'message': 'Could not reach ah4c. Check its server URL and availability.'}), 502
+
+
 @settings_bp.route('/fc-player/heartbeat', methods=['POST'])
 def fc_player_heartbeat():
     """Periodic "still watching" ping from the /watch page for a channel that fell

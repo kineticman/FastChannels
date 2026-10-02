@@ -369,6 +369,13 @@
       line-height: 1.4;
       max-width: 32ch;
     }
+    .ah4c-activity {
+      margin-top: 1.2rem;
+      padding-top: 0.7rem;
+      border-top: 1px solid var(--border);
+    }
+    .ah4c-activity .fc-devices-toolbar { padding-top: 0; }
+    .ah4c-activity .fc-device { gap: 0.35rem; }
 
     /* ── FastChannels Player devices card ── */
     .fc-devices-toolbar {

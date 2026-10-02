@@ -364,7 +364,9 @@ async function saveFcPlayerAh4cToggle() {
 
 async function saveFcPlayerAh4cSettings() {
   const url = document.getElementById('fc-player-ah4c-url').value.trim();
-  await saveSettings({fc_player_ah4c_url: url || null}, 'fc-player-ah4c-status');
+  if (await saveSettings({fc_player_ah4c_url: url || null}, 'fc-player-ah4c-status')) {
+    loadAh4cActivity();
+  }
 }
 
 function renderAh4cTuners(tuners) {

@@ -348,4 +348,89 @@ document.addEventListener('click', (event) => {
 
 document.addEventListener('DOMContentLoaded', () => {
   if (document.getElementById('fc-devices-list')) loadBridgeDevices();
+  if (document.getElementById('ah4c-activity-list')) {
+    loadAh4cActivity();
+    setInterval(() => {
+      if (!document.hidden) loadAh4cActivity();
+    }, 15000);
+  }
 });
+
+let ah4cActivitySeq = 0;
+
+function _ah4cElapsed(seconds) {
+  const total = Math.max(0, Math.floor(Number(seconds) || 0));
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  return hours ? `${hours}h ${String(minutes).padStart(2, '0')}m` : `${minutes}m`;
+}
+
+async function loadAh4cActivity() {
+  const list = document.getElementById('ah4c-activity-list');
+  if (!list) return;
+  const summary = document.getElementById('ah4c-activity-summary');
+  const link = document.getElementById('ah4c-activity-link');
+  const seq = ++ah4cActivitySeq;
+  let data;
+  try {
+    const response = await fetch('/api/settings/fc-player/ah4c-activity');
+    data = await response.json();
+  } catch (e) {
+    data = {ok: false, message: 'Could not load ah4c activity.'};
+  }
+  if (seq !== ah4cActivitySeq) return;
+  list.replaceChildren();
+  if (!data.ok) {
+    summary.textContent = 'Unavailable';
+    const message = document.createElement('div');
+    message.className = 'fc-devices-empty';
+    message.textContent = data.message || 'Could not load ah4c activity.';
+    list.appendChild(message);
+    link.hidden = true;
+    return;
+  }
+
+  const tuners = data.tuners || [];
+  const active = tuners.filter((t) => t.active).length;
+  summary.textContent = `${active} of ${tuners.length} tuners in use`;
+  try {
+    const url = new URL(data.status_url);
+    if (!['http:', 'https:'].includes(url.protocol)) throw new Error('Invalid dashboard URL');
+    link.href = url.href;
+    link.hidden = false;
+  } catch (e) {
+    link.hidden = true;
+  }
+  if (!tuners.length) {
+    const empty = document.createElement('div');
+    empty.className = 'fc-devices-empty';
+    empty.textContent = 'ah4c reports no configured tuners.';
+    list.appendChild(empty);
+    return;
+  }
+  for (const tuner of tuners) {
+    const card = document.createElement('div');
+    card.className = `fc-device ${tuner.active ? 'state-device' : ''}`;
+    card.innerHTML = '<div class="fc-device-head"><span class="fc-device-dot" aria-hidden="true"></span><div class="fc-device-ident"><div class="fc-device-name"></div><div class="fc-device-sub"></div></div><span class="fc-device-state"></span></div><dl class="fc-device-facts"></dl>';
+    card.querySelector('.fc-device-name').textContent = `Tuner #${tuner.index}`;
+    card.querySelector('.fc-device-sub').textContent = tuner.address || 'Device address unavailable';
+    card.querySelector('.fc-device-state').textContent = tuner.active ? 'Streaming' : 'Idle';
+    const facts = card.querySelector('.fc-device-facts');
+    for (const reader of tuner.readers || []) {
+      const label = document.createElement('dt');
+      label.textContent = 'Channel';
+      const value = document.createElement('dd');
+      value.textContent = `${reader.channel || 'Unknown'} · ${_ah4cElapsed(reader.elapsed)}`;
+      facts.append(label, value);
+    }
+    if (tuner.active && !(tuner.readers || []).length) {
+      const label = document.createElement('dt');
+      label.textContent = 'Activity';
+      const value = document.createElement('dd');
+      value.textContent = 'Starting stream…';
+      facts.append(label, value);
+    }
+    if (!facts.children.length) facts.remove();
+    list.appendChild(card);
+  }
+}

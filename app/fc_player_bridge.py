@@ -458,6 +458,36 @@ def _ah4c_base_url() -> str:
     return base
 
 
+def ah4c_activity() -> dict:
+    """Read the small, live subset of ah4c status used by the Bridge card."""
+    base = _ah4c_base_url()
+    resp = requests.get(f'{base}/api/status', timeout=_AH4C_STATUS_TIMEOUT)
+    resp.raise_for_status()
+    data = resp.json()
+    if not isinstance(data, dict) or not isinstance(data.get('Tuners'), list) or not isinstance(data.get('Readers'), list):
+        raise ValueError('ah4c returned an invalid status payload')
+
+    readers = {}
+    for entry in data['Readers']:
+        if not isinstance(entry, dict) or not isinstance(entry.get('T'), int):
+            continue
+        readers.setdefault(entry['T'], []).append({
+            'channel': str(entry.get('Name') or entry.get('Channel') or '')[:120],
+            'elapsed': max(0, int(entry.get('Elapsed') or 0)),
+        })
+    tuners = []
+    for index, entry in enumerate(data['Tuners']):
+        if not isinstance(entry, dict):
+            continue
+        tuners.append({
+            'index': index,
+            'address': str(entry.get('Tunerip') or '')[:120],
+            'active': entry.get('Active') is True,
+            'readers': readers.get(index, []),
+        })
+    return {'tuners': tuners, 'status_url': f'{base}/status'}
+
+
 def ah4c_tuner_ips() -> list[tuple[int, str]]:
     """(tuner number, address) for each tuner device ah4c has configured (its
     TUNERn_IP values), read from ah4c's own GET /api/status JSON
