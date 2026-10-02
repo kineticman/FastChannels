@@ -639,7 +639,11 @@ class AMCNetworksTVEScraper(MvpdCooldownMixin, BaseScraper):
             # r.url — same exemption fox_tve.py's equivalent call makes.
             r.raise_for_status()
             mso_login_url = ''
-        if not mso_login_url and mso_id != 'DTV' and not allow_empty_redirect:
+        # Only Xfinity's scripted backend needs the redirect URL itself.
+        # Confirmed live 2026-10-01 (Blue Stream, tpc010): watchtveverywhere
+        # providers get the same 200 auto-submit form DIRECTV does — the
+        # caller's login_to_mvpd() raises the real "click Sign in" error.
+        if not mso_login_url and mso_id == 'Comcast_SSO' and not allow_empty_redirect:
             logger.warning(
                 '[amcn-tve] no MVPD redirect for mso_id=%s: HTTP %d final_url=%s body[:300]=%r',
                 mso_id, r.status_code, r.url, r.text[:300],

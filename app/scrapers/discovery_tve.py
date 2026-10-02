@@ -500,8 +500,13 @@ class DiscoveryTVEScraper(MvpdCooldownMixin, BaseScraper):
         if not self.config.get('device_id'):
             self._update_config('device_id', device_id)
 
+        # Confirmed live 2026-10-01 (Blue Stream, tpc010): watchtveverywhere
+        # providers get the same 200 auto-submit SAML form, no redirect.
+        # Only Xfinity's scripted backend actually needs the redirect URL;
+        # everything else falls through to login_to_mvpd() below, which
+        # raises the real "click Sign in" error and flags the notice.
         mso_login_url, r = self._discovery_session_redirect(
-            session, device_id, mso_id, mso_name, allow_empty_redirect=mso_id in ('Cox', 'Spectrum'),
+            session, device_id, mso_id, mso_name, allow_empty_redirect=mso_id != 'Comcast_SSO',
         )
         _raise_if_spectrum_routed(mso_id, mso_login_url, r)
 
