@@ -1032,6 +1032,9 @@ _NAME_OVERRIDES: dict[str, str] = {
     'the walking dead espanol':             'Horror',
     'monsters are real':                    'Horror',
     'pluto tv paranormal':                  'Horror',
+    'pluto tv terror':                      'Horror',
+    'pluto tv halloween':                   'Horror',
+    'dark shadows':                         'Horror',
     'beyond belief: fact or fiction':       'Horror',
 
     # ── International ────────────────────────────────────────────────────────
