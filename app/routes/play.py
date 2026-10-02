@@ -2553,11 +2553,17 @@ def license_proxy(source_name: str, channel_id: str | None = None):
             body, headers = scraper_cls.prepare_license_request(
                 challenge, cfg, channel_id=channel_id, sht=sht)
             headers.setdefault('Content-Type', 'application/octet-stream')
-            logger.info('[spectrum-license] minted a fresh stream session after HTTP 401 channel=%s: %s',
-                        channel_id, (r.content or b'')[:200])
+            logger.info('[spectrum-license] minted a fresh stream session after HTTP 401 '
+                        'request_id=%s channel=%s: %s',
+                        getattr(g, 'request_id', '-'), channel_id, (r.content or b'')[:200])
             r = _send_license()
+            logger.info('[spectrum-license] license retry completed request_id=%s channel=%s '
+                        'status=%d bytes=%d',
+                        getattr(g, 'request_id', '-'), channel_id, r.status_code, len(r.content or b''))
         except Exception as e:
-            logger.warning('[spectrum-license] channel refresh after HTTP 401 failed: %s', e)
+            logger.warning('[spectrum-license] channel refresh after HTTP 401 failed '
+                           'request_id=%s channel=%s: %s',
+                           getattr(g, 'request_id', '-'), channel_id, e)
     logger.debug('[license-proxy] %s channel=%s -> HTTP %s (%d bytes)',
                  source_name, channel_id or '-', r.status_code, len(r.content))
     if r.status_code >= 400:
@@ -2569,8 +2575,10 @@ def license_proxy(source_name: str, channel_id: str | None = None):
             error=f'license HTTP {r.status_code}',
         )
         logger.warning(
-            '[license-proxy] %s channel=%s upstream returned HTTP %s (%d bytes): %s',
-            source_name, channel_id or '-', r.status_code, len(r.content or b''),
+            '[license-proxy] %s request_id=%s channel=%s upstream returned HTTP %s '
+            '(%d bytes): %s',
+            source_name, getattr(g, 'request_id', '-'), channel_id or '-',
+            r.status_code, len(r.content or b''),
             (r.content or b'')[:300],
         )
     response_bytes = scraper_cls.process_license_response(r.content)
