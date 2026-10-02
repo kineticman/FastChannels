@@ -632,13 +632,22 @@ def bridge_healthcheck():
     elif bridge_candidates:
         add('ok', 'Bridge sources', f'{len(enabled_source_ids)} enabled source(s); {bridge_candidates} channel(s) are marked for bridge output.')
     else:
+        if not settings.bridge_enabled:
+            fix = 'Turn on Bridge mode, then run Stream Audit on the sources you intend to bridge.'
+        elif not (settings.prismcast_capture_configured() or fc_player_bridge.hardware_capture_configured(settings)):
+            fix = ('No capture method is fully set up yet, so channels can\'t be marked. '
+                   'Finish setting up ah4c, HDMI Capture or PrismCast above (each tile lists what is missing).')
+        else:
+            fix = 'Run Stream Audit on the sources you intend to bridge, and check their channels are enabled.'
         add('warn', 'Bridge sources', f'{len(enabled_source_ids)} DRM-capable source(s) are enabled, but none are marked for bridge output.',
-            'Run Stream Audit on the sources you intend to bridge.')
+            fix)
 
     # HDMI Capture is a fixed single-stream path. Probe only when it has been
     # selected/configured, so unused hardware never creates a scary failure.
     if not settings.fc_player_bridge_enabled:
         add('skip', 'HDMI Capture', 'Hardware capture is disabled.')
+    elif not settings.fc_player_bridge_hdmi_enabled and not settings.effective_fc_player_bridge_adb_address():
+        add('skip', 'HDMI Capture', 'HDMI Capture is disabled.')
     elif not settings.effective_fc_player_bridge_adb_address():
         add('warn', 'HDMI Capture device', 'No Android TV / Fire TV device IP is configured.',
             'Enter the device IP in HDMI Capture, then approve its ADB prompt on the TV.')
