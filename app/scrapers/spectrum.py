@@ -61,6 +61,7 @@ import requests
 from .base import (BaseScraper, ChannelData, ConfigField, ProgramData,
                     ScrapeSkipError, StreamDeadError, infer_language_from_metadata)
 from .category_utils import category_for_channel, infer_category_from_name
+from ..gracenote_map import resolve_gracenote
 from ..tve.adobe_pass import TVENotAuthorizedError
 
 logger = logging.getLogger(__name__)
@@ -405,6 +406,7 @@ class SpectrumScraper(BaseScraper):
                 # by this, not by the playback/entitlement id. Read back in
                 # fetch_epg() via each ChannelData's own .guide_key.
                 guide_key=tms_guide_id,
+                gracenote_id=resolve_gracenote('spectrum', upstream_id=tms_guide_id, lookup_key=str(entitlement_id)),
             ))
         travel = self._fetch_travel_channels(location, channels, home_by_network)
         logger.info('[spectrum] %d channels fetched (%d travel), %d excluded as unavailable '
@@ -496,14 +498,14 @@ class SpectrumScraper(BaseScraper):
             # Same service already in the regular lineup — nothing to add.
             if ncs_id in taken_ids or tms_id in taken_guide_keys:
                 continue
-            # Named and categorized after the home row it stands in for, so it
-            # reads "CW (WWHO)" and lands in the same category — the travel
-            # feed's own callsign is network-level ("CWTV") and it has no genre.
+            # Named "CW (Local)", not after the home row it stands in for: the
+            # home row's callsign ("CW (WWHO)") is the station that CAN'T be
+            # streamed from here, and the travel feed's own callsign is only
+            # network-level ("CWTV"), so the real local station's callsign
+            # isn't known (forum post #3292). Numbered and categorized after
+            # the home row, since the travel feed has no genre.
             home = home_by_network.get(str(network.get('id'))) or {}
-            name = (home.get('networkName') or '').strip()
-            if not name:
-                callsign = re.sub(r'DT\d*$', '', (network.get('callsign') or '').strip())
-                name = f'{base_name} ({callsign})' if callsign and callsign not in base_name else base_name
+            name = f'{base_name} (Local)'
             image_uri = (network.get('image_uri') or '').lstrip('/')
             travel.append(ChannelData(
                 source_channel_id=ncs_id,
@@ -516,6 +518,7 @@ class SpectrumScraper(BaseScraper):
                 stream_type='dash',
                 number=(home.get('channelNumbers') or [None])[0],
                 guide_key=tms_id,
+                gracenote_id=resolve_gracenote('spectrum', upstream_id=tms_id, lookup_key=ncs_id),
             ))
             taken_ids.add(ncs_id)
             taken_guide_keys.add(tms_id)

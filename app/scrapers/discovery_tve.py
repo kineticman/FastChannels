@@ -210,14 +210,11 @@ def _browser_signin_required(provider: str) -> DiscoveryBrowserSignInRequired:
     session shows "sign in again" instead of just silently failing to play.
     A later successful sign-in supersedes the recorded error."""
     message = (
-        f'Discovery TVE needs you to sign in again: {provider} sign-in only works in a browser, '
-        'so it can\'t be renewed automatically. Use Sign in under Settings → TVE.'
+        f'Discovery TVE needs you to sign in again: {provider} sign-in can\'t be renewed '
+        'automatically. Use Sign in under Settings → TV Everywhere (on your phone works too).'
     )
-    try:
-        from ..tve.browser_login.common import _record_tve_login_error
-        _record_tve_login_error('discovery', message)
-    except Exception:  # noqa: BLE001
-        pass
+    from ..tve.signin_notice import mark_signin_needed
+    mark_signin_needed('discovery', message)
     return DiscoveryBrowserSignInRequired(message)
 
 
@@ -503,8 +500,13 @@ class DiscoveryTVEScraper(MvpdCooldownMixin, BaseScraper):
         if not self.config.get('device_id'):
             self._update_config('device_id', device_id)
 
+        # Confirmed live 2026-10-01 (Blue Stream, tpc010): watchtveverywhere
+        # providers get the same 200 auto-submit SAML form, no redirect.
+        # Only Xfinity's scripted backend actually needs the redirect URL;
+        # everything else falls through to login_to_mvpd() below, which
+        # raises the real "click Sign in" error and flags the notice.
         mso_login_url, r = self._discovery_session_redirect(
-            session, device_id, mso_id, mso_name, allow_empty_redirect=mso_id in ('Cox', 'Spectrum'),
+            session, device_id, mso_id, mso_name, allow_empty_redirect=mso_id != 'Comcast_SSO',
         )
         _raise_if_spectrum_routed(mso_id, mso_login_url, r)
 
@@ -532,7 +534,7 @@ class DiscoveryTVEScraper(MvpdCooldownMixin, BaseScraper):
         try:
             code_url = login_to_mvpd(
                 mso_id, page_html, page_url, account.username or '', account.password or '',
-                cookie_jar=cookie_jar,
+                cookie_jar=cookie_jar, key='discovery',
             )
         except TVENotAuthorizedError:
             raise

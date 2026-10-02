@@ -24,6 +24,35 @@ done
 # Ensure the default SQLite data directory exists before app startup.
 mkdir -p /data
 
+# Keep the ADB key (FastChannels Player / Fire TV pairing) across container
+# recreates. The documented setup mounts a volume at /root/.android; installs
+# whose compose file lacks it (older One-Click templates, hand-rolled docker
+# run) would otherwise mint a new key on every update and force re-approval
+# on each TV. Fall back to /data/.android, which every working install persists.
+ADB_FALLBACK_DIR=/data/.android
+if mountpoint -q /root/.android 2>/dev/null; then
+    # Volume present. If it's newly added and empty, seed it from the fallback
+    # so switching to the documented mount doesn't cost a re-approval.
+    if [ ! -f /root/.android/adbkey ] && [ -f "$ADB_FALLBACK_DIR/adbkey" ]; then
+        cp -p "$ADB_FALLBACK_DIR"/adbkey* /root/.android/ 2>/dev/null || true
+        echo "✅ ADB key carried over from $ADB_FALLBACK_DIR"
+    fi
+elif [ ! -L /root/.android ]; then
+    mkdir -p "$ADB_FALLBACK_DIR"
+    if [ -d /root/.android ]; then
+        # Container restarted after writing a key to its own layer: keep it
+        # unless the fallback already has one.
+        if [ ! -f "$ADB_FALLBACK_DIR/adbkey" ] && [ -f /root/.android/adbkey ]; then
+            cp -p /root/.android/adbkey* "$ADB_FALLBACK_DIR"/ 2>/dev/null || true
+        fi
+        rm -rf /root/.android
+    fi
+    ln -s "$ADB_FALLBACK_DIR" /root/.android
+    echo "✅ ADB key stored in $ADB_FALLBACK_DIR (no /root/.android volume mounted)"
+fi
+chmod 700 "$ADB_FALLBACK_DIR" 2>/dev/null || true
+chmod 600 /root/.android/adbkey 2>/dev/null || true
+
 # One-time cleanup: the legacy watch-M3U output was replaced by the PrismCast
 # hybrid feed, so its artifacts are no longer generated. Remove any orphans left
 # by older builds (harmless if absent; nothing regenerates them).

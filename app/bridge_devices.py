@@ -147,7 +147,7 @@ def known_devices() -> tuple[list[dict], str | None]:
 
     ah4c_error = None
     try:
-        for idx, ip in enumerate(fcp.ah4c_tuner_ips(), start=1):
+        for idx, ip in fcp.ah4c_tuner_ips():
             address = normalize_address(ip)
             if address:
                 entry(address)['roles'].append(f'ah4c tuner {idx}')
@@ -312,9 +312,10 @@ def _active_channel_key(address: str) -> str | None:
     return None
 
 
-def probe(address: str) -> dict:
-    """Live adb status for one device. Fields degrade to None when unknown."""
-    state, message = fcp._adb_state_for(address)
+def probe(address: str, *, reconnect: bool = False) -> dict:
+    """Live adb status for one device. Fields degrade to None when unknown.
+    reconnect=True opens a fresh adb connection first (see fcp._adb_state_for)."""
+    state, message = fcp._adb_state_for(address, reconnect=reconnect)
     result = {
         'address': address,
         'state': state,

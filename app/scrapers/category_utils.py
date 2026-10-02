@@ -1032,6 +1032,9 @@ _NAME_OVERRIDES: dict[str, str] = {
     'the walking dead espanol':             'Horror',
     'monsters are real':                    'Horror',
     'pluto tv paranormal':                  'Horror',
+    'pluto tv terror':                      'Horror',
+    'pluto tv halloween':                   'Horror',
+    'dark shadows':                         'Horror',
     'beyond belief: fact or fiction':       'Horror',
 
     # ── International ────────────────────────────────────────────────────────
@@ -1297,6 +1300,7 @@ _NAME_OVERRIDES: dict[str, str] = {
     # Seasonal Yule-log loop; Pluto only files it under the rotating
     # "Christmas In July" promo bucket, so no genre reaches us upstream.
     'festive fireplace':                    'Ambiance',
+    'roku fireside':                        'Ambiance',
 
     # ── Nature ───────────────────────────────────────────────────────────────
     'bbc travel':                           'Travel',

@@ -189,7 +189,8 @@ for the pairing workflow.
 Use these steps on either Fire TV or Android TV after the device IP is saved in
 **Bridge → HDMI Capture**:
 
-1. Retry **Test connection** or **Install FastChannels Player** and watch the
+1. Retry **Test connection**, or click **Refresh** in the **FastChannels Player
+   devices** card, and watch the
    TV for **Allow USB debugging?** (or an equivalent ADB authorization prompt).
 2. Select **Always allow from this computer**, then choose **Allow**. This is
    the authorization for the FastChannels container, not just your laptop.
@@ -224,14 +225,24 @@ must be enabled and authorized afterward for FastChannels to launch it.
 
 ## 3. Configure FastChannels
 
-In the FastChannels admin interface, go to **Bridge**. The **HDMI Capture**
-card contains the shared FastChannels Player companion-app controls; ah4c
-Capture has its own card and Save button.
+In the FastChannels admin interface, go to **Bridge**. The **FastChannels
+Player devices** card holds the settings shared by every device and lists each
+device; **HDMI Capture** and **ah4c Capture** each have their own card and Save
+button.
 
-In the **HDMI Capture** card, complete:
+In the **FastChannels Player devices** card:
 
 - **Enable hardware capture:** Turns on the FastChannels Player companion app
   — required before either hardware capture path works.
+- **Show captions when available:** Optional. Renders an English subtitle/CC
+  track when the stream advertises one.
+
+In the **HDMI Capture** card, complete:
+
+- **Enable HDMI Capture:** Turns on the single-stream HDMI path and its M3U.
+  Installs that already had a capture stream URL saved before this toggle
+  existed are switched on automatically when they upgrade.
+
 - **HDMI Capture device IP:** Enter the IP address found in step 2.
   FastChannels adds ADB port `5555` automatically. This is the device the
   HDMI Capture path always triggers. ah4c Capture triggers whichever
@@ -240,11 +251,11 @@ In the **HDMI Capture** card, complete:
   than one ah4c tuner, set this to any one of the sticks.
 - **Stop playback when nobody's watching:** Optional. When enabled, playback
   stops after about five minutes without a confirmed viewer.
-- **Show captions when available:** Optional. Renders an English subtitle/CC
-  track when the stream advertises one.
 
-Click **Save** in that section before continuing — the device IP must already
-be saved for the install button below to work.
+Click **Save** in that section before continuing — the device shows up in the
+**FastChannels Player devices** card once its IP is saved. (ah4c tuners show
+up there from ah4c's tuner list; any other device can be added with **Add
+device**.)
 
 Before attempting a real bridge-only channel, use **Bridge → Post-install
 Healthcheck → Run healthcheck**. It checks the configured hardware paths
@@ -266,8 +277,8 @@ The automatic stop option detects viewers using Channels DVR's activity status
 or the FastChannels `/watch` page. It cannot detect a third-party player
 connected directly to the M3U. Leave this option off if you watch that way.
 
-**Fire TV Device Controls** next to the Install button is the quickest way to
-diagnose a headless device: it shows ADB reachability, whether the screen is
+**Device controls** on each device in the **FastChannels Player devices**
+card is the quickest way to diagnose a headless device: it shows ADB reachability, whether the screen is
 awake, the installed player version, and current display timeouts. **Apply
 headless preset** keeps a powered device awake and prevents its screen/sleep
 timeouts from interrupting the HDMI encoder; FastChannels saves the prior
@@ -287,12 +298,14 @@ controlled remotely by FastChannels.
 
 ### Install from the admin UI (recommended)
 
-Click **Install FastChannels Player** on the same settings card. FastChannels
-runs `adb install` using the release APK bundled into the Docker image, so no
-download or manual sideload is needed. The device IP from step 3 must already
-be saved, and ADB debugging must already be enabled on the device (step 2).
+Click **Install player** on the device in the **FastChannels Player devices**
+card. FastChannels runs `adb install` using the release APK bundled into the
+Docker image, so no download or manual sideload is needed. ADB debugging must
+already be enabled on the device (step 2).
 
-The same button is also the normal update path for future player versions. It
+The same card is also the normal update path for future player versions:
+each out-of-date device shows **Update to …**, and **Update all** does every
+device at once. It
 replaces the installed app while preserving its data, provided both versions
 use the official release signature.
 
@@ -342,7 +355,11 @@ build or maintain on the ah4c side.
    dedicated one) per tuner, and either `ENCODERn_URL` or `CMDn`/`CMDn_DEVICE`
    for your capture hardware. `IPADDRESS` should be set to wherever ah4c
    itself is reachable from — the same address you'll enter in FastChannels
-   below. Multiple tuners each with their own `TUNERn_IP` and encoder are
+   below. Also set `CHANNELSIP` to your Channels DVR server (e.g.
+   `192.168.1.20:8089`); newer ah4c versions open a setup wizard instead of
+   their home page until it's set. Those versions also want a persistent
+   folder mounted at `/opt/config` for their settings, and warn in the log
+   until one is added. Multiple tuners each with their own `TUNERn_IP` and encoder are
    supported: ah4c allocates a tuner per tune and the exported `bmitune.sh`
    passes that tuner's device to FastChannels, so concurrent tunes each trigger
    their own streaming stick.
@@ -351,7 +368,8 @@ build or maintain on the ah4c side.
    - Enter ah4c's **server URL** (e.g. `http://192.168.1.30:7654`) — the same
      address as `IPADDRESS` above. Click **Save**.
    - Only if your ah4c image doesn't include `scripts/firetv/fastchannels`
-     yet (see step 3), click **Export ah4c scripts**. A modal asks for this
+     yet (see step 3), click **Update ah4c scripts** and use **Other ways to
+     install → download the scripts**. The modal asks for this
      FastChannels server's own address, as reachable from the machine running
      ah4c (it's pre-filled from your browser's address, but confirm it — the
      two machines aren't always the same one). Downloading produces
@@ -387,10 +405,14 @@ build or maintain on the ah4c side.
    instead. Restart the ah4c container to pick up the change.
 
    Each tune reports its script version, and the tuner check's **Scripts**
-   column shows it after a tuner's next tune. **No version** means an older
-   script set that works but lacks later fixes. To update, run a newer ah4c
-   image with `UPDATE_SCRIPTS=true` (which refreshes the selected scripts on
-   start), or re-export.
+   column shows **Up to date** or **Update recommended** after a tuner's next
+   tune. Older scripts still work but lack later fixes. The simplest way to
+   stay current is `UPDATE_SCRIPTS=true` in ah4c (with `FASTCHANNELS_URL`
+   set): each time ah4c starts, it installs the scripts that ship with it, so
+   updating ah4c updates them. Otherwise, click **Update ah4c scripts** and run
+   the one-line command it shows on the ah4c host (no restart needed). Either
+   way replaces any edits you made to the scripts. The column only changes
+   after the next tune.
 4. Confirm that you installed FastChannels Player in Step 4. The same app is
    used by both capture methods; ah4c changes only how tuning and HDMI capture
    are orchestrated.

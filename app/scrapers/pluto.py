@@ -547,6 +547,9 @@ class PlutoScraper(BaseScraper):
                     categories.append('Movie')
                 categories.extend(mapped_categories(ep.get('subGenre')))
                 unique_categories = list(dict.fromkeys(cat for cat in categories if cat))
+                rating = (ep.get('rating') or '').strip()
+                if not rating or rating.lower() in ('not rated', 'no rating'):
+                    rating = None
                 ep_p169     = _pluto_img((ep.get('poster16_9') or {}).get('path'))
                 ep_poster23 = _pluto_img((ep.get('poster')     or {}).get('path'))
                 if series_type == 'film':
@@ -582,7 +585,8 @@ class PlutoScraper(BaseScraper):
                     end_time          = end,
                     poster_url        = poster_url,
                     category          = ';'.join(unique_categories) or None,
-                    season            = ep.get('season'),
+                    rating            = rating,
+                    season           = ep.get('season'),
                     episode           = ep.get('number'),
                     episode_title     = ep_title if ep_title.lower() != title.lower() else None,
                     original_air_date = (

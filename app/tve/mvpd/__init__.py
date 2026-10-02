@@ -41,19 +41,25 @@ _EXPECTED_HOST_SUBSTRING = {}
 _BROWSER_ONLY_MSOS = {'Cox': 'Cox / Cox Spectrum', 'Spectrum': 'Spectrum'}
 
 
-def require_scripted_mvpd_login(mso_id: str, *, where: str = 'for this network in Settings > TV Everywhere') -> None:
+def require_scripted_mvpd_login(mso_id: str, *, where: str = 'for this network in Settings > TV Everywhere',
+                                key: str | None = None) -> None:
     """Raise a clear "sign in again" TVEAuthError for an MSO only a browser
     can sign in to. Call it at the point a scripted flow would otherwise
     start a fresh MVPD login — after any Adobe session reuse has had its
-    chance, never before. `where` says where the Sign in button is."""
+    chance, never before. `where` says where the Sign in button is; `key`
+    (the network's status key) also flags it for the "sign in again"
+    notices — see app/tve/signin_notice.py."""
     name = _BROWSER_ONLY_MSOS.get(mso_id)
     if name:
-        raise TVEAuthError(f'{name} sign-in needs a browser. Click "Sign in" {where} to sign in again.')
+        message = f'{name} sign-in needs you. Click "Sign in" {where} to sign in again.'
+        from ..signin_notice import mark_signin_needed
+        mark_signin_needed(key, message)
+        raise TVEAuthError(message)
 
 
 def login_to_mvpd(
     mso_id: str, page_html: str, page_url: str, username: str, password: str,
-    *, cookie_jar: dict | None = None,
+    *, cookie_jar: dict | None = None, key: str | None = None,
 ) -> str:
     """Sign in to `mso_id` starting from the login page Adobe Pass's own
     authenticate call already produced (`page_html`/`page_url` — the actual
@@ -69,7 +75,7 @@ def login_to_mvpd(
     Raises TVEAuthError for any MSO with no backend registered here yet,
     or that only a browser can sign in to (see require_scripted_mvpd_login).
     """
-    require_scripted_mvpd_login(mso_id)
+    require_scripted_mvpd_login(mso_id, key=key)
     expected_host = _EXPECTED_HOST_SUBSTRING.get(mso_id)
     if expected_host and expected_host not in page_url:
         raise TVEAuthError(f'Unexpected {mso_id} login host: {urlsplit(page_url).netloc}.')
@@ -109,4 +115,7 @@ def login_to_mvpd(
             _mark_directv_login_failed(str(exc))
             raise
 
-    raise TVEAuthError(f'{mso_id}: no scripted sign-in is wired up for this provider yet.')
+    message = f'{mso_id}: this provider can\'t be signed in automatically — click "Sign in" to sign in again.'
+    from ..signin_notice import mark_signin_needed
+    mark_signin_needed(key, message)
+    raise TVEAuthError(message)

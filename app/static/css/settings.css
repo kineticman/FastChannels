@@ -369,6 +369,13 @@
       line-height: 1.4;
       max-width: 32ch;
     }
+    .ah4c-activity {
+      margin-top: 1.2rem;
+      padding-top: 0.7rem;
+      border-top: 1px solid var(--border);
+    }
+    .ah4c-activity .fc-devices-toolbar { padding-top: 0; }
+    .ah4c-activity .fc-device { gap: 0.35rem; }
 
     /* ── FastChannels Player devices card ── */
     .fc-devices-toolbar {
@@ -508,40 +515,6 @@
       font-weight: 600;
     }
     .bridge-fallback-details .help { margin-top: 0.6rem; }
-    .bridge-audit-note {
-      margin-top: 1rem;
-      padding: 0.75rem 0.85rem;
-      border: 1px solid color-mix(in srgb, var(--warning-soft) 45%, var(--border));
-      border-radius: 8px;
-      color: var(--text-soft);
-      font-size: 0.83rem;
-      line-height: 1.5;
-    }
-    .bridge-audit-note a {
-      display: block;
-      width: fit-content;
-      margin-top: 0.4rem;
-      color: var(--accent-soft);
-      text-decoration: none;
-      font-weight: 600;
-    }
-    .bridge-audit-note a:hover { text-decoration: underline; }
-    .bridge-source-inventory {
-      margin-top: 1rem;
-      padding-top: 0.9rem;
-      border-top: 1px solid var(--border);
-    }
-    .bridge-source-inventory-title {
-      margin-bottom: 0.55rem;
-      color: var(--text-soft);
-      font-size: 0.82rem;
-      font-weight: 600;
-    }
-    .bridge-source-chips {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 0.45rem;
-    }
     .bridge-source-chip {
       display: grid;
       grid-template-columns: auto auto;
@@ -554,23 +527,8 @@
       text-decoration: none;
     }
     .bridge-source-chip:hover { border-color: var(--accent); }
-    .bridge-source-name { font-size: 0.8rem; font-weight: 600; }
-    .bridge-source-method { color: var(--text-muted); font-size: 0.7rem; }
-    .bridge-source-count { grid-column: 1 / -1; color: var(--accent-soft); font-size: 0.68rem; }
     @media (max-width: 720px) {
       .bridge-method-grid { grid-template-columns: 1fr; }
-    }
-    .bridge-supported-columns {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 1.1rem;
-      margin-top: 0.9rem;
-    }
-    .bridge-supported-column-title {
-      margin-bottom: 0.5rem;
-      color: var(--text-soft);
-      font-size: 0.78rem;
-      font-weight: 600;
     }
     .bridge-source-chip-static {
       display: inline-block;
@@ -582,8 +540,105 @@
       font-size: 0.8rem;
       font-weight: 600;
     }
+
+    /* ── Bridge page: status strip, method tiles, coverage ── */
+    .bridge-section-title {
+      margin: 0 0 0.6rem;
+      color: var(--text-soft);
+      font-size: 0.78rem;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      scroll-margin-top: 4.5rem;
+    }
+    /* These cards have no .source-header, so the body supplies its own top padding. */
+    .bridge-card-body.source-body { padding-top: 1.1rem; }
+    .bridge-status { display: flex; align-items: center; gap: 1rem; }
+    .bridge-status-text { flex: 1; min-width: 0; }
+    .bridge-status-title { color: var(--text); font-size: 1rem; font-weight: 650; }
+    .bridge-status-title .save-status { font-size: 0.8rem; font-weight: 400; margin-left: 0.5rem; }
+    .bridge-status-facts {
+      display: flex; flex-wrap: wrap; gap: 0.15rem 1.1rem;
+      margin-top: 0.2rem; color: var(--text-soft); font-size: 0.83rem; line-height: 1.45;
+    }
+    .bridge-status-facts strong { color: var(--text); font-weight: 600; }
+    .bridge-steps { list-style: none; margin: 0.8rem 0 0; padding: 0; display: grid; gap: 0.6rem; }
+    .bridge-steps li {
+      display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 0.65rem;
+      color: var(--text-soft); font-size: 0.85rem; line-height: 1.5;
+    }
+    .bridge-steps li strong { color: var(--text); }
+    .bridge-steps a { color: var(--accent-soft); text-decoration: none; }
+    .bridge-steps a:hover { text-decoration: underline; }
+    .bridge-step-mark {
+      width: 1.05rem; height: 1.05rem; margin-top: 0.12rem;
+      border: 1.5px solid var(--text-muted); border-radius: 50%;
+      display: grid; place-items: center; font-size: 0.68rem; line-height: 1;
+    }
+    .bridge-steps li.done { color: var(--text-muted); }
+    .bridge-steps li.done strong { color: var(--text-soft); }
+    .bridge-steps li.done .bridge-step-mark {
+      border-color: var(--success-soft); color: var(--success-soft);
+    }
+    .bridge-steps li.done .bridge-step-mark::before { content: '✓'; }
+    .bridge-method-grid { margin: 0 0 1.5rem; }
+    .bridge-method { display: flex; flex-direction: column; }
+    .bridge-method-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 0.5rem; }
+    .bridge-method-live { border-color: color-mix(in srgb, var(--success-soft) 45%, var(--border)); }
+    .bridge-method a.bridge-method-jump {
+      margin-top: auto; align-self: flex-start; color: var(--text); font-size: 0.85rem;
+    }
+    .bridge-method a.bridge-method-jump:hover { text-decoration: none; }
+    .bridge-method a:has(+ .bridge-method-jump) { margin-bottom: 0.7rem; }
+    .bridge-state {
+      flex-shrink: 0; padding: 0.1rem 0.45rem; border: 1px solid var(--border); border-radius: 999px;
+      color: var(--text-muted); font-size: 0.68rem; font-weight: 600; white-space: nowrap;
+    }
+    .bridge-state-live {
+      color: var(--success-soft);
+      border-color: color-mix(in srgb, var(--success-soft) 45%, var(--border));
+    }
+    .bridge-state-ready, .bridge-state-setup {
+      color: var(--warning-soft);
+      border-color: color-mix(in srgb, var(--warning-soft) 45%, var(--border));
+    }
+    .bridge-method-cards { display: grid; gap: 1.5rem; margin-bottom: 1.5rem; }
+    .bridge-method-cards .source-card { margin: 0; scroll-margin-top: 4.5rem; }
+    .bridge-cov-wrap { overflow-x: auto; }
+    /* Fixed layout so the collapsed "also supported" table lines up with the main one. */
+    .bridge-cov { width: 100%; min-width: 720px; table-layout: fixed; border-collapse: collapse; font-size: 0.84rem; }
+    .bridge-cov th:nth-child(5), .bridge-cov td:nth-child(5) { width: 11.5rem; }
+    .bridge-cov th:nth-child(6), .bridge-cov td:nth-child(6) { width: 11rem; }
+    .bridge-cov th, .bridge-cov td {
+      padding: 0.5rem 0.6rem; border-bottom: 1px solid var(--border);
+      text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .bridge-cov thead th {
+      color: var(--text-muted); font-size: 0.72rem; font-weight: 600;
+    }
+    .bridge-cov tbody th { color: var(--text); font-weight: 600; white-space: normal; }
+    .bridge-dot { font-size: 1.05rem; line-height: 1; }
+    .bridge-cov-legend .bridge-dot { font-size: inherit; }
+    .bridge-cov tbody tr:last-child th, .bridge-cov tbody tr:last-child td { border-bottom: 0; }
+    .bridge-cov .bridge-cov-method { width: 5rem; text-align: center; }
+    .bridge-cov a { color: var(--accent-soft); text-decoration: none; }
+    .bridge-cov a:hover { text-decoration: underline; }
+    .bridge-cov-ready { color: var(--success-soft); font-weight: 600; }
+    .bridge-cov-warn { color: var(--warning-soft); font-weight: 600; }
+    .bridge-cov-of { color: var(--text-muted); }
+    .bridge-dot-live { color: var(--success-soft); }
+    .bridge-dot-idle { color: var(--text-soft); }
+    .bridge-dot-na { color: var(--text-muted); opacity: 0.6; }
+    .bridge-cov-other { margin-top: 0.9rem; padding-top: 0.8rem; border-top: 1px solid var(--border); }
+    .bridge-cov-other summary {
+      cursor: pointer; color: var(--text-soft); font-size: 0.84rem; font-weight: 600;
+    }
+    .bridge-cov-other .bridge-cov-wrap { margin-top: 0.5rem; }
+    .bridge-cov-other thead { display: none; }
+    .bridge-cov-legend { display: flex; flex-wrap: wrap; gap: 0.2rem 1.1rem; margin-top: 0.9rem; }
     @media (max-width: 720px) {
-      .bridge-supported-columns { grid-template-columns: 1fr; }
+      .bridge-status { flex-wrap: wrap; }
+      .bridge-status-text { flex-basis: calc(100% - 4.5rem); }
     }
 
     .advanced-box {
@@ -634,6 +689,10 @@
       justify-content: space-between;
       gap: 1.5rem;
       padding: 0.75rem 0 0.25rem;
+    }
+    #settings-card-advanced .toggle-row + .toggle-row {
+      margin-top: 0.9rem;
+      border-top: 1px solid var(--border);
     }
     .toggle-row-text { flex: 1; }
     .toggle-row-label {
@@ -835,14 +894,7 @@
     .needs-config-banner li.item-configured { color: var(--success-soft); }
     .needs-config-banner li.item-configured a { color: var(--success-soft); }
 
-    /* ── Bridge post-install healthcheck ── */
-    .bridge-healthcheck {
-      display: flex; align-items: center; justify-content: space-between; gap: 1rem;
-      margin-top: 1rem; padding: 0.9rem 1rem;
-      background: color-mix(in srgb, var(--accent-bg) 48%, var(--surface));
-      border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--border)); border-radius: 8px;
-    }
-    .bridge-healthcheck-title { font-weight: 650; color: var(--text); margin-bottom: 0.2rem; }
+    /* ── Bridge healthcheck results ── */
     .bridge-healthcheck-actions { display: flex; gap: 0.5rem; flex-wrap: wrap; flex-shrink: 0; }
     .bridge-healthcheck-results { margin-top: 0.75rem; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
     .bridge-live-test-picker { margin-top: 0.75rem; padding: 0.85rem; border: 1px solid color-mix(in srgb, var(--warning-soft) 35%, var(--border)); border-radius: 8px; background: var(--surface-2); }
@@ -880,6 +932,5 @@
       .source-body { padding: 0 1rem 1rem; }
       .field-actions { flex-wrap: wrap; justify-content: flex-start; }
       .save-status { min-width: 0; text-align: left; }
-      .bridge-healthcheck { align-items: flex-start; flex-direction: column; }
       .bridge-live-test-next { align-items: flex-start; flex-direction: column; }
     }

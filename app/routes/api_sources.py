@@ -481,12 +481,37 @@ def get_source_config(source_id):
         extra['fox_one'] = _fox_one_signin_info(saved)
     if source.name == 'espn':
         extra['espn'] = {'signed_in': bool(saved.get('refresh_token')),
-                         'signed_in_at': saved.get('signed_in_at')}
+                         'signed_in_at': saved.get('signed_in_at'),
+                         **_espn_tve_info(saved)}
     return jsonify({'schema': schema, 'values': values, 'config_complete': config_complete,
                     'config_status': config_status,
                     'oauth_token_time': saved.get('oauth_token_time'),
                     'token_captured_at': saved.get('token_captured_at'),
                     'retired': retired, **extra})
+
+
+def _espn_tv_provider() -> tuple[str, str]:
+    """(Adobe mvpd id, display name) of the TV provider under Settings → TV
+    Everywhere — the same id the other Adobe v2 sign-ins (NBC) use."""
+    from ..models import TVEAccount
+    account = TVEAccount.query.filter_by(provider_id='mvpd').first()
+    cfg = (account.config or {}) if account else {}
+    mso_id = (cfg.get('yt_dlp_mso_id') or cfg.get('selected_mso_id') or '').strip()
+    return mso_id, (cfg.get('selected_mso_name') or mso_id).strip()
+
+
+def _espn_tve_info(saved: dict) -> dict:
+    """What the ESPN card needs for its TV-provider sign-in."""
+    from ..tve.providers import ytdlp_adobe_mso_providers
+    mso_id, mso_name = _espn_tv_provider()
+    providers = ytdlp_adobe_mso_providers()
+    return {'tve_signed_in': bool(saved.get('adobe_client_id')),
+            'tve_mvpd_id': saved.get('adobe_mvpd'),
+            'tve_mvpd_name': saved.get('adobe_mvpd_name') or saved.get('adobe_mvpd'),
+            'tve_signed_in_at': saved.get('adobe_signed_in_at'),
+            'tve_expires_at': saved.get('adobe_expires_at'),
+            'providers': [{'id': p['id'], 'name': p['name']} for p in providers],
+            'settings_mvpd_id': mso_id, 'settings_mvpd_name': mso_name}
 
 
 def _fox_one_signin_info(saved: dict) -> dict:
@@ -891,7 +916,7 @@ def pbs_remove_manual_feed(source_id):
 
 # ── Sling interactive browser login ─────────────────────────────────────────
 # A real, human-operated sign-in: a Camoufox (anti-detect Firefox) tab loads
-# sling.com in the 'fast' RQ worker, auto-fills the saved credentials, and the
+# sling.com in the sign-in (maintenance) RQ worker, auto-fills the saved credentials, and the
 # admin UI streams periodic screenshots of it and forwards the admin's own
 # clicks/keystrokes back — so a real person solves the real hCaptcha
 # challenge. The job captures the OAuth token from the auth-callback URL (or
@@ -1141,6 +1166,56 @@ def fox_one_browser_login_stop(source_id):
     return err or mvpd_browser_login_stop()
 
 
+# Phone-link sign-in for FOX One: the provider login happens on the user's
+# own device (app/tve/link_login.py). Status/stop are the TVE link-login ones.
+
+@sources_bp.route('/sources/<int:source_id>/fox-one-link-login/start', methods=['POST'])
+def fox_one_link_login_start(source_id):
+    import uuid
+    import redis as _redis
+    from ..scrapers.fox_one import FoxOneScraper
+    from ..tve.link_login import STATUS_KEY, job_timeout
+    from ..tve.providers import unsupported_network_reason
+    from .tasks import get_signin_queue
+
+    source, err = _fox_one_source_or_400(source_id)
+    if err:
+        return err
+    scraper = FoxOneScraper(config=dict(source.config or {}))
+    login = scraper._mvpd_login()
+    if not login:
+        if scraper._signin_method() == 'own':
+            return jsonify({'error': 'Choose a TV provider for FOX One\'s separate login and save first.'}), 400
+        return jsonify({'error': 'Set up your TV provider under Settings > TV Everywhere first, '
+                                 'or give FOX One a separate login.'}), 400
+    reason = unsupported_network_reason('foxone', login.mso_id)
+    if reason:
+        return jsonify({'error': reason}), 400
+    run_id = uuid.uuid4().hex
+    status = {'run_id': run_id, 'family': 'foxone', 'requestor_id': None, 'mso_id': login.mso_id,
+              'state': 'starting', 'message': 'Getting a sign-in link…', 'steps': []}
+    _redis.from_url(current_app.config['REDIS_URL']).setex(STATUS_KEY, 900, json.dumps(status))
+    get_signin_queue().enqueue('app.tve.link_login.run_link_login', 'foxone', None, login.mso_id, run_id,
+                             job_timeout=job_timeout('foxone'))
+    return jsonify(status)
+
+
+@sources_bp.route('/sources/<int:source_id>/fox-one-link-login/state')
+def fox_one_link_login_state(source_id):
+    from .api_tve import tve_link_login_state
+
+    _, err = _fox_one_source_or_400(source_id)
+    return err or tve_link_login_state()
+
+
+@sources_bp.route('/sources/<int:source_id>/fox-one-link-login/stop', methods=['POST'])
+def fox_one_link_login_stop(source_id):
+    from .api_tve import tve_link_login_stop
+
+    _, err = _fox_one_source_or_400(source_id)
+    return err or tve_link_login_stop()
+
+
 @sources_bp.route('/sources/<int:source_id>/fox-one-auth', methods=['DELETE'])
 def clear_fox_one_auth(source_id):
     """Forget FOX One's saved sign-in (tokens, device id, cached location)
@@ -1303,7 +1378,7 @@ def espn_activation_start(source_id):
     import redis as _redis
     import requests as _requests
     from ..scrapers.espn import ACTIVATION_STATUS_KEY, ACTIVATE_URL, ESPNAuthError, request_activation_code
-    from .tasks import get_fast_queue
+    from .tasks import get_signin_queue
 
     source = Source.query.get_or_404(source_id)
     if source.name != 'espn':
@@ -1316,7 +1391,7 @@ def espn_activation_start(source_id):
     # still waiting on an older code (run_activation watches this key).
     _redis.from_url(current_app.config['REDIS_URL']).setex(ACTIVATION_STATUS_KEY, 720, json.dumps(
         {'state': 'waiting', 'code': plate['pairingCode'], 'url': ACTIVATE_URL}))
-    get_fast_queue().enqueue('app.scrapers.espn.run_activation', plate, job_timeout=660)
+    get_signin_queue().enqueue('app.scrapers.espn.run_activation', plate, job_timeout=660)
     return jsonify({'status': 'waiting', 'code': plate['pairingCode'], 'url': ACTIVATE_URL})
 
 
@@ -1351,6 +1426,82 @@ def clear_espn_auth(source_id):
         return jsonify({'error': 'not an espn source'}), 400
     cfg = dict(source.config or {})
     for key in ('access_token', 'refresh_token', 'access_expires_at', 'signed_in_at'):
+        cfg.pop(key, None)
+    source.config = cfg
+    db.session.commit()
+    return jsonify({'status': 'cleared'})
+
+
+# ── ESPN TV-provider sign-in (Adobe Pass v2 link) ───────────────────────────
+# The user opens Adobe's sign-in link on their own device; a fast-queue job
+# polls Adobe until the provider sign-in lands — see app.scrapers.espn.
+
+@sources_bp.route('/sources/<int:source_id>/espn-tve/start', methods=['POST'])
+def espn_tve_start(source_id):
+    import redis as _redis
+    import requests as _requests
+    from ..scrapers.espn import (ADOBE_STATUS_KEY, _ADOBE_SIGNIN_TIMEOUT, ESPNAuthError,
+                                 adobe_status, start_adobe_signin)
+    from .tasks import get_signin_queue
+
+    source = Source.query.get_or_404(source_id)
+    if source.name != 'espn':
+        return jsonify({'error': 'not an espn source'}), 400
+    # The card may pick a provider just for ESPN; otherwise fall back to the
+    # shared one from Settings → TV Everywhere. start_adobe_signin validates
+    # the choice against ESPN's own accepted-provider list.
+    mso_id = ((request.get_json(silent=True) or {}).get('provider_id') or '').strip()
+    if not mso_id:
+        mso_id, _ = _espn_tv_provider()
+    if not mso_id:
+        return jsonify({'error': 'Choose a TV provider first.'}), 400
+    try:
+        pending = start_adobe_signin(mso_id)
+    except (ESPNAuthError, _requests.RequestException) as e:
+        return jsonify({'error': str(e)}), 502
+    status = adobe_status(pending, 'waiting')
+    # Overwriting the status with the new code retires any job still waiting
+    # on an older one (run_adobe_signin watches this key).
+    _redis.from_url(current_app.config['REDIS_URL']).setex(
+        ADOBE_STATUS_KEY, _ADOBE_SIGNIN_TIMEOUT + 120, json.dumps(status))
+    get_signin_queue().enqueue('app.scrapers.espn.run_adobe_signin', pending,
+                             job_timeout=_ADOBE_SIGNIN_TIMEOUT + 60)
+    return jsonify(status)
+
+
+@sources_bp.route('/sources/<int:source_id>/espn-tve/state')
+def espn_tve_state(source_id):
+    import redis as _redis
+    from ..scrapers.espn import ADOBE_STATUS_KEY
+
+    source = Source.query.get_or_404(source_id)
+    if source.name != 'espn':
+        return jsonify({'error': 'not an espn source'}), 400
+    raw = _redis.from_url(current_app.config['REDIS_URL']).get(ADOBE_STATUS_KEY)
+    return jsonify(json.loads(raw) if raw else {'state': 'idle'})
+
+
+@sources_bp.route('/sources/<int:source_id>/espn-tve/stop', methods=['POST'])
+def espn_tve_stop(source_id):
+    import redis as _redis
+    from ..scrapers.espn import ADOBE_STATUS_KEY
+
+    source = Source.query.get_or_404(source_id)
+    if source.name != 'espn':
+        return jsonify({'error': 'not an espn source'}), 400
+    _redis.from_url(current_app.config['REDIS_URL']).delete(ADOBE_STATUS_KEY)
+    return jsonify({'status': 'stopped'})
+
+
+@sources_bp.route('/sources/<int:source_id>/espn-tve-auth', methods=['DELETE'])
+def clear_espn_tve_auth(source_id):
+    from ..scrapers.espn import ADOBE_CONFIG_KEYS
+
+    source = Source.query.get_or_404(source_id)
+    if source.name != 'espn':
+        return jsonify({'error': 'not an espn source'}), 400
+    cfg = dict(source.config or {})
+    for key in ADOBE_CONFIG_KEYS:
         cfg.pop(key, None)
     source.config = cfg
     db.session.commit()

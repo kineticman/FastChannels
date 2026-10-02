@@ -206,7 +206,7 @@ class FoxOneScraper(MvpdCooldownMixin, BaseScraper):
             'home_zip_code',
             'Home ZIP code',
             placeholder='10001',
-            help_text='Optional. Sets your home market for regional blackouts and which local FOX station shows up. Left blank, FOX guesses from this server\'s location.',
+            help_text='Optional. Picks your local FOX station and regional blackouts; left blank, FOX guesses from this server\'s location.',
         ),
         ConfigField(
             'signin_method',
@@ -215,7 +215,7 @@ class FoxOneScraper(MvpdCooldownMixin, BaseScraper):
             default='shared',
             options=[
                 {'value': 'shared', 'label': 'My TV provider from Settings > TV Everywhere'},
-                {'value': 'own', 'label': 'A separate TV provider login for FOX One'},
+                {'value': 'own', 'label': 'A different TV provider account, just for FOX One'},
             ],
         ),
         ConfigField('mvpd_provider_id', 'TV provider'),
@@ -698,10 +698,10 @@ class FoxOneScraper(MvpdCooldownMixin, BaseScraper):
         """
         from ..tve.mvpd import login_to_mvpd, require_scripted_mvpd_login
 
-        require_scripted_mvpd_login(mso_id, where="on FOX One's card under Sources")
+        require_scripted_mvpd_login(mso_id, where="on FOX One's card under Sources", key='foxone')
         session, request_id, device_id, mso_login_url, r3 = self._foxone_mvpd_register(mso_id)
         page_html, page_url = (r3.text, str(r3.url)) if not mso_login_url else ('', mso_login_url)
-        login_to_mvpd(mso_id, page_html, page_url, username, password, cookie_jar=cookie_jar)
+        login_to_mvpd(mso_id, page_html, page_url, username, password, cookie_jar=cookie_jar, key='foxone')
 
         return self._foxone_mvpd_finish(session, request_id, device_id, mso_id)
 

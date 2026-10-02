@@ -265,6 +265,21 @@ def merge_config_updates(existing: dict | None, updates: dict | None) -> dict:
     return merged
 
 
+def missing_audit_config(scraper_cls, config: dict | None) -> list[str]:
+    """audit_requires_config entries this config doesn't satisfy, for display."""
+    cfg = config or {}
+
+    def present(key: str) -> bool:
+        return bool(str(cfg.get(key) or '').strip())
+
+    missing = []
+    for entry in getattr(scraper_cls, 'audit_requires_config', None) or []:
+        keys = entry if isinstance(entry, tuple) else (entry,)
+        if not any(present(k) for k in keys):
+            missing.append(' or '.join(keys))
+    return missing
+
+
 def format_http_reason(prefix: str, status_code: int, detail: str | None = None) -> str:
     reason = f"{prefix} (HTTP {status_code})"
     if detail:
@@ -528,7 +543,9 @@ class BaseScraper(ABC):
     # 'full' = descriptions + posters + episode metadata; 'basic' = titles + times only.
     # Used by the resolve-duplicates priority key to prefer richer EPG when breaking ties.
     epg_quality: str = 'full'
-    audit_requires_config: list[str] = []  # config keys that must be non-empty for the audit to run
+    # Config keys that must be non-empty for the audit to run; a tuple entry is
+    # satisfied by any one of its keys (see missing_audit_config).
+    audit_requires_config: list = []
     kodi_props: dict[str, str] = {}  # extra #KODIPROP lines emitted per-channel in M3U output
     license_url: str = None  # DRM license server URL; enables /play/<source>/license proxy endpoint
     config_required: bool = False      # True if source won't return useful channels without user configuration

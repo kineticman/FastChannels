@@ -11,6 +11,7 @@ from sqlalchemy import or_
 from ..extensions import db
 from ..models import Source, Channel, AppSettings, Feed
 from ..scrapers import registry
+from ..scrapers.base import missing_audit_config
 from ..url import public_base_url
 from .tasks import (
     trigger_xml_refresh,
@@ -1297,8 +1298,9 @@ def _prismcast_candidate_report() -> list[dict]:
         scraper_cls = registry.get(source_name)
         source = Source.query.filter_by(name=source_name).first()
         config = (source.config or {}) if source else {}
-        required = list(getattr(scraper_cls, 'audit_requires_config', []) or [])
-        missing = [key for key in required if not str(config.get(key) or '').strip()]
+        required = [' or '.join(k) if isinstance(k, tuple) else k
+                    for k in getattr(scraper_cls, 'audit_requires_config', []) or []]
+        missing = missing_audit_config(scraper_cls, config)
         total_active_enabled = 0
         candidate_count = 0
         if source:

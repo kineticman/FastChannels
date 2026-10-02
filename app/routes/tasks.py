@@ -27,6 +27,27 @@ def get_maintenance_queue():
     return Queue('maintenance', connection=r)
 
 
+def get_signin_queue():
+    """Sign-ins that wait on a person (browser sign-in, phone link, ESPN
+    code/link) can hold their worker for up to 30 minutes. On 'fast' that
+    stalled every guide refresh behind an unattended link, so they run on
+    the mostly idle maintenance worker, which also enforces job_timeout."""
+    return get_maintenance_queue()
+
+
+def _dequeue_signin(job_id: str) -> None:
+    """Drop a sign-in job that hasn't started yet. Stop flags expire after
+    30s, so a job still queued behind other work would otherwise outlive
+    its stop and sit waiting for someone who has gone."""
+    try:
+        q = get_signin_queue()
+        if job_id in q.get_job_ids():
+            q.remove(job_id)
+            logger.info('Removed queued sign-in job %s on stop', job_id)
+    except Exception as e:
+        logger.warning(f'Could not dequeue sign-in job {job_id}: {e}')
+
+
 def _utc_aware(dt):
     if dt is None:
         return None
@@ -469,10 +490,22 @@ def trigger_channel_auto_disable(channel_id: int, reason: str):
         threading.Thread(target=run_channel_auto_disable, args=(channel_id, reason), daemon=True).start()
 
 
+def trigger_new_channel_drm_probe(source_name: str, channel_ids: list):
+    try:
+        q = get_fast_queue()
+        q.enqueue('app.worker.run_new_channel_drm_probe', source_name, channel_ids, job_timeout=900)
+        logger.info('Enqueued new-channel DRM probe for %s (%d channel(s))', source_name, len(channel_ids))
+    except Exception as e:
+        logger.warning(f'RQ unavailable ({e}), falling back to thread for new-channel DRM probe {source_name}')
+        import threading
+        from app.worker import run_new_channel_drm_probe
+        threading.Thread(target=run_new_channel_drm_probe, args=(source_name, channel_ids), daemon=True).start()
+
+
 def trigger_sling_browser_login():
     """Returns True if a job was enqueued, False if one is already running."""
     try:
-        q = get_fast_queue()
+        q = get_signin_queue()
         job_id = 'sling-browser-login'
         if _job_already_active(q, job_id):
             logger.info('Sling browser login already running')
@@ -501,6 +534,7 @@ def stop_sling_browser_login():
         r.setex('sling:browser-login:stop', 30, '1')
     except Exception as e:
         logger.warning(f'Failed to signal Sling browser login stop: {e}')
+    _dequeue_signin('sling-browser-login')
 
 
 # legacy/AMC/Discovery/NBC/FOX browser-login jobs are separate RQ job_ids
@@ -597,7 +631,7 @@ def trigger_mvpd_browser_login(requestor_id: str, resource: str, software_statem
     in one browser session.
     """
     try:
-        q = get_fast_queue()
+        q = get_signin_queue()
         job_id = 'mvpd-browser-login'
         if _mvpd_tve_profile_busy(q):
             # DEBUG, not INFO: the batch "Sign in to all" loop (settings.js's
@@ -638,6 +672,7 @@ def stop_mvpd_browser_login():
         r.setex('mvpd:browser-login:stop', 30, '1')
     except Exception as e:
         logger.warning(f'Failed to signal MVPD browser login stop: {e}')
+    _dequeue_signin('mvpd-browser-login')
     _force_kill_mvpd_browser()
 
 
@@ -662,7 +697,7 @@ def _clear_nbc_browser_login_state() -> None:
 def trigger_nbc_browser_login(mso_id: str):
     """Returns True if a job was enqueued, False if one is already running."""
     try:
-        q = get_fast_queue()
+        q = get_signin_queue()
         job_id = 'nbc-mvpd-browser-login'
         if _mvpd_tve_profile_busy(q):
             logger.debug('NBC MVPD browser login already running')  # see trigger_mvpd_browser_login
@@ -690,13 +725,14 @@ def stop_nbc_browser_login():
         r.setex('nbc-mvpd:browser-login:stop', 30, '1')
     except Exception as e:
         logger.warning(f'Failed to signal NBC MVPD browser login stop: {e}')
+    _dequeue_signin('nbc-mvpd-browser-login')
     _force_kill_mvpd_browser()
 
 
 def trigger_fox_browser_login(mso_id: str):
     """Returns True if a job was enqueued, False if one is already running."""
     try:
-        q = get_fast_queue()
+        q = get_signin_queue()
         job_id = 'fox-mvpd-browser-login'
         if _mvpd_tve_profile_busy(q):
             logger.debug('FOX MVPD browser login already running')  # see trigger_mvpd_browser_login
@@ -722,6 +758,7 @@ def stop_fox_browser_login():
         r.setex('fox-mvpd:browser-login:stop', 30, '1')
     except Exception as e:
         logger.warning(f'Failed to signal FOX MVPD browser login stop: {e}')
+    _dequeue_signin('fox-mvpd-browser-login')
     _force_kill_mvpd_browser()
 
 
@@ -735,7 +772,7 @@ def stop_fox_browser_login():
 def trigger_amcn_browser_login(mso_id: str):
     """Returns True if a job was enqueued, False if one is already running."""
     try:
-        q = get_fast_queue()
+        q = get_signin_queue()
         job_id = 'mvpd-browser-login'
         if _mvpd_tve_profile_busy(q):
             logger.debug('MVPD browser login already running')  # see trigger_mvpd_browser_login
@@ -758,7 +795,7 @@ def trigger_amcn_browser_login(mso_id: str):
 def trigger_discovery_browser_login(mso_id: str):
     """Returns True if a job was enqueued, False if one is already running."""
     try:
-        q = get_fast_queue()
+        q = get_signin_queue()
         job_id = 'mvpd-browser-login'
         if _mvpd_tve_profile_busy(q):
             logger.debug('MVPD browser login already running')  # see trigger_mvpd_browser_login
@@ -782,7 +819,7 @@ def trigger_foxone_browser_login():
     """Returns True if a job was enqueued, False if one is already running.
     Shares the TVE sign-in job lock: both use the same redis status keys."""
     try:
-        q = get_fast_queue()
+        q = get_signin_queue()
         job_id = 'mvpd-browser-login'
         if _mvpd_tve_profile_busy(q):
             logger.debug('MVPD browser login already running')  # see trigger_mvpd_browser_login
@@ -808,7 +845,7 @@ def trigger_google_signin() -> bool:
     only the opportunistic per-network piggyback. Returns True if a job was
     enqueued, False if one is already running."""
     try:
-        q = get_fast_queue()
+        q = get_signin_queue()
         job_id = 'google-signin'
         if _mvpd_tve_profile_busy(q):
             logger.debug('MVPD browser login already running')  # see trigger_mvpd_browser_login
@@ -834,6 +871,7 @@ def stop_google_signin() -> None:
         r.setex('google-signin:browser-login:stop', 30, '1')
     except Exception as e:
         logger.warning(f'Failed to signal Google sign-in stop: {e}')
+    _dequeue_signin('google-signin')
     _force_kill_mvpd_browser()
 
 
@@ -841,7 +879,7 @@ def trigger_spectrum_signin() -> bool:
     """Standalone Spectrum sign-in — see app.tve.browser_login.spectrum.run_spectrum_signin's
     docstring. Returns True if a job was enqueued, False if one is already running."""
     try:
-        q = get_fast_queue()
+        q = get_signin_queue()
         job_id = 'spectrum-signin'
         if _mvpd_tve_profile_busy(q):
             logger.debug('MVPD browser login already running')  # see trigger_mvpd_browser_login
@@ -867,6 +905,7 @@ def stop_spectrum_signin() -> None:
         r.setex('spectrum:browser-login:stop', 30, '1')
     except Exception as e:
         logger.warning(f'Failed to signal Spectrum sign-in stop: {e}')
+    _dequeue_signin('spectrum-signin')
     _force_kill_mvpd_browser()
 
 

@@ -364,6 +364,8 @@ def app_settings():
             if data.get('fc_player_encoder_url') and not encoder_url:
                 return jsonify({'error': 'Invalid HDMI capture stream URL.'}), 422
             row.fc_player_bridge_encoder_url = encoder_url
+        if 'fc_player_hdmi_enabled' in data:
+            row.fc_player_bridge_hdmi_enabled = bool(data['fc_player_hdmi_enabled'])
         if 'fc_player_idle_stop_enabled' in data:
             row.fc_player_bridge_idle_stop_enabled = bool(data['fc_player_idle_stop_enabled'])
         if 'fc_player_captions_enabled' in data:
@@ -372,6 +374,14 @@ def app_settings():
             row.fc_player_bridge_ah4c_enabled = bool(data['fc_player_ah4c_enabled'])
         if 'fc_player_ah4c_url' in data:
             row.fc_player_bridge_ah4c_url = _normalize_server_url(data['fc_player_ah4c_url'], default_port=None)
+        # Both hardware methods run through the FastChannels Player app, so switching
+        # either one on switches the shared hardware-capture toggle on with it — a
+        # method toggle that silently does nothing is the trap this avoids. Turning
+        # hardware capture off still leaves the method toggles as they were.
+        if ((data.get('fc_player_hdmi_enabled') is True or data.get('fc_player_ah4c_enabled') is True)
+                and not row.fc_player_bridge_enabled):
+            row.fc_player_bridge_enabled = True
+            bridge_mode_changed = True
         bridge_mode_changed |= hardware_capture_was_active != fc_player_bridge.hardware_bridge_active(row)
         bridge_mode_changed |= prismcast_was_active != row.prismcast_capture_configured()
         if bridge_mode_changed:
@@ -410,7 +420,8 @@ def app_settings():
         'drm_bridge_enabled': bool(row.bridge_enabled),  # deprecated API alias
         'fc_player_enabled': bool(row.fc_player_bridge_enabled),
         'fc_player_ip': _fc_player_ip_display,
-        'fc_player_encoder_url': row.effective_fc_player_bridge_encoder_url() or '',
+        'fc_player_encoder_url': row.saved_fc_player_bridge_encoder_url() or '',
+        'fc_player_hdmi_enabled': bool(row.fc_player_bridge_hdmi_enabled),
         'fc_player_idle_stop_enabled': bool(row.fc_player_bridge_idle_stop_enabled),
         'fc_player_captions_enabled': bool(row.fc_player_bridge_captions_enabled),
         'fc_player_ah4c_enabled': bool(row.fc_player_bridge_ah4c_enabled),
@@ -435,7 +446,8 @@ def test_fc_player():
     if not ok:
         return jsonify({'ok': False, 'message': message})
 
-    encoder_url = AppSettings.get().effective_fc_player_bridge_encoder_url()
+    # Saved, not effective: the test should work before HDMI Capture is switched on.
+    encoder_url = AppSettings.get().saved_fc_player_bridge_encoder_url()
     if not encoder_url:
         return jsonify({
             'ok': True,
@@ -639,12 +651,12 @@ def bridge_healthcheck():
             device_status = fc_player_bridge.device_controls_status()
             if not device_status.get('player_installed'):
                 add('warn', 'FastChannels Player version', 'FastChannels Player is not installed on this device.',
-                    'Click Install FastChannels Player above.')
+                    'Install it from the FastChannels Player devices card above.')
             elif device_status.get('update_available'):
                 add('warn', 'FastChannels Player version',
                     f"Installed {device_status.get('player_version')}, but {device_status.get('bundled_version')} "
                     'is bundled in this FastChannels image.',
-                    'Open Fire TV Device Controls and click Update FastChannels Player.')
+                    'Click Update on this device in the FastChannels Player devices card above.')
             elif device_status.get('bundled_version_code') is None:
                 add('skip', 'FastChannels Player version',
                     f"Installed {device_status.get('player_version')}. "
@@ -653,7 +665,9 @@ def bridge_healthcheck():
                 add('ok', 'FastChannels Player version', f"Installed {device_status.get('player_version')} — up to date.")
 
         encoder_url = settings.effective_fc_player_bridge_encoder_url()
-        if not encoder_url:
+        if not settings.fc_player_bridge_hdmi_enabled:
+            add('skip', 'HDMI Capture stream', 'HDMI Capture is disabled.')
+        elif not encoder_url:
             add('skip', 'HDMI Capture stream', 'No fixed encoder stream is configured.')
         else:
             add('info', 'HDMI Capture endpoint',
@@ -716,7 +730,6 @@ def bridge_healthcheck():
 
                 # Known only from bmitune.sh's own report on a real tune (ah4c has no
                 # API to read its script files), so an untuned tuner stays unknown.
-                current = tuners[0]['scripts_current_version']
                 by_status = {}
                 for t in tuners:
                     by_status.setdefault(t['scripts_status'], []).append(t)
@@ -724,32 +737,25 @@ def bridge_healthcheck():
                 def _nums(rows):
                     return '#' + ', #'.join(str(t['index']) for t in rows)
 
-                update_hint = ('Update ah4c and restart it with UPDATE_SCRIPTS=true so it refreshes '
-                               'scripts/firetv/fastchannels, or click "Export ah4c scripts".')
-                outdated = by_status.get('outdated', [])
-                unversioned = by_status.get('unversioned', [])
+                update_hint = ('Set UPDATE_SCRIPTS=true and FASTCHANNELS_URL in ah4c so updating ah4c '
+                               'also updates its scripts, or click "Update ah4c scripts" on the Bridge page '
+                               'and run the command it shows. This rechecks on each tuner\'s next tune.')
+                stale = by_status.get('outdated', []) + by_status.get('unversioned', [])
                 unseen = by_status.get('unknown', [])
-                if outdated:
-                    add('warn', 'ah4c scripts',
-                        f'{len(outdated)}/{len(tuners)} tuner(s) last tuned with an older ah4c script set '
-                        f'(tuner {_nums(outdated)}; current is {current}).', update_hint)
-                if unversioned:
-                    # What every ah4c image from before the upstream versioning ships,
-                    # so it's not a misconfiguration; the tunes still work.
+                if stale:
+                    # 'unversioned' alone is what every ah4c image from before upstream
+                    # script versioning ships, so it's informational, not a misconfiguration.
+                    add('warn' if by_status.get('outdated') else 'info', 'ah4c scripts',
+                        f'{len(stale)}/{len(tuners)} tuner(s) use older ah4c scripts (tuner {_nums(stale)}). '
+                        'Tuning still works, but they are missing fixes.', update_hint)
+                elif len(unseen) == len(tuners):
                     add('info', 'ah4c scripts',
-                        f'{len(unversioned)}/{len(tuners)} tuner(s) last tuned with ah4c scripts from before '
-                        f'script versioning (tuner {_nums(unversioned)}). They work, but lack fixes in {current}.',
-                        update_hint)
-                if not outdated and not unversioned:
-                    if len(unseen) == len(tuners):
-                        add('info', 'ah4c scripts',
-                            f'No ah4c tunes recorded yet, so the deployed script version is unknown (current is {current}).')
-                    elif unseen:
-                        add('ok', 'ah4c scripts',
-                            f'Tuners seen tuning are on script set {current} or newer; '
-                            f'tuner {_nums(unseen)} not seen yet.')
-                    else:
-                        add('ok', 'ah4c scripts', f'All ah4c tuners are on script set {current} or newer.')
+                        'No ah4c tunes yet, so FastChannels can\'t tell whether its scripts are up to date.')
+                elif unseen:
+                    add('ok', 'ah4c scripts',
+                        f'ah4c scripts are up to date; tuner {_nums(unseen)} hasn\'t tuned yet.')
+                else:
+                    add('ok', 'ah4c scripts', 'ah4c scripts are up to date on every tuner.')
         except fc_player_bridge.FcPlayerNotConfigured:
             add('warn', 'ah4c tuners', 'ah4c is not fully configured.', 'Save the ah4c server URL and retry.')
         except (ValueError, _req.RequestException):
@@ -822,12 +828,15 @@ def list_fc_player_devices():
 
 @settings_bp.route('/settings/fc-player/devices/probe', methods=['POST'])
 def probe_fc_player_device():
-    """Live adb status for one device; the page probes each device in parallel."""
+    """Live adb status for one device; the page probes each device in parallel.
+    `reconnect` is the card's Request approval / Try connecting button."""
     from .. import bridge_devices
-    address = bridge_devices.normalize_address((request.get_json(silent=True) or {}).get('address'))
+    data = request.get_json(silent=True) or {}
+    address = bridge_devices.normalize_address(data.get('address'))
     if not address:
         return jsonify({'ok': False, 'message': 'Invalid device address.'}), 400
-    return jsonify({'ok': True, 'device': bridge_devices.probe(address)})
+    reconnect = bool(data.get('reconnect')) and bridge_devices.is_known(address)
+    return jsonify({'ok': True, 'device': bridge_devices.probe(address, reconnect=reconnect)})
 
 
 @settings_bp.route('/settings/fc-player/devices', methods=['POST'])
@@ -884,29 +893,77 @@ def install_fc_player_on_device():
     return jsonify({'ok': ok, 'message': message})
 
 
-def _remember_fc_player_device_settings(previous: dict | None) -> None:
-    """Save the pre-headless snapshot only once, so Restore stays meaningful."""
-    if not previous:
-        return
+def _device_controls_target():
+    """The device a Device Controls call acts on: `address` from the query
+    string or JSON body (any device the devices card lists), else the HDMI
+    Capture device. Returns (address or None, error response or None)."""
+    from .. import bridge_devices
+    raw = request.args.get('address') or (request.get_json(silent=True) or {}).get('address')
+    if not raw:
+        return None, None
+    address = bridge_devices.normalize_address(raw)
+    if not address or not bridge_devices.is_known(address):
+        return None, (jsonify({'ok': False, 'message': 'Unknown device.'}), 404)
+    return address, None
+
+
+def _device_settings_backup_key(address: str | None) -> str | None:
+    from .. import bridge_devices
+    return bridge_devices.normalize_address(address or AppSettings.get().effective_fc_player_bridge_adb_address())
+
+
+def _device_settings_backups() -> dict:
+    """Pre-headless power snapshots keyed by device address. Before Device
+    Controls worked per device this held one bare snapshot, which belongs to
+    the HDMI Capture device."""
+    try:
+        data = json.loads(AppSettings.get().fc_player_device_settings_backup or '')
+    except (TypeError, ValueError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    if {'stay_on_while_powered', 'screen_off_timeout', 'sleep_timeout'} & data.keys():
+        key = _device_settings_backup_key(None)
+        return {key: data} if key else {}
+    return data
+
+
+def _save_device_settings_backups(backups: dict) -> None:
     row = AppSettings.get()
-    if not row.fc_player_device_settings_backup:
-        row.fc_player_device_settings_backup = json.dumps(previous, separators=(',', ':'))
-        db.session.commit()
+    row.fc_player_device_settings_backup = json.dumps(backups, separators=(',', ':')) if backups else None
+    db.session.commit()
+
+
+def _remember_fc_player_device_settings(address: str | None, previous: dict | None) -> None:
+    """Save each device's pre-headless snapshot only once, so Restore stays meaningful."""
+    key = _device_settings_backup_key(address)
+    if not previous or not key:
+        return
+    backups = _device_settings_backups()
+    if key not in backups:
+        backups[key] = previous
+        _save_device_settings_backups(backups)
 
 
 @settings_bp.route('/settings/fc-player/device-controls', methods=['GET'])
 def fc_player_device_controls_status():
-    """Live ADB diagnostics for the settings page's Fire TV Device Controls modal."""
+    """Live ADB diagnostics for the Bridge page's Device Controls modal."""
     from .. import fc_player_bridge
-    status = fc_player_bridge.device_controls_status()
-    status['restore_available'] = bool(AppSettings.get().fc_player_device_settings_backup)
+    address, error = _device_controls_target()
+    if error:
+        return error
+    status = fc_player_bridge.device_controls_status(address)
+    status['restore_available'] = _device_settings_backup_key(address) in _device_settings_backups()
     return jsonify(status), (200 if status.get('ok') else 400)
 
 
 @settings_bp.route('/settings/fc-player/device-controls/wake', methods=['POST'])
 def wake_fc_player_device():
     from .. import fc_player_bridge
-    ok, message = fc_player_bridge.wake_device()
+    address, error = _device_controls_target()
+    if error:
+        return error
+    ok, message = fc_player_bridge.wake_device(address)
     return jsonify({'ok': ok, 'message': message}), (200 if ok else 400)
 
 
@@ -914,6 +971,9 @@ def wake_fc_player_device():
 def save_fc_player_device_power():
     """Apply explicit power settings, retaining the first pre-change snapshot."""
     from .. import fc_player_bridge
+    address, error = _device_controls_target()
+    if error:
+        return error
     data = request.get_json(silent=True) or {}
     stay_awake = data.get('stay_awake')
     screen_off_timeout = data.get('screen_off_timeout')
@@ -924,33 +984,37 @@ def save_fc_player_device_power():
         stay_awake=stay_awake,
         screen_off_timeout=screen_off_timeout,
         sleep_timeout=sleep_timeout,
+        address=address,
     )
     if ok:
-        _remember_fc_player_device_settings(previous)
+        _remember_fc_player_device_settings(address, previous)
     return jsonify({'ok': ok, 'message': message}), (200 if ok else 400)
 
 
 @settings_bp.route('/settings/fc-player/device-controls/headless', methods=['POST'])
 def apply_fc_player_headless_preset():
     from .. import fc_player_bridge
-    ok, message, previous = fc_player_bridge.headless_power_settings()
+    address, error = _device_controls_target()
+    if error:
+        return error
+    ok, message, previous = fc_player_bridge.headless_power_settings(address)
     if ok:
-        _remember_fc_player_device_settings(previous)
+        _remember_fc_player_device_settings(address, previous)
     return jsonify({'ok': ok, 'message': message}), (200 if ok else 400)
 
 
 @settings_bp.route('/settings/fc-player/device-controls/restore', methods=['POST'])
 def restore_fc_player_device_power():
     from .. import fc_player_bridge
-    row = AppSettings.get()
-    try:
-        previous = json.loads(row.fc_player_device_settings_backup or '')
-    except (TypeError, ValueError):
-        previous = None
-    ok, message = fc_player_bridge.restore_device_power_settings(previous)
+    address, error = _device_controls_target()
+    if error:
+        return error
+    key = _device_settings_backup_key(address)
+    backups = _device_settings_backups()
+    ok, message = fc_player_bridge.restore_device_power_settings(backups.get(key), address)
     if ok:
-        row.fc_player_device_settings_backup = None
-        db.session.commit()
+        backups.pop(key, None)
+        _save_device_settings_backups(backups)
     return jsonify({'ok': ok, 'message': message}), (200 if ok else 400)
 
 
@@ -1010,6 +1074,19 @@ def check_ah4c_tuners():
             'message': 'ah4c reports no configured tuners (no TUNERn_IP values).',
         })
     return jsonify({'ok': True, 'tuners': tuners})
+
+
+@settings_bp.route('/settings/fc-player/ah4c-activity', methods=['GET'])
+def get_ah4c_activity():
+    """Read-only activity summary for the ah4c Bridge card; no ADB probes."""
+    try:
+        return jsonify({'ok': True, **fc_player_bridge.ah4c_activity()})
+    except fc_player_bridge.FcPlayerNotConfigured:
+        return jsonify({'ok': False, 'message': 'Save an ah4c server URL to see activity.'}), 400
+    except (ValueError, TypeError):
+        return jsonify({'ok': False, 'message': 'ah4c returned invalid status data.'}), 502
+    except _req.RequestException:
+        return jsonify({'ok': False, 'message': 'Could not reach ah4c. Check its server URL and availability.'}), 502
 
 
 @settings_bp.route('/fc-player/heartbeat', methods=['POST'])

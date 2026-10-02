@@ -698,7 +698,7 @@ def _fox_sports_mvpd_token(
     cookie_jar: dict | None = None,
 ) -> str:
     from ..tve.mvpd import require_scripted_mvpd_login
-    require_scripted_mvpd_login(mso_id)
+    require_scripted_mvpd_login(mso_id, key='fox')
 
     anon = session.post(
         'https://api3.fox.com/v2.0/login',
@@ -738,9 +738,12 @@ def _fox_sports_mvpd_token(
     mso_login_url = r.headers.get('location') or ''
     # DIRECTV doesn't redirect here at all (see app/tve/mvpd/directv.py's
     # directv_login() docstring) — login_to_mvpd() below works from this
-    # response's body directly, so it's exempt from the "no redirect" check
-    # every other MSO needs.
-    if not mso_login_url and mso_id != 'DTV':
+    # response's body directly. Confirmed live 2026-10-01 (Blue Stream,
+    # tpc010): watchtveverywhere providers get the same 200 auto-submit
+    # form, and login_to_mvpd() raises the real "click Sign in" error for
+    # them — so only Xfinity, whose backend needs the redirect URL itself,
+    # keeps the "no redirect" check.
+    if not mso_login_url and mso_id == 'Comcast_SSO':
         raise ValueError('FOX Adobe authenticate call did not return an MVPD login redirect.')
 
     # Every MVPD's actual sign-in mechanics live in app/tve/mvpd/ — add one
@@ -749,7 +752,7 @@ def _fox_sports_mvpd_token(
     from ..tve.adobe_pass import TVEAuthError as _TVEAuthError
     page_html, page_url = (r.text, str(r.url)) if not mso_login_url else ('', mso_login_url)
     try:
-        login_to_mvpd(mso_id, page_html, page_url, username, password, cookie_jar=cookie_jar)
+        login_to_mvpd(mso_id, page_html, page_url, username, password, cookie_jar=cookie_jar, key='fox')
     except _TVEAuthError as exc:
         raise ValueError(str(exc)) from exc
 

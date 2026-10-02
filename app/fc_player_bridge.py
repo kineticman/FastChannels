@@ -320,7 +320,8 @@ def is_configured() -> bool:
 
 
 def hdmi_capture_configured(settings=None) -> bool:
-    """Whether the fixed, single-stream HDMI Capture path is usable."""
+    """Whether the fixed, single-stream HDMI Capture path is usable. Its own
+    toggle is folded into the effective encoder URL (None while it's off)."""
     settings = settings or AppSettings.get()
     return bool(
         settings.fc_player_bridge_enabled
@@ -457,33 +458,76 @@ def _ah4c_base_url() -> str:
     return base
 
 
-def ah4c_tuner_ips() -> list[str]:
-    """The tuner device addresses ah4c has configured (its TUNERn_IP values), read
-    from ah4c's own GET /api/status JSON ("Tuners": [{"Tunerip": ...}, ...]).
+def ah4c_activity() -> dict:
+    """Read the small, live subset of ah4c status used by the Bridge card."""
+    base = _ah4c_base_url()
+    resp = requests.get(f'{base}/api/status', timeout=_AH4C_STATUS_TIMEOUT)
+    resp.raise_for_status()
+    data = resp.json()
+    if not isinstance(data, dict) or not isinstance(data.get('Tuners'), list) or not isinstance(data.get('Readers'), list):
+        raise ValueError('ah4c returned an invalid status payload')
 
-    Returned in ah4c's own tuner order, as ah4c reports them — a bare host or a
-    host:port, whatever was put in TUNERn_IP — with blanks and duplicates dropped.
+    readers = {}
+    for entry in data['Readers']:
+        if not isinstance(entry, dict) or not isinstance(entry.get('T'), int):
+            continue
+        readers.setdefault(entry['T'], []).append({
+            'channel': str(entry.get('Name') or entry.get('Channel') or '')[:120],
+            'elapsed': max(0, int(entry.get('Elapsed') or 0)),
+        })
+    tuners = []
+    for index, entry in enumerate(data['Tuners']):
+        if not isinstance(entry, dict):
+            continue
+        tuners.append({
+            'index': index,
+            'address': str(entry.get('Tunerip') or '')[:120],
+            'active': entry.get('Active') is True,
+            'readers': readers.get(index, []),
+        })
+    return {'tuners': tuners, 'status_url': f'{base}/status'}
+
+
+def ah4c_tuner_ips() -> list[tuple[int, str]]:
+    """(tuner number, address) for each tuner device ah4c has configured (its
+    TUNERn_IP values), read from ah4c's own GET /api/status JSON
+    ("Tuners": [{"Tunerip": ...}, ...]).
+
+    The number is the entry's position in that list, which is how ah4c itself
+    numbers tuners in its logs (0-based, so TUNER1_IP is tuner 0); blanks and
+    duplicates are dropped without renumbering the rest. The address is as ah4c
+    reports it — a bare host or a host:port, whatever was put in TUNERn_IP.
     Raises FcPlayerNotConfigured if no ah4c URL is set; lets requests/JSON errors
     propagate so the caller can tell the user why it couldn't ask ah4c."""
     resp = requests.get(f'{_ah4c_base_url()}/api/status', timeout=_AH4C_STATUS_TIMEOUT)
     resp.raise_for_status()
     tuners = resp.json().get('Tuners') or []
     seen: set[str] = set()
-    out: list[str] = []
-    for entry in tuners:
+    out: list[tuple[int, str]] = []
+    for idx, entry in enumerate(tuners):
         ip = str((entry or {}).get('Tunerip') or '').strip()
         if ip and ip not in seen:
             seen.add(ip)
-            out.append(ip)
+            out.append((idx, ip))
     return out
 
 
-def _adb_state_for(address: str) -> tuple[str, str]:
+def _adb_state_for(address: str, *, reconnect: bool = False) -> tuple[str, str]:
     """(state, human-readable message) for one device address, from this container's
     own adb client — connects first (same first step a real tune takes), then asks
     adb for the device state. state is one of: 'device' (reachable + this
-    container's adb key is authorized), 'unauthorized', 'offline', 'unreachable'."""
+    container's adb key is authorized), 'unauthorized', 'offline', 'unreachable'.
+
+    reconnect=True drops any existing connection first. `adb connect` is a no-op on
+    a connection adb is already holding — including an unauthorized one — and the
+    device only raises its "Allow USB debugging?" prompt on a fresh connection, so
+    this is the only way to bring back a prompt that was missed or dismissed."""
     try:
+        if reconnect:
+            subprocess.run(
+                ['adb', 'disconnect', address],
+                capture_output=True, timeout=_ADB_TIMEOUT, check=False,
+            )
         subprocess.run(
             ['adb', 'connect', address],
             capture_output=True, timeout=_ADB_TIMEOUT, check=False,
@@ -499,9 +543,14 @@ def _adb_state_for(address: str) -> tuple[str, str]:
     if state.returncode == 0 and (state.stdout or '').strip() == 'device':
         return 'device', 'Authorized — reachable over adb from FastChannels.'
     if 'unauthorized' in blob:
-        return 'unauthorized', ("Reachable, but this FastChannels container's adb key isn't "
-                                'approved on the device yet — trigger an action and approve the '
-                                'prompt on the TV.')
+        if reconnect:
+            return 'unauthorized', ('Approval prompt sent. On the TV, tick "Always allow from this '
+                                    'computer" and choose Allow, then use Refresh. If nothing '
+                                    "appeared, wake the device and try again, or switch ADB "
+                                    'Debugging off and on in its Developer Options.')
+        return 'unauthorized', ("Reachable, but not approved yet. Use Request approval to put the "
+                                '"Allow USB debugging?" prompt on the TV, then tick "Always allow '
+                                'from this computer" and choose Allow.')
     if 'offline' in blob:
         return 'offline', 'Connected but offline — power-cycle the device or re-approve adb.'
     return 'unreachable', ("No adb connection — check the IP, that the device is powered on, and "
@@ -670,7 +719,7 @@ def verify_ah4c_tuners() -> list[dict]:
     FastChannels Player version after confirming installation for the active
     Android user; ah4c can drive a stick that never got the player sideloaded."""
     results: list[dict] = []
-    for idx, ip in enumerate(ah4c_tuner_ips(), start=1):
+    for idx, ip in ah4c_tuner_ips():
         # ah4c stores TUNERn_IP as a bare host or host:port; the container's adb
         # keys are always host:5555 (see prebmitune.sh's own optional-port match).
         address = ip if ':' in ip.rsplit(']', 1)[-1] else f'{ip}:5555'
@@ -714,12 +763,14 @@ def _adb_shell(address: str, *command: str, timeout: int = _ADB_TIMEOUT) -> tupl
     return result.returncode == 0, text
 
 
-def _device_connected() -> tuple[bool, str, str | None]:
-    """Connect to the configured device and return its adb address if usable."""
-    try:
-        address = _adb_address()
-    except FcPlayerNotConfigured:
-        return False, 'Set a Fire TV / Android TV IP address first.', None
+def _device_connected(address: str | None = None) -> tuple[bool, str, str | None]:
+    """Connect to `address` (the configured HDMI Capture device when omitted)
+    and return its adb address if usable."""
+    if not address:
+        try:
+            address = _adb_address()
+        except FcPlayerNotConfigured:
+            return False, 'Set a Fire TV / Android TV IP address first.', None
     try:
         subprocess.run(['adb', 'connect', address], capture_output=True,
                        timeout=_ADB_TIMEOUT, check=False)
@@ -753,14 +804,14 @@ _PLAYER_SESSION_RE = re.compile(
 )
 
 
-def device_controls_status() -> dict:
+def device_controls_status(address: str | None = None) -> dict:
     """Return lightweight, user-facing diagnostics for the Device Controls modal.
 
     This deliberately uses only standard adb shell commands: it works for both
     Fire OS and Android TV, and does not require the bridge feature toggle itself
     to be enabled.
     """
-    connected, message, address = _device_connected()
+    connected, message, address = _device_connected(address)
     if not connected:
         return {'ok': False, 'message': message}
 
@@ -803,8 +854,8 @@ def device_controls_status() -> dict:
     return result
 
 
-def wake_device() -> tuple[bool, str]:
-    connected, message, address = _device_connected()
+def wake_device(address: str | None = None) -> tuple[bool, str]:
+    connected, message, address = _device_connected(address)
     if not connected:
         return False, message
     ok, output = _adb_shell(address, 'input', 'keyevent', 'KEYCODE_WAKEUP')
@@ -812,13 +863,13 @@ def wake_device() -> tuple[bool, str]:
 
 
 def set_device_power_settings(*, stay_awake: bool, screen_off_timeout: int,
-                              sleep_timeout: int) -> tuple[bool, str, dict | None]:
+                              sleep_timeout: int, address: str | None = None) -> tuple[bool, str, dict | None]:
     """Apply explicit display settings and return the values they replaced."""
     if (not isinstance(screen_off_timeout, int) or not isinstance(sleep_timeout, int)
             or screen_off_timeout < 0 or sleep_timeout < 0
             or screen_off_timeout > _NEVER_TIMEOUT_MS or sleep_timeout > _NEVER_TIMEOUT_MS):
         return False, 'Invalid display timeout.', None
-    connected, message, address = _device_connected()
+    connected, message, address = _device_connected(address)
     if not connected:
         return False, message, None
     previous = {
@@ -838,16 +889,17 @@ def set_device_power_settings(*, stay_awake: bool, screen_off_timeout: int,
     return True, 'Device power settings saved.', previous
 
 
-def headless_power_settings() -> tuple[bool, str, dict | None]:
+def headless_power_settings(address: str | None = None) -> tuple[bool, str, dict | None]:
     """Apply the safe headless preset: stay awake on power plus max timeouts."""
     return set_device_power_settings(
         stay_awake=True,
         screen_off_timeout=_NEVER_TIMEOUT_MS,
         sleep_timeout=_NEVER_TIMEOUT_MS,
+        address=address,
     )
 
 
-def restore_device_power_settings(previous: dict) -> tuple[bool, str]:
+def restore_device_power_settings(previous: dict, address: str | None = None) -> tuple[bool, str]:
     """Restore the exact settings snapshot saved before a headless preset."""
     if not isinstance(previous, dict):
         return False, 'No saved device settings are available to restore.'
@@ -856,7 +908,7 @@ def restore_device_power_settings(previous: dict) -> tuple[bool, str]:
         ('system', 'screen_off_timeout', previous.get('screen_off_timeout')),
         ('secure', 'sleep_timeout', previous.get('sleep_timeout')),
     )
-    connected, message, address = _device_connected()
+    connected, message, address = _device_connected(address)
     if not connected:
         return False, message
     for namespace, name, value in mapping:

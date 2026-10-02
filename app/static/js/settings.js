@@ -215,7 +215,7 @@ async function savePrismcastSettings() {
 
 async function saveFcPlayerToggles() {
   const enabled = document.getElementById('fc-player-enabled').checked;
-  const ok = await saveSettings({fc_player_enabled: enabled}, 'fc-player-status');
+  const ok = await saveSettings({fc_player_enabled: enabled}, 'fc-player-toggles-status');
   // "Enable" affects whether the feed-URL guidance block (server-rendered) shows.
   if (ok) setTimeout(() => location.reload(), 700);
 }
@@ -338,6 +338,13 @@ async function createFcPlayerCaptureSource() {
   }
 }
 
+async function saveFcPlayerHdmiToggle() {
+  const enabled = document.getElementById('fc-player-hdmi-enabled').checked;
+  const ok = await saveSettings({fc_player_hdmi_enabled: enabled}, 'fc-player-status');
+  // Affects whether the HDMI Capture M3U option shows up on the Feeds page.
+  if (ok) setTimeout(() => location.reload(), 700);
+}
+
 async function saveFcPlayerIdleStopToggle() {
   const enabled = document.getElementById('fc-player-idle-stop-enabled').checked;
   await saveSettings({fc_player_idle_stop_enabled: enabled}, 'fc-player-status');
@@ -345,7 +352,7 @@ async function saveFcPlayerIdleStopToggle() {
 
 async function saveFcPlayerCaptionsToggle() {
   const enabled = document.getElementById('fc-player-captions-enabled').checked;
-  await saveSettings({fc_player_captions_enabled: enabled}, 'fc-player-status');
+  await saveSettings({fc_player_captions_enabled: enabled}, 'fc-player-toggles-status');
 }
 
 async function saveFcPlayerAh4cToggle() {
@@ -357,7 +364,9 @@ async function saveFcPlayerAh4cToggle() {
 
 async function saveFcPlayerAh4cSettings() {
   const url = document.getElementById('fc-player-ah4c-url').value.trim();
-  await saveSettings({fc_player_ah4c_url: url || null}, 'fc-player-ah4c-status');
+  if (await saveSettings({fc_player_ah4c_url: url || null}, 'fc-player-ah4c-status')) {
+    loadAh4cActivity();
+  }
 }
 
 function renderAh4cTuners(tuners) {
@@ -369,6 +378,7 @@ function renderAh4cTuners(tuners) {
   ['ah4c tuner', 'TUNERx_IP', 'Authorized in FastChannels', 'Android / Fire OS', 'Sleep disabled', 'FC Player', 'Scripts'].forEach((label) => {
     const th = document.createElement('th');
     th.textContent = label;
+    if (label === 'ah4c tuner') th.title = 'Numbered as in ah4c’s logs, which start at 0: TUNER1_IP is tuner #0.';
     // Keep the literal env-var name as-is; the other headers get uppercased by CSS.
     if (label === 'TUNERx_IP') th.className = 'no-transform';
     head.appendChild(th);
@@ -398,6 +408,12 @@ function renderAh4cTuners(tuners) {
     const ipCell = row.insertCell();
     ipCell.textContent = t.tuner_ip;
     ipCell.className = 'mono';
+    // ah4c's log numbers are 0-based, its env vars 1-based; name the env var so
+    // "#0" beside TUNER1_IP's address doesn't read as a mismatch.
+    const envNote = document.createElement('div');
+    envNote.className = 'ah4c-tuner-note';
+    envNote.textContent = 'TUNER' + (t.index + 1) + '_IP';
+    ipCell.appendChild(envNote);
 
     const [text, cls] = badges[t.state] || ['✕ ' + t.state, 'error'];
     addBadge(row.insertCell(), text, cls, t.message);
@@ -439,18 +455,16 @@ function renderAh4cTuners(tuners) {
       addBadge(playerCell, '? Unknown', 'warn');
     }
 
-    // Reported by bmitune.sh on each tune — independent of adb reachability.
+    // Reported by bmitune.sh on each tune — independent of adb reachability, and
+    // only as fresh as the last tune, so an update shows after the next one.
     const scriptsCell = row.insertCell();
+    const staleNote = 'Tuning still works, but fixes are missing. Use Update ah4c scripts; this rechecks on the next tune.';
     if (t.scripts_status === 'current') {
-      addBadge(scriptsCell, '✓ ' + t.scripts_version, 'ok');
-    } else if (t.scripts_status === 'outdated') {
-      addBadge(scriptsCell, '⬆ ' + t.scripts_version, 'warn',
-        `Update ah4c's scripts or re-export (current ${t.scripts_current_version})`);
-    } else if (t.scripts_status === 'unversioned') {
-      addBadge(scriptsCell, 'No version', '',
-        `Older set; update ah4c's scripts or re-export (current ${t.scripts_current_version})`);
+      addBadge(scriptsCell, '✓ Up to date', 'ok');
+    } else if (t.scripts_status === 'outdated' || t.scripts_status === 'unversioned') {
+      addBadge(scriptsCell, '⬆ Update recommended', t.scripts_status === 'outdated' ? 'warn' : '', staleNote);
     } else {
-      addBadge(scriptsCell, '? Not seen yet', '', 'Known after its next ah4c tune');
+      addBadge(scriptsCell, '? Not used yet', '', 'Shown after this tuner’s first ah4c tune');
     }
   });
   box.appendChild(table);
@@ -493,24 +507,6 @@ async function checkAh4cTuners() {
   }
 }
 
-async function installFcPlayer() {
-  const statusEl = document.getElementById('fc-player-status');
-  statusEl.textContent = 'Installing…';
-  statusEl.className = 'save-status';
-  try {
-    const resp = await fetch('/api/settings/fc-player/install', {method: 'POST'});
-    const data = await resp.json();
-    statusEl.textContent = data.message || (data.ok ? 'Installed.' : 'Install failed.');
-    statusEl.className = 'save-status ' + (data.ok ? 'ok' : 'error');
-    if (data.ok && document.getElementById('fc-player-device-controls-modal').classList.contains('open')) {
-      await refreshFcPlayerDeviceControls();
-    }
-  } catch (e) {
-    statusEl.textContent = 'Install failed.';
-    statusEl.className = 'save-status error';
-  }
-}
-
 const FC_PLAYER_NEVER_TIMEOUT = 2147483647;
 
 function fcPlayerTimeoutLabel(value) {
@@ -544,9 +540,19 @@ function closeFcPlayerDeviceControls() {
   document.getElementById('fc-player-device-controls-modal').classList.remove('open');
 }
 
-async function openFcPlayerDeviceControls() {
+// The device the Device Controls modal acts on — opened from a tile in the
+// FastChannels Player devices card (bridge_devices.js).
+let fcPlayerDeviceAddress = null;
+
+async function openFcPlayerDeviceControls(address, title) {
+  fcPlayerDeviceAddress = address;
+  document.getElementById('fc-player-device-controls-title').textContent = title || address;
   document.getElementById('fc-player-device-controls-modal').classList.add('open');
   await refreshFcPlayerDeviceControls();
+}
+
+async function updateFcPlayerFromDeviceControls() {
+  if (await _bdInstall(fcPlayerDeviceAddress)) await refreshFcPlayerDeviceControls();
 }
 
 async function refreshFcPlayerDeviceControls() {
@@ -554,7 +560,7 @@ async function refreshFcPlayerDeviceControls() {
   body.textContent = 'Loading…';
   fcPlayerDeviceMessage('');
   try {
-    const resp = await fetch('/api/settings/fc-player/device-controls');
+    const resp = await fetch('/api/settings/fc-player/device-controls?address=' + encodeURIComponent(fcPlayerDeviceAddress));
     const data = await resp.json();
     if (!data.ok) {
       body.textContent = data.message || 'Could not read device status.';
@@ -590,11 +596,11 @@ async function refreshFcPlayerDeviceControls() {
 
 async function fcPlayerDevicePost(path, payload = null) {
   try {
-    const options = {method: 'POST', headers: {}};
-    if (payload !== null) {
-      options.headers['Content-Type'] = 'application/json';
-      options.body = JSON.stringify(payload);
-    }
+    const options = {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({...(payload || {}), address: fcPlayerDeviceAddress}),
+    };
     const resp = await fetch(`/api/settings/fc-player/device-controls/${path}`, options);
     const data = await resp.json();
     fcPlayerDeviceMessage(data.message || (data.ok ? 'Saved.' : 'Action failed.'), !!data.ok);
@@ -643,9 +649,10 @@ function openAh4cScriptsModal() {
   // Suggested only — the ah4c container may run on a different machine/network
   // than whoever is loading this settings page, so this is a starting point for
   // the user to confirm or override, never submitted as-is without their eyes on it.
-  document.getElementById('ah4c-scripts-url').value = window.location.origin;
-  updateAh4cScriptsCommand();
+  const urlInput = document.getElementById('ah4c-scripts-url');
+  urlInput.value = urlInput.dataset.default || window.location.origin;
   document.getElementById('ah4c-scripts-modal').classList.add('open');
+  updateAh4cScriptsCommand();
 }
 
 function _ah4cScriptsExportUrl(serverUrl) {
@@ -661,6 +668,9 @@ function updateAh4cScriptsCommand() {
   box.value = url
     ? `docker exec ah4c sh -c 'cd /opt && curl -fsS "${_ah4cScriptsExportUrl(url)}" | tar xz -C "$STREAMER_APP"'`
     : '';
+  // Grow to fit so the whole command shows at any width (it wraps more on phones).
+  box.style.height = 'auto';
+  box.style.height = box.scrollHeight + 'px';
 }
 
 async function copyAh4cScriptsCommand() {
@@ -671,6 +681,11 @@ async function copyAh4cScriptsCommand() {
   } catch (e) {
     box.select();
     document.execCommand('copy');
+  }
+  const btn = document.getElementById('ah4c-scripts-copy-btn');
+  if (btn) {
+    btn.textContent = 'Copied';
+    setTimeout(() => { btn.textContent = 'Copy command'; }, 1500);
   }
 }
 
@@ -733,7 +748,8 @@ function updateTveProviderFields() {
   const coxRetiringNotice = document.getElementById('tve-cox-retiring-notice');
   if (coxRetiringNotice) coxRetiringNotice.style.display = isCox ? '' : 'none';
   const googleRow = document.getElementById('tve-google-signin-row');
-  if (googleRow) googleRow.style.display = provider.id === 'YouTubeTV' ? '' : 'none';
+  if (googleRow) googleRow.dataset.youtubeTv = provider.id === 'YouTubeTV' ? '1' : '';
+  _updateTveGoogleRowForMethod();
   if (select) select.dataset.previousProvider = provider.id;
 }
 
@@ -863,6 +879,12 @@ const MVPD_LOGIN_FAMILIES = {
   discovery: { base: '/api/settings/tve/discovery/browser-login', needsRequestor: false },
   google:    { base: '/api/settings/tve/google/browser-login', needsRequestor: false },
 };
+// Phone-link sign-in (app/tve/link_login.py): the families whose provider
+// login can happen on the user's own device instead of in our browser.
+// Discovery uses a typed code on its own page (the status carries it); the
+// Google step isn't a network sign-in, so it stays browser-only.
+MVPD_LOGIN_FAMILIES.link = { base: '/api/settings/tve/link-login', needsRequestor: false };
+const TVE_LINK_FAMILIES = new Set(['legacy', 'nbc', 'fox', 'amcn', 'discovery']);
 let _mvpdLoginActive = false;
 let _mvpdLoginDone = false;
 let _mvpdLoginPollTimer = null;
@@ -942,8 +964,14 @@ async function loadTveNetworkStatus() {
       // "Last attempt failed just now" when it last worked under a
       // different MVPD than whatever's selected now (reported live
       // 2026-08-17: read as "looks finished but still says 1d ago?").
-      const age = n.last_signed_in_at ? `Signed in ${_tveRelativeTime(n.last_signed_in_at)}` : 'Never signed in';
-      const ageColor = n.last_signed_in_at ? 'var(--text-soft)' : 'var(--text-dim)';
+      let age = n.last_signed_in_at ? `Signed in ${_tveRelativeTime(n.last_signed_in_at)}` : 'Never signed in';
+      let ageColor = n.last_signed_in_at ? 'var(--text-soft)' : 'var(--text-dim)';
+      // The saved sign-in lapsed and only a person can redo it (see
+      // app/tve/signin_notice.py) — say that plainly instead of a stale age.
+      if (n.needs_signin) {
+        age = 'Sign in again';
+        ageColor = 'var(--warning-soft,#b8860b)';
+      }
       let note = n.note ? `<div style="color:var(--text-dim);font-size:0.72rem;margin:0.05rem 0 0.35rem">${n.note}</div>` : '';
       // Otherwise a network that's never signed in successfully just shows
       // "Never" with no clue why (e.g. this specific network not entitled
@@ -953,6 +981,9 @@ async function loadTveNetworkStatus() {
       if (n.unsupported) {
         note = `<div style="color:var(--text-dim);font-size:0.72rem;margin:0.05rem 0 0.35rem">${_escapeHtml(n.unsupported)}</div>`;
       }
+      if (!note && n.needs_signin) {
+        note = `<div style="color:var(--warning-soft,#b8860b);font-size:0.72rem;margin:0.05rem 0 0.35rem">${_escapeHtml(n.last_error_message || 'The saved sign-in stopped working.')}</div>`;
+      }
       if (!note && n.last_error_message) {
         const errAge = _tveRelativeTime(n.last_error_at);
         note = `<div style="color:var(--danger);font-size:0.72rem;margin:0.05rem 0 0.35rem">Last attempt failed ${errAge}: ${_escapeHtml(n.last_error_message)}</div>`;
@@ -960,7 +991,8 @@ async function loadTveNetworkStatus() {
       const requestorArg = n.requestor_id ? `'${n.requestor_id}'` : 'null';
       let button = '';
       if (n.family && !n.unsupported) {
-        button = `<button class="btn btn-audit" style="padding:0.15rem 0.55rem;font-size:0.74rem" type="button" title="Sign in to just this network — reuses your saved credentials, doesn't touch any other network's sign-in" onclick="openMvpdLoginModal('${n.family}', ${requestorArg})">Sign in</button>`;
+        const needsStyle = n.needs_signin ? ';background:var(--warning-soft,#b8860b);color:#1a1a1a;border-color:transparent;font-weight:600' : '';
+        button = `<button class="btn btn-audit" style="padding:0.15rem 0.55rem;font-size:0.74rem${needsStyle}" type="button" title="Sign in to just this network — reuses your saved credentials, doesn't touch any other network's sign-in" onclick="openMvpdLoginModal('${n.family}', ${requestorArg})">Sign in</button>`;
       }
       return `<div style="display:flex;justify-content:space-between;align-items:center;gap:0.75rem;padding:0.15rem 0">
         <span>${n.label}</span>
@@ -977,6 +1009,11 @@ async function loadTveNetworkStatus() {
 
 function openMvpdLoginModal(family, requestorId) {
   family = family || 'legacy';
+  if (_tveSigninMethod() === 'phone' && TVE_LINK_FAMILIES.has(family)) {
+    openTveLinkModal(family, requestorId);
+    return;
+  }
+  _tveLinkPanelOff();
   const cfg = MVPD_LOGIN_FAMILIES[family];
   if (!cfg) return;
   if (cfg.needsRequestor && !requestorId) return;
@@ -1043,6 +1080,12 @@ function _mvpdLoginBeginRequest(cfg, requestorId, attempt = 1) {
           + 'Force-stop it and retry</a> if it looks stuck, or wait for it to finish on its own.';
         return;
       }
+      // Closed while the start was in flight: the Cancel's stop went out
+      // before this job existed, so stop it now rather than leave it waiting.
+      if (!_mvpdLoginActive) {
+        fetch(`${cfg.base}/stop`, { method: 'POST' }).catch(() => {});
+        return;
+      }
       _pollMvpdLoginModal();
     })
     .catch(() => {
@@ -1102,6 +1145,14 @@ function _closeMvpdLoginModal(cancel) {
     fetch(`${MVPD_LOGIN_FAMILIES[_mvpdLoginFamily].base}/stop`, { method: 'POST' }).catch(() => {});
   }
 }
+
+// Leaving the page with a sign-in open abandons it the same as Cancel —
+// otherwise its job keeps the sign-in worker waiting for up to 30 minutes.
+window.addEventListener('pagehide', () => {
+  if (_mvpdLoginActive && !_mvpdLoginDone && MVPD_LOGIN_FAMILIES[_mvpdLoginFamily]) {
+    navigator.sendBeacon(`${MVPD_LOGIN_FAMILIES[_mvpdLoginFamily].base}/stop`);
+  }
+});
 
 const MVPD_STEP_LABELS = {
   HISTORY: 'History', AETV: 'A&E', LIFETIME: 'Lifetime', FYI: 'FYI',
@@ -1248,6 +1299,8 @@ async function _pollMvpdLoginModal() {
 // browser or shared job to coordinate.
 async function signInToAllTve() {
   if (_mvpdLoginActive) return;  // a sign-in (single or batch) is already open
+  if (_tveSigninMethod() === 'phone') return signInToAllTveByLink();
+  _tveLinkPanelOff();
   const modal = document.getElementById('mvpd-login-modal');
   const frame = document.getElementById('mvpd-login-frame');
   const status = document.getElementById('mvpd-login-status');
@@ -2457,18 +2510,6 @@ async function loadSystemStats() {
   }
 }
 
-async function saveContributionUrl() {
-  const url = document.getElementById('gn-contribution-url').value.trim();
-  const st = document.getElementById('gn-contribution-status');
-  st.textContent = 'Saving…'; st.className = 'save-status';
-  try {
-    const cr = await fetch('/api/settings', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({gracenote_contribution_url: url}) });
-    if (!cr.ok) throw new Error(`HTTP ${cr.status}`);
-    st.textContent = 'Saved'; st.className = 'save-status saved';
-  } catch(e) { st.textContent = 'Error'; st.className = 'save-status error'; }
-  setTimeout(() => { st.textContent = ''; }, 3000);
-}
-
 initSettingsSectionNav();
 if (document.getElementById('system-stats-body')) loadSystemStats();
 if (document.getElementById('tve-provider')) updateTveProviderFields();
@@ -2536,3 +2577,242 @@ async function refreshRemoteGracenoteMap() {
 
 if (document.getElementById('gn-map-url')) loadRemoteGracenoteStatus();
 if (document.getElementById('local-backups-list')) loadLatestBackup();
+
+
+// ── Phone-link sign-in ──────────────────────────────────────────────────────
+// Same modal as the browser sign-in, but instead of the live browser view it
+// shows a link the user opens on their own device. The job (app/tve/
+// link_login.py) polls the provider and saves the sign-in exactly where the
+// browser flow would, so network status updates the same way.
+
+function _tveSigninMethod() {
+  const el = document.getElementById('tve-signin-method');
+  return (el && el.dataset.method) || 'browser';
+}
+
+async function saveTveSigninMethod(method) {
+  const el = document.getElementById('tve-signin-method');
+  const status = document.getElementById('tve-signin-method-status');
+  status.className = 'save-status';
+  status.textContent = 'Saving…';
+  try {
+    const r = await fetch('/api/settings/tve/signin-method', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ method }),
+    });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
+    el.dataset.method = d.signin_method;
+    _updateTveGoogleRowForMethod();
+    status.className = 'save-status ok';
+    status.textContent = 'Saved';
+  } catch (e) {
+    status.className = 'save-status err';
+    status.textContent = 'Not saved: ' + e.message;
+    const current = el.dataset.method || 'browser';
+    document.querySelectorAll('input[name="tve-signin-method"]').forEach(i => { i.checked = i.value === current; });
+  }
+  setTimeout(() => { status.textContent = ''; }, 2500);
+}
+
+// YouTube TV's "Sign in with Google" only helps the browser flow (it signs
+// our browser in to Google once); on a phone, Google's sign-in is part of
+// each network's link — so show the row only for YouTube TV + browser mode.
+function _updateTveGoogleRowForMethod() {
+  const row = document.getElementById('tve-google-signin-row');
+  if (!row) return;
+  row.style.display = row.dataset.youtubeTv && _tveSigninMethod() !== 'phone' ? '' : 'none';
+}
+
+// Back to the browser view — called by the browser-mode openers.
+function _tveLinkPanelOff() {
+  document.getElementById('mvpd-link-panel').style.display = 'none';
+  document.getElementById('mvpd-login-frame').style.display = '';
+}
+
+function _tveLinkModalOpen() {
+  const modal = document.getElementById('mvpd-login-modal');
+  const status = document.getElementById('mvpd-login-status');
+  const frame = document.getElementById('mvpd-login-frame');
+  frame.removeAttribute('src');
+  frame.style.display = 'none';
+  document.getElementById('mvpd-link-panel').style.display = 'none';
+  document.getElementById('mvpd-login-hint').style.display = 'none';
+  _mvpdLoginLastLogLine = null;
+  _renderMvpdLoginLog([]);
+  _renderMvpdLoginSteps([]);
+  status.style.color = '';
+  status.textContent = 'Getting a sign-in link…';
+  if (_mvpdLoginPollTimer) { clearTimeout(_mvpdLoginPollTimer); _mvpdLoginPollTimer = null; }
+  _mvpdLoginRetryArgs = null;
+  _mvpdLoginFamily = 'link';  // so Cancel stops the link job
+  _mvpdLoginActive = true;
+  _mvpdLoginDone = false;
+  modal.classList.add('open');
+  return status;
+}
+
+function _showTveLink(label, url, code) {
+  const panel = document.getElementById('mvpd-link-panel');
+  const a = document.getElementById('mvpd-link-url');
+  document.getElementById('mvpd-link-label').textContent = `Sign in for ${label}`;
+  document.getElementById('mvpd-link-code-row').style.display = code ? '' : 'none';
+  document.getElementById('mvpd-link-code').textContent = code || '';
+  if (a.getAttribute('href') !== url) {
+    a.setAttribute('href', url);
+    a.textContent = url;
+    document.getElementById('mvpd-link-copy').textContent = 'Copy link';
+    renderQrCode(document.getElementById('mvpd-link-qr'), url);
+  }
+  panel.style.display = 'block';
+}
+
+// QR code for a sign-in link (vendored qrcode-generator, drawn in the page —
+// no server or network involved). Leaves the box empty if the library
+// didn't load; the link and Copy button still work.
+function renderQrCode(el, text) {
+  if (!el) return;
+  el.innerHTML = '';
+  if (typeof qrcode !== 'function' || !text) return;
+  try {
+    const qr = qrcode(0, 'M');
+    qr.addData(text);
+    qr.make();
+    el.innerHTML = qr.createSvgTag({ cellSize: 4, margin: 0, scalable: true });
+    const svg = el.querySelector('svg');
+    if (svg) { svg.style.width = '100%'; svg.style.height = '100%'; svg.style.display = 'block'; }
+  } catch (e) {
+    el.innerHTML = '';
+  }
+}
+
+function copyTveLink() {
+  const url = document.getElementById('mvpd-link-url').getAttribute('href');
+  const btn = document.getElementById('mvpd-link-copy');
+  if (navigator.clipboard && url) {
+    navigator.clipboard.writeText(url).then(() => { btn.textContent = 'Copied'; }).catch(() => {});
+  }
+}
+
+// Stops the current link job; its _tveLinkRunOne resolves 'stopped' and a
+// "Sign in to all" run carries on with the next network.
+function skipTveLink() {
+  document.getElementById('mvpd-link-panel').style.display = 'none';
+  fetch(`${MVPD_LOGIN_FAMILIES.link.base}/stop`, { method: 'POST' }).catch(() => {});
+}
+
+// One network (AMC: its four channels, one link each). Resolves with
+// {ok, message} once the job reaches a terminal state; onSteps gets the
+// job's own per-channel steps.
+function _tveLinkRunOne(family, requestorId, status, onSteps) {
+  return new Promise((resolve) => {
+    let runId = null;
+    let startedAt = 0;
+    const poll = () => {
+      if (!_mvpdLoginActive) { resolve({ ok: false, message: 'cancelled' }); return; }
+      fetch(`${MVPD_LOGIN_FAMILIES.link.base}/state`)
+        .then(r => r.json())
+        .then((d) => {
+          if (!_mvpdLoginActive) { resolve({ ok: false, message: 'cancelled' }); return; }
+          if (d.run_id !== runId) {
+            if (d.state === 'idle') { resolve({ ok: false, message: 'stopped' }); return; }
+            _mvpdLoginPollTimer = setTimeout(poll, 1000);
+            return;
+          }
+          if (onSteps && Array.isArray(d.steps)) onSteps(d.steps);
+          const label = MVPD_STEP_LABELS[d.label] || d.label || '';
+          if (d.state === 'waiting' && d.url) {
+            status.textContent = `Waiting for you to sign in for ${label}…`;
+            _showTveLink(label, d.url, d.code);
+          } else if (d.state === 'waiting') {
+            status.textContent = `Checking ${label}…`;
+          } else if (d.state === 'starting' && Date.now() - startedAt > 10000) {
+            // Sign-ins share the maintenance worker; a nightly job or a bulk
+            // channel update can hold it for a bit.
+            status.textContent = 'Waiting for the background worker to pick this up…';
+          }
+          if (d.state === 'success' || d.state === 'error') {
+            document.getElementById('mvpd-link-panel').style.display = 'none';
+            resolve({ ok: d.state === 'success', message: d.message || '' });
+            return;
+          }
+          _mvpdLoginPollTimer = setTimeout(poll, 2000);
+        })
+        .catch(() => { _mvpdLoginPollTimer = setTimeout(poll, 3000); });
+    };
+    fetch(`${MVPD_LOGIN_FAMILIES.link.base}/start`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ family, requestor_id: requestorId || null }),
+    })
+      .then(r => r.json().then(d => ({ ok: r.ok, status: r.status, d })))
+      .then(({ ok, status: httpStatus, d }) => {
+        if (!ok) { resolve({ ok: false, message: (d && d.error) || `HTTP ${httpStatus}` }); return; }
+        // Closed while the start was in flight (see openMvpdLoginModal).
+        if (!_mvpdLoginActive) {
+          fetch(`${MVPD_LOGIN_FAMILIES.link.base}/stop`, { method: 'POST' }).catch(() => {});
+          resolve({ ok: false, message: 'cancelled' });
+          return;
+        }
+        runId = d.run_id;
+        startedAt = Date.now();
+        poll();
+      })
+      .catch(() => resolve({ ok: false, message: 'could not reach the server to start sign-in' }));
+  });
+}
+
+async function openTveLinkModal(family, requestorId) {
+  if (_mvpdLoginActive) return;
+  const status = _tveLinkModalOpen();
+  // AMC's four channels show as steps; a single network needs none.
+  const res = await _tveLinkRunOne(family, requestorId, status,
+    steps => _renderMvpdLoginSteps(steps.length > 1 ? steps : []));
+  if (!_mvpdLoginActive) return;
+  _mvpdLoginDone = true;
+  status.style.color = res.ok ? 'var(--success-soft)' : 'var(--danger)';
+  status.textContent = (res.ok ? '✓ ' : '✗ ') + res.message;
+  loadTveNetworkStatus();
+}
+
+async function signInToAllTveByLink() {
+  const status = _tveLinkModalOpen();
+  status.textContent = 'Loading network list…';
+  let networks;
+  try {
+    const d = await (await fetch('/api/settings/tve/status')).json();
+    networks = (d.networks || []).filter(n => !n.unsupported && n.family);
+  } catch (e) {
+    _mvpdLoginDone = true;
+    status.style.color = 'var(--danger)';
+    status.textContent = 'Could not load the TVE network list.';
+    return;
+  }
+  if (!_mvpdLoginActive) return;
+  const steps = networks.map(n => ({ label: n.requestor_id || n.label, state: 'pending' }));
+  _renderMvpdLoginSteps(steps);
+  for (let i = 0; i < networks.length; i++) {
+    if (!_mvpdLoginActive) return;
+    const n = networks[i];
+    if (!TVE_LINK_FAMILIES.has(n.family)) {
+      steps[i].state = 'failed';
+      steps[i].message = 'needs "Sign in for me"';
+      _renderMvpdLoginSteps(steps);
+      continue;
+    }
+    steps[i].state = 'running';
+    _renderMvpdLoginSteps(steps);
+    status.textContent = `Getting a sign-in link for ${n.label}…`;
+    const res = await _tveLinkRunOne(n.family, n.requestor_id, status, null);
+    if (!_mvpdLoginActive) return;
+    steps[i].state = res.ok ? 'done' : 'failed';
+    steps[i].message = res.message;
+    _renderMvpdLoginSteps(steps);
+  }
+  _mvpdLoginDone = true;
+  const okCount = steps.filter(s => s.state === 'done').length;
+  const skipped = steps.filter(s => s.message === 'needs "Sign in for me"').length;
+  status.style.color = okCount ? 'var(--success-soft)' : '';
+  status.textContent = `✓ Signed in to ${okCount}/${steps.length} networks.`
+    + (skipped ? ` ${skipped} need "Sign in for me" (not available as a phone link).` : '');
+  loadTveNetworkStatus();
+}

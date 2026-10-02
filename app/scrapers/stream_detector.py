@@ -702,6 +702,11 @@ class StreamDetector:
         # should take precedence over generic m3u8 URLs baked into the page HTML
         # (e.g. related-story clips that are VOD, not the actual live feed).
         _priority_hls: list[str] = []
+        for _c in self._extract_nexstar_anvato_live_candidates(session, url, text):
+            if _c not in _priority_hls:
+                _priority_hls.append(_c)
+                self._candidate_resolvers.setdefault(_c, 'nexstar anvato live')
+                self._candidate_page_urls.setdefault(_c, url)
         for _c in self._extract_videolinq_provider_candidates(session, url, text):
             if _c not in _priority_hls:
                 _priority_hls.append(_c)
@@ -886,6 +891,84 @@ class StreamDetector:
                     candidates.append(c)
                     self._candidate_resolvers.setdefault(c, 'custom api')
 
+        return candidates
+
+    def _extract_nexstar_anvato_live_candidates(
+        self,
+        session: requests.Session,
+        url: str,
+        page_text: str,
+    ) -> list[str]:
+        """Resolve Nexstar's live Anvato player through its public metadata API.
+
+        The page may show an email sign-in overlay, but its live player gets a
+        signed HLS URL from Lura without a KTLA login cookie.  Read the player
+        ID and public API key from the current page so rotating URLs are never
+        stored as the source of truth.
+        """
+        if 'data-nexstar-video=' not in page_text or 'nexstarVideoPluginSettings' not in page_text:
+            return []
+
+        settings_match = re.search(r'var\s+nexstarVideoPluginSettings\s*=\s*', page_text)
+        if not settings_match:
+            return []
+        try:
+            settings, _ = json.JSONDecoder().raw_decode(page_text[settings_match.end():])
+            provider = settings['providerSettings']['anvato']
+        except (ValueError, KeyError, TypeError):
+            return []
+
+        api_base = provider.get('videoApiBaseUrl') or ''
+        api_parts = urlsplit(api_base)
+        if api_parts.scheme != 'https' or api_parts.hostname != 'tkx.mp.lura.live' or api_parts.path.rstrip('/') != '/rest/v2/mcp/video':
+            return []
+
+        candidates: list[str] = []
+        for match in re.finditer(r'data-nexstar-video="([^"]+)"', page_text):
+            try:
+                player = json.loads(html.unescape(match.group(1)))
+            except (ValueError, TypeError):
+                continue
+            attributes = player.get('attributes') or {}
+            if player.get('provider') != 'anvato' or attributes.get('type') != 'live':
+                continue
+            video_id = player.get('id') or attributes.get('id') or ''
+            if not isinstance(video_id, str) or not re.fullmatch(r'[A-Za-z0-9_-]+', video_id):
+                continue
+            override = (provider.get('overrides') or {}).get(video_id) or {}
+            api_key = override.get('anvack') or provider.get('anvack')
+            if not isinstance(api_key, str) or not re.fullmatch(r'[A-Za-z0-9]+', api_key):
+                continue
+            try:
+                response = session.get(
+                    f'{api_base.rstrip("/")}/{video_id}',
+                    params={'anvack': api_key},
+                    headers={'Referer': url, 'Origin': self._origin_of(url)},
+                    timeout=self.TIMEOUT,
+                )
+                if not response.ok:
+                    continue
+                body = response.text.strip()
+                # Lura currently wraps JSON in anvatoVideoJSONLoaded(...).
+                if body.startswith('anvatoVideoJSONLoaded('):
+                    body = body[len('anvatoVideoJSONLoaded('):].rstrip(';').rstrip(')')
+                metadata = json.loads(body)
+                if not isinstance(metadata, dict):
+                    continue
+            except (ValueError, TypeError, requests.RequestException) as exc:
+                logger.debug('[detector] Nexstar Anvato metadata failed: %s', exc)
+                continue
+            for published in metadata.get('published_urls') or []:
+                if not isinstance(published, dict):
+                    continue
+                stream_url = published.get('embed_url') or ''
+                parts = urlsplit(stream_url)
+                if parts.scheme != 'https' or not (parts.hostname or '').endswith('.mp.lura.live'):
+                    continue
+                if not parts.path.endswith('.m3u8') or stream_url in candidates:
+                    continue
+                candidates.append(stream_url)
+                self._trusted_hls.add(stream_url)
         return candidates
 
     @staticmethod

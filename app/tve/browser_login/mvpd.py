@@ -605,7 +605,7 @@ def run_mvpd_browser_login(requestor_id: str, resource: str, software_statement:
                     _autofill_spectrum_sso_confirm(page)
                     idid_message = _spectrum_signin_error_message(page, requestor_id, mso_id)
                     if idid_message:
-                        _step(requestor_id, 'failed', 'Spectrum "Feature Unavailable"')
+                        _step(requestor_id, 'failed', 'Spectrum sign-in error')
                         _record_tve_login_error(requestor_id, idid_message)
                         set_status('error', idid_message)
                         return

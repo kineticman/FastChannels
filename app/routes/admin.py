@@ -564,6 +564,14 @@ def dashboard():
     # ways (GH #64). Non-blocking — first load kicks off the lookup in background.
     from app.geo_check import get_server_country
     server_country = get_server_country()
+    # TV-provider sign-ins that lapsed and need a person to redo them (see
+    # app/tve/signin_notice.py). Never let this break the dashboard.
+    try:
+        from app.tve.signin_notice import pending_signins
+        signins_needed = pending_signins()
+    except Exception:  # noqa: BLE001
+        current_app.logger.exception('[dashboard] could not read pending sign-ins')
+        signins_needed = []
     return render_template('admin/dashboard.html', sources=sources,
                            enabled_sources=enabled_sources, disabled_sources=disabled_sources,
                            total_channels=total_channels, base_url=base_url,
@@ -578,6 +586,7 @@ def dashboard():
                            tz_health=timezone_health(app_settings.timezone_name),
                            scheduler_health=scheduler_health,
                            server_country=server_country,
+                           signins_needed=signins_needed,
                            now=_now)
 
 
@@ -1454,78 +1463,123 @@ def _drm_bridge_recoverable_count() -> int:
             .count())
 
 
-def _bridge_supported_sources() -> dict:
-    """Static reference lists for the Bridge page: which sources the project has
-    actually verified over each bridge method, independent of whether the operator
-    has added/enabled that source yet (unlike `_bridge_source_inventory`, which only
-    covers sources already configured here).
+def _bridge_methods(settings) -> list[dict]:
+    """The three bridge methods and where each stands, for the Bridge page tiles.
 
-    PrismCast's list is every scraper with a `license_url` (registry.drm_capable_source_names —
-    the same single source of truth the feed/audit/PrismCast-test code already routes
-    through), since PrismCast's browser/EME capture only needs a source to expose DRM
-    license handling at all. FastChannels Player's list is the narrower
-    DRM_BRIDGE_TRUSTED_SOURCES — sources individually re-tested against its native
-    adb-triggered device bridge, since a license_url alone doesn't mean a native
-    Widevine client can reach it (the retired Cox Contour source was the standing
-    example: it had a license_url and worked over PrismCast, but its license server
-    rejected native clients by app identity)."""
+    `state` walks the setup chain: 'off' (untouched) → 'setup' (started, still
+    missing something) → 'ready' (usable, but global Bridge mode is off) → 'live'.
+    """
+    player_on = bool(settings.fc_player_bridge_enabled)
+    adb = settings.effective_fc_player_bridge_adb_address()
+
+    def _state(started: bool, configured: bool) -> str:
+        if configured:
+            return 'live' if settings.bridge_enabled else 'ready'
+        return 'setup' if started else 'off'
+
+    prismcast_url = settings.effective_prismcast_url()
+    # Raw values: the effective_ getters return None while their toggle is off.
+    encoder_url = settings.saved_fc_player_bridge_encoder_url()
+    ah4c_url = (settings.fc_player_bridge_ah4c_url or '').strip()
+
+    def _missing(pairs) -> str:
+        return ', '.join(label for label, ok in pairs if not ok)
+
+    return [
+        {
+            'key': 'ah4c',
+            'label': 'ah4c Capture',
+            'state': _state(bool(settings.fc_player_bridge_ah4c_enabled or ah4c_url),
+                            _fc_player_bridge.ah4c_capture_configured(settings)),
+            'missing': _missing([('hardware capture toggle', player_on),
+                                 ('ah4c Capture toggle', settings.fc_player_bridge_ah4c_enabled),
+                                 ('ah4c server URL', ah4c_url),
+                                 ('a Player device', adb)]),
+        },
+        {
+            'key': 'hdmi',
+            'label': 'HDMI Capture',
+            'state': _state(bool(settings.fc_player_bridge_hdmi_enabled or encoder_url),
+                            _fc_player_bridge.hdmi_capture_configured(settings)),
+            'missing': _missing([('hardware capture toggle', player_on),
+                                 ('HDMI Capture toggle', settings.fc_player_bridge_hdmi_enabled),
+                                 ('device IP', adb),
+                                 ('capture stream URL', encoder_url)]),
+        },
+        {
+            'key': 'prismcast',
+            'label': 'PrismCast Capture',
+            'state': _state(bool(settings.prismcast_enabled or prismcast_url),
+                            bool(settings.prismcast_enabled and prismcast_url)),
+            'missing': _missing([('PrismCast Capture toggle', settings.prismcast_enabled),
+                                 ('server URL', prismcast_url)]),
+        },
+    ]
+
+
+def _bridge_coverage(methods: list[dict]) -> dict:
+    """Source × method coverage for the Bridge page.
+
+    One table answers both "what does the project support" and "what is working
+    here": every DRM-capable source gets a row, split into the ones enabled on this
+    server (with channel counts) and the rest. PrismCast covers every scraper with a
+    `license_url` (registry.drm_capable_source_names), since browser/EME capture only
+    needs license handling to exist; the FastChannels Player methods cover the
+    narrower DRM_BRIDGE_TRUSTED_SOURCES, re-tested one source at a time against the
+    native adb bridge.
+
+    `requires_drm_bridge` is populated by scrape/audit work, so a source with
+    channels but no candidates still needs its first Stream Audit.
+    """
     scrapers = _scraper_registry.get_all()
+    capable = _scraper_registry.drm_capable_source_names()
+    live = {m['key'] for m in methods if m['state'] == 'live'}
 
     def _label(name: str) -> str:
         cls = scrapers.get(name)
         return (getattr(cls, 'display_name', None) or name) if cls else name
 
-    prismcast_names = _scraper_registry.drm_capable_source_names()
-    fc_player_names = sorted(DRM_BRIDGE_TRUSTED_SOURCES)
+    def _cells(name: str, enabled: bool) -> dict:
+        cells = {}
+        for key in ('prismcast', 'hdmi', 'ah4c'):
+            if key != 'prismcast' and name not in DRM_BRIDGE_TRUSTED_SOURCES:
+                cells[key] = 'na'
+            elif not enabled:
+                cells[key] = 'supported'
+            else:
+                cells[key] = 'live' if key in live else 'idle'
+        return cells
+
+    enabled_rows = []
+    enabled_names = set()
+    if capable:
+        sources = (Source.query
+                   .options(defer(Source.config))
+                   .filter(Source.name.in_(capable), Source.is_enabled.is_(True))
+                   .order_by(Source.display_name, Source.name)
+                   .all())
+        for source in sources:
+            enabled_names.add(source.name)
+            if source.epg_only:
+                continue
+            base = Channel.query.filter_by(source_id=source.id, is_active=True, is_enabled=True)
+            enabled_rows.append({
+                'name': source.name,
+                'display_name': source.display_name or _label(source.name),
+                'cells': _cells(source.name, True),
+                'channel_count': base.count(),
+                'candidate_count': base.filter_by(requires_drm_bridge=True).count(),
+            })
+    other_rows = [
+        {'name': n, 'display_name': _label(n), 'cells': _cells(n, False)}
+        for n in sorted(set(capable) - enabled_names, key=lambda n: _label(n).lower())
+    ]
     return {
-        'prismcast': [{'name': n, 'display_name': _label(n)} for n in sorted(prismcast_names, key=_label)],
-        'fc_player': [{'name': n, 'display_name': _label(n)} for n in sorted(fc_player_names, key=_label)],
+        'enabled': enabled_rows,
+        'other': other_rows,
+        'ready_channels': sum(r['candidate_count'] for r in enabled_rows),
+        'ready_sources': sum(1 for r in enabled_rows if r['candidate_count']),
     }
-
-
-def _bridge_source_inventory() -> list[dict]:
-    """Enabled sources that can produce DRM bridge channels, for the Bridge page.
-
-    `requires_drm_bridge` is populated by scrape/audit work, so exposing both the
-    current candidate count and Player compatibility tells an operator exactly
-    which sources need an initial audit after enabling bridge mode.
-    """
-    from ..scrapers.registry import drm_capable_source_names
-
-    settings = AppSettings.get()
-    capable = set(drm_capable_source_names())
-    if not capable:
-        return []
-    sources = (Source.query
-               .filter(Source.name.in_(capable), Source.is_enabled.is_(True), Source.epg_only.is_not(True))
-               .order_by(Source.display_name, Source.name)
-               .all())
-    rows = []
-    for source in sources:
-        active_enabled = (Channel.query
-                          .filter_by(source_id=source.id, is_active=True, is_enabled=True)
-                          .count())
-        candidates = (Channel.query
-                      .filter_by(source_id=source.id, is_active=True, is_enabled=True,
-                                 requires_drm_bridge=True)
-                      .count())
-        player_compatible = source.name in DRM_BRIDGE_TRUSTED_SOURCES
-        active_methods = []
-        if settings.prismcast_capture_configured():
-            active_methods.append('PrismCast Capture')
-        if player_compatible and _fc_player_bridge.ah4c_bridge_active(settings):
-            active_methods.append('ah4c Multi-Tuner Capture')
-        if player_compatible and _fc_player_bridge.hdmi_bridge_active(settings):
-            active_methods.append('HDMI Capture')
-        rows.append({
-            'name': source.name,
-            'display_name': source.display_name or source.name,
-            'player_compatible': player_compatible,
-            'active_methods': active_methods,
-            'active_enabled_count': active_enabled,
-            'candidate_count': candidates,
-        })
-    return rows
 
 
 @admin_bp.route('/settings')
@@ -1592,7 +1646,7 @@ def settings():
                            prismcast_enabled=bool(app_settings.prismcast_enabled),
                            fc_player_enabled=bool(app_settings.fc_player_bridge_enabled),
                            fc_player_ip=_fc_player_ip_display(app_settings.effective_fc_player_bridge_adb_address()),
-                           fc_player_encoder_url=app_settings.effective_fc_player_bridge_encoder_url() or '',
+                           fc_player_encoder_url=app_settings.saved_fc_player_bridge_encoder_url() or '',
                            fc_player_idle_stop_enabled=bool(app_settings.fc_player_bridge_idle_stop_enabled),
                            fc_player_captions_enabled=bool(app_settings.fc_player_bridge_captions_enabled),
                            fc_player_ah4c_enabled=bool(app_settings.fc_player_bridge_ah4c_enabled),
@@ -1614,6 +1668,7 @@ def settings():
                                'username': '',
                                'password_configured': False,
                                'is_enabled': False,
+                               'signin_method': 'browser',
                                'last_auth_status': None,
                                'last_auth_message': None,
                                'last_auth_at': None,
@@ -1626,28 +1681,32 @@ def settings():
                                'home_zip_code': '',
                                'xfinity_cookie_jar_captured_at': None,
                            },
-                           drm_bridge_recoverable_count=_drm_bridge_recoverable_count(),
-                           gracenote_contribution_url=app_settings.gracenote_contribution_url or '')
+                           drm_bridge_recoverable_count=_drm_bridge_recoverable_count())
 
 
 @admin_bp.route('/bridge')
 def bridge():
     """Dedicated configuration surface for DRM playback/capture bridge methods."""
     app_settings = AppSettings.get()
+    bridge_methods = _bridge_methods(app_settings)
     return render_template(
         'admin/bridge.html',
         request_base_url=request.host_url.rstrip('/'),
+        # The LAN address M3Us use; the ah4c modal pre-fills it because ah4c runs
+        # elsewhere, where this browser's own origin (often localhost) is wrong.
+        ah4c_scripts_default_url=public_base_url(),
         prismcast_url=app_settings.effective_prismcast_url() or '',
         prismcast_inner_url=app_settings.prismcast_inner_url or '',
         prismcast_max_height=int(app_settings.prismcast_max_height or 0),
         bridge_enabled=bool(app_settings.bridge_enabled),
         prismcast_enabled=bool(app_settings.prismcast_enabled),
         drm_bridge_recoverable_count=_drm_bridge_recoverable_count(),
-        bridge_sources=_bridge_source_inventory(),
-        bridge_supported_sources=_bridge_supported_sources(),
+        bridge_methods=bridge_methods,
+        bridge_coverage=_bridge_coverage(bridge_methods),
         fc_player_enabled=bool(app_settings.fc_player_bridge_enabled),
         fc_player_ip=_fc_player_ip_display(app_settings.effective_fc_player_bridge_adb_address()),
-        fc_player_encoder_url=app_settings.effective_fc_player_bridge_encoder_url() or '',
+        fc_player_encoder_url=app_settings.saved_fc_player_bridge_encoder_url() or '',
+        fc_player_hdmi_enabled=bool(app_settings.fc_player_bridge_hdmi_enabled),
         fc_player_idle_stop_enabled=bool(app_settings.fc_player_bridge_idle_stop_enabled),
         fc_player_captions_enabled=bool(app_settings.fc_player_bridge_captions_enabled),
         fc_player_ah4c_enabled=bool(app_settings.fc_player_bridge_ah4c_enabled),

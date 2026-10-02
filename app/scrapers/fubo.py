@@ -195,6 +195,15 @@ class FuboScraper(BaseScraper):
     # routed through the bridge; get_license_url() returns None for the rest.
     license_url = 'https://irdeto.fubo.tv/licenseServer/widevine/v1/FuboTV/license'
 
+    # Neither scrape-time response (lineup nor PAPI guide) says which channels are
+    # DRM (checked field-by-field against 109 DRM / 50 clear, 2026-09-29), so new
+    # channels get one resolve_dash() asset call right after the scrape — see
+    # worker.run_new_channel_drm_probe. Deliberately NOT set on Roku (403-sensitive).
+    probe_new_channels_for_drm = True
+    # Opt-in source, so a full stream audit right after the first scrape is fine —
+    # every channel is new then, too many for the per-channel probe above.
+    audit_on_first_scrape = True
+
     config_schema = [
         ConfigField('username', 'Email', required=True,
                     placeholder='you@example.com',

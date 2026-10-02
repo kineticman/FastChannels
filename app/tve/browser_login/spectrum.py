@@ -60,6 +60,8 @@ from app.worker import flask_app
 from app.tve.browser_login.common import (
     _watch_spectrum_auth_results,
     _detect_spectrum_feature_unavailable,
+    _spectrum_outage_code,
+    _spectrum_outage_message,
     _safe_page_url,
     _relay_input_and_screenshot,
     _set_expected_spectrum_username,
@@ -612,7 +614,7 @@ def run_spectrum_signin():
                 page = context.pages[0] if context.pages else context.new_page()
                 # Before any navigation: a "You're signing in as" screen for
                 # another account (e.g. the one tied to this home network)
-                # must get "Change account", not the usual auto-Continue.
+                # must get "Sign in with another account", not the usual auto-Continue.
                 _set_expected_spectrum_username(page, username)
                 _watch_spectrum_auth_results(page, 'spectrum-signin')
                 page.on('crash', lambda p: logger.warning('[spectrum-signin] page CRASH event fired (url was %s)', _safe_page_url(p)))
@@ -768,10 +770,11 @@ def run_spectrum_signin():
                     # to check on every poll tick regardless.
                     _dismiss_spectrum_tos_welcome(page)
                     if getattr(page, '_fc_spectrum_changed_account', False):
-                        # "Change account" was clicked on a signing-in-as
-                        # screen for another account (see
-                        # _autofill_spectrum_sso_confirm) — fill the real
-                        # login form it leads to.
+                        # "Sign in with another account" was clicked on a
+                        # signing-in-as screen for another account (see
+                        # _autofill_spectrum_sso_confirm) outside an
+                        # autofill wait — fill the real login form it leads
+                        # to. An autofill that already submitted clears it.
                         page._fc_spectrum_changed_account = False
                         _dismiss_tos_and_autofill()
                     now = time.monotonic()
@@ -782,6 +785,12 @@ def run_spectrum_signin():
                                 _debug_log('page navigated: %s -> %s', last_seen_url, current_url)
                                 last_seen_url = current_url
                             last_debug_url_log = now
+                    outage = _spectrum_outage_code(page)
+                    if outage:
+                        logger.warning('[spectrum-signin] Spectrum sign-in backend error (%s) — '
+                                       'stopping, not retrying', outage)
+                        set_status('error', _spectrum_outage_message('Spectrum', outage))
+                        return
                     idid_code = _detect_spectrum_feature_unavailable(page)
                     if idid_code:
                         # Confirmed live 2026-09-23: Spectrum's own "Feature
@@ -791,6 +800,25 @@ def run_spectrum_signin():
                         # outright, too fast to be a lasting account-level
                         # block. See module docstring's 2026-09-23 update and
                         # _detect_spectrum_feature_unavailable's docstring.
+                        auth_name = (getattr(page, '_fc_spectrum_auth_result', None) or {}).get('name') or ''
+                        if 'RECAPTCHA_REJECT' in auth_name and 'THMX' not in auth_name:
+                            # password/auth said AUTH_REJECT_BY_RECAPTCHA_REJECT_STATUS:
+                            # the retry below would submit the password
+                            # again seconds later, and repeated password
+                            # attempts are what this reject follows (see
+                            # _spectrum_signin_error_message, which doesn't
+                            # retry it either). Only the ThreatMetrix reject
+                            # has been seen to pass on a resubmit.
+                            logger.warning(
+                                '[spectrum-signin] hit Spectrum\'s "%s" error — password sign-in '
+                                'rejected by reCAPTCHA (%s), not retrying', idid_code, auth_name)
+                            set_status(
+                                'error',
+                                f'Spectrum rejected the password sign-in ({idid_code}, "Feature '
+                                f'Unavailable... try again from home"). This is Spectrum\'s bot check '
+                                f'(reCAPTCHA), which tends to follow several sign-ins in a short time — '
+                                f'retrying right away makes it worse. Wait a few hours before trying again.')
+                            return
                         if _idid_retries_remaining > 0:
                             _idid_retries_remaining -= 1
                             logger.info(
@@ -808,8 +836,8 @@ def run_spectrum_signin():
                             continue
                         else:
                             logger.warning(
-                                '[spectrum-signin] hit Spectrum\'s "%s" error again — retries '
-                                'exhausted, giving up', idid_code)
+                                '[spectrum-signin] hit Spectrum\'s "%s" error again (3rd time this '
+                                'sign-in) — retries exhausted, giving up', idid_code)
                             set_status(
                                 'error',
                                 f'Spectrum returned "{idid_code}" ("Feature Unavailable... try '

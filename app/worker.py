@@ -509,6 +509,9 @@ def run_scraper(source_name: str, force_full: bool = False):
                 _active_geos = None
                 if hasattr(scraper, '_geos'):
                     _active_geos = {g.upper() for g in scraper._geos()}
+                _upsert_started = datetime.now(timezone.utc)
+                _first_scrape = db.session.query(Channel.id).filter(
+                    Channel.source_id == source.id).first() is None
                 for _attempt in range(3):
                     try:
                         if source.scrape_interval != 0:
@@ -558,6 +561,36 @@ def run_scraper(source_name: str, force_full: bool = False):
                         logger.warning('[%s] DB locked (channel upsert, attempt %d/3), retrying in %ds',
                                        source_name, _attempt + 1, _wait)
                         time.sleep(_wait)
+
+                # New channels on a FairPlay-HLS / Widevine-DASH source: flag the DRM
+                # ones now so their first play already gets Widevine. A source's first
+                # scrape (whole lineup new) gets the full stream audit instead — it
+                # runs on this same queue, so it starts once this scrape finishes.
+                if (_first_scrape and getattr(scraper, 'audit_on_first_scrape', False)
+                        and source.scrape_interval != 0):
+                    try:
+                        from app.routes.tasks import trigger_stream_audit
+                        logger.info('[%s] first scrape — queuing a stream audit', source_name)
+                        trigger_stream_audit(source_name)
+                    except Exception as _audit_exc:
+                        logger.warning('[%s] first-scrape stream audit not queued: %s', source_name, _audit_exc)
+                elif getattr(scraper, 'probe_new_channels_for_drm', False) and source.scrape_interval != 0:
+                    try:
+                        _new_ids = [cid for (cid,) in (
+                            db.session.query(Channel.id)
+                            .filter(Channel.source_id == source.id,
+                                    Channel.first_seen_at >= _upsert_started)
+                            .all()
+                        )]
+                        if _new_ids:
+                            if len(_new_ids) > _NEW_CHANNEL_DRM_PROBE_MAX:
+                                logger.info('[%s] %d new channels — DRM-probing the first %d, '
+                                            'the stream audit covers the rest',
+                                            source_name, len(_new_ids), _NEW_CHANNEL_DRM_PROBE_MAX)
+                            from app.routes.tasks import trigger_new_channel_drm_probe
+                            trigger_new_channel_drm_probe(source_name, _new_ids[:_NEW_CHANNEL_DRM_PROBE_MAX])
+                    except Exception as _probe_exc:
+                        logger.warning('[%s] new-channel DRM probe not queued: %s', source_name, _probe_exc)
 
                 _progress('epg', 0, len(channels))
                 # Query enabled_ids after channels are committed so new channels
@@ -769,9 +802,8 @@ def run_stream_audit(source_name: str):
             logger.info('[audit] %s: stream audit not enabled for this source, skipping', source_name)
             return
 
-        _required = getattr(scraper_cls, 'audit_requires_config', [])
-        _cfg = source.config or {}
-        _missing = [k for k in _required if not (_cfg.get(k) or '').strip()]
+        from app.scrapers.base import missing_audit_config
+        _missing = missing_audit_config(scraper_cls, source.config)
         if _missing:
             _skip_msg = f"Required config missing: {', '.join(_missing)}"
             logger.warning('[audit] %s: %s — skipping audit', source_name, _skip_msg)
@@ -1383,8 +1415,14 @@ def run_stream_audit(source_name: str):
                         ch.disable_reason = None
                         bridged += 1
                         report_channels.append({'id': ch.id, 'name': ch.name, 'status': 'drm_bridge', 'reason': _drm_type})
-                        logger.info('[audit] DRM→%s bridge: %s (%s)',
-                                    _active_bridge_label(source_name), ch.name, _drm_type)
+                        # Name the variant that actually plays: on resolve_dash() sources
+                        # (Roku, Fubo) the FairPlay HLS is skipped for Widevine DASH.
+                        if hasattr(scraper_cls, 'resolve_dash'):
+                            logger.info('[audit] %s: HLS is %s → plays as Widevine DASH via %s',
+                                        ch.name, _drm_type, _active_bridge_label(source_name))
+                        else:
+                            logger.info('[audit] %s: HLS is %s → %s bridge',
+                                        ch.name, _drm_type, _active_bridge_label(source_name))
                     else:
                         # Disable mode (or non-bridge-capable source): drop it as before.
                         ch.requires_drm_bridge = False
@@ -2217,6 +2255,72 @@ def run_channel_auto_disable(channel_id: int, reason: str):
             ch_source_name,
             ch_source_channel_id,
         )
+
+
+# Cap per scrape: a first-ever scrape inserts the whole lineup, which is the stream
+# audit's job. This probe is for the handful of channels a routine scrape adds.
+_NEW_CHANNEL_DRM_PROBE_MAX = 25
+
+
+def run_new_channel_drm_probe(source_name: str, channel_ids: list):
+    """Flag newly-scraped DRM channels for the Widevine path before anyone plays them.
+
+    For sources whose default HLS is FairPlay but that also serve CENC DASH+Widevine
+    (probe_new_channels_for_drm), only requires_drm_bridge channels get the Widevine
+    variant. The stream audit is manual, so otherwise a new DRM channel stays
+    unflagged until a first tune fails on FairPlay (Shaka 4040) and the play proxy
+    flags it. resolve_dash() returning an MPD means the channel is DRM — on Fubo it
+    matched the stream audit on all 159 active channels (119 DRM / 40 clear,
+    2026-09-29).
+    """
+    drm_ids = []
+    with flask_app.app_context():
+        source = Source.query.filter_by(name=source_name).first()
+        if not source or not source.is_enabled:
+            return
+        scraper_cls = registry.get(source_name)
+        if (not scraper_cls or not getattr(scraper_cls, 'probe_new_channels_for_drm', False)
+                or not _drm_bridge_mode_for(source_name)):
+            return
+        channels = (
+            Channel.query
+            .filter(Channel.id.in_(channel_ids),
+                    Channel.is_active == True,
+                    Channel.requires_drm_bridge == False)
+            .all()
+        )
+        if not channels:
+            return
+        scraper = scraper_cls(config=source.config or {})
+        try:
+            scraper.pre_run_setup()
+        except Exception:
+            pass
+        for ch in channels:
+            try:
+                result = scraper.resolve_dash(ch.stream_url, allow_cached=False)
+            except Exception as e:
+                logger.info('[drm-probe] %s: could not check %s: %s', source_name, ch.name, e)
+                continue
+            if (result or {}).get('mpd_url'):
+                # Same end state as the audit's / play proxy's bridge branch. Set
+                # inline rather than via run_channel_auto_disable so N channels cost
+                # one XML rebuild, not N (~40s each).
+                ch.requires_drm_bridge = True
+                drm_ids.append(ch.id)
+                logger.info('[drm-probe] %s: DRM → plays as Widevine DASH via %s',
+                            ch.name, _active_bridge_label(source_name))
+        try:
+            _apply_scraper_config_updates(source, scraper)
+            db.session.commit()
+        except Exception as e:
+            db.session.rollback()
+            logger.warning('[drm-probe] %s: commit failed: %s', source_name, e)
+            return
+        logger.info('[drm-probe] %s: checked %d new channel(s), %d DRM → Widevine path',
+                    source_name, len(channels), len(drm_ids))
+        if drm_ids:
+            _invalidate_and_refresh_xml()
 
 
 def _fresh_epg_sids(source, horizon_hours: float = 2.0) -> set[str]:
@@ -3215,8 +3319,8 @@ def _schedule_due_scrapes():
         # session; nothing is lost, since this sweep just runs again in 60s
         # and always re-evaluates every source's actual elapsed interval
         # rather than tracking "missed" ticks.
-        from app.routes.tasks import _mvpd_tve_profile_busy, get_fast_queue
-        if _mvpd_tve_profile_busy(get_fast_queue()):
+        from app.routes.tasks import _mvpd_tve_profile_busy, get_signin_queue
+        if _mvpd_tve_profile_busy(get_signin_queue()):
             logger.debug('[scheduler] TVE browser-login in progress — skipping this due-scrape sweep')
             return
 

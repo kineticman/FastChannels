@@ -412,7 +412,21 @@
       width: 100%; background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
       padding: 0.5rem 0.7rem; color: var(--text); font-size: 0.84rem; outline: none;
     }
-    .field input:focus { border-color: var(--focus-accent); }
+    .field select:not([multiple]) {
+      width: 100%; background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
+      padding: 0.5rem 0.7rem; color: var(--text); font-size: 0.84rem; outline: none;
+    }
+    .field input:focus, .field select:focus { border-color: var(--focus-accent); }
+    .signin-box {
+      margin-top: 0.9rem; padding: 0.8rem 0.9rem; border: 1px solid var(--border);
+      border-radius: 8px; background: var(--surface-2);
+    }
+    .signin-box-row { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; margin-top: 0.55rem; }
+    .signin-box-row .spacer { flex: 1; }
+    .subfields {
+      margin-top: 0.9rem; padding-left: 0.85rem; border-left: 2px solid var(--border);
+    }
+    .subfields .fields-grid { margin-top: 0.5rem; }
     .field .help { font-size: 0.76rem; color: var(--text-muted); margin-top: 0.32rem; line-height: 1.45; }
     .config-toggle-field {
       display: flex; align-items: center; justify-content: space-between; gap: 1rem;
@@ -971,6 +985,9 @@
                 {% if this_cat == 'tve' %}
                 <div class="config-note">This source authenticates with your TV-provider account under <a href="/admin/settings#settings-card-tve">Settings → Credentials</a> — nothing to configure here.</div>
                 {% endif %}
+                {% if source.name == 'fox_tve' %}
+                <div class="config-note">If your TV provider works with FOX One (under Premium Sources), use that instead: it carries more channels, including your local FOX station. Keep FOX TVE if FOX One won't sign in with your provider.</div>
+                {% endif %}
 
                 {% set interval_meta = source_interval_meta.get(source.name, {'recommended': source.scrape_interval, 'min': 30, 'max': 10080}) %}
                 {% if source.scrape_cron %}
@@ -1099,6 +1116,14 @@
     <div class="modal" onclick="event.stopPropagation()" style="max-width:1340px;">
       <h2>Sign in to FOX One</h2>
       <p id="foxone-login-status" style="margin-bottom:0.75rem;">Launching browser…</p>
+      <div id="foxone-link-panel" style="display:none;margin-bottom:0.75rem;padding:0.8rem 0.9rem;border:1px solid var(--border);border-radius:6px">
+        <div style="display:flex;flex-wrap:wrap;gap:0.9rem;align-items:center;margin-bottom:0.45rem">
+          <div id="foxone-link-qr" style="width:200px;height:200px;flex:none;background:#fff;border-radius:6px;padding:6px;box-sizing:border-box"></div>
+          <div style="flex:1;min-width:220px;font-size:0.85rem">Scan the QR code with your phone's camera, or open the link below on any phone or computer, and sign in to your TV provider there. This window updates by itself once you're done.</div>
+        </div>
+        <a id="foxone-link-url" href="#" target="_blank" rel="noopener" style="font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:0.8rem;word-break:break-all"></a>
+        <div class="help" style="margin-top:0.5rem">Use a private/incognito tab if that browser is already signed in to a different TV provider account. If Spectrum says to select "Cox Spectrum" (IDLI-4213), choose Cox as the TV provider and start again. The link works for about 10 minutes.</div>
+      </div>
       <img id="foxone-login-frame" alt="FOX One TV provider sign-in" tabindex="0" draggable="false"
            onmousedown="foxOneLoginFrameMouse(event, 'mousedown')" onkeydown="foxOneLoginFrameKeydown(event)"
            onmousemove="foxOneLoginFrameMousemove(event)" ondragstart="return false;"
@@ -1321,6 +1346,7 @@
       if (!row) return;
       const isOpen = row.style.display !== 'none';
       row.style.display = isOpen ? 'none' : '';
+      if (isOpen) espnAbandon(sourceId);  // no-op unless an ESPN sign-in is waiting here
       document.querySelectorAll(`.configure-btn-display[data-source-id="${sourceId}"]`).forEach(btn => {
         btn.textContent = isOpen ? 'Configure ▾' : 'Configure ▴';
         btn.classList.toggle('open', !isOpen);
@@ -3337,14 +3363,64 @@
     // ── ESPN activation-code sign-in (same flow as ESPN's TV apps) ───────────
     const _espnPollTimers = {};
 
+    // Waits in progress, keyed `${kind}-${sourceId}` (kind: 'tve' link or
+    // 'activation' code). Each holds the sign-in worker for up to 30 minutes,
+    // so Cancel, closing the card and leaving the page all stop them.
+    const _espnActive = {};
+    const _espnStopUrl = (sourceId, kind) =>
+      `/api/sources/${sourceId}/${kind === 'tve' ? 'espn-tve' : 'espn-activation'}/stop`;
+    const _espnTimerKey = (sourceId, kind) => (kind === 'tve' ? `tve-${sourceId}` : sourceId);
+
+    function _espnPanelOpen(sourceId) {
+      const row = document.getElementById(`config-panel-row-${sourceId}`);
+      return !!row && row.style.display !== 'none';
+    }
+
+    function _espnStop(sourceId, kind) {
+      const key = `${kind}-${sourceId}`;
+      clearTimeout(_espnPollTimers[_espnTimerKey(sourceId, kind)]);
+      if (!_espnActive[key]) return;
+      delete _espnActive[key];
+      fetch(_espnStopUrl(sourceId, kind), { method: 'POST' }).catch(() => {});
+    }
+
+    function espnCancel(sourceId, kind) {
+      _espnStop(sourceId, kind);
+      const statusEl = document.getElementById(kind === 'tve' ? `espn-tve-status-${sourceId}` : `espn-status-${sourceId}`);
+      if (statusEl) statusEl.innerHTML = '<span style="color:var(--text-muted)">Cancelled.</span>';
+    }
+
+    // Closing the card abandons any ESPN wait on it (called by toggleConfigPanel).
+    function espnAbandon(sourceId) {
+      _espnStop(sourceId, 'tve');
+      _espnStop(sourceId, 'activation');
+    }
+
+    window.addEventListener('pagehide', () => {
+      for (const key of Object.keys(_espnActive)) {
+        const [kind, sourceId] = key.split('-');
+        navigator.sendBeacon(_espnStopUrl(sourceId, kind));
+      }
+    });
+
     function renderEspnConfig(sourceId, schema, values, cfg) {
       const info = (cfg && cfg.espn) || {};
+      const tveProvider = info.tve_mvpd_name || info.settings_mvpd_name;
+      const defaultMvpd = info.tve_mvpd_id || info.settings_mvpd_id;
+      const provOpts = ['<option value="">Choose your TV provider…</option>'].concat(
+        (info.providers || []).map(p =>
+          `<option value="${escapeHtml(p.id)}" ${p.id === defaultMvpd ? 'selected' : ''}>${escapeHtml(p.name)}</option>`)
+      ).join('');
       return `
         <div class="config-title">ESPN Settings</div>
         <div class="config-note">
-          Sign in the same way as ESPN's TV apps: get a code here, then enter it at espn.com/activate
-          on any device where you're signed in to ESPN. Streams NFL Network and MLB Network with an
-          ESPN+ subscription; playback goes through the DRM bridge.
+          Two ways to sign in; use either or both. Playback goes through the DRM bridge.
+        </div>
+        <div class="config-subtitle" style="margin-top:.75rem;font-weight:600">ESPN account</div>
+        <div class="config-note">
+          For ESPN Unlimited on your ESPN (MyDisney) account, bought directly or included by your TV
+          provider. Get a code here, then enter it at espn.com/activate on any device where you're
+          signed in. Plain ESPN+ doesn't include the linear networks.
         </div>
         <div class="amazon-autologin-panel" id="espn-login-${sourceId}">
           <div class="amazon-autologin-header">
@@ -3356,7 +3432,126 @@
           <span class="amazon-status-text" id="espn-status-${sourceId}">
             ${info.signed_in ? `<span style="color:var(--success-soft)">&#10003; Signed in</span>` : ''}
           </span>
+        </div>
+        <div class="config-subtitle" style="margin-top:1rem;font-weight:600">TV provider</div>
+        <div class="config-note">
+          For cable or streaming TV subscribers without ESPN Unlimited: plays whichever of ESPN, ESPN2,
+          ESPNU, ESPNews, ESPN Deportes, SEC Network and ACC Network your TV package includes (the
+          stream audit switches off the rest). NFL Network and MLB Network need an ESPN plan. Pick your
+          TV provider, get a sign-in link here, open it on your phone or computer, and sign in there.
+          ${info.settings_mvpd_id ? '' : `<br>Defaults to the provider from
+            <a href="/admin/settings#settings-card-tve">Settings → TV Everywhere</a> — none is set, so choose one here.`}
+        </div>
+        <div class="field field-full" style="max-width:360px;margin:0.4rem 0 0.6rem">
+          <label for="espn-tve-provider-${sourceId}">TV provider</label>
+          <select id="espn-tve-provider-${sourceId}">${provOpts}</select>
+        </div>
+        <div class="amazon-autologin-panel" id="espn-tve-${sourceId}">
+          <div class="amazon-autologin-header">
+            <button class="btn btn-run" type="button" id="espn-tve-btn-${sourceId}"
+                    onclick="espnTveStart(${sourceId})">${info.tve_signed_in ? 'Sign in again' : 'Get sign-in link'}</button>
+            ${info.tve_signed_in ? `<button class="btn btn-cancel btn-sm" type="button"
+                    onclick="espnTveClear(${sourceId})">Sign out</button>` : ''}
+          </div>
+          <span class="amazon-status-text" id="espn-tve-status-${sourceId}">
+            ${info.tve_signed_in
+              ? `<span style="color:var(--success-soft)">&#10003; Signed in with ${escapeHtml(tveProvider || 'your TV provider')}</span>`
+              : (tveProvider ? `<span style="color:var(--text-muted)">Provider: ${escapeHtml(tveProvider)}</span>` : '')}
+          </span>
         </div>`;
+    }
+
+    async function espnTveStart(sourceId) {
+      const btn      = document.getElementById(`espn-tve-btn-${sourceId}`);
+      const statusEl = document.getElementById(`espn-tve-status-${sourceId}`);
+      const provider = (document.getElementById(`espn-tve-provider-${sourceId}`)?.value || '').trim();
+      if (!provider) {
+        statusEl.innerHTML = '<span style="color:var(--danger-soft)">Choose your TV provider first.</span>';
+        return;
+      }
+      btn.disabled = true;
+      statusEl.innerHTML = '<span style="color:var(--text-muted)">Getting a sign-in link…</span>';
+      try {
+        const r = await fetch(`/api/sources/${sourceId}/espn-tve/start`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ provider_id: provider }),
+        });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok) {
+          statusEl.innerHTML = `<span style="color:var(--danger-soft)">${escapeHtml(d.error || 'Could not get a sign-in link.')}</span>`;
+          return;
+        }
+        _espnActive[`tve-${sourceId}`] = true;
+        if (!_espnPanelOpen(sourceId)) { _espnStop(sourceId, 'tve'); return; }  // closed meanwhile
+        espnTveShowLink(statusEl, d, sourceId);
+        espnTvePoll(sourceId);
+      } catch (e) {
+        statusEl.innerHTML = '<span style="color:var(--danger-soft)">Network error getting a sign-in link.</span>';
+      } finally {
+        btn.disabled = false;
+      }
+    }
+
+    function espnTveShowLink(statusEl, d, sourceId) {
+      const url = d.url || '';
+      statusEl.innerHTML = `
+        <div class="espn-tve-qr" style="width:200px;height:200px;background:#fff;border-radius:6px;padding:6px;box-sizing:border-box;margin:0.4rem 0"></div>
+        Scan the QR code with your phone, or open this link on your phone or computer, and sign in to ${escapeHtml(d.mso_name || 'your TV provider')}:<br>
+        <a href="${escapeHtml(url)}" target="_blank" rel="noopener" style="word-break:break-all;font-family:monospace">${escapeHtml(url)}</a>
+        <button class="btn btn-sm" type="button" onclick="navigator.clipboard && navigator.clipboard.writeText(${escapeHtml(JSON.stringify(url))}); this.textContent='Copied'">Copy link</button>
+        <button class="btn btn-cancel btn-sm" type="button" onclick="espnCancel(${sourceId}, 'tve')">Cancel</button>
+        <br><span style="color:var(--text-muted)">Waiting for the sign-in… (the link works for about 30 minutes)</span>`;
+      renderQrCode(statusEl.querySelector('.espn-tve-qr'), url);
+    }
+
+    // Same helper as settings.js's (vendored qrcode-generator, drawn in the page).
+    function renderQrCode(el, text) {
+      if (!el) return;
+      el.innerHTML = '';
+      if (typeof qrcode !== 'function' || !text) return;
+      try {
+        const qr = qrcode(0, 'M');
+        qr.addData(text);
+        qr.make();
+        el.innerHTML = qr.createSvgTag({ cellSize: 4, margin: 0, scalable: true });
+        const svg = el.querySelector('svg');
+        if (svg) { svg.style.width = '100%'; svg.style.height = '100%'; svg.style.display = 'block'; }
+      } catch (e) {
+        el.innerHTML = '';
+      }
+    }
+
+    function espnTvePoll(sourceId) {
+      clearTimeout(_espnPollTimers[`tve-${sourceId}`]);
+      _espnPollTimers[`tve-${sourceId}`] = setTimeout(async () => {
+        const statusEl = document.getElementById(`espn-tve-status-${sourceId}`);
+        if (!statusEl) { _espnStop(sourceId, 'tve'); return; }  // panel gone
+        let d = {};
+        try {
+          d = await (await fetch(`/api/sources/${sourceId}/espn-tve/state`)).json();
+        } catch (e) {
+          espnTvePoll(sourceId);
+          return;
+        }
+        if (d.state === 'waiting') {
+          espnTvePoll(sourceId);
+          return;
+        }
+        delete _espnActive[`tve-${sourceId}`];
+        if (d.state === 'success') {
+          statusEl.innerHTML = '<span style="color:var(--success-soft)">&#10003; Signed in</span>';
+          setTimeout(() => loadSourceConfig(sourceId, 'espn'), 600);
+        } else if (d.state === 'expired' || d.state === 'error') {
+          statusEl.innerHTML = `<span style="color:var(--danger-soft)">${escapeHtml(d.message || 'Sign-in failed.')} Get a new link to try again.</span>`;
+        }
+      }, 3000);
+    }
+
+    async function espnTveClear(sourceId) {
+      if (!confirm('Sign out of your TV provider for ESPN? Channels that need it stop playing until you sign in again.')) return;
+      await fetch(`/api/sources/${sourceId}/espn-tve-auth`, { method: 'DELETE' }).catch(() => {});
+      loadSourceConfig(sourceId, 'espn');
     }
 
     async function espnStartActivation(sourceId) {
@@ -3371,7 +3566,9 @@
           statusEl.innerHTML = `<span style="color:var(--danger-soft)">${escapeHtml(d.error || 'Could not get a code.')}</span>`;
           return;
         }
-        espnShowCode(statusEl, d.code, d.url);
+        _espnActive[`activation-${sourceId}`] = true;
+        if (!_espnPanelOpen(sourceId)) { _espnStop(sourceId, 'activation'); return; }  // closed meanwhile
+        espnShowCode(statusEl, d.code, d.url, sourceId);
         espnPoll(sourceId);
       } catch (e) {
         statusEl.innerHTML = '<span style="color:var(--danger-soft)">Network error getting a code.</span>';
@@ -3380,18 +3577,19 @@
       }
     }
 
-    function espnShowCode(statusEl, code, url) {
+    function espnShowCode(statusEl, code, url, sourceId) {
       statusEl.innerHTML = `
         Go to <a href="${escapeHtml(url)}" target="_blank" rel="noopener">${escapeHtml(url.replace(/^https?:\/\/(www\.)?/, ''))}</a>
         and enter <b style="font-size:1.4em;letter-spacing:.15em;font-family:monospace">${escapeHtml(code)}</b>
-        <span style="color:var(--text-muted)">— waiting…</span>`;
+        <span style="color:var(--text-muted)">— waiting…</span>
+        <button class="btn btn-cancel btn-sm" type="button" onclick="espnCancel(${sourceId}, 'activation')">Cancel</button>`;
     }
 
     function espnPoll(sourceId) {
       clearTimeout(_espnPollTimers[sourceId]);
       _espnPollTimers[sourceId] = setTimeout(async () => {
         const statusEl = document.getElementById(`espn-status-${sourceId}`);
-        if (!statusEl) return;  // panel closed
+        if (!statusEl) { _espnStop(sourceId, 'activation'); return; }  // panel gone
         let d = {};
         try {
           d = await (await fetch(`/api/sources/${sourceId}/espn-activation/state`)).json();
@@ -3401,7 +3599,10 @@
         }
         if (d.state === 'waiting') {
           espnPoll(sourceId);
-        } else if (d.state === 'success') {
+          return;
+        }
+        delete _espnActive[`activation-${sourceId}`];
+        if (d.state === 'success') {
           statusEl.innerHTML = '<span style="color:var(--success-soft)">&#10003; Signed in</span>';
           setTimeout(() => loadSourceConfig(sourceId, 'espn'), 600);
         } else if (d.state === 'expired' || d.state === 'error') {
@@ -3602,8 +3803,8 @@
       const lastSignIn = _epochAgo(info.last_signed_in_at);
       const errorAt = _epochAgo(info.signin_error_at);
       let statusHtml = lastSignIn
-        ? `<div class="help" style="color:var(--success-soft);">✓ Last signed in: ${lastSignIn}</div>`
-        : `<div class="help">Not signed in yet.</div>`;
+        ? `<div style="color:var(--success-soft);font-size:0.84rem;">✓ Signed in ${lastSignIn}</div>`
+        : `<div style="color:var(--text-muted);font-size:0.84rem;">Not signed in yet.</div>`;
       if (info.signin_error) {
         statusHtml += `<div class="help" style="color:var(--danger);">Last sign-in problem${errorAt ? ` (${errorAt})` : ''}: ${escapeHtml(info.signin_error)}</div>`;
       }
@@ -3612,36 +3813,38 @@
 
       return `
         <div class="config-title">FOX One Settings</div>
-        <div class="config-note">FOX One signs in through a TV provider. Most providers' login pages need a real browser, so after the first sign-in you may occasionally need to click "Sign in to FOX One" again.</div>
+        <div class="config-note">FOX One signs in with a TV provider account (cable, satellite or live-TV streaming), not a FOX One subscription email.</div>
         <div class="fields-grid">
-          ${input('home_zip_code')}
           <div class="field">
             <label for="cfg-${sourceId}-signin_method">${escapeHtml(byKey.signin_method?.label || 'Sign in with')}</label>
             <select id="cfg-${sourceId}-signin_method" data-key="signin_method"
                     onchange="foxOneMethodChanged(${sourceId}, this.value)">${methodOpts}</select>
             <div class="help" id="foxone-shared-note-${sourceId}" ${own ? 'style="display:none"' : ''}>${sharedNote}</div>
           </div>
+          ${input('home_zip_code')}
         </div>
-        <div id="foxone-own-${sourceId}" style="margin-top:0.75rem;${own ? '' : 'display:none'}">
-          <div class="config-note">A separate login just for FOX One. It signs in in its own browser profile, so it never mixes with the TV provider under Settings → TV Everywhere. The username and password only fill in the provider's sign-in page — you can leave them blank and type into the sign-in window instead.</div>
+        <div class="subfields" id="foxone-own-${sourceId}" ${own ? '' : 'style="display:none"'}>
           <div class="fields-grid">
-            <div class="field">
+            <div class="field field-full">
               <label for="cfg-${sourceId}-mvpd_provider_id">TV provider</label>
               <select id="cfg-${sourceId}-mvpd_provider_id" data-key="mvpd_provider_id">${providerOpts}</select>
             </div>
             ${input('mvpd_username')}
             ${input('mvpd_password', 'password')}
           </div>
+          <div class="config-note" style="margin:0.45rem 0 0">Used only for FOX One, in its own browser profile, so it never mixes with Settings → TV Everywhere. The username and password fill in the provider's page for "Sign in for me"; you can also leave them blank and type there.</div>
         </div>
-        <div class="fields-grid">
-          <div class="field field-full" style="margin:0.25rem 0 0.5rem;">
-            <button class="btn btn-run" type="button" onclick="openFoxOneLoginModal(${sourceId})">Sign in to FOX One</button>
+        <div class="signin-box">
+          ${statusHtml}
+          ${blocked}
+          <div class="signin-box-row">
+            <button class="btn btn-run" type="button" onclick="openFoxOneLoginModal(${sourceId})" title="Opens the TV provider's real sign-in page in a window here">Sign in for me</button>
+            <button class="btn btn-run" type="button" onclick="openFoxOneLinkModal(${sourceId})" title="Get a link and QR code to sign in on your own phone or computer">Sign in on my phone</button>
+            <span class="spacer"></span>
             <button class="btn btn-cancel" type="button" onclick="foxOneClearSignin(${sourceId})" ${lastSignIn ? '' : 'disabled'}>Clear sign-in</button>
-            <div class="help">Saves these settings, then opens the TV provider's real sign-in page right here. Solve a captcha yourself if one is shown.</div>
-            ${blocked}
-            <div id="foxone-clear-status-${sourceId}"></div>
-            ${statusHtml}
           </div>
+          <div class="config-note" style="margin:0.45rem 0 0">Either one saves these settings first. Sign-ins last a while, but FOX may occasionally ask you to sign in again.</div>
+          <div id="foxone-clear-status-${sourceId}"></div>
         </div>
         <div class="config-actions">
           <span class="config-status" id="config-status-${sourceId}"></span>
@@ -3667,6 +3870,92 @@
       }
     }
 
+    let _foxOneLinkMode = false;  // the modal is showing a phone link, not the browser
+
+    // Phone-link sign-in: same modal, but a link + QR code instead of the
+    // live browser view. The job (app/tve/link_login.py) saves the sign-in
+    // exactly where the browser flow does.
+    async function openFoxOneLinkModal(sourceId) {
+      _foxOneLoginSourceId = sourceId;
+      _foxOneLoginDone = false;
+      _foxOneLinkMode = true;
+      if (_foxOneLoginPollTimer) { clearTimeout(_foxOneLoginPollTimer); _foxOneLoginPollTimer = null; }
+      const frame = document.getElementById('foxone-login-frame');
+      const status = document.getElementById('foxone-login-status');
+      const panel = document.getElementById('foxone-link-panel');
+      frame.removeAttribute('src');
+      frame.style.display = 'none';
+      panel.style.display = 'none';
+      document.getElementById('foxone-link-url').removeAttribute('href');
+      status.className = '';
+      status.textContent = 'Saving…';
+      document.getElementById('foxone-login-modal').classList.add('open');
+      try { await saveSourceConfig(sourceId); } catch (e) { /* fall through with what's saved */ }
+      if (_foxOneLoginSourceId !== sourceId) return;  // closed during the save
+      status.textContent = 'Getting a sign-in link…';
+      let runId = null;
+      try {
+        const r = await fetch(`/api/sources/${sourceId}/fox-one-link-login/start`, { method: 'POST' });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok) {
+          _foxOneLoginDone = true;
+          status.className = 'error';
+          status.textContent = '✗ ' + (d.error || 'Could not start sign-in.');
+          return;
+        }
+        // Closed while the start was in flight: the Cancel's stop went out
+        // before this job existed, so stop it now.
+        if (_foxOneLoginSourceId !== sourceId) {
+          fetch(`/api/sources/${sourceId}/fox-one-link-login/stop`, { method: 'POST' }).catch(() => {});
+          return;
+        }
+        runId = d.run_id;
+      } catch (e) {
+        _foxOneLoginDone = true;
+        status.className = 'error';
+        status.textContent = '✗ Could not reach the server to start sign-in.';
+        return;
+      }
+      const startedAt = Date.now();
+      const poll = async () => {
+        if (_foxOneLoginSourceId !== sourceId || !_foxOneLinkMode) return;
+        try {
+          const d = await (await fetch(`/api/sources/${sourceId}/fox-one-link-login/state`)).json();
+          if (_foxOneLoginSourceId !== sourceId) return;
+          if (d.run_id === runId) {
+            if (d.state === 'waiting' && d.url) {
+              status.textContent = 'Waiting for you to sign in…';
+              const a = document.getElementById('foxone-link-url');
+              if (a.getAttribute('href') !== d.url) {
+                a.setAttribute('href', d.url);
+                a.textContent = d.url;
+                renderQrCode(document.getElementById('foxone-link-qr'), d.url);
+              }
+              panel.style.display = 'block';
+            } else if (d.state === 'starting' && Date.now() - startedAt > 10000) {
+              status.textContent = 'Waiting for the background worker to pick this up…';
+            } else if (d.state === 'success' || d.state === 'error') {
+              _foxOneLoginDone = true;
+              panel.style.display = 'none';
+              status.className = d.state === 'success' ? 'success' : 'error';
+              status.textContent = (d.state === 'success' ? '✓ ' : '✗ ') + (d.message || '');
+              if (d.state === 'success') setTimeout(() => _closeFoxOneLoginModal(false), 1800);
+              return;
+            }
+          } else if (d.state === 'idle') {
+            _foxOneLoginDone = true;
+            panel.style.display = 'none';
+            status.textContent = 'Sign-in stopped.';
+            return;
+          }
+        } catch (e) {
+          // transient — keep polling
+        }
+        _foxOneLoginPollTimer = setTimeout(poll, 2000);
+      };
+      poll();
+    }
+
     let _foxOneLoginSourceId = null;
     let _foxOneLoginPollTimer = null;
     let _foxOneLoginDone = false;
@@ -3679,6 +3968,9 @@
       if (_foxOneLoginPollTimer) { clearTimeout(_foxOneLoginPollTimer); _foxOneLoginPollTimer = null; }
       const frame = document.getElementById('foxone-login-frame');
       const status = document.getElementById('foxone-login-status');
+      _foxOneLinkMode = false;
+      document.getElementById('foxone-link-panel').style.display = 'none';
+      frame.style.display = '';
       frame.removeAttribute('src');
       frame.style.visibility = 'hidden';
       status.className = '';
@@ -3686,6 +3978,7 @@
       document.getElementById('foxone-login-modal').classList.add('open');
       // The sign-in job reads the saved config, not these inputs.
       try { await saveSourceConfig(sourceId); } catch (e) { /* fall through with what's saved */ }
+      if (_foxOneLoginSourceId !== sourceId) return;  // closed during the save
       status.textContent = 'Launching browser…';
       try {
         const r = await fetch(`/api/sources/${sourceId}/fox-one-browser-login/start`, { method: 'POST' });
@@ -3698,6 +3991,10 @@
         }
         if (d.status === 'already_running') {
           status.textContent = 'Another TV-provider sign-in is still running — showing it here.';
+        } else if (_foxOneLoginSourceId !== sourceId) {
+          // Closed while the start was in flight — stop the job just started.
+          fetch(`/api/sources/${sourceId}/fox-one-browser-login/stop`, { method: 'POST' }).catch(() => {});
+          return;
         }
       } catch (e) {
         // transient — polling shows the real state
@@ -3716,7 +4013,8 @@
       const sourceId = _foxOneLoginSourceId;
       _foxOneLoginSourceId = null;
       if (cancel && !_foxOneLoginDone && sourceId) {
-        fetch(`/api/sources/${sourceId}/fox-one-browser-login/stop`, { method: 'POST' }).catch(() => {});
+        const which = _foxOneLinkMode ? 'fox-one-link-login' : 'fox-one-browser-login';
+        fetch(`/api/sources/${sourceId}/${which}/stop`, { method: 'POST' }).catch(() => {});
       }
       if (sourceId) loadSourceConfig(sourceId, 'fox_one');
     }
@@ -3850,9 +4148,16 @@
       } catch (e) {
         // ignore — see comment above
       }
+      if (_spectrumLoginSourceId !== sourceId) return;  // closed during the save
       status.textContent = 'Launching browser…';
       fetch(`/api/sources/${sourceId}/spectrum-browser-login/start`, { method: 'POST' })
         .then(r => r.json())
+        .then(d => {
+          // Closed while the start was in flight — stop the job just started.
+          if (d && d.status === 'started' && _spectrumLoginSourceId !== sourceId) {
+            fetch(`/api/sources/${sourceId}/spectrum-browser-login/stop`, { method: 'POST' }).catch(() => {});
+          }
+        })
         .catch(() => {})
         .finally(() => _pollSpectrumLoginModal());
     }
@@ -3990,6 +4295,12 @@
       modal.classList.add('open');
       fetch(`/api/sources/${sourceId}/sling-browser-login/start`, { method: 'POST' })
         .then(r => r.json())
+        .then(d => {
+          // Closed while the start was in flight — stop the job just started.
+          if (d && d.status === 'started' && _slingLoginSourceId !== sourceId) {
+            fetch(`/api/sources/${sourceId}/sling-browser-login/stop`, { method: 'POST' }).catch(() => {});
+          }
+        })
         .catch(() => {})
         .finally(() => _pollSlingLoginModal());
     }
@@ -4008,6 +4319,21 @@
         fetch(`/api/sources/${sourceId}/sling-browser-login/stop`, { method: 'POST' }).catch(() => {});
       }
     }
+
+    // Leaving the page with a sign-in modal open abandons it the same as
+    // Cancel — otherwise its job keeps the sign-in worker waiting.
+    window.addEventListener('pagehide', () => {
+      if (_foxOneLoginSourceId && !_foxOneLoginDone) {
+        const which = _foxOneLinkMode ? 'fox-one-link-login' : 'fox-one-browser-login';
+        navigator.sendBeacon(`/api/sources/${_foxOneLoginSourceId}/${which}/stop`);
+      }
+      if (_spectrumLoginSourceId && !_spectrumLoginDone) {
+        navigator.sendBeacon(`/api/sources/${_spectrumLoginSourceId}/spectrum-browser-login/stop`);
+      }
+      if (_slingLoginSourceId && !_slingLoginDone) {
+        navigator.sendBeacon(`/api/sources/${_slingLoginSourceId}/sling-browser-login/stop`);
+      }
+    });
 
     async function _pollSlingLoginModal() {
       if (!_slingLoginSourceId) return;
@@ -5210,6 +5536,7 @@
 <script src="https://cdn.jsdelivr.net/npm/shaka-player@4/dist/shaka-player.compiled.js"></script>
 <script src="{{ url_for('static', filename='js/fc_player.js') }}?v={{ app_version }}"></script>
 <script src="{{ url_for('static', filename='js/admin_theme.js') }}"></script>
+<script src="{{ url_for('static', filename='js/vendor/qrcode-generator-1.4.4.js') }}"></script>
   {% include 'admin/_update_modal.html' %}
 </body>
 </html>

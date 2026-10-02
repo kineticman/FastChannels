@@ -287,6 +287,69 @@ def mvpd_browser_login_stop():
     return jsonify({'status': 'stopping'})
 
 
+# ── Phone-link sign-in ──────────────────────────────────────────────────────
+# The other way to do a network's provider sign-in: the user opens a link on
+# their own device instead of our browser filling in the login — see
+# app/tve/link_login.py. Saves land where the browser flow's do.
+
+@tve_bp.route('/settings/tve/signin-method', methods=['POST'])
+def tve_signin_method():
+    method = ((request.get_json(force=True) or {}).get('method') or '').strip()
+    if method not in {'browser', 'phone'}:
+        return jsonify({'error': 'Unknown sign-in method.'}), 400
+    account = _get_tve_account('mvpd', 'TV Provider')
+    cfg = dict(account.config or {})
+    cfg['signin_method'] = method
+    account.config = cfg
+    db.session.commit()
+    return jsonify({'signin_method': method})
+
+
+@tve_bp.route('/settings/tve/link-login/start', methods=['POST'])
+def tve_link_login_start():
+    import uuid
+    import redis as _redis
+    from ..tve.link_login import LINK_FAMILIES, STATUS_KEY, job_timeout
+    from ..tve.providers import tve_account_mso_id
+    from .tasks import get_signin_queue
+
+    data = request.get_json(force=True) or {}
+    family = (data.get('family') or '').strip()
+    requestor_id = (data.get('requestor_id') or '').strip().upper() or None
+    if family not in LINK_FAMILIES:
+        return jsonify({'error': 'This network can only sign in with "Sign in for me".'}), 400
+    if family == 'legacy' and not requestor_id:
+        return jsonify({'error': 'requestor_id is required.'}), 400
+    account = TVEAccount.query.filter_by(provider_id='mvpd').first()
+    if not account or not account.is_enabled or not account.has_credentials():
+        return jsonify({'error': 'Enter and save your TV provider username and password first.'}), 400
+    mso_id = tve_account_mso_id(account)
+    run_id = uuid.uuid4().hex
+    status = {'run_id': run_id, 'family': family, 'requestor_id': requestor_id, 'mso_id': mso_id,
+              'state': 'starting', 'message': 'Getting a sign-in link…', 'steps': []}
+    # A new run_id in the status retires any job still waiting on an older link.
+    _redis.from_url(current_app.config['REDIS_URL']).setex(STATUS_KEY, 900, json.dumps(status))
+    get_signin_queue().enqueue('app.tve.link_login.run_link_login', family, requestor_id, mso_id, run_id,
+                             job_timeout=job_timeout(family))
+    return jsonify(status)
+
+
+@tve_bp.route('/settings/tve/link-login/state')
+def tve_link_login_state():
+    import redis as _redis
+    from ..tve.link_login import STATUS_KEY
+    raw = _redis.from_url(current_app.config['REDIS_URL']).get(STATUS_KEY)
+    return jsonify(json.loads(raw) if raw else {'state': 'idle'})
+
+
+@tve_bp.route('/settings/tve/link-login/stop', methods=['POST'])
+def tve_link_login_stop():
+    import redis as _redis
+    from ..tve.link_login import STATUS_KEY
+    _redis.from_url(current_app.config['REDIS_URL']).delete(STATUS_KEY)
+    return jsonify({'status': 'stopped'})
+
+
 # AMC Networks TVE / Discovery TVE standalone sign-in — neither has a
 # dedicated Adobe Pass client to register up front, so these reuse the
 # legacy flow's redis keys/job (see app.worker._run_amcn_or_discovery_

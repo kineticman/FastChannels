@@ -34,11 +34,13 @@ verified byte-for-byte against a real captured license request):
   Adobe Pass preauthorize is still run in resolve() to (a) confirm the
   configured Cox account actually works and (b) skip channels the account's
   package doesn't include — same validate-then-gate pattern as
-  warner_tve.py's audit_resolve. A resourceId Adobe's preauthorize response
-  doesn't even mention (observed for the two free/ad-supported NBC News
-  NOW / NBC Sports Now resources) is treated as unrestricted rather than
-  blocked, since Adobe silently omitting a resource is how it behaves for
-  content that isn't MVPD-gated at all.
+  warner_tve.py's audit_resolve. Channels NBC's guide marks entitlement
+  "Free" (analytics.currentVideo.entitlement: NBC News NOW, NBC Sports NOW,
+  Bravo Vault, Real Housewives Vault, the Telemundo Ahora/Al Día feeds) skip
+  preauthorize entirely: they play on nbc.com signed out, and a TV provider
+  may flatly deny them as "not included in your subscription" (Spectrum,
+  2026-09-29). A resourceId Adobe's preauthorize response doesn't mention is
+  still treated as unrestricted rather than blocked.
 - The Widevine license proxy URL is *signed*, not a static constant:
     secretValue = f"{timestamp_ms}widevine"
     hash = HMAC-SHA256(drmProxySecret, secretValue).hexdigest()
@@ -389,7 +391,7 @@ class AdobePassV2Client:
             return {}
 
         from ..tve.mvpd import login_to_mvpd, require_scripted_mvpd_login
-        require_scripted_mvpd_login(mso_id)
+        require_scripted_mvpd_login(mso_id, key='nbc')
 
         try:
             r = self.session.get(
@@ -401,9 +403,12 @@ class AdobePassV2Client:
         mso_login_url = r.headers.get('location') or ''
         # DIRECTV doesn't redirect here at all (see app/tve/mvpd/directv.py's
         # directv_login() docstring) — login_to_mvpd() below works from this
-        # response's body directly, so it's exempt from the "no redirect"
-        # check every other MSO needs.
-        if not mso_login_url and mso_id != 'DTV':
+        # response's body directly. Confirmed live 2026-10-01 (Blue Stream,
+        # tpc010): watchtveverywhere providers get the same 200 auto-submit
+        # form, and login_to_mvpd() raises the real "click Sign in" error
+        # for them — so only Xfinity (whose backend needs the redirect URL
+        # itself) and an outright Adobe error keep the "no redirect" check.
+        if not mso_login_url and (mso_id == 'Comcast_SSO' or r.status_code >= 400):
             raise TVEAuthError('Adobe Pass v2: sessions authenticate call did not return an MVPD login redirect.')
 
         # Every MVPD's actual sign-in mechanics live in app/tve/mvpd/ — add
@@ -415,7 +420,7 @@ class AdobePassV2Client:
         # particular HTTP session, same as the existing browser-assisted
         # pairing's cross-session polling already relies on.
         page_html, page_url = (r.text, str(r.url)) if not mso_login_url else ('', mso_login_url)
-        login_to_mvpd(mso_id, page_html, page_url, username, password, cookie_jar=cookie_jar)
+        login_to_mvpd(mso_id, page_html, page_url, username, password, cookie_jar=cookie_jar, key='nbc')
 
         r = self._get(f'{ADOBE_BASE}/api/v2/{self.requestor_id}/profiles/{mso_id}', headers=self._bearer_headers())
         profile = ((r.json() or {}).get('profiles') or {}).get(mso_id)
@@ -456,6 +461,10 @@ class NbcGuideEntry:
     name: str
     category: str
     programs: list[dict]
+    # NBC's own guide marks each program entitlement "Free" or "Entitled"
+    # (analytics.currentVideo.entitlement). Default False so guide entries
+    # cached before this field existed still get the Adobe check.
+    free: bool = False
 
     @property
     def stream_url(self) -> str:
@@ -594,6 +603,8 @@ class NbcTveScraper(MvpdCooldownMixin, BaseScraper):
             if not stream_access_name or not station_id:
                 continue
             name, category = branding
+            entitlements = {((p.get('analytics') or {}).get('currentVideo') or {}).get('entitlement')
+                            for p in programs if isinstance(p, dict)} - {None}
             entries[stream_access_name] = NbcGuideEntry(
                 stream_access_name=stream_access_name,
                 channel_id=first.get('channelId') or stream_access_name,
@@ -604,6 +615,7 @@ class NbcTveScraper(MvpdCooldownMixin, BaseScraper):
                 name=name,
                 category=category,
                 programs=programs,
+                free=entitlements == {'Free'},
             )
 
         if not entries:
@@ -824,7 +836,7 @@ class NbcTveScraper(MvpdCooldownMixin, BaseScraper):
             cached_client.access_token = cached_auth['access_token']
             profile = self._cached_nbc_profile(cached_client, mso_id, cached_auth, cfg, account)
             if profile:
-                resource_ids = sorted({e.resource_id for e in self._fetch_guide().values()} | {resource_id})
+                resource_ids = sorted({e.resource_id for e in self._fetch_guide().values() if not e.free} | {resource_id})
                 decisions = cached_client.preauthorize(mso_id, resource_ids)
                 self._update_cache('nbc_entitlements', {
                     'decisions': decisions, 'checked': sorted(resource_ids), 'cached_at': time.time(),
@@ -858,7 +870,7 @@ class NbcTveScraper(MvpdCooldownMixin, BaseScraper):
             client.authorize(mso_id, account.username or '', account.password or '', cfg.get('xfinity_cookie_jar'))
             if not client_creds:
                 save_adobe_client_creds(account, REQUESTOR_ID, client.client_id, client.client_secret, client.access_token)
-            resource_ids = sorted({e.resource_id for e in self._fetch_guide().values()} | {resource_id})
+            resource_ids = sorted({e.resource_id for e in self._fetch_guide().values() if not e.free} | {resource_id})
             decisions = client.preauthorize(mso_id, resource_ids)
             account.last_auth_status = 'ok'
             account.last_auth_message = f'NBC TVE access token obtained through {mso_id} MVPD.'
@@ -933,7 +945,15 @@ class NbcTveScraper(MvpdCooldownMixin, BaseScraper):
         if not entry:
             raise RuntimeError(f'NBC TVE: channel {stream_access_name} not found in the current guide.')
 
-        self._ensure_entitled(entry.resource_id)
+        # NBC's free channels (Bravo Vault, Real Housewives Vault, the Telemundo
+        # "Ahora"/"Al Día" feeds, NBC News NOW, NBC Sports NOW) play on nbc.com
+        # signed out, and aren't in any TV package: Spectrum answered
+        # preauthorization_denied_by_mvpd "not included in your Spectrum TV
+        # subscription" for them (checked live 2026-09-29, forum post #3292),
+        # which disabled them as NotAuthorized. Only ask the TV provider about
+        # channels NBC's guide marks "Entitled".
+        if not entry.free:
+            self._ensure_entitled(entry.resource_id)
 
         r = self.session.get(
             f'{LEMONADE_LINEAR_URL}{entry.station_id}',
