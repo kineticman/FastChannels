@@ -302,7 +302,7 @@
     .ws-tab.active { background: var(--accent-strong); color: #fff; }
 
     /* Order & Numbers view */
-    .ord-bar { font-size: 0.78rem; color: var(--text-muted); margin-bottom: 0.4rem; min-height: 1.2rem; }
+    .ord-bar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.4rem; font-size: 0.78rem; color: var(--text-muted); margin-bottom: 0.4rem; min-height: 1.2rem; }
     .ord-list {
       max-height: min(56vh, 620px); overflow-y: auto;
       border: 1px solid var(--accent-bg); border-radius: 6px; background: var(--bg);
@@ -907,10 +907,13 @@
       </div>
 
       <div id="ws-order" style="display:none">
-        <div class="ord-bar"><span id="ord-note"></span></div>
+        <div class="ord-bar">
+          <span id="ord-note"></span>
+          <button class="ch-bar-btn" type="button" onclick="sortOrderBySourceName()">Sort by source, then name</button>
+        </div>
         <div class="ord-list" id="order-list"></div>
         <div class="ord-hint">
-          Drag rows to reorder — tvg-chno is reassigned sequentially from the starting number as you go.
+          Sort or drag rows to reorder, then save the feed. Locked and provider numbers stay fixed, so those rows may appear outside the sorted groups. tvg-chno is reassigned sequentially from the starting number as you go.
           You can also hover a row for ⤒ / ⤓. Click a number to set that channel's number yourself — any number, e.g. 500 — which locks it in every feed.
           🔒 rows have a fixed number (locked, or the provider's own, e.g. DirecTV) and can't be dragged; ✕ unlocks your own locks. PIN-badged rows are pinned into this feed and reorder freely.
           Channels that match your filters later are appended to the end of the order.
@@ -951,12 +954,15 @@ async function ensureFeedMembershipLoaded(excludeId) {
 }
 
 async function ensureChannelsLoaded() {
-  if (_allChannels.length > 0) return;
+  // Channel enablement can change while this page stays open. Refresh the picker
+  // each time the modal opens so it matches the server's current feed eligibility.
+  _allChannels = [];
   document.getElementById('ch-selected-count').textContent = 'loading…';
   try {
     let page = 1, all = [];
     while (true) {
-      const r = await fetch(`/api/channels?feed_eligible=1&slim=1&per_page=2000&page=${page}`);
+      const r = await fetch(`/api/channels?feed_eligible=1&slim=1&per_page=2000&page=${page}`, {cache: 'no-store'});
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
       const d = await r.json();
       all = all.concat(d.channels);
       if (page >= (d.pages || 1)) break;
@@ -996,6 +1002,12 @@ function renderChannelList() {
       row.className = 'ch-pinned-item';
       row.dataset.id = id;
       row.innerHTML = `<span class="ord-num" title="Anticipated tvg-chno in this feed"></span><span class="ch-name">${ch ? ch.name : `Channel #${id}`}</span><span class="ch-source">${ch ? ch.source_name : ''}</span><button class="btn-unpin" title="Remove from pinned">×</button>`;
+      if (!ch) {
+        const unavailable = document.createElement('span');
+        unavailable.className = 'ch-source';
+        unavailable.textContent = 'Unavailable — excluded from feed';
+        row.insertBefore(unavailable, row.querySelector('.btn-unpin'));
+      }
       row.querySelector('.ord-num').textContent = numTxt;
       row.querySelector('.btn-unpin').onclick = () => {
         _pinnedChannelIds.delete(id);
@@ -2049,6 +2061,19 @@ function moveOrderRow(id, toIndex) {
   if (toIndex > from) toIndex--;
   toIndex = Math.max(0, Math.min(toIndex, _orderRows.length));
   _orderRows.splice(toIndex, 0, row);
+  _orderDirty = true;
+  renumberOrderRows();
+  renderOrderList();
+}
+
+async function sortOrderBySourceName() {
+  if (_orderStale) await refreshOrderPreview();
+  if (_orderStale || !_orderRows.length) return;
+  _orderRows.sort((a, b) =>
+    a.source.localeCompare(b.source, undefined, {sensitivity: 'base'}) ||
+    a.name.localeCompare(b.name, undefined, {sensitivity: 'base'}) ||
+    a.id - b.id
+  );
   _orderDirty = true;
   renumberOrderRows();
   renderOrderList();
