@@ -1,5 +1,7 @@
 """
-warner_tve.py — Warner Bros Discovery / Turner cable networks: TBS, TNT, truTV.
+warner_tve.py — Warner Bros Discovery / Turner cable networks: TBS, TNT,
+truTV and TCM. TCM uses the same NGTV/Widevine playback stack, with Adobe
+Pass v2 and its own public Next.js page config / GraphQL guide.
 
 DRM: Widevine CENC HLS via Adobe Pass Cox + Turner's NGTV token stack. Same
 native license-proxy pattern as app/scrapers/directv.py — resolve() returns an
@@ -47,9 +49,11 @@ Key facts established by probing (not derivable from a single HAR capture):
 """
 from __future__ import annotations
 
+import base64
 import json
 import re
 import time
+import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -60,7 +64,8 @@ import requests
 from .base import BaseScraper, ChannelData, ProgramData, null_placeholder_season_episode
 from ..gracenote_map import resolve_gracenote
 from ..models import TVEAccount
-from ..tve.adobe_pass import MvpdCooldownMixin, TVEAuthError, TVENotAuthorizedError, authorize_mvpd
+from ..tve.adobe_pass import (MvpdCooldownMixin, TVEAuthError, TVENotAuthorizedError,
+                              authorize_mvpd, save_adobe_client_creds)
 
 SCHEME = 'warner-tve://'
 UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36'
@@ -71,6 +76,13 @@ WIDEVINE_LICENSE_BASE = 'https://widevine.license.istreamplanet.com/widevine/api
 # selects the brand.
 SCHEDULE_WIDGET_URL = 'https://tnets-dvs-schedule.wme-digital.com/'
 SCHEDULE_NETWORK_CODES = {'tnt': 'TNT', 'tbs': 'TBS', 'trutv': 'TRUTV'}
+TCM_LIVE_URL = 'https://www.tcm.com/watchtcm/livestream'
+TCM_GUIDE_URL = 'https://wme-gep-graphql-prod.wme-digital.com/graphql'
+# The site's public Apollo persisted queries use a different hash per feed.
+TCM_GUIDE_HASHES = {
+    'tcm-east': '93c7a879d46f6a788dcdba08f79b670a09d2fa09eadb5e04506d26768489e5c7',
+    'tcm-west': '0d063c0ae8c94dc525fe9eac45ffff42a34acaa8c3b9fa048dbf8e562dc968fc',
+}
 _EAST_TZ = ZoneInfo('America/New_York')
 _WEST_TZ = ZoneInfo('America/Los_Angeles')
 _NEXT_DATA_RE = re.compile(
@@ -100,6 +112,7 @@ BRAND_SITES: dict[str, WarnerBrandSite] = {
     'tnt': WarnerBrandSite(domain='www.tntdrama.com', watch_path='/watchtnt/east'),
     'tbs': WarnerBrandSite(domain='www.tbs.com', watch_path='/watchtbs/east'),
     'trutv': WarnerBrandSite(domain='www.trutv.com', watch_path='/watchtrutv/east'),
+    'tcm': WarnerBrandSite(domain='www.tcm.com', watch_path='/watchtcm/livestream'),
 }
 
 
@@ -141,6 +154,14 @@ CHANNELS: dict[str, WarnerChannel] = {
     'tru-west': WarnerChannel(
         channel_id='tru-west', name='truTV (West)', brand_key='trutv', media_id='tru-west',
         logo_url='https://www.trutv.com/themes/custom/ten_theme/images/trutv_logo_white.png',
+    ),
+    'tcm-east': WarnerChannel(
+        channel_id='tcm-east', name='TCM (East)', brand_key='tcm', media_id='tcm-east',
+        logo_url='https://static.tcm.com/2025-11/legacy-watch-tcm-logo.png', category='Movies',
+    ),
+    'tcm-west': WarnerChannel(
+        channel_id='tcm-west', name='TCM (West)', brand_key='tcm', media_id='tcm-west',
+        logo_url='https://static.tcm.com/2025-11/legacy-watch-tcm-logo.png', category='Movies',
     ),
 }
 
@@ -197,6 +218,28 @@ def _fetch_widget_schedule(network: str) -> dict[str, Any] | None:
     return grouped if isinstance(grouped, dict) else None
 
 
+def _fetch_tcm_schedule(channel_id: str) -> list[dict]:
+    now = datetime.now(timezone.utc) - timedelta(hours=2)
+    params = {
+        'operationName': 'getListings',
+        'variables': json.dumps({
+            'feed': ['tcm' if channel_id == 'tcm-east' else 'tcm-west'],
+            'brand': 'tcm', 'startDate': now.isoformat(timespec='milliseconds').replace('+00:00', 'Z'),
+            'count': 40,
+        }, separators=(',', ':')),
+        'extensions': json.dumps({'persistedQuery': {
+            'version': 1, 'sha256Hash': TCM_GUIDE_HASHES[channel_id],
+        }}, separators=(',', ':')),
+    }
+    try:
+        response = requests.get(TCM_GUIDE_URL, params=params, headers={'User-Agent': UA}, timeout=20)
+        response.raise_for_status()
+        entries = (response.json().get('data') or {}).get('getScheduleEntries') or []
+        return entries if isinstance(entries, list) else []
+    except (requests.RequestException, ValueError, AttributeError):
+        return []
+
+
 def _parse_widget_time(value: str | None, tz) -> datetime | None:
     """Parse e.g. "Mon Aug 03 06:04:00 GMT 2026" / "...PDT 2026". Drops the
     tz-abbreviation token and localizes the naive value with the given
@@ -216,8 +259,7 @@ def _parse_widget_time(value: str | None, tz) -> datetime | None:
 
 
 class WarnerTVEScraper(MvpdCooldownMixin, BaseScraper):
-    """Warner Bros Discovery cable networks — TBS, TNT, truTV — resolved via
-    Adobe Pass Cox + Turner's NGTV/Widevine-CENC playback stack."""
+    """TBS, TNT, truTV and TCM via Adobe Pass + NGTV/Widevine CENC."""
 
     source_name = 'warner_tve'
     display_name = 'Warner Bros Discovery TVE'
@@ -254,7 +296,8 @@ class WarnerTVEScraper(MvpdCooldownMixin, BaseScraper):
 
     def fetch_epg(self, channels: list[ChannelData], **kwargs) -> list[ProgramData]:
         wanted = {ch.source_channel_id for ch in channels}
-        brands_needed = {CHANNELS[cid].brand_key for cid in wanted if cid in CHANNELS}
+        brands_needed = {CHANNELS[cid].brand_key for cid in wanted
+                         if cid in CHANNELS and CHANNELS[cid].brand_key != 'tcm'}
 
         # One fetch per brand covers both east/west channels (see module
         # docstring) — never fetch per-channel.
@@ -267,9 +310,41 @@ class WarnerTVEScraper(MvpdCooldownMixin, BaseScraper):
         for channel_id, channel in CHANNELS.items():
             if channel_id not in wanted:
                 continue
-            parsed = self._parse_widget_schedule(channel, schedules.get(channel.brand_key) or {})
+            if channel.brand_key == 'tcm':
+                parsed = self._parse_tcm_schedule(channel, _fetch_tcm_schedule(channel_id))
+            else:
+                parsed = self._parse_widget_schedule(channel, schedules.get(channel.brand_key) or {})
             programs.extend(parsed or self._placeholder_epg(channel))
         null_placeholder_season_episode(programs)
+        return programs
+
+    @staticmethod
+    def _parse_tcm_schedule(channel: WarnerChannel, entries: list[dict]) -> list[ProgramData]:
+        programs = []
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            try:
+                start = datetime.fromisoformat(entry['scheduledTimestamp'].replace('Z', '+00:00'))
+                duration = int(entry['scheduledDuration'])
+            except (KeyError, ValueError, TypeError):
+                continue
+            if duration <= 0:
+                continue
+            show = entry.get('show') or {}
+            title = (((show.get('title') or {}).get('en_US') or {}).get('full') or '').strip()
+            summary = entry.get('summary') or {}
+            programs.append(ProgramData(
+                source_channel_id=channel.channel_id,
+                title=title or channel.name,
+                description=summary.get('full') or summary.get('short') or None,
+                start_time=start,
+                end_time=start + timedelta(seconds=duration),
+                category=entry.get('category') or channel.category,
+                rating=entry.get('ratingCode') or None,
+                is_live=True,
+            ))
+        programs.sort(key=lambda p: p.start_time)
         return programs
 
     @staticmethod
@@ -363,6 +438,9 @@ class WarnerTVEScraper(MvpdCooldownMixin, BaseScraper):
         if cached and (time.time() - float(cached.get('cached_at', 0))) < _CONFIG_CACHE_TTL:
             return cached
 
+        if brand_key == 'tcm':
+            return self._tcm_config(cached, all_cfg)
+
         site = BRAND_SITES[brand_key]
         top2 = _fetch_top2_config(site.domain, site.watch_path)
         if not top2:
@@ -388,6 +466,37 @@ class WarnerTVEScraper(MvpdCooldownMixin, BaseScraper):
 
         updated = dict(all_cfg) if isinstance(all_cfg, dict) else {}
         updated[brand_key] = entry
+        self._update_cache('warner_brand_config', updated)
+        return entry
+
+    def _tcm_config(self, cached: dict | None, all_cfg: dict) -> dict[str, Any]:
+        try:
+            response = requests.get(TCM_LIVE_URL, headers={'User-Agent': UA}, timeout=20)
+            response.raise_for_status()
+            match = re.search(r'<script[^>]+id="__NEXT_DATA__"[^>]*>(.*?)</script>', response.text, re.S)
+            if not match:
+                raise ValueError('Next.js page data missing')
+            page = json.loads(match.group(1))['props']['pageProps']
+            player = page['siteConfig']['VIDEOPLAYER']
+            auth = player['auth']
+            entry = {
+                'requestor_id': auth['brand'],
+                'software_statement': auth.get('softwareStatementV2') or auth['softwareStatement'],
+                'app_id': player['mediaAppId'],
+                'media': {
+                    media_id: {'company_id': auth['companyId']['live'], 'ads_profile': ''}
+                    for media_id in ('tcm-east', 'tcm-west')
+                },
+                'cached_at': time.time(),
+            }
+            if entry['requestor_id'] != 'TCM' or not all(entry[k] for k in ('software_statement', 'app_id')):
+                raise ValueError('incomplete TCM page config')
+        except (requests.RequestException, ValueError, KeyError, TypeError):
+            if cached:
+                return cached
+            raise RuntimeError('Warner TVE: could not discover TCM page config')
+        updated = dict(all_cfg) if isinstance(all_cfg, dict) else {}
+        updated['tcm'] = entry
         self._update_cache('warner_brand_config', updated)
         return entry
 
@@ -453,13 +562,16 @@ class WarnerTVEScraper(MvpdCooldownMixin, BaseScraper):
         site = BRAND_SITES[channel.brand_key]
 
         try:
-            adobe_token, session = authorize_mvpd(
-                account,
-                requestor_id=brand_cfg['requestor_id'],
-                resource=brand_cfg['requestor_id'],
-                software_statement=brand_cfg['software_statement'],
-                redirect_url=site.url,
-            )
+            if channel.brand_key == 'tcm':
+                adobe_token, session = self._tcm_adobe_token(account, brand_cfg)
+            else:
+                adobe_token, session = authorize_mvpd(
+                    account,
+                    requestor_id=brand_cfg['requestor_id'],
+                    resource=brand_cfg['requestor_id'],
+                    software_statement=brand_cfg['software_statement'],
+                    redirect_url=site.url,
+                )
         except TVENotAuthorizedError as exc:
             raise TVENotAuthorizedError(f'Warner TVE: MVPD is not authorized for {channel.brand_key}: {exc}') from exc
         except TVEAuthError as exc:
@@ -486,6 +598,61 @@ class WarnerTVEScraper(MvpdCooldownMixin, BaseScraper):
         self._update_cache('warner_manifest', manifests)
         return manifest_url
 
+    def _tcm_adobe_token(self, account: TVEAccount, brand_cfg: dict) -> tuple[str, requests.Session]:
+        """TCM uses Adobe Pass v2; its decision token is base64 on the wire.
+
+        The TCM player base64-decodes `serializedToken` before giving it to
+        token.ngtv.io. Confirmed against the successful East/West HAR capture.
+        """
+        from ..extensions import db
+        from .nbc_tve import AdobePassV2Client
+
+        cfg = account.config or {}
+        mso_id = (cfg.get('yt_dlp_mso_id') or cfg.get('selected_mso_id') or 'Cox').strip()
+        fingerprint = self.config.get('tcm_device_fingerprint')
+        if not fingerprint:
+            fingerprint = str(uuid.uuid4())
+            self._update_config('tcm_device_fingerprint', fingerprint)
+
+        saved = (cfg.get('adobe_client_creds') or {}).get('TCM') or {}
+        client = AdobePassV2Client(
+            'TCM', brand_cfg['software_statement'], TCM_LIVE_URL, fingerprint,
+            client_creds=saved or None, origin='https://www.tcm.com',
+        )
+        if saved and time.time() - float(saved.get('captured_at') or 0) >= 5 * 3600:
+            client.client_id = saved.get('client_id')
+            client.client_secret = saved.get('client_secret')
+            if client.client_id and client.client_secret:
+                client.refresh_access_token()
+                client._client_creds = {
+                    **saved, 'access_token': client.access_token,
+                }
+
+        client.authorize(mso_id, account.username or '', account.password or '', cfg.get('xfinity_cookie_jar'))
+        save_adobe_client_creds(account, 'TCM', client.client_id, client.client_secret, client.access_token)
+        response = client._post(
+            f'https://sp.auth.adobe.com/api/v2/TCM/decisions/authorize/{mso_id}',
+            json={'resources': ['TCM']},
+            headers={**client._bearer_headers(), 'Content-Type': 'application/json'},
+        )
+        decision = next((d for d in (response.json().get('decisions') or [])
+                         if d.get('resource') == 'TCM'), None)
+        if not decision or not decision.get('authorized'):
+            raise TVENotAuthorizedError(f'TCM: {mso_id} account is not entitled to TCM.')
+        serialized = ((decision.get('token') or {}).get('serializedToken') or '')
+        try:
+            adobe_token = base64.b64decode(serialized, validate=True).decode('utf-8')
+        except (ValueError, UnicodeDecodeError) as exc:
+            raise TVEAuthError('TCM: Adobe did not return a usable decision token.') from exc
+        if not adobe_token:
+            raise TVEAuthError('TCM: Adobe did not return a decision token.')
+
+        new_cfg = dict(account.config or {})
+        new_cfg['tcm_mvpd_auth'] = {'mso_id': mso_id, 'captured_at': int(time.time())}
+        account.config = new_cfg
+        db.session.commit()
+        return adobe_token, client.session
+
     @staticmethod
     def _resolve_manifest(
         session: requests.Session, brand_cfg: dict, channel: WarnerChannel, adobe_token: str,
@@ -495,14 +662,16 @@ class WarnerTVEScraper(MvpdCooldownMixin, BaseScraper):
 
         # Validation/gate step observed in the real auth chain — not consumed
         # downstream (medium.ngtv.io and token_isp both authenticate with the
-        # Adobe shortAuthorize token directly, not this token's value), but
+        # Adobe authorization token directly, not this token's value), but
         # kept in sequence since that's the proven-working order.
-        ngtv = session.get(
-            'https://token.ngtv.io/token/token_ngtv',
-            params={'appId': app_id, 'accessTokenType': 'adobe', 'accessToken': adobe_token,
-                    'fname': 'ngtv', 'format': 'json'},
-            timeout=20,
-        )
+        ngtv_params = {'appId': app_id, 'accessTokenType': 'adobe',
+                       'accessToken': adobe_token, 'format': 'json'}
+        if channel.brand_key == 'tcm':
+            ngtv = session.post('https://token.ngtv.io/token/token_ngtv',
+                                params=ngtv_params, json={}, timeout=20)
+        else:
+            ngtv = session.get('https://token.ngtv.io/token/token_ngtv',
+                               params={**ngtv_params, 'fname': 'ngtv'}, timeout=20)
         if ngtv.status_code != 200:
             return None, None
         try:
@@ -513,9 +682,12 @@ class WarnerTVEScraper(MvpdCooldownMixin, BaseScraper):
             return None, None
 
         ssai_profile = media_cfg.get('ads_profile') or ''
+        desktop_params = {'appId': app_id}
+        if ssai_profile:
+            desktop_params['ssaiProfile'] = ssai_profile
         desktop = session.get(
             f'https://medium.ngtv.io/v2/media/{channel.media_id}/desktop',
-            params={'appId': app_id, 'ssaiProfile': ssai_profile},
+            params=desktop_params,
             timeout=20,
         )
         if desktop.status_code != 200:

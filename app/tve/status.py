@@ -88,6 +88,25 @@ def tve_network_status(account) -> list[dict]:
         'needs_signin': _needs_signin('nbc', nbc_last_signed_in_at),
     })
 
+    tcm = cfg.get('tcm_mvpd_auth') or {}
+    tcm_last_signed_in_at = tcm.get('captured_at')
+    tcm_error_message, tcm_error_at = _last_error('tcm', tcm_last_signed_in_at)
+    # Older link-login runs reported a definite entitlement denial as a
+    # generic save failure. Show the useful Adobe result for those records too.
+    old_prefix = 'TCM: save failed: '
+    if tcm_error_message and tcm_error_message.startswith(old_prefix) and 'not entitled' in tcm_error_message.lower():
+        tcm_error_message = tcm_error_message[len(old_prefix):]
+    entries.append({
+        'label': 'TCM (Warner TVE)',
+        'last_signed_in_at': tcm_last_signed_in_at,
+        'note': 'Sign in with a link on your phone or computer.',
+        'family': 'tcm',
+        'requestor_id': None,
+        'last_error_message': tcm_error_message,
+        'last_error_at': tcm_error_at,
+        'needs_signin': _needs_signin('tcm', tcm_last_signed_in_at),
+    })
+
     fox_last_signed_in_at = cfg.get('fox_sports_access_token_captured_at')
     fox_error_message, fox_error_at = _last_error('fox', fox_last_signed_in_at)
     entries.append({

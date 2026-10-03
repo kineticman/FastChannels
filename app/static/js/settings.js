@@ -877,6 +877,7 @@ const MVPD_LOGIN_FAMILIES = {
   fox:       { base: '/api/settings/tve/fox/browser-login', needsRequestor: false },
   amcn:      { base: '/api/settings/tve/amcn/browser-login', needsRequestor: false },
   discovery: { base: '/api/settings/tve/discovery/browser-login', needsRequestor: false },
+  tcm:       { base: '/api/settings/tve/link-login', needsRequestor: false },
   google:    { base: '/api/settings/tve/google/browser-login', needsRequestor: false },
 };
 // Phone-link sign-in (app/tve/link_login.py): the families whose provider
@@ -884,7 +885,7 @@ const MVPD_LOGIN_FAMILIES = {
 // Discovery uses a typed code on its own page (the status carries it); the
 // Google step isn't a network sign-in, so it stays browser-only.
 MVPD_LOGIN_FAMILIES.link = { base: '/api/settings/tve/link-login', needsRequestor: false };
-const TVE_LINK_FAMILIES = new Set(['legacy', 'nbc', 'fox', 'amcn', 'discovery']);
+const TVE_LINK_FAMILIES = new Set(['legacy', 'nbc', 'tcm', 'fox', 'amcn', 'discovery']);
 let _mvpdLoginActive = false;
 let _mvpdLoginDone = false;
 let _mvpdLoginPollTimer = null;
@@ -981,10 +982,10 @@ async function loadTveNetworkStatus() {
       if (n.unsupported) {
         note = `<div style="color:var(--text-dim);font-size:0.72rem;margin:0.05rem 0 0.35rem">${_escapeHtml(n.unsupported)}</div>`;
       }
-      if (!note && n.needs_signin) {
+      if (n.needs_signin && !n.unsupported) {
         note = `<div style="color:var(--warning-soft,#b8860b);font-size:0.72rem;margin:0.05rem 0 0.35rem">${_escapeHtml(n.last_error_message || 'The saved sign-in stopped working.')}</div>`;
       }
-      if (!note && n.last_error_message) {
+      if (n.last_error_message && !n.needs_signin && !n.unsupported) {
         const errAge = _tveRelativeTime(n.last_error_at);
         note = `<div style="color:var(--danger);font-size:0.72rem;margin:0.05rem 0 0.35rem">Last attempt failed ${errAge}: ${_escapeHtml(n.last_error_message)}</div>`;
       }
@@ -1009,7 +1010,7 @@ async function loadTveNetworkStatus() {
 
 function openMvpdLoginModal(family, requestorId) {
   family = family || 'legacy';
-  if (_tveSigninMethod() === 'phone' && TVE_LINK_FAMILIES.has(family)) {
+  if ((family === 'tcm' || _tveSigninMethod() === 'phone') && TVE_LINK_FAMILIES.has(family)) {
     openTveLinkModal(family, requestorId);
     return;
   }
@@ -1348,7 +1349,9 @@ async function signInToAllTve() {
     _mvpdLoginFamily = n.family;  // so a mid-batch cancel/force-stop hits the right endpoint
     steps[i].state = 'running';
     _renderMvpdLoginSteps(steps);
-    const result = await _mvpdLoginRunOneForBatch(MVPD_LOGIN_FAMILIES[n.family], n.requestor_id, n.label, status, hintEl);
+    const result = n.family === 'tcm'
+      ? await _tveLinkRunOne('tcm', null, status, null)
+      : await _mvpdLoginRunOneForBatch(MVPD_LOGIN_FAMILIES[n.family], n.requestor_id, n.label, status, hintEl);
     if (!_mvpdLoginActive) return;
     steps[i].state = result.ok ? 'done' : 'failed';
     steps[i].message = result.message;

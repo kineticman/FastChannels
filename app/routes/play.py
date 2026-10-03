@@ -71,7 +71,7 @@ _CSPAN_PROXY_SESSION.headers.update(_CSPAN_CDN_HEADERS)
 
 
 from ..scrapers.base import StreamDeadError
-from ..tve.adobe_pass import TVENotAuthorizedError
+from ..tve.adobe_pass import TVEAuthError, TVENotAuthorizedError
 from .tasks import trigger_channel_auto_disable
 
 logger = logging.getLogger(__name__)
@@ -2780,6 +2780,15 @@ def play(source_name: str, channel_id: str):
             trigger_channel_auto_disable(channel.id, 'NotAuthorized')
             resolved_url = None
             resolve_dead = True
+        except TVEAuthError as e:
+            # A missing or expired TV-provider sign-in is an expected 503,
+            # not an unhandled scraper failure. The per-network settings row
+            # carries the actionable sign-in message.
+            logger.warning(
+                '[play] TVE authorization unavailable request_id=%s source=%s channel_id=%s: %s',
+                getattr(g, 'request_id', '-'), source_name, channel_id, e,
+            )
+            resolved_url = None
         except Exception as e:
             logger.error(
                 '[play] resolve failed request_id=%s ip=%s source=%s channel_id=%s channel_name=%s: %s',
