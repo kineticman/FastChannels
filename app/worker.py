@@ -1900,6 +1900,33 @@ def _refresh_xml_artifacts() -> None:
                         generate_fc_player_m3u(filters, base_url=base_url, ah4c_base_url=ah4c_url, **std_kw)
                     ),
                 ))
+            # Mixed guide mode: one bridge playlist per method instead of a
+            # standard + Gracenote pair (see generate_mixed_m3u).
+            if (feed.guide_mode or 'split') == 'mixed':
+                if prismcast_ready:
+                    m3u_artifacts.append((
+                        f'feed-{feed.slug}-prismcast-mixed-m3u',
+                        lambda fp, filters=filters, std_kw=std_kw: fp.write(
+                            generate_prismcast_m3u(
+                                filters, base_url=base_url, prismcast_url=prismcast_url,
+                                inner_base_url=prismcast_inner, gracenote=None, **std_kw)
+                        ),
+                    ))
+                if fc_player_ready:
+                    m3u_artifacts.append((
+                        f'feed-{feed.slug}-fc-player-mixed-m3u',
+                        lambda fp, filters=filters, std_kw=std_kw: fp.write(
+                            generate_fc_player_m3u(filters, base_url=base_url, gracenote=None, **std_kw)
+                        ),
+                    ))
+                if ah4c_url:
+                    m3u_artifacts.append((
+                        f'feed-{feed.slug}-fc-player-ah4c-mixed-m3u',
+                        lambda fp, filters=filters, std_kw=std_kw: fp.write(
+                            generate_fc_player_m3u(filters, base_url=base_url, gracenote=None,
+                                                   ah4c_base_url=ah4c_url, **std_kw)
+                        ),
+                    ))
             if feed.chnum_start is not None:
                 gn_kw = {'feed_chnum_start': feed.chnum_start, 'feed_id': feed.id}
             else:

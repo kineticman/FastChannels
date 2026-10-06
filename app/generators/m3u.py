@@ -376,6 +376,29 @@ def _build_channel_stub_query(filters: dict):
     return query.order_by(Channel.number.asc().nullslast(), Channel.name.asc())
 
 
+def _apply_guide_partition(channels, gracenote, max_ch):
+    """Guide-partition + max_channels tail shared by _selected_channels and
+    _selected_channel_stubs.
+
+    gracenote='mixed' is the union of the standard and Gracenote playlists, each
+    capped the way it is on its own, in the original order. Unlike gracenote=None
+    it leaves out a channel neither split playlist carries (a gracenote_id that
+    is set but malformed): the mixed playlist would give it a tvg-id our XMLTV
+    has no programmes for.
+    """
+    cap = int(max_ch) if max_ch else None
+    if gracenote == 'mixed':
+        std = [ch for ch in channels if not _has_gracenote_claim(ch)]
+        gn = [ch for ch in channels if _parse_gracenote_id(ch)]
+        keep = {ch.id for ch in std[:cap]} | {ch.id for ch in gn[:cap]}
+        return [ch for ch in channels if ch.id in keep]
+    if gracenote is True:
+        channels = [ch for ch in channels if _parse_gracenote_id(ch)]
+    elif gracenote is False:
+        channels = [ch for ch in channels if not _has_gracenote_claim(ch)]
+    return channels[:cap] if cap else channels
+
+
 def _selected_channel_stubs(filters: dict | None = None, *, gracenote: bool | None = False):
     """Return lightweight channel rows for overlap validation paths."""
     filters = filters or {}
@@ -401,16 +424,7 @@ def _selected_channel_stubs(filters: dict | None = None, *, gracenote: bool | No
         for row in rows
     ]
 
-    if gracenote is True:
-        channels = [ch for ch in channels if _parse_gracenote_id(ch)]
-    elif gracenote is False:
-        channels = [ch for ch in channels if not _has_gracenote_claim(ch)]
-
-    max_ch = filters.get('max_channels')
-    if max_ch:
-        channels = channels[:int(max_ch)]
-
-    return channels
+    return _apply_guide_partition(channels, gracenote, filters.get('max_channels'))
 
 
 def _selected_channels(filters: dict | None = None, *, gracenote: bool | None = False):
@@ -420,6 +434,7 @@ def _selected_channels(filters: dict | None = None, *, gracenote: bool | None = 
     gracenote=False  -> channels for the standard XMLTV-backed M3U
     gracenote=True   -> channels for the Gracenote-backed M3U
     gracenote=None   -> all filtered channels without Gracenote partitioning
+    gracenote='mixed' -> the standard and Gracenote sets together (mixed M3U)
     """
     filters = filters or {}
     channels = _build_channel_query(filters).all()
@@ -431,16 +446,7 @@ def _selected_channels(filters: dict | None = None, *, gracenote: bool | None = 
         if extra_ids:
             channels = list(channels) + _build_channel_query({'channel_ids': extra_ids}).all()
 
-    if gracenote is True:
-        channels = [ch for ch in channels if _parse_gracenote_id(ch)]
-    elif gracenote is False:
-        channels = [ch for ch in channels if not _has_gracenote_claim(ch)]
-
-    max_ch = filters.get('max_channels')
-    if max_ch:
-        channels = channels[:int(max_ch)]
-
-    return channels
+    return _apply_guide_partition(channels, gracenote, filters.get('max_channels'))
 
 
 def feed_namespace_start(feed: Feed, *, gracenote: bool) -> int:
@@ -966,7 +972,8 @@ def get_global_chnum_overlaps() -> list[str]:
     subscribes to multiple feeds doesn't see duplicate channel numbers.
     """
     master_outputs: list[tuple[str, list, dict[int, int]]] = []
-    feed_outputs:   list[tuple[str, list, dict[int, int]]] = []
+    std_feed_outputs: list[tuple[str, list, dict[int, int]]] = []
+    gn_feed_outputs:  list[tuple[str, list, dict[int, int]]] = []
     # std/gn output pairs for unified-pool (chnum_start) feeds, which DO share a
     # single number range and so must be cross-checked against each other.
     unified_pairs:  list[tuple[tuple, tuple]] = []
@@ -995,7 +1002,6 @@ def get_global_chnum_overlaps() -> list[str]:
             feed_id=feed.id if feed.chnum_start is not None else None,
         )
         std_out = (f'feed {feed.slug} /m3u', std_channels, std_map)
-        feed_outputs.append(std_out)
 
         gn_channels = _selected_channel_stubs(filters, gracenote=True)
         gn_ns = None if feed.chnum_start is not None else feed_namespace_start(feed, gracenote=True)
@@ -1006,7 +1012,16 @@ def get_global_chnum_overlaps() -> list[str]:
             feed_id=feed.id if feed.chnum_start is not None else None,
         )
         gn_out = (f'feed {feed.slug} /m3u/gracenote', gn_channels, gn_map)
-        feed_outputs.append(gn_out)
+        if getattr(feed, 'guide_mode', None) == 'mixed':
+            # One playlist carries both halves, so each half has to stay clear
+            # of every other feed's standard AND Gracenote numbers.
+            mixed_out = (f'feed {feed.slug} /m3u/mixed',
+                         std_channels + gn_channels, {**std_map, **gn_map})
+            std_feed_outputs.append(mixed_out)
+            gn_feed_outputs.append(mixed_out)
+        else:
+            std_feed_outputs.append(std_out)
+            gn_feed_outputs.append(gn_out)
 
         if feed.chnum_start is not None:
             unified_pairs.append((std_out, gn_out))
@@ -1041,8 +1056,8 @@ def get_global_chnum_overlaps() -> list[str]:
     # feeds against each other.  Don't compare a std feed against an unrelated
     # gracenote feed — for namespace-numbered feeds the two live in separate
     # 10k blocks and a user adds both halves of a feed, not halves of two feeds.
-    _check([o for o in feed_outputs if not o[0].endswith('/gracenote')])
-    _check([o for o in feed_outputs if o[0].endswith('/gracenote')])
+    _check(std_feed_outputs)
+    _check(gn_feed_outputs)
     # Within a single chnum_start feed, std and gracenote channels DO share one
     # unified pool, so a number used on both sides is a real collision.
     for std_out, gn_out in unified_pairs:
@@ -1205,7 +1220,7 @@ def generate_m3u(filters: dict = None, base_url: str = None,
 
 def generate_fc_player_m3u(filters: dict = None, base_url: str = None,
                             feed_chnum_start: int = None, namespace_start: int = None,
-                            feed_id: int = None, gracenote: bool = False,
+                            feed_id: int = None, gracenote: bool | None = False,
                             ah4c_base_url: str = None) -> str:
     """
     FastChannels Player (app/fc_player/) DRM-bridge playlist.
@@ -1225,6 +1240,8 @@ def generate_fc_player_m3u(filters: dict = None, base_url: str = None,
                        pairs with our XMLTV /epg.xml.
     gracenote=True  — only channels with a Gracenote ID; emits tvc-guide-stationid so
                        Channels DVR routes guide data through Gracenote.
+    gracenote=None  — both sets in one playlist (a feed in mixed guide mode);
+                       tvc-guide-stationid where there is a Gracenote ID, else tvg-id.
 
     ah4c_base_url — when set, every entry points at ah4c's own /play/tuner/<channel>
                     (see _ah4c_play_url) instead of our /play/fc-player/... route, so
@@ -1253,7 +1270,9 @@ def generate_fc_player_m3u(filters: dict = None, base_url: str = None,
             continue
         if gracenote and not _parse_gracenote_id(ch):
             continue
-        if not gracenote and _has_gracenote_claim(ch):
+        if gracenote is False and _has_gracenote_claim(ch):
+            continue
+        if gracenote is None and _has_gracenote_claim(ch) and not _parse_gracenote_id(ch):
             continue
         channels.append(ch)
         _seen.add(ch.id)
@@ -1275,8 +1294,9 @@ def generate_fc_player_m3u(filters: dict = None, base_url: str = None,
     for ch in channels:
         tvg_id = _tvg_id(ch)
         display_name = _channel_display_name(ch, multi_country_map)
-        guide_attr = (f'tvc-guide-stationid="{_parse_gracenote_id(ch)}"'
-                      if gracenote else f'tvg-id="{tvg_id}"')
+        gracenote_id = _parse_gracenote_id(ch) if gracenote is not False else None
+        guide_attr = (f'tvc-guide-stationid="{gracenote_id}"'
+                      if gracenote_id else f'tvg-id="{tvg_id}"')
         attrs = [
             f'channel-id="{tvg_id}"',
             guide_attr,
@@ -1457,7 +1477,8 @@ def generate_mixed_m3u(filters: dict = None, base_url: str = None,
     generate_m3u / generate_gracenote_m3u exist as a hard split; on a server
     with the beta enabled, this single playlist can replace both.
 
-    Includes every feed channel, same selection as generate_native_m3u.
+    Includes exactly the channels generate_m3u and generate_gracenote_m3u carry
+    between them (see _apply_guide_partition).
     Per channel: tvc-guide-stationid when a Gracenote ID is present (mode !=
     'off'), else tvg-id — so it pairs with the same /epg.xml the standard
     M3U uses; that XMLTV output already omits program data for Gracenote-
@@ -1472,7 +1493,7 @@ def generate_mixed_m3u(filters: dict = None, base_url: str = None,
     _s = AppSettings.get()
     _image_proxy = _s.image_proxy_enabled if _s.image_proxy_enabled is not None else True
 
-    channels = _selected_channels(filters, gracenote=None)
+    channels = _selected_channels(filters, gracenote='mixed')
 
     chnum_map, warnings = _resolve_chnum_map(
         channels,
@@ -1609,7 +1630,7 @@ def _prismcast_bridge_ts_url(ch, base_url: str) -> str:
 def generate_prismcast_m3u(filters: dict = None, base_url: str = None, *,
                            prismcast_url: str, inner_base_url: str = None,
                            feed_chnum_start: int = None, namespace_start: int = None,
-                           feed_id: int = None, gracenote: bool = False, ts: bool = False) -> str:
+                           feed_id: int = None, gracenote: bool | None = False, ts: bool = False) -> str:
     """
     Bridge-only PrismCast playlist: exactly the DRM channels a normal client can't
     play (browser/EME required), wrapped through PrismCast's `/play?url=` endpoint
@@ -1629,6 +1650,8 @@ def generate_prismcast_m3u(filters: dict = None, base_url: str = None, *,
         the guide pairs with our XMLTV /epg.xml.
       * gracenote=True  — only channels with a Gracenote ID; emits
         tvc-guide-stationid so Channels DVR routes guide data through Gracenote.
+      * gracenote=None  — both sets in one playlist (a feed in mixed guide
+        mode); tvc-guide-stationid where there is a Gracenote ID, else tvg-id.
 
     prismcast_url   — PrismCast base, e.g. http://192.168.1.x:5589
     inner_base_url  — base URL PrismCast's Chrome uses to reach this server's
@@ -1663,7 +1686,9 @@ def generate_prismcast_m3u(filters: dict = None, base_url: str = None, *,
             continue
         if gracenote and not _parse_gracenote_id(ch):
             continue
-        if not gracenote and _has_gracenote_claim(ch):
+        if gracenote is False and _has_gracenote_claim(ch):
+            continue
+        if gracenote is None and _has_gracenote_claim(ch) and not _parse_gracenote_id(ch):
             continue
         channels.append(ch)
         _seen.add(ch.id)
@@ -1686,8 +1711,9 @@ def generate_prismcast_m3u(filters: dict = None, base_url: str = None, *,
         tvg_id = _tvg_id(ch)
         display_name = _channel_display_name(ch, multi_country_map)
         # Guide routing: tvc-guide-stationid → Gracenote, tvg-id → our XMLTV.
-        guide_attr = (f'tvc-guide-stationid="{_parse_gracenote_id(ch)}"'
-                      if gracenote else f'tvg-id="{tvg_id}"')
+        gracenote_id = _parse_gracenote_id(ch) if gracenote is not False else None
+        guide_attr = (f'tvc-guide-stationid="{gracenote_id}"'
+                      if gracenote_id else f'tvg-id="{tvg_id}"')
         attrs = [
             f'channel-id="{tvg_id}"',
             guide_attr,

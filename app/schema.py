@@ -112,6 +112,15 @@ def ensure_runtime_schema() -> None:
         if "feeds" not in tables:
             return
 
+        # feeds.guide_mode: 'split' (separate XMLTV + Gracenote playlists) or
+        # 'mixed' (one playlist). Added first so nothing below, or after boot,
+        # can touch the Feed model before the column exists.
+        feed_cols = {row[1] for row in conn.execute(text("PRAGMA table_info(feeds)"))}
+        if "guide_mode" not in feed_cols:
+            conn.execute(text(
+                "ALTER TABLE feeds ADD COLUMN guide_mode VARCHAR(16) NOT NULL DEFAULT 'split'"
+            ))
+
         # source_cache: key/value home for large regenerable scraper caches that
         # used to bloat Source.config (see models.SourceCache). Fresh installs get
         # this via db.create_all(); existing installs need the guard so the table

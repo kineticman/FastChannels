@@ -45,6 +45,41 @@ def _safe_flush():
         raise
 
 
+GUIDE_MODES = ('split', 'mixed')
+
+
+def _promote_to_unified_pool(feed: Feed) -> None:
+    """Give a feed without a chnum_start one, keeping the numbers it has now.
+
+    A mixed-guide feed is one playlist, so it needs one sticky number pool
+    (FeedChannelNumber). Without a chnum_start the standard and Gracenote
+    playlists are numbered by position in two separate blocks; snapshot those
+    numbers into the pool and start the feed at the lowest of them, so going
+    mixed renumbers nothing and later channel changes stop shifting everything
+    after them.
+    """
+    from ..generators.m3u import (
+        _selected_channels, _resolve_app_chnum_map,
+        feed_namespace_start, feed_gracenote_start,
+    )
+    q_filters = feed_to_query_filters(feed.filters or {})
+    std_start = feed_namespace_start(feed, gracenote=False)
+    numbers: dict[int, int] = {}
+    for gracenote, start in ((False, std_start), (True, feed_gracenote_start(feed))):
+        channels = _selected_channels(q_filters, gracenote=gracenote)
+        num_map, _ = _resolve_app_chnum_map(channels, namespace_start=start)
+        pinned = {ch.id for ch in channels if ch.number_pinned and ch.number is not None}
+        numbers.update({cid: num for cid, num in num_map.items() if cid not in pinned})
+
+    feed.chnum_start = min([std_start, *numbers.values()])
+    existing = {r.channel_id: r for r in FeedChannelNumber.query.filter_by(feed_id=feed.id).all()}
+    for cid, num in numbers.items():
+        if cid in existing:
+            existing[cid].number = num
+        else:
+            db.session.add(FeedChannelNumber(feed_id=feed.id, channel_id=cid, number=num))
+
+
 def _slugify(text: str) -> str:
     s = text.lower().strip()
     s = re.sub(r'[^a-z0-9]+', '-', s)
@@ -344,6 +379,9 @@ def create_feed():
     slug = data.get('slug') or _slugify(name)
     if Feed.query.filter_by(slug=slug).first():
         return jsonify({'error': f'slug "{slug}" already exists'}), 409
+    guide_mode = data.get('guide_mode') or 'split'
+    if guide_mode not in GUIDE_MODES:
+        return jsonify({'error': 'guide_mode must be "split" or "mixed"'}), 400
 
     # Capture baseline overlaps among existing feeds BEFORE adding the new feed,
     # so we can block only on overlaps that the new feed itself introduces.
@@ -355,12 +393,15 @@ def create_feed():
         description = data.get('description', ''),
         filters     = _clean_filters(data.get('filters', {})),
         chnum_start = _parse_chnum_start(data.get('chnum_start')),
+        guide_mode  = guide_mode,
         is_enabled  = data.get('is_enabled', True),
     )
     db.session.add(feed)
     err = _safe_flush()  # make new feed visible to overlap check
     if err:
         return err
+    if feed.guide_mode == 'mixed' and feed.chnum_start is None:
+        _promote_to_unified_pool(feed)
     # A new chnum_start feed needs its FeedChannelNumber store populated before
     # the overlap check / XML refresh, so its std and gracenote M3Us draw from one
     # unified pool instead of both numbering from chnum_start and colliding.
@@ -400,9 +441,12 @@ def update_feed(feed_id):
     # overlaps that this edit introduces, not pre-existing ones.
     baseline_warnings = set(get_global_chnum_overlaps())
 
+    if 'guide_mode' in data and data['guide_mode'] not in GUIDE_MODES:
+        return jsonify({'error': 'guide_mode must be "split" or "mixed"'}), 400
+
     if feed.slug in SYSTEM_FEED_SLUGS:
-        # System feeds only allow chnum_start to be changed.
-        disallowed = set(data.keys()) - {'chnum_start'}
+        # System feeds only allow chnum_start and guide_mode to be changed.
+        disallowed = set(data.keys()) - {'chnum_start', 'guide_mode'}
         if disallowed:
             return jsonify({'error': 'Built-in feeds cannot be edited.'}), 403
     else:
@@ -417,6 +461,11 @@ def update_feed(feed_id):
 
     if 'chnum_start' in data:
         feed.chnum_start = _parse_chnum_start(data['chnum_start'])
+    if 'guide_mode' in data:
+        feed.guide_mode = data['guide_mode']
+    # A mixed feed always numbers from one sticky pool (see _promote_to_unified_pool).
+    if feed.guide_mode == 'mixed' and feed.chnum_start is None:
+        _promote_to_unified_pool(feed)
 
     err = _safe_flush()  # make changes visible to overlap check
     if err:
@@ -427,14 +476,17 @@ def update_feed(feed_id):
     # other, so the store must be rebuilt BEFORE we regenerate XML or check for
     # overlaps — otherwise both partitions number sequentially from chnum_start
     # and every gracenote channel collides with a standard one.
-    if any(k in data for k in ('chnum_start', 'filters', 'is_enabled')):
+    if any(k in data for k in ('chnum_start', 'filters', 'is_enabled', 'guide_mode')):
         from ..worker import _refresh_auto_channel_numbers
         _refresh_auto_channel_numbers()
         err = _safe_flush()
         if err:
             return err
     new_warnings = [w for w in get_global_chnum_overlaps() if w not in baseline_warnings]
-    if new_warnings:
+    # Switching guide mode alone moves no numbers; it only widens what the
+    # mixed playlist is compared against. Report that on the Feeds page rather
+    # than refusing the switch.
+    if new_warnings and set(data) != {'guide_mode'}:
         db.session.rollback()
         return jsonify({'error': 'Channel number overlaps detected', 'warnings': new_warnings}), 409
     err = _safe_commit()

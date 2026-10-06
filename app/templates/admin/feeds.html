@@ -551,7 +551,7 @@
           {% set std_count = split.get('standard_count', standard_total) %}
           <button class="btn btn-dvr"
                   title="{% if standard_total == 0 %}No standard channels in this feed; use PrismCast output below for bridge-only channels{% else %}Register this feed's standard M3U source in Channels DVR{% endif %}"
-                  onclick='pushToDvr({{ feed.id }}, {{ feed.name|tojson }}, {{ standard_total }}, {{ std_count }}, this)'
+                  onclick='pushToDvr({{ feed.id }}, {{ feed.name|tojson }}, {{ standard_total }}, {{ standard_total if (feed.guide_mode or "split") == "mixed" else std_count }}, this)'
                   {% if standard_total == 0 %}disabled{% endif %}>📺 Add to Channels DVR</button>
           {% if feed.slug != 'default' %}
           <button class="btn btn-danger" onclick='deleteFeed({{ feed.id }}, {{ feed.name|tojson }}, this)'>Delete</button>
@@ -620,12 +620,42 @@
       </div>
       {% endif %}
 
+      {% set mixed_guide = (feed.guide_mode or 'split') == 'mixed' %}
+      <div class="feed-settings">
+        <div class="inline-setting">
+          <div class="field">
+            <label>Guide Mode <span class="badge-pill pill-beta">Beta</span></label>
+            <div class="inline-controls">
+              <select id="guide-mode-{{ feed.id }}" data-saved="{{ 'mixed' if mixed_guide else 'split' }}" onchange="saveFeedGuideMode({{ feed.id }}, {{ feed.name|tojson|forceescape }}, this)">
+                <option value="split" {% if not mixed_guide %}selected{% endif %}>Separate standard + Gracenote playlists</option>
+                <option value="mixed" {% if mixed_guide %}selected{% endif %}>One mixed playlist</option>
+              </select>
+            </div>
+            <div class="help">Mixed puts this feed's XMLTV and Gracenote channels in a single playlist, so Channels DVR needs one source instead of two. Requires Channels DVR 2026.08.25 or newer. Channel numbers do not change{% if not feed.chnum_start %}; switching fills in Channel Number Start so they stay put{% endif %}. After switching, use Add to Channels DVR again.</div>
+          </div>
+          <span class="save-status" id="guide-mode-status-{{ feed.id }}"></span>
+        </div>
+      </div>
+
       <div class="feed-urls">
         {% set split = feed_split_counts.get(feed.id, {}) %}
         {% set standard_total = split.get('total_count', feed.channel_count()) %}
         {% set std_count = split.get('standard_count', 1) %}
         {% set gn_count  = split.get('gracenote_count', 0) %}
-        {% if std_count > 0 %}
+        {% if mixed_guide %}
+        <div class="url-chip" onclick="copyChip(event, this, '{{ base_url }}/feeds/{{ feed.slug }}/m3u/mixed')">
+          <span style="color:var(--text-soft);font-family:sans-serif;font-size:0.7rem;flex-shrink:0">Mixed ({{ standard_total }})</span>
+          <span class="url-chip-text">{{ base_url }}/feeds/{{ feed.slug }}/m3u/mixed</span>
+          <a href="{{ base_url }}/feeds/{{ feed.slug }}/m3u/mixed" target="_blank" onclick="event.stopPropagation()" style="color:var(--text-muted);font-size:0.75rem;flex-shrink:0" title="Open">↗</a>
+          <button class="copy-btn" onclick="copyChip(event, this.closest('.url-chip'), '{{ base_url }}/feeds/{{ feed.slug }}/m3u/mixed')">Copy</button>
+        </div>
+        <div class="url-chip" onclick="copyChip(event, this, '{{ base_url }}/feeds/{{ feed.slug }}/epg.xml')">
+          <span style="color:var(--text-soft);font-family:sans-serif;font-size:0.7rem;flex-shrink:0">EPG</span>
+          <span class="url-chip-text">{{ base_url }}/feeds/{{ feed.slug }}/epg.xml</span>
+          <a href="{{ base_url }}/feeds/{{ feed.slug }}/epg.xml" target="_blank" onclick="event.stopPropagation()" style="color:var(--text-muted);font-size:0.75rem;flex-shrink:0" title="Open">↗</a>
+          <button class="copy-btn" onclick="copyChip(event, this.closest('.url-chip'), '{{ base_url }}/feeds/{{ feed.slug }}/epg.xml')">Copy</button>
+        </div>
+        {% elif std_count > 0 %}
         <div class="url-chip" onclick="copyChip(event, this, '{{ base_url }}/feeds/{{ feed.slug }}/m3u')">
           <span style="color:var(--text-soft);font-family:sans-serif;font-size:0.7rem;flex-shrink:0">Standard ({{ std_count }})</span>
           <span class="url-chip-text">{{ base_url }}/feeds/{{ feed.slug }}/m3u</span>
@@ -639,7 +669,7 @@
           <button class="copy-btn" onclick="copyChip(event, this.closest('.url-chip'), '{{ base_url }}/feeds/{{ feed.slug }}/epg.xml')">Copy</button>
         </div>
         {% endif %}
-        {% if gn_count > 0 %}
+        {% if gn_count > 0 and not mixed_guide %}
         <div class="url-chip" onclick="copyChip(event, this, '{{ base_url }}/feeds/{{ feed.slug }}/m3u/gracenote')">
           <span style="color:var(--text-soft);font-family:sans-serif;font-size:0.7rem;flex-shrink:0">Gracenote ({{ gn_count }})</span>
           <span class="url-chip-text">{{ base_url }}/feeds/{{ feed.slug }}/m3u/gracenote</span>
@@ -669,28 +699,17 @@
       </details>
 
       <details class="native-endpoints">
-        <summary>Mixed guide output <span class="badge-pill pill-beta">Experimental</span> <span style="color:var(--text-dim);font-weight:400;font-size:0.75rem">({{ standard_total }} channel{{ 's' if standard_total != 1 else '' }}{% if gn_count %}, {{ gn_count }} via Gracenote{% endif %})</span></summary>
-        <div class="feed-urls" style="margin-top:0.5rem">
-          <div class="url-chip" onclick="copyChip(event, this, '{{ base_url }}/feeds/{{ feed.slug }}/m3u/mixed')">
-            <span style="color:var(--text-soft);font-family:sans-serif;font-size:0.7rem;flex-shrink:0">Mixed M3U ({{ standard_total }})</span>
-            <span class="url-chip-text">{{ base_url }}/feeds/{{ feed.slug }}/m3u/mixed</span>
-            <a href="{{ base_url }}/feeds/{{ feed.slug }}/m3u/mixed" target="_blank" onclick="event.stopPropagation()" style="color:var(--text-muted);font-size:0.75rem;flex-shrink:0" title="Open">↗</a>
-            <button class="copy-btn" onclick="copyChip(event, this.closest('.url-chip'), '{{ base_url }}/feeds/{{ feed.slug }}/m3u/mixed')">Copy</button>
-          </div>
-          <div class="url-chip" onclick="copyChip(event, this, '{{ base_url }}/feeds/{{ feed.slug }}/epg.xml')">
-            <span style="color:var(--text-soft);font-family:sans-serif;font-size:0.7rem;flex-shrink:0">EPG</span>
-            <span class="url-chip-text">{{ base_url }}/feeds/{{ feed.slug }}/epg.xml</span>
-            <a href="{{ base_url }}/feeds/{{ feed.slug }}/epg.xml" target="_blank" onclick="event.stopPropagation()" style="color:var(--text-muted);font-size:0.75rem;flex-shrink:0" title="Open">↗</a>
-            <button class="copy-btn" onclick="copyChip(event, this.closest('.url-chip'), '{{ base_url }}/feeds/{{ feed.slug }}/epg.xml')">Copy</button>
-          </div>
-        </div>
-        <p class="help" style="margin-top:0.5rem">Requires a Channels DVR server on the beta build that lets one Custom Source mix Gracenote and XMLTV channel mappings (community.getchannels.com/t/46907) — older builds will treat this the same as the standard M3U and expect every channel to share one guide source. Import this single M3U + the EPG above instead of the separate Standard/Gracenote pair; each channel carries whichever guide mapping it already uses.</p>
-      </details>
-
-      <details class="native-endpoints">
         <summary>PrismCast output <span class="badge-pill pill-beta">Beta</span>{% if prismcast_enabled and split.get('bridged_count', 0) %} <span style="color:var(--text-dim);font-weight:400;font-size:0.75rem">— includes {{ split.get('bridged_count', 0) }} bridge-only channel{{ 's' if split.get('bridged_count', 0) != 1 else '' }}{% if standard_total %} plus {{ standard_total }} standard{% endif %}</span>{% endif %}</summary>
         <div class="feed-urls" style="margin-top:0.5rem">
           {% if prismcast_enabled %}
+          {% if mixed_guide %}
+          <div class="url-chip" onclick="copyChip(event, this, '{{ base_url }}/feeds/{{ feed.slug }}/m3u/prismcast/mixed')">
+            <span style="color:var(--text-soft);font-family:sans-serif;font-size:0.7rem;flex-shrink:0">PrismCast Mixed M3U ({{ split.get('prismcast_count', 0) + split.get('prismcast_gracenote_count', 0) }})</span>
+            <span class="url-chip-text">{{ base_url }}/feeds/{{ feed.slug }}/m3u/prismcast/mixed</span>
+            <a href="{{ base_url }}/feeds/{{ feed.slug }}/m3u/prismcast/mixed" target="_blank" onclick="event.stopPropagation()" style="color:var(--text-muted);font-size:0.75rem;flex-shrink:0" title="Open">↗</a>
+            <button class="copy-btn" onclick="copyChip(event, this.closest('.url-chip'), '{{ base_url }}/feeds/{{ feed.slug }}/m3u/prismcast/mixed')">Copy</button>
+          </div>
+          {% else %}
           <div class="url-chip" onclick="copyChip(event, this, '{{ base_url }}/feeds/{{ feed.slug }}/m3u/prismcast')">
             <span style="color:var(--text-soft);font-family:sans-serif;font-size:0.7rem;flex-shrink:0">PrismCast M3U ({{ split.get('prismcast_count', standard_total) }})</span>
             <span class="url-chip-text">{{ base_url }}/feeds/{{ feed.slug }}/m3u/prismcast</span>
@@ -706,6 +725,7 @@
           </div>
           {% endif %}
           {% endif %}
+          {% endif %}
           <div class="url-chip" onclick="copyChip(event, this, '{{ base_url }}/feeds/{{ feed.slug }}/epg.xml')">
             <span style="color:var(--text-soft);font-family:sans-serif;font-size:0.7rem;flex-shrink:0">EPG</span>
             <span class="url-chip-text">{{ base_url }}/feeds/{{ feed.slug }}/epg.xml</span>
@@ -716,7 +736,7 @@
         {% if prismcast_enabled %}
         <div style="margin-top:0.6rem">
           <button class="btn btn-dvr" title="Register this feed's PrismCast output as a custom M3U source in Channels DVR"
-                  onclick='pushPrismcastToDvr({{ feed.id }}, {{ feed.name|tojson }}, {{ split.get("prismcast_count", 0) }}, {{ split.get("prismcast_gracenote_count", 0) }}, this)'
+                  onclick='pushPrismcastToDvr({{ feed.id }}, {{ feed.name|tojson }}, {{ split.get("prismcast_count", 0) + (split.get("prismcast_gracenote_count", 0) if mixed_guide else 0) }}, {{ 0 if mixed_guide else split.get("prismcast_gracenote_count", 0) }}, this)'
                   {% if not split.get('prismcast_count', 0) and not split.get('prismcast_gracenote_count', 0) %}disabled title="No PrismCast channels in this feed"{% endif %}>📺 Add PrismCast to Channels DVR</button>
         </div>
         {% endif %}
@@ -728,6 +748,14 @@
         <summary>FastChannels Android Bridge Channels{% if fc_player_enabled and android_bridge_total %} <span style="color:var(--text-dim);font-weight:400;font-size:0.75rem">({{ android_bridge_total }} channel{{ 's' if android_bridge_total != 1 else '' }}){% endif %}</span></summary>
         <div class="feed-urls" style="margin-top:0.5rem">
           {% if fc_player_enabled %}
+          {% if mixed_guide %}
+          <div class="url-chip" onclick="copyChip(event, this, '{{ base_url }}/feeds/{{ feed.slug }}/m3u/fc-player/mixed')">
+            <span style="color:var(--text-soft);font-family:sans-serif;font-size:0.7rem;flex-shrink:0">Android Bridge Mixed M3U ({{ split.get('drm_bridge_count', 0) + split.get('drm_bridge_gracenote_count', 0) }})</span>
+            <span class="url-chip-text">{{ base_url }}/feeds/{{ feed.slug }}/m3u/fc-player/mixed</span>
+            <a href="{{ base_url }}/feeds/{{ feed.slug }}/m3u/fc-player/mixed" target="_blank" onclick="event.stopPropagation()" style="color:var(--text-muted);font-size:0.75rem;flex-shrink:0" title="Open">↗</a>
+            <button class="copy-btn" onclick="copyChip(event, this.closest('.url-chip'), '{{ base_url }}/feeds/{{ feed.slug }}/m3u/fc-player/mixed')">Copy</button>
+          </div>
+          {% else %}
           <div class="url-chip" onclick="copyChip(event, this, '{{ base_url }}/feeds/{{ feed.slug }}/m3u/fc-player')">
             <span style="color:var(--text-soft);font-family:sans-serif;font-size:0.7rem;flex-shrink:0">Android Bridge M3U ({{ split.get('drm_bridge_count', 0) }})</span>
             <span class="url-chip-text">{{ base_url }}/feeds/{{ feed.slug }}/m3u/fc-player</span>
@@ -743,6 +771,7 @@
           </div>
           {% endif %}
           {% endif %}
+          {% endif %}
           <div class="url-chip" onclick="copyChip(event, this, '{{ base_url }}/feeds/{{ feed.slug }}/epg.xml')">
             <span style="color:var(--text-soft);font-family:sans-serif;font-size:0.7rem;flex-shrink:0">EPG</span>
             <span class="url-chip-text">{{ base_url }}/feeds/{{ feed.slug }}/epg.xml</span>
@@ -753,7 +782,7 @@
         {% if fc_player_enabled %}
         <div style="margin-top:0.6rem">
           <button class="btn btn-dvr" title="Register this feed's FastChannels Android Bridge output as a custom M3U source in Channels DVR"
-                  onclick='pushFcPlayerToDvr({{ feed.id }}, {{ feed.name|tojson }}, {{ split.get("drm_bridge_count", 0) }}, {{ split.get("drm_bridge_gracenote_count", 0) }}, this)'
+                  onclick='pushFcPlayerToDvr({{ feed.id }}, {{ feed.name|tojson }}, {{ split.get("drm_bridge_count", 0) + (split.get("drm_bridge_gracenote_count", 0) if mixed_guide else 0) }}, {{ 0 if mixed_guide else split.get("drm_bridge_gracenote_count", 0) }}, this)'
                   {% if not split.get('drm_bridge_count', 0) and not split.get('drm_bridge_gracenote_count', 0) %}disabled title="No FastChannels Android Bridge channels in this feed"{% endif %}>📺 Add to Channels DVR</button>
         </div>
         {% endif %}
@@ -764,6 +793,14 @@
         <summary>FastChannels Android Bridge Channels (ah4c){% if fc_player_ah4c_configured and android_bridge_total %} <span style="color:var(--text-dim);font-weight:400;font-size:0.75rem">({{ android_bridge_total }} channel{{ 's' if android_bridge_total != 1 else '' }}){% endif %}</span></summary>
         <div class="feed-urls" style="margin-top:0.5rem">
           {% if fc_player_ah4c_configured %}
+          {% if mixed_guide %}
+          <div class="url-chip" onclick="copyChip(event, this, '{{ base_url }}/feeds/{{ feed.slug }}/m3u/fc-player/ah4c/mixed')">
+            <span style="color:var(--text-soft);font-family:sans-serif;font-size:0.7rem;flex-shrink:0">Android Bridge Mixed M3U via ah4c ({{ split.get('drm_bridge_count', 0) + split.get('drm_bridge_gracenote_count', 0) }})</span>
+            <span class="url-chip-text">{{ base_url }}/feeds/{{ feed.slug }}/m3u/fc-player/ah4c/mixed</span>
+            <a href="{{ base_url }}/feeds/{{ feed.slug }}/m3u/fc-player/ah4c/mixed" target="_blank" onclick="event.stopPropagation()" style="color:var(--text-muted);font-size:0.75rem;flex-shrink:0" title="Open">↗</a>
+            <button class="copy-btn" onclick="copyChip(event, this.closest('.url-chip'), '{{ base_url }}/feeds/{{ feed.slug }}/m3u/fc-player/ah4c/mixed')">Copy</button>
+          </div>
+          {% else %}
           <div class="url-chip" onclick="copyChip(event, this, '{{ base_url }}/feeds/{{ feed.slug }}/m3u/fc-player/ah4c')">
             <span style="color:var(--text-soft);font-family:sans-serif;font-size:0.7rem;flex-shrink:0">Android Bridge M3U via ah4c ({{ split.get('drm_bridge_count', 0) }})</span>
             <span class="url-chip-text">{{ base_url }}/feeds/{{ feed.slug }}/m3u/fc-player/ah4c</span>
@@ -778,6 +815,7 @@
             <button class="copy-btn" onclick="copyChip(event, this.closest('.url-chip'), '{{ base_url }}/feeds/{{ feed.slug }}/m3u/fc-player/ah4c/gracenote')">Copy</button>
           </div>
           {% endif %}
+          {% endif %}
           <div class="url-chip" onclick="copyChip(event, this, '{{ base_url }}/feeds/{{ feed.slug }}/epg.xml')">
             <span style="color:var(--text-soft);font-family:sans-serif;font-size:0.7rem;flex-shrink:0">EPG</span>
             <span class="url-chip-text">{{ base_url }}/feeds/{{ feed.slug }}/epg.xml</span>
@@ -789,7 +827,7 @@
         {% if fc_player_ah4c_configured %}
         <div style="margin-top:0.6rem">
           <button class="btn btn-dvr" title="Register this feed's ah4c-routed FastChannels Android Bridge output as a custom M3U source in Channels DVR"
-                  onclick='pushFcPlayerAh4cToDvr({{ feed.id }}, {{ feed.name|tojson }}, {{ split.get("drm_bridge_count", 0) }}, {{ split.get("drm_bridge_gracenote_count", 0) }}, this)'
+                  onclick='pushFcPlayerAh4cToDvr({{ feed.id }}, {{ feed.name|tojson }}, {{ split.get("drm_bridge_count", 0) + (split.get("drm_bridge_gracenote_count", 0) if mixed_guide else 0) }}, {{ 0 if mixed_guide else split.get("drm_bridge_gracenote_count", 0) }}, this)'
                   {% if not split.get('drm_bridge_count', 0) and not split.get('drm_bridge_gracenote_count', 0) %}disabled title="No FastChannels Android Bridge channels in this feed"{% endif %}>📺 Add to Channels DVR</button>
         </div>
         {% endif %}
@@ -1562,6 +1600,7 @@ async function pushToDvr(id, name, count, standardCount, btn, force = false) {
       return;
     }
     btn.textContent = '✓ Added!';
+    offerStaleSourceRemoval(id, data);
     btn.style.background = 'var(--success-bg-2)';
     btn.style.color = 'var(--success-soft)';
     setTimeout(() => {
@@ -1616,6 +1655,7 @@ async function pushPrismcastToDvr(id, name, stdCount, gnCount, btn, force = fals
       return;
     }
     btn.textContent = '✓ Added!';
+    offerStaleSourceRemoval(id, data);
     btn.style.background = 'var(--success-bg-2)';
     btn.style.color = 'var(--success-soft)';
     setTimeout(() => {
@@ -1669,6 +1709,7 @@ async function pushFcPlayerAh4cToDvr(id, name, stdCount, gnCount, btn, force = f
       return;
     }
     btn.textContent = '✓ Added!';
+    offerStaleSourceRemoval(id, data);
     btn.style.background = 'var(--success-bg-2)';
     btn.style.color = 'var(--success-soft)';
     setTimeout(() => {
@@ -1723,6 +1764,7 @@ async function pushFcPlayerToDvr(id, name, stdCount, gnCount, btn, force = false
       return;
     }
     btn.textContent = '✓ Added!';
+    offerStaleSourceRemoval(id, data);
     btn.style.background = 'var(--success-bg-2)';
     btn.style.color = 'var(--success-soft)';
     setTimeout(() => {
@@ -1800,6 +1842,56 @@ function _prewarmFeed(feedData, statusEl) {
         setTimeout(() => { statusEl.textContent = ''; }, 3000);
       }
     }).catch(() => { done++; });
+  }
+}
+
+// ── After a mixed-mode push: offer to remove the now-redundant Gracenote source ──
+async function offerStaleSourceRemoval(feedId, data) {
+  for (const name of (data.stale_sources || [])) {
+    const ok = confirm(
+      `"${name}" is still in Channels DVR.\n\nIts channels are now part of the mixed source, so they will appear twice until it is removed.\n\nRemove "${name}" from Channels DVR now?`
+    );
+    if (!ok) continue;
+    try {
+      const r = await fetch(`/api/feeds/${feedId}/remove-dvr-gracenote-source`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ name }),
+      });
+      const res = await r.json().catch(() => ({}));
+      if (!r.ok) alert(`Could not remove "${name}":\n\n` + (res.error || `HTTP ${r.status}`));
+    } catch(e) {
+      alert(`Could not remove "${name}": ` + e.message);
+    }
+  }
+}
+
+// ── Save feed guide mode (inline on card) ─────────────────────────────────
+async function saveFeedGuideMode(feedId, feedName, select) {
+  const status = document.getElementById(`guide-mode-status-${feedId}`);
+  const mode = select.value;
+  if (mode === 'mixed' && !confirm(
+    `Switch "${feedName}" to one mixed playlist?\n\nRequires Channels DVR 2026.08.25 or newer. Channel numbers stay the same.\n\nAfterwards, click Add to Channels DVR again so the source is updated.`
+  )) {
+    select.value = select.dataset.saved;
+    return;
+  }
+  status.textContent = 'Saving…';
+  status.className   = 'save-status';
+  try {
+    const r = await fetch(`/api/feeds/${feedId}`, {
+      method: 'PATCH',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ guide_mode: mode }),
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
+    // The card's URLs and counts are rendered server-side.
+    window.location.reload();
+  } catch(e) {
+    select.value = select.dataset.saved;
+    status.textContent = '✗ ' + e.message;
+    status.className   = 'save-status error';
   }
 }
 

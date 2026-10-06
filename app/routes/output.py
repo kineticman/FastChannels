@@ -760,3 +760,54 @@ def feed_m3u_fc_player_gracenote(slug):
         mimetype='application/x-mpegurl',
         download_name=f'{slug}-fc-player-gracenote.m3u',
     )
+
+
+def _feed_bridge_mixed_artifact(slug: str, key: str, label: str):
+    """Serve a mixed-guide bridge playlist. These are only built for feeds in
+    mixed guide mode, so anything else is a 404 rather than a forever-warming 503."""
+    feed = Feed.query.filter_by(slug=slug, is_enabled=True).first_or_404()
+    if (feed.guide_mode or 'split') != 'mixed':
+        return Response(
+            f'Feed {feed.slug} is not in mixed guide mode. Turn it on from the Feeds page.\n',
+            status=404,
+            mimetype='text/plain',
+        )
+    path = get_artifact(f'feed-{slug}-{key}-mixed-m3u', ext='m3u')
+    if path is None:
+        return Response(
+            f'{label} mixed M3U artifact for {feed.slug} is warming. Retry shortly.',
+            status=503,
+            mimetype='text/plain',
+            headers={'Retry-After': '15'},
+        )
+    return _send_feed_artifact(
+        path,
+        mimetype='application/x-mpegurl',
+        download_name=f'{slug}-{key}-mixed.m3u',
+    )
+
+
+@output_bp.route('/feeds/<slug>/m3u/prismcast/mixed')
+def feed_m3u_prismcast_mixed(slug):
+    """Mixed-guide PrismCast DRM-bridge M3U for a feed. Pair with /feeds/<slug>/epg.xml."""
+    from ..models import AppSettings
+    if not AppSettings.get().prismcast_capture_configured():
+        return _prismcast_not_configured()
+    return _feed_bridge_mixed_artifact(slug, 'prismcast', 'PrismCast')
+
+
+@output_bp.route('/feeds/<slug>/m3u/fc-player/mixed')
+def feed_m3u_fc_player_mixed(slug):
+    """Mixed-guide FastChannels Player bridge M3U for a feed. Pair with /feeds/<slug>/epg.xml."""
+    if not _fc_player_bridge_ready():
+        return _fc_player_not_configured()
+    return _feed_bridge_mixed_artifact(slug, 'fc-player', 'FastChannels Player')
+
+
+@output_bp.route('/feeds/<slug>/m3u/fc-player/ah4c/mixed')
+def feed_m3u_fc_player_ah4c_mixed(slug):
+    """Mixed-guide ah4c-routed FastChannels Player bridge M3U for a feed.
+    Pair with /feeds/<slug>/epg.xml."""
+    if not _ah4c_bridge_ready():
+        return _fc_player_ah4c_not_configured()
+    return _feed_bridge_mixed_artifact(slug, 'fc-player-ah4c', 'FastChannels Player ah4c')

@@ -370,6 +370,7 @@ class Feed(db.Model):
     description = db.Column(db.Text, default='')
     filters     = db.Column(db.JSON, default=dict)
     chnum_start = db.Column(db.Integer, nullable=True)   # starting tvg-chno for this feed's M3U output
+    guide_mode  = db.Column(db.String(16), nullable=False, default='split', server_default='split')  # 'split' = separate XMLTV + Gracenote playlists; 'mixed' = one playlist (Channels DVR 2026.08.25+)
     is_enabled  = db.Column(db.Boolean, default=True)
     created_at  = db.Column(db.DateTime(timezone=True),
                             default=lambda: datetime.now(timezone.utc))
@@ -393,6 +394,7 @@ class Feed(db.Model):
             'description': self.description,
             'filters':     self.filters or {},
             'chnum_start': self.chnum_start,
+            'guide_mode':  self.guide_mode or 'split',
             'is_enabled':  self.is_enabled,
             'created_at':  self.created_at.isoformat() if self.created_at else None,
             'updated_at':  self.updated_at.isoformat() if self.updated_at else None,
@@ -400,6 +402,7 @@ class Feed(db.Model):
             'm3u_url':        f'{base_url}/feeds/{self.slug}/m3u',
             'epg_url':        f'{base_url}/feeds/{self.slug}/epg.xml',
             'gracenote_url':  f'{base_url}/feeds/{self.slug}/m3u/gracenote',
+            'mixed_url':      f'{base_url}/feeds/{self.slug}/m3u/mixed',
             'native_m3u_url': f'{base_url}/feeds/{self.slug}/native/m3u',
             'native_epg_url': f'{base_url}/feeds/{self.slug}/native/epg.xml',
         }
