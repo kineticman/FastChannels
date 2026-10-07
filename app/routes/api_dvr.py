@@ -412,6 +412,74 @@ def push_feed_to_dvr(feed_id):
     return jsonify({'ok': True, 'sources_added': sources_added})
 
 
+@dvr_bp.route('/feeds/<int:feed_id>/push-native-to-dvr', methods=['POST'])
+def push_feed_native_to_dvr(feed_id):
+    """Register this feed's native (scraped-only) output as one custom M3U
+    source in Channels DVR: every standard channel on our own XMLTV, Gracenote
+    assignments ignored. Named "... Native" so it sits alongside the regular
+    push rather than overwriting it — it carries the same channels, so it is an
+    alternative to that source, not an addition.
+    """
+    from ..generators.m3u import (
+        _build_channel_query, feed_to_query_filters, feed_namespace_start, generate_native_m3u,
+    )
+    from ..generators.xmltv import write_xmltv
+    from ..xml_cache import write_artifact, write_xml_artifact
+
+    feed = Feed.query.get_or_404(feed_id)
+    dvr_url = (AppSettings.get().effective_channels_dvr_url() or '').strip()
+    if not dvr_url:
+        return jsonify({'error': 'Channels DVR URL is not configured in Settings.'}), 400
+
+    base = public_base_url()
+    filters = feed_to_query_filters(feed.filters or {})
+    feed_query = _build_channel_query(filters)
+    channel_count = feed_query.order_by(None).count()
+    dvr_type = _dvr_stream_format(feed_query)
+    if channel_count == 0:
+        return jsonify({'error': 'This feed has no eligible channels to add to Channels DVR.'}), 400
+
+    force = bool((request.get_json(silent=True) or {}).get('force'))
+    if channel_count > _CHANNELS_DVR_RECOMMENDED_MAX and not force:
+        return jsonify({
+            'error': f'This feed has {channel_count} channels. Channels DVR usually works best at 750 or fewer.',
+            'requires_confirm': True,
+            'channel_count': channel_count,
+            'recommended_max': _CHANNELS_DVR_RECOMMENDED_MAX,
+        }), 409
+
+    # A DVR import is a user-triggered snapshot: rebuild this feed's native
+    # artifacts now so the DVR doesn't fetch a stale (or still-warming) file.
+    if feed.chnum_start is not None:
+        std_kw = {'feed_chnum_start': feed.chnum_start, 'feed_id': feed.id}
+    else:
+        std_kw = {'namespace_start': feed_namespace_start(feed, gracenote=False)}
+    write_xml_artifact(
+        f'feed-{feed.slug}-native',
+        lambda fp: write_xmltv(fp, filters, base_url=base, feed_name=feed.name, native=True),
+    )
+    write_artifact(
+        f'feed-{feed.slug}-native-m3u',
+        lambda fp: fp.write(generate_native_m3u(filters, base_url=base, include_description=False, **std_kw)),
+        ext='m3u',
+    )
+
+    name = f"FastChannels {feed.name} Native"
+    try:
+        r = _dvr_put_source(dvr_url, name, dvr_type,
+                            f"{base}/feeds/{feed.slug}/native/m3u", f"{base}/feeds/{feed.slug}/native/epg.xml")
+        r.raise_for_status()
+    except _req.exceptions.ConnectionError:
+        return jsonify({'error': f'Could not connect to Channels DVR at {dvr_url}'}), 502
+    except _req.exceptions.Timeout:
+        return jsonify({'error': 'Channels DVR timed out.'}), 504
+    except _req.exceptions.HTTPError as exc:
+        resp = exc.response
+        return jsonify({'error': f'DVR {resp.status_code}: {resp.text[:300]}'}), 502
+
+    return jsonify({'ok': True, 'sources_added': [name]})
+
+
 @dvr_bp.route('/feeds/<int:feed_id>/push-prismcast-to-dvr', methods=['POST'])
 def push_feed_prismcast_to_dvr(feed_id):
     """Register this feed's PrismCast (DRM-bridge) output as custom M3U source(s)

@@ -695,6 +695,11 @@
             <button class="copy-btn" onclick="copyChip(event, this.closest('.url-chip'), '{{ base_url }}/feeds/{{ feed.slug }}/native/epg.xml')">Copy</button>
           </div>
         </div>
+        <div style="margin-top:0.6rem">
+          <button class="btn btn-dvr" title="Register this feed's native (scraped-only) output as a custom M3U source in Channels DVR"
+                  onclick='pushNativeToDvr({{ feed.id }}, {{ feed.name|tojson }}, {{ standard_total }}, this)'
+                  {% if standard_total == 0 %}disabled{% endif %}>📺 Add Native to Channels DVR</button>
+        </div>
         <p class="help" style="margin-top:0.5rem">The feed's {{ standard_total }} standard channel{{ 's' if standard_total != 1 else '' }} with scraped EPG data only — Gracenote assignments and bridge-only DRM channels are ignored. Use these together as a single source for clients that prefer one EPG backend.</p>
       </details>
 
@@ -1601,6 +1606,58 @@ async function pushToDvr(id, name, count, standardCount, btn, force = false) {
     }
     btn.textContent = '✓ Added!';
     offerStaleSourceRemoval(id, data);
+    btn.style.background = 'var(--success-bg-2)';
+    btn.style.color = 'var(--success-soft)';
+    setTimeout(() => {
+      btn.textContent = orig;
+      btn.style.background = '';
+      btn.style.color = '';
+      btn.disabled = false;
+    }, 3000);
+  } catch(e) {
+    alert('Error: ' + e.message);
+    btn.disabled = false;
+    btn.textContent = orig;
+  }
+}
+
+// ── Push native (scraped-only) output to Channels DVR ──────────────────────
+async function pushNativeToDvr(id, name, count, btn, force = false) {
+  if (count > 750 && !force) {
+    const ok = confirm(
+      `${name} has ${count} channels.\n\nChannels DVR usually works best at 750 or fewer.\n\nAdd it anyway?`
+    );
+    if (!ok) return;
+  }
+  const orig = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = '⏳ Adding…';
+  try {
+    const r = await fetch(`/api/feeds/${id}/push-native-to-dvr`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(force || count > 750 ? {force: true} : {}),
+    });
+    const data = await r.json();
+    if (!r.ok) {
+      if (r.status === 400 && data.error?.includes('not configured')) {
+        alert('Channels DVR URL is not configured.\n\nGo to Settings and enter your Channels DVR server URL (e.g. http://192.168.1.x:8089).');
+      } else if (r.status === 504 || (r.status === 502 && /could not connect|timed out/i.test(data.error || ''))) {
+        alert('Could not reach Channels DVR.\n\nGo to Settings → Channels DVR and use the Test Connection button to verify your server URL is correct and reachable.');
+      } else if (r.status === 502 && data.error) {
+        alert('Channels DVR rejected the request:\n\n' + data.error);
+      } else if (r.status === 409 && data.requires_confirm && !force) {
+        btn.disabled = false;
+        btn.textContent = orig;
+        return pushNativeToDvr(id, name, count, btn, true);
+      } else {
+        alert('Failed: ' + (data.error || `HTTP ${r.status}`));
+      }
+      btn.disabled = false;
+      btn.textContent = orig;
+      return;
+    }
+    btn.textContent = '✓ Added!';
     btn.style.background = 'var(--success-bg-2)';
     btn.style.color = 'var(--success-soft)';
     setTimeout(() => {
