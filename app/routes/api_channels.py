@@ -273,6 +273,14 @@ def update_channel(channel_id):
             db.session.rollback()
             return jsonify({'error': str(exc)}), 422
         try:
+            # A lock change can displace another channel's sticky number. Settle
+            # the feed number pools now rather than at the next scrape: until
+            # then a feed's standard and Gracenote playlists are numbered
+            # independently and can both hand out the displaced number.
+            if any(k in data for k in ('number', 'number_pinned', 'pinned_chno')):
+                from ..worker import _refresh_auto_channel_numbers
+                db.session.flush()
+                _refresh_auto_channel_numbers()
             db.session.commit()
             break
         except OperationalError as _oe:

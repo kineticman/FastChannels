@@ -819,19 +819,26 @@ def _build_feed_chnum_map(channels, feed_chnum_start: int,
     channel_ids = {ch.id for ch in channels}
     reserved = _reserved_provider_numbers()
 
-    # First pass: honour pinned channels and preserve valid stored assignments.
+    # First pass: pinned channels claim their numbers before anything else, so
+    # a lock always beats another channel's stored number regardless of list
+    # order (otherwise an earlier channel's sticky number silently wins and the
+    # lock is ignored).
     for ch in channels:
         if getattr(ch, 'number_pinned', False) and ch.number is not None and ch.number not in used_numbers:
             result[ch.id] = ch.number
             used_numbers.add(ch.number)
+
+    # Then preserve valid stored assignments.
+    for ch in channels:
+        if ch.id in result:
+            continue
+        stored = stored_numbers.get(ch.id) if stored_numbers else None
+        if (stored is not None and stored >= feed_chnum_start
+                and stored not in used_numbers and stored not in reserved):
+            result[ch.id] = stored
+            used_numbers.add(stored)
         else:
-            stored = stored_numbers.get(ch.id) if stored_numbers else None
-            if (stored is not None and stored >= feed_chnum_start
-                    and stored not in used_numbers and stored not in reserved):
-                result[ch.id] = stored
-                used_numbers.add(stored)
-            else:
-                unassigned.append(ch)
+            unassigned.append(ch)
 
     # Reserve numbers held by channels outside this batch (e.g. the other
     # M3U partition — std vs gracenote) so the cursor never steps on them.

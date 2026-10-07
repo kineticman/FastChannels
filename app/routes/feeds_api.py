@@ -401,7 +401,10 @@ def create_feed():
     if err:
         return err
     if feed.guide_mode == 'mixed' and feed.chnum_start is None:
-        _promote_to_unified_pool(feed)
+        # Nothing to preserve on a new feed: number it in one run from its
+        # auto-assigned block (the refresh below fills the pool).
+        from ..generators.m3u import feed_namespace_start
+        feed.chnum_start = feed_namespace_start(feed, gracenote=False)
     # A new chnum_start feed needs its FeedChannelNumber store populated before
     # the overlap check / XML refresh, so its std and gracenote M3Us draw from one
     # unified pool instead of both numbering from chnum_start and colliding.
@@ -458,6 +461,16 @@ def update_feed(feed_id):
             feed.filters = _clean_filters(data['filters'])
         if 'is_enabled' in data:
             feed.is_enabled = bool(data['is_enabled'])
+
+    # A mixed feed is numbered from one sticky pool, which needs a start.
+    # Clearing it would mean re-deriving every number from scratch.
+    if ('chnum_start' in data and _parse_chnum_start(data['chnum_start']) is None
+            and feed.chnum_start is not None
+            and data.get('guide_mode', feed.guide_mode) == 'mixed'):
+        db.session.rollback()
+        return jsonify({'error': 'A feed in mixed guide mode needs a Channel Number Start. '
+                                 'Change it to another number, or switch the feed back to '
+                                 'separate playlists first.'}), 400
 
     if 'chnum_start' in data:
         feed.chnum_start = _parse_chnum_start(data['chnum_start'])
