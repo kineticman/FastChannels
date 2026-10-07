@@ -109,6 +109,7 @@ _BAM_HEADERS = {
 # gracenote = the national HD feed's station ID (DirecTV's; Deportes supplied
 # by the maintainer). The community CSV (key = network id) can override.
 # tve = a TV-provider sign-in can play it (NFL/MLB Network need an ESPN plan).
+# logo = used instead of the watch API's logo, whose MLB Network URL 404s.
 NETWORKS = {
     'espn1': {'name': 'ESPN', 'gracenote': '32645', 'tve': True},
     'espn2': {'name': 'ESPN2', 'gracenote': '45507', 'tve': True},
@@ -118,7 +119,8 @@ NETWORKS = {
     'sec': {'name': 'SEC Network', 'gracenote': '89714', 'tve': True},
     'acc': {'name': 'ACC Network', 'gracenote': '111871', 'tve': True},
     'nfl_network_domestic': {'name': 'NFL Network', 'gracenote': '45399'},
-    'mlb_network': {'name': 'MLB Network', 'gracenote': '62081'},
+    'mlb_network': {'name': 'MLB Network', 'gracenote': '62081',
+                    'logo': 'https://a.espncdn.com/watchespn/images/web/network_logos/channel_logo_mlb_2x.png'},
 }
 
 _ACCESS_REFRESH_MARGIN = 10 * 60   # refresh the 4h BAM token this early
@@ -580,7 +582,7 @@ class ESPNScraper(BaseScraper):
                 source_channel_id=network_id,
                 name=meta['name'],
                 stream_url=SCHEME + network_id,
-                logo_url=logos.get(network_id),
+                logo_url=meta.get('logo') or logos.get(network_id),
                 slug=f'espn-{network_id}',
                 category='Sports',
                 language=meta.get('language', 'en'),
