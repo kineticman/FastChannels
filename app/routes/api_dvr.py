@@ -86,6 +86,44 @@ def _dvr_put_source(dvr_url: str, name: str, dvr_type: str, url: str, xmltv_url:
     return resp
 
 
+# First Channels DVR build where one Custom Source can mix XMLTV and Gracenote
+# mappings AND reliably reloads its XMLTV guide (the feature landed in
+# 2026.08.14.1836; the guide-reload bug was fixed in 2026.08.25.0133).
+_MIXED_GUIDE_MIN_DVR_VERSION = (2026, 8, 25, 133)
+
+
+def _parse_dvr_version(version: str) -> tuple[int, ...] | None:
+    """'2026.10.06.0736' -> (2026, 10, 6, 736); None if it isn't that shape."""
+    m = re.fullmatch(r'(\d{4})\.(\d{1,2})\.(\d{1,2})\.(\d{1,4})', (version or '').strip())
+    return tuple(int(g) for g in m.groups()) if m else None
+
+
+def _mixed_guide_unsupported(dvr_url: str):
+    """A 409 response if this Channels DVR is too old for a mixed-guide source,
+    else None. An older server accepts the push but ignores the Gracenote IDs,
+    leaving those channels with no guide and no error anywhere.
+
+    Only a version we can read and parse blocks the push: if /status can't be
+    fetched or has an unfamiliar version string, carry on and let the push
+    itself report any connection problem.
+    """
+    try:
+        r = _req.get(f"{dvr_url}/status", timeout=8, verify=False)
+        r.raise_for_status()
+        version = str(r.json().get('version') or '')
+    except Exception:
+        return None
+    parsed = _parse_dvr_version(version)
+    if parsed is None or parsed >= _MIXED_GUIDE_MIN_DVR_VERSION:
+        return None
+    return jsonify({
+        'error': f'Channels DVR {version} is too old for mixed guide mode, which needs '
+                 '2026.08.25 or newer. Update Channels DVR, or switch this feed back to '
+                 'separate standard + Gracenote playlists.',
+        'dvr_version': version,
+    }), 409
+
+
 def _feed_gracenote_source_names(feed: Feed) -> dict[str, str]:
     """The Gracenote-half DVR sources a split-mode push registers for a feed,
     mapped to the playlist path each one points at. A mixed-mode push makes
@@ -372,6 +410,8 @@ def push_feed_to_dvr(feed_id):
         }), 409
 
     mixed = (feed.guide_mode or 'split') == 'mixed'
+    if mixed and (blocked := _mixed_guide_unsupported(dvr_url)):
+        return blocked
     try:
         _ensure_feed_dvr_artifacts(feed, base, has_gracenote=has_gracenote, force_refresh=True, mixed=mixed)
     except TimeoutError:
@@ -519,6 +559,8 @@ def push_feed_prismcast_to_dvr(feed_id):
     # Each partition registers as its own DVR source, so gate the recommended-max
     # warning on the larger of the two.
     mixed = (feed.guide_mode or 'split') == 'mixed'
+    if mixed and (blocked := _mixed_guide_unsupported(dvr_url)):
+        return blocked
     largest = (std_count + gn_count) if mixed else max(std_count, gn_count)
     force = bool((request.get_json(silent=True) or {}).get('force'))
     if largest > _CHANNELS_DVR_RECOMMENDED_MAX and not force:
@@ -611,6 +653,8 @@ def push_feed_fc_player_to_dvr(feed_id):
         return jsonify({'error': 'This feed has no eligible FastChannels Android Bridge channels to add to Channels DVR.'}), 400
 
     mixed = (feed.guide_mode or 'split') == 'mixed'
+    if mixed and (blocked := _mixed_guide_unsupported(dvr_url)):
+        return blocked
     largest = (std_count + gn_count) if mixed else max(std_count, gn_count)
     force = bool((request.get_json(silent=True) or {}).get('force'))
     if largest > _CHANNELS_DVR_RECOMMENDED_MAX and not force:
@@ -695,6 +739,8 @@ def push_feed_fc_player_ah4c_to_dvr(feed_id):
         return jsonify({'error': 'This feed has no eligible FastChannels Android Bridge channels to add to Channels DVR.'}), 400
 
     mixed = (feed.guide_mode or 'split') == 'mixed'
+    if mixed and (blocked := _mixed_guide_unsupported(dvr_url)):
+        return blocked
     largest = (std_count + gn_count) if mixed else max(std_count, gn_count)
     force = bool((request.get_json(silent=True) or {}).get('force'))
     if largest > _CHANNELS_DVR_RECOMMENDED_MAX and not force:
