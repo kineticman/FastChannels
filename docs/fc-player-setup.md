@@ -458,13 +458,14 @@ a failure — it just means try again once a tuner frees up.
 
 ## 5. Add the feed to Channels DVR
 
-Open `/admin/feeds` in FastChannels. Each configured feed includes up to two
-sections, depending on which capture method(s) you've set up:
+Open `/admin/feeds` in FastChannels. Under **Bridge outputs**, each feed
+includes up to two hardware-capture sections, depending on which capture
+method(s) you've set up:
 
-- **FastChannels HDMI Capture** — the HDMI Capture path, with
-  ready-to-use M3U and EPG URLs.
-- **FastChannels Android Bridge Channels (ah4c)** — the same channels, routed
-  through ah4c instead, only shown once ah4c support is configured.
+- **HDMI Capture** — the HDMI Capture path, with ready-to-use M3U and EPG
+  URLs.
+- **ah4c Capture** — the same channels, routed through ah4c instead, only
+  shown once ah4c support is configured.
 
 Both are bridge-only — just the channels that actually need the device
 trigger, not your entire channel catalog or even the whole source. They're
@@ -473,11 +474,60 @@ these), not instead of it. Use whichever one matches your capture method —
 importing both into Channels DVR at once would register the same channels
 twice.
 
-Click **📺 Add to Channels DVR** in the section you're using to register the
-source(s) automatically — Channels DVR is set to the correct MPEG-TS stream
-format for you. If you'd rather add it by hand (or Channels DVR isn't
-reachable from FastChannels), copy the M3U/EPG URLs shown and add them as a
-custom M3U and XMLTV source yourself; see the MPEG-TS note below if you do.
+Click **📺 Add HDMI Capture to Channels DVR** (or **📺 Add ah4c Capture to
+Channels DVR**) in the section you're using to register the source(s)
+automatically — Channels DVR is set to the correct MPEG-TS stream format for
+you. If you'd rather add it by hand (or Channels DVR isn't reachable from
+FastChannels), copy the M3U/EPG URLs shown and add them as a custom M3U and
+XMLTV source yourself; see the MPEG-TS note below if you do.
+
+## Stream limits and PrismCast fallback
+
+HDMI Capture is one device and one encoder, so it can only show one channel at
+a time. FastChannels doesn't arbitrate that: every tune simply retunes the
+device. Out of the box, a second viewer — or a recording starting — changes
+the channel for everyone already on the capture card, including a recording
+in progress.
+
+Channels DVR already has the tools to prevent this. Each custom source has a
+**stream limit**, and when a source is at its limit Channels DVR tunes the
+same channel from the next source that carries it. Setting that up takes two
+things in Channels DVR, not in FastChannels:
+
+1. **Set the stream limit on the capture source.** In Channels DVR, edit the
+   `FastChannels <feed> Android Bridge` source and set its stream limit to
+   `1`. For ah4c Capture, set it to the number of tuners ah4c has. Re-pushing
+   the feed from FastChannels later keeps the limit you set.
+2. **Optionally add PrismCast as the fallback.** If PrismCast is also
+   configured, click **📺 Add PrismCast to Channels DVR** on the *same feed*,
+   give that source a stream limit matching what your PrismCast host can
+   actually encode at once (a low-power box may only manage one), and order
+   the sources in Channels DVR so the capture source has priority over the
+   PrismCast one.
+
+Because both outputs come from the same feed, they share channel numbers and
+channel IDs. Channels DVR treats them as one channel with two ways to tune
+it, so the guide shows no duplicates and viewers don't choose a bridge. The
+first tune takes the capture card; the next one rolls over to PrismCast
+within about a second. Once every source is at its limit, further tunes get
+Channels DVR's "tuner unavailable" error rather than stealing a stream.
+
+Things to get right:
+
+- **Use one feed for everything that shares the capture card.** Stream limits
+  are per Channels DVR source. If Sling lives in one feed and Amazon in
+  another, each feed's capture source gets its own limit and they will still
+  retune the same device out from under each other. Put every HDMI Capture
+  channel in a single feed.
+- **Prefer Guide Mode "One mixed playlist".** With the default *Separate
+  standard + Gracenote playlists*, each bridge output registers as two
+  Channels DVR sources (`… Android Bridge` and `… Android Bridge Gracenote`),
+  each with its own limit — so a limit of `1` on both still allows two
+  simultaneous tunes on one capture card. Mixed mode (Channels DVR 2026.08.25
+  or newer) collapses them into one source, and one limit covers everything.
+- **Fallback only covers channels both bridges carry.** A channel that only
+  HDMI Capture can play has nowhere to roll over to and gets "tuner
+  unavailable" while the card is busy.
 
 ## Troubleshooting
 

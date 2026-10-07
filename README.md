@@ -171,6 +171,11 @@ DRM source can ride this bridge. Hardware-and-software
 setup, not a toggle: **[docs/fc-player-setup.md](docs/fc-player-setup.md)** is the
 full walkthrough.
 
+A single capture device plays one channel at a time. To stop a second viewer or a
+recording from retuning it — and to fall back to PrismCast when it's busy — set a stream
+limit on the source in Channels DVR; see
+[Stream limits and PrismCast fallback](docs/fc-player-setup.md#stream-limits-and-prismcast-fallback).
+
 ## Configuration
 
 Source credentials and options are configured on the **Sources** page — click into any source card to expand its settings. Changes take effect on the next scrape.
