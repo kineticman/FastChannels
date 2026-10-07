@@ -109,13 +109,15 @@
     .feed-urls { margin-top: 0.9rem; display: flex; gap: 0.75rem; flex-wrap: wrap; }
     .url-chip {
       background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
-      padding: 0.35rem 0.75rem; font-family: monospace; font-size: 0.75rem; color: var(--accent);
+      padding: 0.4rem 0.8rem; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.84rem; color: var(--accent);
       text-decoration: none; display: flex; align-items: center; gap: 0.4rem;
       cursor: pointer;
     }
     .url-chip:hover { border-color: var(--accent); }
     .url-chip.copied { border-color: var(--success-strong); color: var(--success-strong); }
     .url-chip span { min-width: 0; }
+    .url-chip-label { color: var(--text-soft); font-family: sans-serif; font-size: 0.82rem; font-weight: 500; flex-shrink: 0; }
+    .url-chip-open { color: var(--text-muted); font-size: 0.85rem; flex-shrink: 0; }
     .url-chip-text {
       flex: 1;
       min-width: 0;
@@ -125,21 +127,32 @@
     }
     .url-chip .copy-btn {
       background: var(--surface); border: 1px solid var(--text-dim); border-radius: 4px;
-      color: var(--text-soft); cursor: pointer; font-size: 0.7rem; padding: 0.15rem 0.45rem;
+      color: var(--text-soft); cursor: pointer; font-size: 0.78rem; padding: 0.15rem 0.5rem;
       flex-shrink: 0; font-family: sans-serif; transition: all 0.15s;
     }
     .url-chip .copy-btn:hover { background: var(--border); color: var(--text); border-color: var(--text-muted); }
     .url-chip .copy-btn.ok { background: var(--success-bg-2); border-color: var(--success-strong); color: var(--success-strong); }
     .feed-actions { display: flex; gap: 0.5rem; flex-shrink: 0; flex-wrap: wrap; justify-content: flex-end; }
+    .bridge-outputs-head {
+      margin-top: 1rem; padding-top: 0.8rem; border-top: 1px solid var(--border);
+      font-size: 0.82rem; color: var(--text-muted); line-height: 1.5;
+    }
+    .bridge-outputs-head a { color: var(--accent); }
+    .bridge-outputs-title {
+      display: block; font-size: 0.72rem; font-weight: 600; color: var(--text-soft);
+      text-transform: uppercase; letter-spacing: 0.05em;
+    }
     .native-endpoints { margin-top: 0.6rem; }
     .native-endpoints summary {
-      font-size: 0.72rem; color: var(--text-dim); cursor: pointer; list-style: none;
-      display: flex; align-items: center; gap: 0.3rem; user-select: none;
+      font-size: 0.88rem; font-weight: 500; color: var(--text-soft); cursor: pointer; list-style: none;
+      display: flex; align-items: center; gap: 0.4rem; user-select: none;
     }
     .native-endpoints summary::-webkit-details-marker { display: none; }
-    .native-endpoints summary::before { content: '▶'; font-size: 0.6rem; transition: transform 0.15s; display: inline-block; }
+    .native-endpoints summary::before { content: '▶'; font-size: 0.65rem; transition: transform 0.15s; display: inline-block; }
     .native-endpoints[open] summary::before { transform: rotate(90deg); }
-    .native-endpoints summary:hover { color: var(--text-muted); }
+    .native-endpoints summary:hover { color: var(--text); }
+    .native-endpoints .summary-note { color: var(--text-muted); font-weight: 400; font-size: 0.82rem; }
+    .native-endpoints .help { font-size: 0.82rem; color: var(--text-muted); line-height: 1.5; }
     .badge-pill {
       display: inline-block; padding: 0.15rem 0.55rem; border-radius: 9999px;
       font-size: 0.7rem; font-weight: 600;
@@ -644,36 +657,36 @@
         {% set gn_count  = split.get('gracenote_count', 0) %}
         {% if mixed_guide %}
         <div class="url-chip" onclick="copyChip(event, this, '{{ base_url }}/feeds/{{ feed.slug }}/m3u/mixed')">
-          <span style="color:var(--text-soft);font-family:sans-serif;font-size:0.7rem;flex-shrink:0">Mixed ({{ standard_total }})</span>
+          <span class="url-chip-label">Mixed ({{ standard_total }})</span>
           <span class="url-chip-text">{{ base_url }}/feeds/{{ feed.slug }}/m3u/mixed</span>
-          <a href="{{ base_url }}/feeds/{{ feed.slug }}/m3u/mixed" target="_blank" onclick="event.stopPropagation()" style="color:var(--text-muted);font-size:0.75rem;flex-shrink:0" title="Open">↗</a>
+          <a href="{{ base_url }}/feeds/{{ feed.slug }}/m3u/mixed" target="_blank" onclick="event.stopPropagation()" class="url-chip-open" title="Open">↗</a>
           <button class="copy-btn" onclick="copyChip(event, this.closest('.url-chip'), '{{ base_url }}/feeds/{{ feed.slug }}/m3u/mixed')">Copy</button>
         </div>
         <div class="url-chip" onclick="copyChip(event, this, '{{ base_url }}/feeds/{{ feed.slug }}/epg.xml')">
-          <span style="color:var(--text-soft);font-family:sans-serif;font-size:0.7rem;flex-shrink:0">EPG</span>
+          <span class="url-chip-label">EPG</span>
           <span class="url-chip-text">{{ base_url }}/feeds/{{ feed.slug }}/epg.xml</span>
-          <a href="{{ base_url }}/feeds/{{ feed.slug }}/epg.xml" target="_blank" onclick="event.stopPropagation()" style="color:var(--text-muted);font-size:0.75rem;flex-shrink:0" title="Open">↗</a>
+          <a href="{{ base_url }}/feeds/{{ feed.slug }}/epg.xml" target="_blank" onclick="event.stopPropagation()" class="url-chip-open" title="Open">↗</a>
           <button class="copy-btn" onclick="copyChip(event, this.closest('.url-chip'), '{{ base_url }}/feeds/{{ feed.slug }}/epg.xml')">Copy</button>
         </div>
         {% elif std_count > 0 %}
         <div class="url-chip" onclick="copyChip(event, this, '{{ base_url }}/feeds/{{ feed.slug }}/m3u')">
-          <span style="color:var(--text-soft);font-family:sans-serif;font-size:0.7rem;flex-shrink:0">Standard ({{ std_count }})</span>
+          <span class="url-chip-label">Standard ({{ std_count }})</span>
           <span class="url-chip-text">{{ base_url }}/feeds/{{ feed.slug }}/m3u</span>
-          <a href="{{ base_url }}/feeds/{{ feed.slug }}/m3u" target="_blank" onclick="event.stopPropagation()" style="color:var(--text-muted);font-size:0.75rem;flex-shrink:0" title="Open">↗</a>
+          <a href="{{ base_url }}/feeds/{{ feed.slug }}/m3u" target="_blank" onclick="event.stopPropagation()" class="url-chip-open" title="Open">↗</a>
           <button class="copy-btn" onclick="copyChip(event, this.closest('.url-chip'), '{{ base_url }}/feeds/{{ feed.slug }}/m3u')">Copy</button>
         </div>
         <div class="url-chip" onclick="copyChip(event, this, '{{ base_url }}/feeds/{{ feed.slug }}/epg.xml')">
-          <span style="color:var(--text-soft);font-family:sans-serif;font-size:0.7rem;flex-shrink:0">EPG</span>
+          <span class="url-chip-label">EPG</span>
           <span class="url-chip-text">{{ base_url }}/feeds/{{ feed.slug }}/epg.xml</span>
-          <a href="{{ base_url }}/feeds/{{ feed.slug }}/epg.xml" target="_blank" onclick="event.stopPropagation()" style="color:var(--text-muted);font-size:0.75rem;flex-shrink:0" title="Open">↗</a>
+          <a href="{{ base_url }}/feeds/{{ feed.slug }}/epg.xml" target="_blank" onclick="event.stopPropagation()" class="url-chip-open" title="Open">↗</a>
           <button class="copy-btn" onclick="copyChip(event, this.closest('.url-chip'), '{{ base_url }}/feeds/{{ feed.slug }}/epg.xml')">Copy</button>
         </div>
         {% endif %}
         {% if gn_count > 0 and not mixed_guide %}
         <div class="url-chip" onclick="copyChip(event, this, '{{ base_url }}/feeds/{{ feed.slug }}/m3u/gracenote')">
-          <span style="color:var(--text-soft);font-family:sans-serif;font-size:0.7rem;flex-shrink:0">Gracenote ({{ gn_count }})</span>
+          <span class="url-chip-label">Gracenote ({{ gn_count }})</span>
           <span class="url-chip-text">{{ base_url }}/feeds/{{ feed.slug }}/m3u/gracenote</span>
-          <a href="{{ base_url }}/feeds/{{ feed.slug }}/m3u/gracenote" target="_blank" onclick="event.stopPropagation()" style="color:var(--text-muted);font-size:0.75rem;flex-shrink:0" title="Open">↗</a>
+          <a href="{{ base_url }}/feeds/{{ feed.slug }}/m3u/gracenote" target="_blank" onclick="event.stopPropagation()" class="url-chip-open" title="Open">↗</a>
           <button class="copy-btn" onclick="copyChip(event, this.closest('.url-chip'), '{{ base_url }}/feeds/{{ feed.slug }}/m3u/gracenote')">Copy</button>
         </div>
         {% endif %}
@@ -683,15 +696,15 @@
         <summary>Native (scraped-only) endpoints — advanced</summary>
         <div class="feed-urls" style="margin-top:0.5rem">
           <div class="url-chip" onclick="copyChip(event, this, '{{ base_url }}/feeds/{{ feed.slug }}/native/m3u')">
-            <span style="color:var(--text-soft);font-family:sans-serif;font-size:0.7rem;flex-shrink:0">Native M3U ({{ standard_total }})</span>
+            <span class="url-chip-label">Native M3U ({{ standard_total }})</span>
             <span class="url-chip-text">{{ base_url }}/feeds/{{ feed.slug }}/native/m3u</span>
-            <a href="{{ base_url }}/feeds/{{ feed.slug }}/native/m3u" target="_blank" onclick="event.stopPropagation()" style="color:var(--text-muted);font-size:0.75rem;flex-shrink:0" title="Open">↗</a>
+            <a href="{{ base_url }}/feeds/{{ feed.slug }}/native/m3u" target="_blank" onclick="event.stopPropagation()" class="url-chip-open" title="Open">↗</a>
             <button class="copy-btn" onclick="copyChip(event, this.closest('.url-chip'), '{{ base_url }}/feeds/{{ feed.slug }}/native/m3u')">Copy</button>
           </div>
           <div class="url-chip" onclick="copyChip(event, this, '{{ base_url }}/feeds/{{ feed.slug }}/native/epg.xml')">
-            <span style="color:var(--text-soft);font-family:sans-serif;font-size:0.7rem;flex-shrink:0">Native EPG</span>
+            <span class="url-chip-label">Native EPG</span>
             <span class="url-chip-text">{{ base_url }}/feeds/{{ feed.slug }}/native/epg.xml</span>
-            <a href="{{ base_url }}/feeds/{{ feed.slug }}/native/epg.xml" target="_blank" onclick="event.stopPropagation()" style="color:var(--text-muted);font-size:0.75rem;flex-shrink:0" title="Open">↗</a>
+            <a href="{{ base_url }}/feeds/{{ feed.slug }}/native/epg.xml" target="_blank" onclick="event.stopPropagation()" class="url-chip-open" title="Open">↗</a>
             <button class="copy-btn" onclick="copyChip(event, this.closest('.url-chip'), '{{ base_url }}/feeds/{{ feed.slug }}/native/epg.xml')">Copy</button>
           </div>
         </div>
@@ -703,141 +716,141 @@
         <p class="help" style="margin-top:0.5rem">The feed's {{ standard_total }} standard channel{{ 's' if standard_total != 1 else '' }} with scraped EPG data only — Gracenote assignments and bridge-only DRM channels are ignored. Use these together as a single source for clients that prefer one EPG backend.</p>
       </details>
 
+      {% if prismcast_enabled or fc_player_enabled or fc_player_ah4c_configured %}
+      <div class="bridge-outputs-head">
+        <span class="bridge-outputs-title">Bridge outputs</span>
+        <span>DRM-only channels, one playlist per capture method you've set up on <a href="/admin/bridge">Bridge</a>. Add these alongside the regular feed above, not instead of it.</span>
+      </div>
+      {% endif %}
+      {% if prismcast_enabled %}
       <details class="native-endpoints">
-        <summary>PrismCast output <span class="badge-pill pill-beta">Beta</span>{% if prismcast_enabled and split.get('bridged_count', 0) %} <span style="color:var(--text-dim);font-weight:400;font-size:0.75rem">— includes {{ split.get('bridged_count', 0) }} bridge-only channel{{ 's' if split.get('bridged_count', 0) != 1 else '' }}{% if standard_total %} plus {{ standard_total }} standard{% endif %}</span>{% endif %}</summary>
+        <summary>PrismCast Capture <span class="summary-note">— browser capture, no extra hardware{% if split.get('bridged_count', 0) %} · {{ split.get('bridged_count', 0) }} bridge-only channel{{ 's' if split.get('bridged_count', 0) != 1 else '' }}{% endif %}</span></summary>
         <div class="feed-urls" style="margin-top:0.5rem">
-          {% if prismcast_enabled %}
           {% if mixed_guide %}
           <div class="url-chip" onclick="copyChip(event, this, '{{ base_url }}/feeds/{{ feed.slug }}/m3u/prismcast/mixed')">
-            <span style="color:var(--text-soft);font-family:sans-serif;font-size:0.7rem;flex-shrink:0">PrismCast Mixed M3U ({{ split.get('prismcast_count', 0) + split.get('prismcast_gracenote_count', 0) }})</span>
+            <span class="url-chip-label">PrismCast Mixed M3U ({{ split.get('prismcast_count', 0) + split.get('prismcast_gracenote_count', 0) }})</span>
             <span class="url-chip-text">{{ base_url }}/feeds/{{ feed.slug }}/m3u/prismcast/mixed</span>
-            <a href="{{ base_url }}/feeds/{{ feed.slug }}/m3u/prismcast/mixed" target="_blank" onclick="event.stopPropagation()" style="color:var(--text-muted);font-size:0.75rem;flex-shrink:0" title="Open">↗</a>
+            <a href="{{ base_url }}/feeds/{{ feed.slug }}/m3u/prismcast/mixed" target="_blank" onclick="event.stopPropagation()" class="url-chip-open" title="Open">↗</a>
             <button class="copy-btn" onclick="copyChip(event, this.closest('.url-chip'), '{{ base_url }}/feeds/{{ feed.slug }}/m3u/prismcast/mixed')">Copy</button>
           </div>
           {% else %}
           <div class="url-chip" onclick="copyChip(event, this, '{{ base_url }}/feeds/{{ feed.slug }}/m3u/prismcast')">
-            <span style="color:var(--text-soft);font-family:sans-serif;font-size:0.7rem;flex-shrink:0">PrismCast M3U ({{ split.get('prismcast_count', standard_total) }})</span>
+            <span class="url-chip-label">PrismCast M3U ({{ split.get('prismcast_count', standard_total) }})</span>
             <span class="url-chip-text">{{ base_url }}/feeds/{{ feed.slug }}/m3u/prismcast</span>
-            <a href="{{ base_url }}/feeds/{{ feed.slug }}/m3u/prismcast" target="_blank" onclick="event.stopPropagation()" style="color:var(--text-muted);font-size:0.75rem;flex-shrink:0" title="Open">↗</a>
+            <a href="{{ base_url }}/feeds/{{ feed.slug }}/m3u/prismcast" target="_blank" onclick="event.stopPropagation()" class="url-chip-open" title="Open">↗</a>
             <button class="copy-btn" onclick="copyChip(event, this.closest('.url-chip'), '{{ base_url }}/feeds/{{ feed.slug }}/m3u/prismcast')">Copy</button>
           </div>
           {% if split.get('prismcast_gracenote_count', 0) %}
           <div class="url-chip" onclick="copyChip(event, this, '{{ base_url }}/feeds/{{ feed.slug }}/m3u/prismcast/gracenote')">
-            <span style="color:var(--text-soft);font-family:sans-serif;font-size:0.7rem;flex-shrink:0">PrismCast Gracenote M3U ({{ split.get('prismcast_gracenote_count', 0) }})</span>
+            <span class="url-chip-label">PrismCast Gracenote M3U ({{ split.get('prismcast_gracenote_count', 0) }})</span>
             <span class="url-chip-text">{{ base_url }}/feeds/{{ feed.slug }}/m3u/prismcast/gracenote</span>
-            <a href="{{ base_url }}/feeds/{{ feed.slug }}/m3u/prismcast/gracenote" target="_blank" onclick="event.stopPropagation()" style="color:var(--text-muted);font-size:0.75rem;flex-shrink:0" title="Open">↗</a>
+            <a href="{{ base_url }}/feeds/{{ feed.slug }}/m3u/prismcast/gracenote" target="_blank" onclick="event.stopPropagation()" class="url-chip-open" title="Open">↗</a>
             <button class="copy-btn" onclick="copyChip(event, this.closest('.url-chip'), '{{ base_url }}/feeds/{{ feed.slug }}/m3u/prismcast/gracenote')">Copy</button>
           </div>
           {% endif %}
           {% endif %}
-          {% endif %}
           <div class="url-chip" onclick="copyChip(event, this, '{{ base_url }}/feeds/{{ feed.slug }}/epg.xml')">
-            <span style="color:var(--text-soft);font-family:sans-serif;font-size:0.7rem;flex-shrink:0">EPG</span>
+            <span class="url-chip-label">EPG</span>
             <span class="url-chip-text">{{ base_url }}/feeds/{{ feed.slug }}/epg.xml</span>
-            <a href="{{ base_url }}/feeds/{{ feed.slug }}/epg.xml" target="_blank" onclick="event.stopPropagation()" style="color:var(--text-muted);font-size:0.75rem;flex-shrink:0" title="Open">↗</a>
+            <a href="{{ base_url }}/feeds/{{ feed.slug }}/epg.xml" target="_blank" onclick="event.stopPropagation()" class="url-chip-open" title="Open">↗</a>
             <button class="copy-btn" onclick="copyChip(event, this.closest('.url-chip'), '{{ base_url }}/feeds/{{ feed.slug }}/epg.xml')">Copy</button>
           </div>
         </div>
-        {% if prismcast_enabled %}
         <div style="margin-top:0.6rem">
           <button class="btn btn-dvr" title="Register this feed's PrismCast output as a custom M3U source in Channels DVR"
                   onclick='pushPrismcastToDvr({{ feed.id }}, {{ feed.name|tojson }}, {{ split.get("prismcast_count", 0) + (split.get("prismcast_gracenote_count", 0) if mixed_guide else 0) }}, {{ 0 if mixed_guide else split.get("prismcast_gracenote_count", 0) }}, this)'
                   {% if not split.get('prismcast_count', 0) and not split.get('prismcast_gracenote_count', 0) %}disabled title="No PrismCast channels in this feed"{% endif %}>📺 Add PrismCast to Channels DVR</button>
         </div>
-        {% endif %}
-        <p class="help" style="margin-top:0.5rem">{% if prismcast_enabled %}Bridge-only: just the DRM channels routed through your PrismCast server, not the whole catalog — import alongside the regular feed M3U, not instead of it, since the regular output already excludes these. Like the regular feed, PrismCast splits into a standard-guide M3U (pairs with this EPG) and a Gracenote M3U (guide routed through Gracenote) — import only one of those two variants to avoid duplicate channels. The button above registers both as distinct sources (named "… PrismCast") separate from the standard push.{% else %}Configure a PrismCast server in Settings to publish a ready-to-import DRM-bridge M3U here.{% endif %}</p>
+        <p class="help" style="margin-top:0.5rem">Bridge-only: just the DRM channels routed through your PrismCast server, not the whole catalog — import alongside the regular feed M3U, not instead of it, since the regular output already excludes these. Like the regular feed, PrismCast splits into a standard-guide M3U (pairs with this EPG) and a Gracenote M3U (guide routed through Gracenote) — import only one of those two variants to avoid duplicate channels. The button above registers both as distinct sources (named "… PrismCast") separate from the standard push.</p>
       </details>
+      {% endif %}
 
       {% set android_bridge_total = split.get('drm_bridge_count', 0) + split.get('drm_bridge_gracenote_count', 0) %}
+      {% if fc_player_enabled %}
       <details class="native-endpoints">
-        <summary>FastChannels Android Bridge Channels{% if fc_player_enabled and android_bridge_total %} <span style="color:var(--text-dim);font-weight:400;font-size:0.75rem">({{ android_bridge_total }} channel{{ 's' if android_bridge_total != 1 else '' }}){% endif %}</span></summary>
+        <summary>HDMI Capture <span class="summary-note">— FastChannels Player on one device, one stream at a time{% if android_bridge_total %} · {{ android_bridge_total }} channel{{ 's' if android_bridge_total != 1 else '' }}{% endif %}</span></summary>
         <div class="feed-urls" style="margin-top:0.5rem">
-          {% if fc_player_enabled %}
           {% if mixed_guide %}
           <div class="url-chip" onclick="copyChip(event, this, '{{ base_url }}/feeds/{{ feed.slug }}/m3u/fc-player/mixed')">
-            <span style="color:var(--text-soft);font-family:sans-serif;font-size:0.7rem;flex-shrink:0">Android Bridge Mixed M3U ({{ split.get('drm_bridge_count', 0) + split.get('drm_bridge_gracenote_count', 0) }})</span>
+            <span class="url-chip-label">HDMI Mixed M3U ({{ split.get('drm_bridge_count', 0) + split.get('drm_bridge_gracenote_count', 0) }})</span>
             <span class="url-chip-text">{{ base_url }}/feeds/{{ feed.slug }}/m3u/fc-player/mixed</span>
-            <a href="{{ base_url }}/feeds/{{ feed.slug }}/m3u/fc-player/mixed" target="_blank" onclick="event.stopPropagation()" style="color:var(--text-muted);font-size:0.75rem;flex-shrink:0" title="Open">↗</a>
+            <a href="{{ base_url }}/feeds/{{ feed.slug }}/m3u/fc-player/mixed" target="_blank" onclick="event.stopPropagation()" class="url-chip-open" title="Open">↗</a>
             <button class="copy-btn" onclick="copyChip(event, this.closest('.url-chip'), '{{ base_url }}/feeds/{{ feed.slug }}/m3u/fc-player/mixed')">Copy</button>
           </div>
           {% else %}
           <div class="url-chip" onclick="copyChip(event, this, '{{ base_url }}/feeds/{{ feed.slug }}/m3u/fc-player')">
-            <span style="color:var(--text-soft);font-family:sans-serif;font-size:0.7rem;flex-shrink:0">Android Bridge M3U ({{ split.get('drm_bridge_count', 0) }})</span>
+            <span class="url-chip-label">HDMI M3U ({{ split.get('drm_bridge_count', 0) }})</span>
             <span class="url-chip-text">{{ base_url }}/feeds/{{ feed.slug }}/m3u/fc-player</span>
-            <a href="{{ base_url }}/feeds/{{ feed.slug }}/m3u/fc-player" target="_blank" onclick="event.stopPropagation()" style="color:var(--text-muted);font-size:0.75rem;flex-shrink:0" title="Open">↗</a>
+            <a href="{{ base_url }}/feeds/{{ feed.slug }}/m3u/fc-player" target="_blank" onclick="event.stopPropagation()" class="url-chip-open" title="Open">↗</a>
             <button class="copy-btn" onclick="copyChip(event, this.closest('.url-chip'), '{{ base_url }}/feeds/{{ feed.slug }}/m3u/fc-player')">Copy</button>
           </div>
           {% if split.get('drm_bridge_gracenote_count', 0) %}
           <div class="url-chip" onclick="copyChip(event, this, '{{ base_url }}/feeds/{{ feed.slug }}/m3u/fc-player/gracenote')">
-            <span style="color:var(--text-soft);font-family:sans-serif;font-size:0.7rem;flex-shrink:0">Android Bridge Gracenote M3U ({{ split.get('drm_bridge_gracenote_count', 0) }})</span>
+            <span class="url-chip-label">HDMI Gracenote M3U ({{ split.get('drm_bridge_gracenote_count', 0) }})</span>
             <span class="url-chip-text">{{ base_url }}/feeds/{{ feed.slug }}/m3u/fc-player/gracenote</span>
-            <a href="{{ base_url }}/feeds/{{ feed.slug }}/m3u/fc-player/gracenote" target="_blank" onclick="event.stopPropagation()" style="color:var(--text-muted);font-size:0.75rem;flex-shrink:0" title="Open">↗</a>
+            <a href="{{ base_url }}/feeds/{{ feed.slug }}/m3u/fc-player/gracenote" target="_blank" onclick="event.stopPropagation()" class="url-chip-open" title="Open">↗</a>
             <button class="copy-btn" onclick="copyChip(event, this.closest('.url-chip'), '{{ base_url }}/feeds/{{ feed.slug }}/m3u/fc-player/gracenote')">Copy</button>
           </div>
           {% endif %}
           {% endif %}
-          {% endif %}
           <div class="url-chip" onclick="copyChip(event, this, '{{ base_url }}/feeds/{{ feed.slug }}/epg.xml')">
-            <span style="color:var(--text-soft);font-family:sans-serif;font-size:0.7rem;flex-shrink:0">EPG</span>
+            <span class="url-chip-label">EPG</span>
             <span class="url-chip-text">{{ base_url }}/feeds/{{ feed.slug }}/epg.xml</span>
-            <a href="{{ base_url }}/feeds/{{ feed.slug }}/epg.xml" target="_blank" onclick="event.stopPropagation()" style="color:var(--text-muted);font-size:0.75rem;flex-shrink:0" title="Open">↗</a>
+            <a href="{{ base_url }}/feeds/{{ feed.slug }}/epg.xml" target="_blank" onclick="event.stopPropagation()" class="url-chip-open" title="Open">↗</a>
             <button class="copy-btn" onclick="copyChip(event, this.closest('.url-chip'), '{{ base_url }}/feeds/{{ feed.slug }}/epg.xml')">Copy</button>
           </div>
         </div>
-        {% if fc_player_enabled %}
         <div style="margin-top:0.6rem">
           <button class="btn btn-dvr" title="Register this feed's FastChannels Android Bridge output as a custom M3U source in Channels DVR"
                   onclick='pushFcPlayerToDvr({{ feed.id }}, {{ feed.name|tojson }}, {{ split.get("drm_bridge_count", 0) + (split.get("drm_bridge_gracenote_count", 0) if mixed_guide else 0) }}, {{ 0 if mixed_guide else split.get("drm_bridge_gracenote_count", 0) }}, this)'
-                  {% if not split.get('drm_bridge_count', 0) and not split.get('drm_bridge_gracenote_count', 0) %}disabled title="No FastChannels Android Bridge channels in this feed"{% endif %}>📺 Add to Channels DVR</button>
+                  {% if not split.get('drm_bridge_count', 0) and not split.get('drm_bridge_gracenote_count', 0) %}disabled title="No FastChannels Android Bridge channels in this feed"{% endif %}>📺 Add HDMI Capture to Channels DVR</button>
         </div>
-        {% endif %}
-        <p class="help" style="margin-top:0.5rem">{% if fc_player_enabled %}Bridge-only: just the DRM channels that trigger the device, not the whole source — import alongside the regular feed M3U, not instead of it, since the regular output already excludes these. Gracenote-mapped channels split into their own M3U here too — import only one of those two variants to avoid duplicate channels. The button above registers both as distinct sources (named "… Android Bridge") separate from the standard push.{% else %}Configure FastChannels Player in Settings (device IP + encoder/capture stream URL) to publish a ready-to-import feed here.{% endif %}</p>
+        <p class="help" style="margin-top:0.5rem">Bridge-only: just the DRM channels that trigger the device, not the whole source — import alongside the regular feed M3U, not instead of it, since the regular output already excludes these. Gracenote-mapped channels split into their own M3U here too — import only one of those two variants to avoid duplicate channels. The button above registers both as distinct sources (named "… Android Bridge") separate from the standard push.</p>
       </details>
+      {% endif %}
 
+      {% if fc_player_ah4c_configured %}
       <details class="native-endpoints">
-        <summary>FastChannels Android Bridge Channels (ah4c){% if fc_player_ah4c_configured and android_bridge_total %} <span style="color:var(--text-dim);font-weight:400;font-size:0.75rem">({{ android_bridge_total }} channel{{ 's' if android_bridge_total != 1 else '' }}){% endif %}</span></summary>
+        <summary>ah4c Capture <span class="summary-note">— FastChannels Player across ah4c's tuners, several streams at once{% if android_bridge_total %} · {{ android_bridge_total }} channel{{ 's' if android_bridge_total != 1 else '' }}{% endif %}</span></summary>
         <div class="feed-urls" style="margin-top:0.5rem">
-          {% if fc_player_ah4c_configured %}
           {% if mixed_guide %}
           <div class="url-chip" onclick="copyChip(event, this, '{{ base_url }}/feeds/{{ feed.slug }}/m3u/fc-player/ah4c/mixed')">
-            <span style="color:var(--text-soft);font-family:sans-serif;font-size:0.7rem;flex-shrink:0">Android Bridge Mixed M3U via ah4c ({{ split.get('drm_bridge_count', 0) + split.get('drm_bridge_gracenote_count', 0) }})</span>
+            <span class="url-chip-label">ah4c Mixed M3U ({{ split.get('drm_bridge_count', 0) + split.get('drm_bridge_gracenote_count', 0) }})</span>
             <span class="url-chip-text">{{ base_url }}/feeds/{{ feed.slug }}/m3u/fc-player/ah4c/mixed</span>
-            <a href="{{ base_url }}/feeds/{{ feed.slug }}/m3u/fc-player/ah4c/mixed" target="_blank" onclick="event.stopPropagation()" style="color:var(--text-muted);font-size:0.75rem;flex-shrink:0" title="Open">↗</a>
+            <a href="{{ base_url }}/feeds/{{ feed.slug }}/m3u/fc-player/ah4c/mixed" target="_blank" onclick="event.stopPropagation()" class="url-chip-open" title="Open">↗</a>
             <button class="copy-btn" onclick="copyChip(event, this.closest('.url-chip'), '{{ base_url }}/feeds/{{ feed.slug }}/m3u/fc-player/ah4c/mixed')">Copy</button>
           </div>
           {% else %}
           <div class="url-chip" onclick="copyChip(event, this, '{{ base_url }}/feeds/{{ feed.slug }}/m3u/fc-player/ah4c')">
-            <span style="color:var(--text-soft);font-family:sans-serif;font-size:0.7rem;flex-shrink:0">Android Bridge M3U via ah4c ({{ split.get('drm_bridge_count', 0) }})</span>
+            <span class="url-chip-label">ah4c M3U ({{ split.get('drm_bridge_count', 0) }})</span>
             <span class="url-chip-text">{{ base_url }}/feeds/{{ feed.slug }}/m3u/fc-player/ah4c</span>
-            <a href="{{ base_url }}/feeds/{{ feed.slug }}/m3u/fc-player/ah4c" target="_blank" onclick="event.stopPropagation()" style="color:var(--text-muted);font-size:0.75rem;flex-shrink:0" title="Open">↗</a>
+            <a href="{{ base_url }}/feeds/{{ feed.slug }}/m3u/fc-player/ah4c" target="_blank" onclick="event.stopPropagation()" class="url-chip-open" title="Open">↗</a>
             <button class="copy-btn" onclick="copyChip(event, this.closest('.url-chip'), '{{ base_url }}/feeds/{{ feed.slug }}/m3u/fc-player/ah4c')">Copy</button>
           </div>
           {% if split.get('drm_bridge_gracenote_count', 0) %}
           <div class="url-chip" onclick="copyChip(event, this, '{{ base_url }}/feeds/{{ feed.slug }}/m3u/fc-player/ah4c/gracenote')">
-            <span style="color:var(--text-soft);font-family:sans-serif;font-size:0.7rem;flex-shrink:0">Android Bridge Gracenote M3U via ah4c ({{ split.get('drm_bridge_gracenote_count', 0) }})</span>
+            <span class="url-chip-label">ah4c Gracenote M3U ({{ split.get('drm_bridge_gracenote_count', 0) }})</span>
             <span class="url-chip-text">{{ base_url }}/feeds/{{ feed.slug }}/m3u/fc-player/ah4c/gracenote</span>
-            <a href="{{ base_url }}/feeds/{{ feed.slug }}/m3u/fc-player/ah4c/gracenote" target="_blank" onclick="event.stopPropagation()" style="color:var(--text-muted);font-size:0.75rem;flex-shrink:0" title="Open">↗</a>
+            <a href="{{ base_url }}/feeds/{{ feed.slug }}/m3u/fc-player/ah4c/gracenote" target="_blank" onclick="event.stopPropagation()" class="url-chip-open" title="Open">↗</a>
             <button class="copy-btn" onclick="copyChip(event, this.closest('.url-chip'), '{{ base_url }}/feeds/{{ feed.slug }}/m3u/fc-player/ah4c/gracenote')">Copy</button>
           </div>
           {% endif %}
           {% endif %}
           <div class="url-chip" onclick="copyChip(event, this, '{{ base_url }}/feeds/{{ feed.slug }}/epg.xml')">
-            <span style="color:var(--text-soft);font-family:sans-serif;font-size:0.7rem;flex-shrink:0">EPG</span>
+            <span class="url-chip-label">EPG</span>
             <span class="url-chip-text">{{ base_url }}/feeds/{{ feed.slug }}/epg.xml</span>
-            <a href="{{ base_url }}/feeds/{{ feed.slug }}/epg.xml" target="_blank" onclick="event.stopPropagation()" style="color:var(--text-muted);font-size:0.75rem;flex-shrink:0" title="Open">↗</a>
+            <a href="{{ base_url }}/feeds/{{ feed.slug }}/epg.xml" target="_blank" onclick="event.stopPropagation()" class="url-chip-open" title="Open">↗</a>
             <button class="copy-btn" onclick="copyChip(event, this.closest('.url-chip'), '{{ base_url }}/feeds/{{ feed.slug }}/epg.xml')">Copy</button>
           </div>
-          {% endif %}
         </div>
-        {% if fc_player_ah4c_configured %}
         <div style="margin-top:0.6rem">
           <button class="btn btn-dvr" title="Register this feed's ah4c-routed FastChannels Android Bridge output as a custom M3U source in Channels DVR"
                   onclick='pushFcPlayerAh4cToDvr({{ feed.id }}, {{ feed.name|tojson }}, {{ split.get("drm_bridge_count", 0) + (split.get("drm_bridge_gracenote_count", 0) if mixed_guide else 0) }}, {{ 0 if mixed_guide else split.get("drm_bridge_gracenote_count", 0) }}, this)'
-                  {% if not split.get('drm_bridge_count', 0) and not split.get('drm_bridge_gracenote_count', 0) %}disabled title="No FastChannels Android Bridge channels in this feed"{% endif %}>📺 Add to Channels DVR</button>
+                  {% if not split.get('drm_bridge_count', 0) and not split.get('drm_bridge_gracenote_count', 0) %}disabled title="No FastChannels Android Bridge channels in this feed"{% endif %}>📺 Add ah4c Capture to Channels DVR</button>
         </div>
-        {% endif %}
-        <p class="help" style="margin-top:0.5rem">{% if fc_player_ah4c_configured %}Same channels as the section above, but every entry is routed through <a href="https://github.com/sullrich/ah4c" target="_blank" rel="noopener">ah4c</a>'s own <code>/play/tuner/&lt;channel&gt;</code> instead of the fixed encoder URL — use this if your HDMI encoder isn't the one FastChannels documents directly. Import only one of the two sections per source to avoid duplicate channels.{% else %}Enable ah4c support in Settings (FastChannels Player card) to publish a ready-to-import ah4c-routed feed here.{% endif %}</p>
+        <p class="help" style="margin-top:0.5rem">Same channels as HDMI Capture, but every entry is routed through <a href="https://github.com/sullrich/ah4c" target="_blank" rel="noopener">ah4c</a>'s own <code>/play/tuner/&lt;channel&gt;</code> instead of the fixed encoder URL — use this if your HDMI encoder isn't the one FastChannels documents directly. If you run both HDMI Capture and ah4c Capture, import only one of the two to avoid duplicate channels.</p>
       </details>
+      {% endif %}
     </div>
     {% endfor %}
   </div>
