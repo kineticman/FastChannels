@@ -1582,7 +1582,7 @@ async function pushToDvr(id, name, count, standardCount, btn, force = false) {
     const r = await fetch(`/api/feeds/${id}/push-to-dvr`, {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify(force || count > 750 ? {force: true} : {}),
+      body: JSON.stringify(dvrPushBody(id, force || count > 750)),
     });
     const data = await r.json();
     if (!r.ok) {
@@ -1593,6 +1593,13 @@ async function pushToDvr(id, name, count, standardCount, btn, force = false) {
       } else if (r.status === 502 && data.error) {
         // Channels DVR was reachable but rejected the request — show its actual message.
         alert('Channels DVR rejected the request:\n\n' + data.error);
+      } else if (r.status === 409 && data.requires_mixed_confirm) {
+        // Channels DVR may not support mixed guide sources; the user can override.
+        btn.disabled = false;
+        btn.textContent = orig;
+        if (!confirm(data.error + '\n\nAdd it anyway?')) return;
+        _mixedGuideConfirmed.add(id);
+        return pushToDvr(id, name, count, standardCount, btn, true);
       } else if (r.status === 409 && data.requires_confirm && !force) {
         btn.disabled = false;
         btn.textContent = orig;
@@ -1636,7 +1643,7 @@ async function pushNativeToDvr(id, name, count, btn, force = false) {
     const r = await fetch(`/api/feeds/${id}/push-native-to-dvr`, {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify(force || count > 750 ? {force: true} : {}),
+      body: JSON.stringify(dvrPushBody(id, force || count > 750)),
     });
     const data = await r.json();
     if (!r.ok) {
@@ -1646,6 +1653,13 @@ async function pushNativeToDvr(id, name, count, btn, force = false) {
         alert('Could not reach Channels DVR.\n\nGo to Settings → Channels DVR and use the Test Connection button to verify your server URL is correct and reachable.');
       } else if (r.status === 502 && data.error) {
         alert('Channels DVR rejected the request:\n\n' + data.error);
+      } else if (r.status === 409 && data.requires_mixed_confirm) {
+        // Channels DVR may not support mixed guide sources; the user can override.
+        btn.disabled = false;
+        btn.textContent = orig;
+        if (!confirm(data.error + '\n\nAdd it anyway?')) return;
+        _mixedGuideConfirmed.add(id);
+        return pushNativeToDvr(id, name, count, btn, true);
       } else if (r.status === 409 && data.requires_confirm && !force) {
         btn.disabled = false;
         btn.textContent = orig;
@@ -1690,7 +1704,7 @@ async function pushPrismcastToDvr(id, name, stdCount, gnCount, btn, force = fals
     const r = await fetch(`/api/feeds/${id}/push-prismcast-to-dvr`, {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify(force || largest > 750 ? {force: true} : {}),
+      body: JSON.stringify(dvrPushBody(id, force || largest > 750)),
     });
     const data = await r.json();
     if (!r.ok) {
@@ -1700,6 +1714,13 @@ async function pushPrismcastToDvr(id, name, stdCount, gnCount, btn, force = fals
         alert('Could not reach Channels DVR.\n\nGo to Settings → Channels DVR and use the Test Connection button to verify your server URL is correct and reachable.\n\nNote: if FastChannels and Channels DVR are on the same machine, use its LAN IP address — not localhost or 127.0.0.1.');
       } else if (r.status === 502 && data.error) {
         alert('Channels DVR rejected the request:\n\n' + data.error);
+      } else if (r.status === 409 && data.requires_mixed_confirm) {
+        // Channels DVR may not support mixed guide sources; the user can override.
+        btn.disabled = false;
+        btn.textContent = orig;
+        if (!confirm(data.error + '\n\nAdd it anyway?')) return;
+        _mixedGuideConfirmed.add(id);
+        return pushPrismcastToDvr(id, name, stdCount, gnCount, btn, true);
       } else if (r.status === 409 && data.requires_confirm && !force) {
         btn.disabled = false;
         btn.textContent = orig;
@@ -1744,7 +1765,7 @@ async function pushFcPlayerAh4cToDvr(id, name, stdCount, gnCount, btn, force = f
     const r = await fetch(`/api/feeds/${id}/push-fc-player-ah4c-to-dvr`, {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify(force || largest > 750 ? {force: true} : {}),
+      body: JSON.stringify(dvrPushBody(id, force || largest > 750)),
     });
     const data = await r.json();
     if (!r.ok) {
@@ -1754,6 +1775,13 @@ async function pushFcPlayerAh4cToDvr(id, name, stdCount, gnCount, btn, force = f
         alert('Could not reach Channels DVR.\n\nGo to Settings → Channels DVR and use the Test Connection button to verify your server URL is correct and reachable.\n\nNote: if FastChannels and Channels DVR are on the same machine, use its LAN IP address — not localhost or 127.0.0.1.');
       } else if (r.status === 502 && data.error) {
         alert('Channels DVR rejected the request:\n\n' + data.error);
+      } else if (r.status === 409 && data.requires_mixed_confirm) {
+        // Channels DVR may not support mixed guide sources; the user can override.
+        btn.disabled = false;
+        btn.textContent = orig;
+        if (!confirm(data.error + '\n\nAdd it anyway?')) return;
+        _mixedGuideConfirmed.add(id);
+        return pushFcPlayerAh4cToDvr(id, name, stdCount, gnCount, btn, true);
       } else if (r.status === 409 && data.requires_confirm && !force) {
         btn.disabled = false;
         btn.textContent = orig;
@@ -1799,7 +1827,7 @@ async function pushFcPlayerToDvr(id, name, stdCount, gnCount, btn, force = false
     const r = await fetch(`/api/feeds/${id}/push-fc-player-to-dvr`, {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify(force || largest > 750 ? {force: true} : {}),
+      body: JSON.stringify(dvrPushBody(id, force || largest > 750)),
     });
     const data = await r.json();
     if (!r.ok) {
@@ -1809,6 +1837,13 @@ async function pushFcPlayerToDvr(id, name, stdCount, gnCount, btn, force = false
         alert('Could not reach Channels DVR.\n\nGo to Settings → Channels DVR and use the Test Connection button to verify your server URL is correct and reachable.\n\nNote: if FastChannels and Channels DVR are on the same machine, use its LAN IP address — not localhost or 127.0.0.1.');
       } else if (r.status === 502 && data.error) {
         alert('Channels DVR rejected the request:\n\n' + data.error);
+      } else if (r.status === 409 && data.requires_mixed_confirm) {
+        // Channels DVR may not support mixed guide sources; the user can override.
+        btn.disabled = false;
+        btn.textContent = orig;
+        if (!confirm(data.error + '\n\nAdd it anyway?')) return;
+        _mixedGuideConfirmed.add(id);
+        return pushFcPlayerToDvr(id, name, stdCount, gnCount, btn, true);
       } else if (r.status === 409 && data.requires_confirm && !force) {
         btn.disabled = false;
         btn.textContent = orig;
@@ -1900,6 +1935,16 @@ function _prewarmFeed(feedData, statusEl) {
       }
     }).catch(() => { done++; });
   }
+}
+
+// Feeds whose mixed-guide push the user chose to send despite a Channels DVR
+// version/track warning (this page load only).
+const _mixedGuideConfirmed = new Set();
+function dvrPushBody(feedId, force) {
+  return {
+    ...(force ? {force: true} : {}),
+    ...(_mixedGuideConfirmed.has(feedId) ? {confirm_mixed: true} : {}),
+  };
 }
 
 // ── After a mixed-mode push: offer to remove the now-redundant Gracenote source ──

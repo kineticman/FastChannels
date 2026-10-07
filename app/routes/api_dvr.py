@@ -99,28 +99,47 @@ def _parse_dvr_version(version: str) -> tuple[int, ...] | None:
 
 
 def _mixed_guide_unsupported(dvr_url: str):
-    """A 409 response if this Channels DVR is too old for a mixed-guide source,
-    else None. An older server accepts the push but ignores the Gracenote IDs,
-    leaving those channels with no guide and no error anywhere.
+    """A 409 the user can override if this Channels DVR may not support a
+    mixed-guide source, else None. A server without the feature accepts the
+    push but ignores the Gracenote IDs, leaving those channels with no guide
+    and no error anywhere.
 
-    Only a version we can read and parse blocks the push: if /status can't be
-    fetched or has an unfamiliar version string, carry on and let the push
+    Two cases, both read from /status:
+      * version older than _MIXED_GUIDE_MIN_DVR_VERSION — the feature isn't there;
+      * a new enough version on the stable track — the feature shipped in
+        pre-releases and we can't tell from here whether stable has it yet.
+    The request can carry confirm_mixed=true to push anyway. If /status can't
+    be fetched or has an unfamiliar version string, carry on and let the push
     itself report any connection problem.
     """
+    if (request.get_json(silent=True) or {}).get('confirm_mixed'):
+        return None
     try:
         r = _req.get(f"{dvr_url}/status", timeout=8, verify=False)
         r.raise_for_status()
-        version = str(r.json().get('version') or '')
+        status = r.json()
+        version = str(status.get('version') or '')
     except Exception:
         return None
     parsed = _parse_dvr_version(version)
-    if parsed is None or parsed >= _MIXED_GUIDE_MIN_DVR_VERSION:
+    if parsed is None:
+        return None
+    if parsed < _MIXED_GUIDE_MIN_DVR_VERSION:
+        error = (f'Channels DVR {version} is too old for mixed guide mode, which needs '
+                 '2026.08.25 or newer. Gracenote channels in this feed would show no guide. '
+                 'Update Channels DVR, or switch this feed back to separate standard + '
+                 'Gracenote playlists.')
+    elif status.get('prerelease') is False:
+        error = (f'Channels DVR {version} is on the stable track. Mixed guide sources '
+                 'arrived in the pre-release track and may not be in stable yet; if they '
+                 "aren't, Gracenote channels in this feed will show no guide.")
+    else:
         return None
     return jsonify({
-        'error': f'Channels DVR {version} is too old for mixed guide mode, which needs '
-                 '2026.08.25 or newer. Update Channels DVR, or switch this feed back to '
-                 'separate standard + Gracenote playlists.',
+        'error': error,
+        'requires_mixed_confirm': True,
         'dvr_version': version,
+        'dvr_prerelease': status.get('prerelease'),
     }), 409
 
 
