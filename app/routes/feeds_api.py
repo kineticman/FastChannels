@@ -204,6 +204,8 @@ def preview_order():
         except (TypeError, ValueError):
             return jsonify({'error': 'order must contain integer channel ids'}), 400
         num_map = build_manual_order_map(stubs, order_ids, start)
+        # Members the overlaid order doesn't cover get appended after it.
+        placed_ids = set(order_ids)
     else:
         stored = {}
         if feed is not None:
@@ -212,6 +214,10 @@ def preview_order():
                 for r in FeedChannelNumber.query.filter_by(feed_id=feed.id).all()
             }
         num_map = _build_feed_chnum_map(stubs, start, stored_numbers=stored)
+        # With a saved number pool, members that have no stored number are
+        # slotted into whatever numbers are free (gaps first, then the end).
+        # No pool means everything is numbered fresh, so nothing is "new".
+        placed_ids = set(stored) if stored else None
     app_map = num_map
     num_map = apply_provider_numbers(stubs, num_map)
     # Rows whose number is fixed outside this feed's ordering (a provider number
@@ -233,6 +239,11 @@ def preview_order():
                             or getattr(ch, 'pinned_chno', None)),
         'feed_pinned': ch.id in feed_pinned_ids,
         'gracenote':   ch.id in gn_ids,
+        # Newly matched since the order was saved -- sits outside the sorted
+        # order until the user re-sorts. Fixed-number rows never move, so skip.
+        'new':         bool(placed_ids is not None and ch.id not in placed_ids
+                            and ch.id not in fixed_ids
+                            and not (getattr(ch, 'number_pinned', False) and ch.number is not None)),
     } for ch in stubs]
     rows.sort(key=lambda r: chnum_sort_key(r['number']) + (r['name'].lower(),))
     return jsonify({'start': start, 'channels': rows})

@@ -967,6 +967,7 @@
           <span id="ord-note"></span>
           <button class="ch-bar-btn" type="button" onclick="sortOrderBySourceName()">Sort by source, then name</button>
         </div>
+        <div class="ch-src-hint" id="ord-new-hint" style="display:none"></div>
         <div class="ord-list" id="order-list"></div>
         <div class="ord-hint">
           Sort or drag rows to reorder, then save the feed. Locked and provider numbers stay fixed, so those rows may appear outside the sorted groups. tvg-chno is reassigned sequentially from the starting number as you go.
@@ -2185,6 +2186,16 @@ function updateOrderNote() {
   if (gn) text += ` · ${gn} in Gracenote M3U`;
   if (_orderDirty) text += ' · reordered — Save Feed to apply';
   document.getElementById('ord-note').textContent = text;
+
+  // Channels matched since the order was saved keep everyone else's number
+  // stable by taking whatever numbers are free, which breaks a sorted list.
+  const fresh  = _orderRows.filter(r => r.new).length;
+  const hintEl = document.getElementById('ord-new-hint');
+  hintEl.style.display = fresh ? '' : 'none';
+  if (fresh) {
+    hintEl.textContent = `⚠ ${fresh} newly matched channel${fresh === 1 ? ' was' : 's were'} placed in free numbers, `
+      + 'so the list may no longer be in order. Use “Sort by source, then name” to tidy it, then save the feed.';
+  }
 }
 
 // Mirror of the server's numbering rule: pinned rows keep their master number
@@ -2281,6 +2292,7 @@ async function sortOrderBySourceName() {
     a.name.localeCompare(b.name, undefined, {sensitivity: 'base'}) ||
     a.id - b.id
   );
+  for (const r of _orderRows) r.new = false;
   _orderDirty = true;
   renumberOrderRows();
   renderOrderList();
