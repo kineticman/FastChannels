@@ -1,8 +1,11 @@
+import logging
 import os
 
 from sqlalchemy import text
 
 from .extensions import db
+
+logger = logging.getLogger(__name__)
 
 _DEFAULT_FEEDS = (
     {
@@ -87,6 +90,48 @@ def _merge_source_name(conn, old_name: str, new_name: str) -> None:
             )
 
         conn.execute(text("DELETE FROM sources WHERE id = :source_id"), {"source_id": old_source_id})
+
+
+def _ensure_app_settings_row(conn) -> None:
+    """Create the app_settings singleton (id=1) if it's missing.
+
+    The one-time migrations below record that they ran by UPDATEing *_done flags
+    on this row, so it has to exist before any of them runs. A bare
+    `INSERT OR IGNORE ... (id) VALUES (1)` is not enough: on a table built by
+    db.create_all() some columns are NOT NULL with only a Python-side default,
+    and OR IGNORE swallows that NOT NULL violation as silently as it swallows a
+    duplicate key — no row, no error (#70). So every NOT NULL column lacking a
+    SQL default is filled in explicitly from the model's default.
+    """
+    if conn.execute(text("SELECT 1 FROM app_settings WHERE id = 1")).fetchone():
+        return
+    from .models import AppSettings
+    values = {"id": 1}
+    # PRAGMA table_info: (cid, name, type, notnull, dflt_value, pk)
+    for _cid, name, _type, notnull, dflt, pk in conn.execute(text("PRAGMA table_info(app_settings)")):
+        if pk or not notnull or dflt is not None:
+            continue
+        col = AppSettings.__table__.columns.get(name)
+        default = getattr(getattr(col, "default", None), "arg", None)
+        values[name] = 0 if default is None or callable(default) else default
+    cols = ", ".join(values)
+    params = ", ".join(f":{k}" for k in values)
+    conn.execute(text(f"INSERT INTO app_settings ({cols}) VALUES ({params})"), values)
+    logger.info("Created app_settings row")
+
+
+def _mark_migration_done(conn, flag: str) -> None:
+    """Set a one-time migration's *_done flag, and say so loudly if it didn't stick.
+
+    An UPDATE that matches no row succeeds silently, which is how a migration
+    ends up re-running against a populated database on the next restart.
+    """
+    result = conn.execute(text(f"UPDATE app_settings SET {flag} = 1 WHERE id = 1"))
+    if result.rowcount != 1:
+        logger.error(
+            "Could not record %s (app_settings row missing) — this one-time "
+            "migration will run again on the next restart", flag,
+        )
 
 
 def ensure_runtime_schema() -> None:
@@ -315,6 +360,7 @@ def ensure_runtime_schema() -> None:
                 # Default off — meant to be flipped on briefly while reproducing a
                 # specific issue (see app/debug_flag.py), not left running.
                 conn.execute(text("ALTER TABLE app_settings ADD COLUMN debug_logging_enabled BOOLEAN NOT NULL DEFAULT 0"))
+            _ensure_app_settings_row(conn)
 
         if "sources" in tables:
             src_cols = {
@@ -556,60 +602,25 @@ def ensure_runtime_schema() -> None:
                 "SET last_seen_at = COALESCE(updated_at, created_at, CURRENT_TIMESTAMP) "
                 "WHERE is_active = 1 AND last_seen_at IS NULL"
             ))
-            # Migration 011: channels that had no gracenote_id of their own but shared a
-            # name with a channel that did were silently routed to the Gracenote M3U by
-            # the cross-source name-matching feature (commit f6d5cd4, reverted).  Set
-            # gracenote_mode='off' on those channels so they stay out of Gracenote
-            # routing even if name matching is re-introduced.
-            # This migration is one-time: once applied it is marked done so it doesn't
-            # keep re-flipping deliberately re-'auto'd channels back to 'off' on restart.
-            _m011_done = conn.execute(
-                text("SELECT migration_011_done FROM app_settings WHERE id = 1")
-            ).fetchone()
-            if (not _m011_done or not _m011_done[0]) and conn.execute(text(
-                "SELECT 1 FROM channels WHERE gracenote_id IS NOT NULL AND gracenote_id != '' LIMIT 1"
-            )).fetchone():
-                conn.execute(text(
-                    "UPDATE channels "
-                    "SET gracenote_mode = 'off' "
-                    "WHERE (gracenote_id IS NULL OR gracenote_id = '') "
-                    "AND gracenote_mode NOT IN ('off', 'manual') "
-                    "AND LOWER(name) IN ("
-                    "    SELECT LOWER(name) FROM channels "
-                    "    WHERE gracenote_id IS NOT NULL AND gracenote_id != ''"
-                    ")"
-                ))
-                conn.execute(text("UPDATE app_settings SET migration_011_done = 1 WHERE id = 1"))
 
-        # Migration 012: clear gracenote_ids that came from the community CSV rather
-        # than the native scraper API.  Channels with gracenote_mode='manual' are left
-        # untouched (user explicitly set them).  Cleared channels get gracenote_mode='off'
-        # so the scraper won't re-populate them from the CSV on the next scrape, and users
-        # can re-assign via the Gracenote helper popup if desired.
-        # This migration is one-time: once applied it is marked done so that community CSV
-        # updates (including the bundled baseline) don't keep clearing scraped IDs on restart.
-        if "channels" in tables and "sources" in tables and "app_settings" in tables:
-            _m012_done = conn.execute(
-                text("SELECT migration_012_done FROM app_settings WHERE id = 1")
-            ).fetchone()
-            if not _m012_done or not _m012_done[0]:
-                from .gracenote_map import lookup_gracenote
-                rows = conn.execute(text(
-                    "SELECT c.id, c.gracenote_id, s.name, c.source_channel_id "
-                    "FROM channels c JOIN sources s ON c.source_id = s.id "
-                    "WHERE c.gracenote_id IS NOT NULL AND c.gracenote_id != '' "
-                    "AND (c.gracenote_mode IS NULL OR c.gracenote_mode NOT IN ('manual', 'off'))"
-                )).fetchall()
-                to_clear = [
-                    row[0] for row in rows
-                    if (m := lookup_gracenote(row[2], row[3])) and m.get('tmsid') == row[1]
-                ]
-                if to_clear:
-                    conn.execute(
-                        text("UPDATE channels SET gracenote_id = NULL, gracenote_mode = 'off' WHERE id = :id"),
-                        [{'id': rid} for rid in to_clear],
-                    )
-                conn.execute(text("UPDATE app_settings SET migration_012_done = 1 WHERE id = 1"))
+        # Migrations 011 and 012 are retired — their flags are still set so the
+        # columns stay meaningful, but neither does any work any more.
+        #   011 set gracenote_mode='off' on channels with no gracenote_id that shared
+        #       a name with a channel that had one (undoing the reverted cross-source
+        #       name-matching feature, f6d5cd4).
+        #   012 cleared gracenote_ids that matched the community CSV and set those
+        #       channels to 'off'.
+        # Both are long done on any install old enough to have needed them: 012 has
+        # been one-time since v2.7.0, and 011 ran on every boot until v4.7.0 gave it
+        # a flag. On a fresh install, though, the flags never got recorded (see
+        # _ensure_app_settings_row), and 011 only marked itself done once it had
+        # found something to change — so both ran against a populated database on
+        # the first restart and wiped every community-mapped Gracenote ID (#70).
+        # An unflagged install today is far more likely one of those than a
+        # pre-v2.7.0 upgrade, so mark both done without running them.
+        if "app_settings" in tables:
+            _mark_migration_done(conn, "migration_011_done")
+            _mark_migration_done(conn, "migration_012_done")
 
         # Migration 025: collapse legacy bare-UUID Vidaa channel IDs into their
         # region-qualified US: counterparts.  Before multi-region support, channels
@@ -677,7 +688,7 @@ def ensure_runtime_schema() -> None:
                         "Migration 025: merged %d / renamed %d Vidaa channel ID(s)",
                         _m025_merged, _m025_renamed,
                     )
-                conn.execute(text("UPDATE app_settings SET migration_025_done = 1 WHERE id = 1"))
+                _mark_migration_done(conn, "migration_025_done")
 
         if "tvtv_program_cache" in tables:
             tvtv_cols = {

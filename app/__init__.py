@@ -137,18 +137,11 @@ def create_app(config_class=Config):
         # such call takes a DB write lock and can stall concurrent requests.
         import os as _os
         if not _os.environ.get('FC_SCHEMA_READY'):
-            # Ensure the app_settings singleton row exists before any schema
-            # migration below runs. Migrations gate their one-time work on raw-SQL
-            # *_done flags UPDATEd against this row; if the row doesn't exist yet,
-            # the UPDATE affects 0 rows and silently no-ops, so a migration never
-            # actually marks itself done and re-runs destructively on the next
-            # restart. This must be a raw INSERT touching only the guaranteed-safe
-            # `id` column — not AppSettings.get(), which SELECTs every ORM-mapped
-            # column and raises "no such column" on upgrades where
-            # ensure_runtime_schema() hasn't added the newest ones yet.
-            from sqlalchemy import text as _text
-            db.session.execute(_text("INSERT OR IGNORE INTO app_settings (id) VALUES (1)"))
-            db.session.commit()
+            # ensure_runtime_schema() also creates the app_settings singleton row,
+            # which its one-time migrations need in order to record that they ran.
+            # Don't reach for AppSettings.get() before it: that SELECTs every
+            # ORM-mapped column and raises "no such column" on upgrades where the
+            # newest ones haven't been added yet.
             ensure_runtime_schema()
         write_timezone_cache(AppSettings.get().timezone_name)
 
