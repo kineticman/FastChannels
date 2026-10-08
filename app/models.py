@@ -231,6 +231,8 @@ class Channel(db.Model):
     proxy_segments    = db.Column(db.Boolean, default=False, nullable=False, server_default=db.text('0'))  # route segments through FC proxy
     page_url          = db.Column(db.Text, nullable=True)                     # original page URL for re-detection
     redetect_on_play  = db.Column(db.Boolean, default=False, nullable=False, server_default=db.text('0'))  # re-scrape page_url at play time (TTL 5 min)
+    guide_title       = db.Column(db.Text, nullable=True)                     # placeholder-guide programme title, when it differs from the channel name (playlist tvc-guide-title)
+    guide_art         = db.Column(db.Text, nullable=True)                     # placeholder-guide programme image (playlist tvc-guide-art)
     guide_block_minutes = db.Column(db.Integer, nullable=True)               # EPG placeholder block size for custom channels (None = 60)
     is_duplicate      = db.Column(db.Boolean, default=False, nullable=False, server_default=db.text('0'))  # set by user — manual duplicate label (does not disable)
     is_active         = db.Column(db.Boolean, default=True, nullable=False, server_default=db.text('1'))   # set by scraper — channel exists upstream

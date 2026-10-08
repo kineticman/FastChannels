@@ -455,6 +455,12 @@ def ensure_runtime_schema() -> None:
                 conn.execute(text(
                     "ALTER TABLE channels ADD COLUMN guide_block_minutes INTEGER"
                 ))
+            # Placeholder-guide title/art a playlist declares per channel
+            # (tvc-guide-title / tvc-guide-art).
+            if "guide_title" not in ch_cols:
+                conn.execute(text("ALTER TABLE channels ADD COLUMN guide_title TEXT"))
+            if "guide_art" not in ch_cols:
+                conn.execute(text("ALTER TABLE channels ADD COLUMN guide_art TEXT"))
             if "scrape_pinned" not in ch_cols:
                 conn.execute(text(
                     "ALTER TABLE channels ADD COLUMN scrape_pinned BOOLEAN NOT NULL DEFAULT 0"

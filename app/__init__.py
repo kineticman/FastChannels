@@ -155,6 +155,7 @@ def create_app(config_class=Config):
     from .routes.output import output_bp
     from .routes.api_sources import sources_bp
     from .routes.api_custom_channels import custom_channels_bp
+    from .routes.api_playlists import playlists_bp
     from .routes.api_channels import channels_bp
     from .routes.api_playback import playback_bp
     from .routes.api_gracenote import gracenote_bp
@@ -173,6 +174,7 @@ def create_app(config_class=Config):
     # blueprints, all still mounted at /api so routes/endpoints are unchanged.
     app.register_blueprint(sources_bp, url_prefix='/api')
     app.register_blueprint(custom_channels_bp, url_prefix='/api')
+    app.register_blueprint(playlists_bp, url_prefix='/api')
     app.register_blueprint(channels_bp, url_prefix='/api')
     app.register_blueprint(playback_bp, url_prefix='/api')
     app.register_blueprint(gracenote_bp, url_prefix='/api')

@@ -45,8 +45,43 @@ def get_all() -> dict[str, type[BaseScraper]]:
     return _registry
 
 
+# Per-source subclasses of PlaylistScraper, keyed by source name. Kept out of
+# _registry on purpose: get_all() describes the built-in scrapers that get
+# seeded as Source rows, and user-created playlist sources are not those.
+_playlist_classes: dict[str, type[BaseScraper]] = {}
+
+
+def _playlist_class(source_name: str) -> type[BaseScraper] | None:
+    """Playlist sources (`m3u_<slug>`) are created by users at runtime and all
+    share one scraper. Give each its own subclass so `source_name` — which
+    logging, the source cache and category rules all read off the class — is
+    the real source's name rather than a shared placeholder."""
+    from .playlist import PlaylistScraper, is_playlist_source
+    if not is_playlist_source(source_name):
+        return None
+    cls = _playlist_classes.get(source_name)
+    # A hot-reloaded playlist module leaves stale subclasses of the old class.
+    if cls is None or not issubclass(cls, PlaylistScraper):
+        cls = type('PlaylistScraper_' + source_name, (PlaylistScraper,), {'source_name': source_name})
+        _playlist_classes[source_name] = cls
+    return cls
+
+
 def get(source_name: str) -> type[BaseScraper] | None:
-    return get_all().get(source_name)
+    return get_all().get(source_name) or _playlist_class(source_name)
+
+
+def get_all_including(source_names) -> dict[str, type[BaseScraper]]:
+    """get_all() plus the playlist scraper for any `m3u_*` name given. For
+    callers that build per-source lookups from the registry and need the
+    user's playlist sources in them too."""
+    scrapers = dict(get_all())
+    for name in source_names:
+        if name not in scrapers:
+            cls = _playlist_class(name)
+            if cls:
+                scrapers[name] = cls
+    return scrapers
 
 
 def drm_capable_source_names() -> list[str]:

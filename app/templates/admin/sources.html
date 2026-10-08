@@ -162,6 +162,10 @@
       --cat-color: var(--warning-soft);
       --cat-border: var(--warning-strong);
     }
+    .source-category-header.cat-custom {
+      --cat-color: var(--accent-soft);
+      --cat-border: var(--accent-border);
+    }
     .source-category-header.cat-drm {
       --cat-color: var(--danger-soft);
       --cat-border: var(--danger-border);
@@ -170,6 +174,7 @@
       --cat-color: var(--text-muted);
       --cat-border: var(--border);
     }
+    .cat-header-action { float: right; text-transform: none; letter-spacing: normal; margin: -0.2rem 0; }
     .cat-chevron { display: inline-block; width: 0.9em; margin-right: 0.3em; }
     .cat-count { font-weight: 600; opacity: 0.75; margin-left: 0.3em; letter-spacing: normal; }
 
@@ -773,8 +778,8 @@
     </div>
     {% endif %}
 
-    {% set _CAT_LABELS = {'fast': 'FAST Sources', 'premium': 'Premium Sources', 'tve': 'TVE Sources', 'specialty': 'Specialty Sources', 'drm': 'DRM Sources', 'retired': 'Retired Sources'} %}
-    {% set _CAT_ORDER = ['fast', 'premium', 'tve', 'specialty', 'drm', 'retired'] %}
+    {% set _CAT_LABELS = {'fast': 'FAST Sources', 'premium': 'Premium Sources', 'tve': 'TVE Sources', 'specialty': 'Specialty Sources', 'custom': 'Custom Sources', 'drm': 'DRM Sources', 'retired': 'Retired Sources'} %}
+    {% set _CAT_ORDER = ['fast', 'premium', 'tve', 'specialty', 'custom', 'drm', 'retired'] %}
     <div class="sources-quicknav">
       <input type="text" id="source-filter-input" class="source-filter-input"
              placeholder="Filter sources by name…" oninput="filterSources(this.value)">
@@ -805,20 +810,27 @@
           {% set cfg_status = source_config_status.get(source.id, 'none') %}
           {% set retired = source_retired.get(source.id) %}
           {% set is_custom = source.name == 'custom' %}
-          {% set this_cat = source_categories.get(source.name, 'fast') if not is_custom else 'specialty' %}
+          {% set is_playlist = source.name.startswith('m3u_') %}
+          {% set this_cat = source_categories.get(source.name, 'fast') if not is_custom else 'custom' %}
           {% if this_cat != ns.last_cat %}
             {% set ns.last_cat = this_cat %}
             <tr class="source-category-header cat-{{ this_cat }}" id="cat-header-{{ this_cat }}"
                 data-cat="{{ this_cat }}" onclick="toggleCategoryCollapse('{{ this_cat }}')">
               <td colspan="4">
                 <span class="cat-chevron" id="cat-chevron-{{ this_cat }}">▾</span>{{ _CAT_LABELS.get(this_cat, this_cat | title) }}<span class="cat-count">{{ category_counts.get(this_cat, 0) }}</span>
+                {% if this_cat == 'custom' %}
+                <button type="button" class="btn btn-run btn-sm cat-header-action"
+                        onclick="event.stopPropagation(); openPlaylistModal()"
+                        title="Import your own M3U playlist, with its XMLTV guide if it has one.">+ Add Playlist</button>
+                {% endif %}
               </td>
             </tr>
           {% endif %}
 
           <tr class="dash-row {% if not source.is_enabled %}disabled{% endif %}" id="dash-row-{{ source.id }}"
               data-cat="{{ this_cat }}" data-search="{{ (source.display_name ~ ' ' ~ source.name) | lower }}"
-              {% if is_custom %}data-custom="true"{% endif %}>
+              {% if is_custom %}data-custom="true"{% endif %}
+              {% if is_custom or is_playlist %}data-keeps-channels="true"{% endif %}>
             <td class="col-source">
               <div class="source-name-wrap">
                 <span class="source-name">{{ source.display_name }}</span>
@@ -833,7 +845,9 @@
                   {% if under_development.get(source.name) %}
                     <span class="config-badge development" title="This source is under development and disabled by default">Under development</span>
                   {% endif %}
-                  {% if retired %}
+                  {% if is_playlist %}
+                    <span class="config-badge auto" style="font-style:italic">User-defined</span>
+                  {% elif retired %}
                     <span class="config-badge retired" id="config-badge-{{ source.id }}"
                           title="Upstream shut down; this scraper was removed. Auto-removed from this list in {{ retired.days_left }} day{{ '' if retired.days_left == 1 else 's' }}.">Retired</span>
                   {% elif cfg_status == 'configured' %}
@@ -886,7 +900,7 @@
               <div class="mobile-toggle-wrap">
                 <label class="toggle" id="mobile-toggle-{{ source.id }}">
                   <input type="checkbox" {% if source.is_enabled %}checked{% endif %}
-                         onchange="onSourceToggle({{ source.id }}, '{{ source.display_name }}', this)">
+                         onchange='onSourceToggle({{ source.id }}, {{ source.display_name | tojson }}, this)'>
                   <span class="slider"></span>
                 </label>
                 <span class="toggle-label {% if source.is_enabled %}on{% else %}off{% endif %}"
@@ -900,7 +914,7 @@
               <div class="toggle-wrap">
                 <label class="toggle" id="toggle-{{ source.id }}">
                   <input type="checkbox" {% if source.is_enabled %}checked{% endif %}
-                         onchange="onSourceToggle({{ source.id }}, '{{ source.display_name }}', this)">
+                         onchange='onSourceToggle({{ source.id }}, {{ source.display_name | tojson }}, this)'>
                   <span class="slider"></span>
                 </label>
                 <span class="toggle-label {% if source.is_enabled %}on{% else %}off{% endif %}"
@@ -1071,6 +1085,17 @@
                   <button class="btn-delete-inactive" type="button" onclick="deleteInactiveChannels({{ source.id }})">Delete Inactive</button>
                   <span class="delete-inactive-status" id="delete-status-{{ source.id }}"></span>
                 </div>
+
+                {% if is_playlist %}
+                <div class="interval-control">
+                  <label>Playlist</label>
+                  <button class="btn btn-cancel btn-sm" type="button" onclick="openPlaylistModal({{ source.id }})">Edit playlist…</button>
+                  <button class="btn-delete-inactive" type="button"
+                          onclick='deletePlaylist({{ source.id }}, {{ source.display_name | tojson }})'>Delete playlist</button>
+                  <span class="save-status" id="playlist-status-{{ source.id }}"></span>
+                  <div class="help">Edit changes the playlist or guide URL, the groups imported, and the default language and country. Turning the playlist off (the Enabled switch) pauses it and keeps its channels; Delete removes it and its channels for good.</div>
+                </div>
+                {% endif %}
 
                 <div class="source-config hidden" id="source-config-{{ source.id }}"></div>
               </div>
@@ -1698,7 +1723,8 @@
     // ── Source enable/disable ─────────────────────────────────────────────
     function onSourceToggle(sourceId, sourceName, checkbox) {
       const row = document.getElementById(`dash-row-${sourceId}`);
-      const isCustom = row && row.dataset.custom === 'true';
+      // Custom Channels and playlists keep their channels when switched off.
+      const isCustom = row && row.dataset.keepsChannels === 'true';
       if (!checkbox.checked && !isCustom) {
         // Normal sources: show destructive confirm before disabling
         checkbox.checked = true;
@@ -1826,7 +1852,8 @@
           }
         }
 
-        if (!enabled) document.getElementById(`ch-count-${sourceId}`).textContent = '0';
+        const keepsChannels = document.getElementById(`dash-row-${sourceId}`)?.dataset.keepsChannels === 'true';
+        if (!enabled && !keepsChannels) document.getElementById(`ch-count-${sourceId}`).textContent = '0';
         applySourceEnabledState(sourceId, enabled);
         if (enabled) maybeOfferReviewHold(sourceId);
 
@@ -5538,5 +5565,6 @@
 <script src="{{ url_for('static', filename='js/admin_theme.js') }}"></script>
 <script src="{{ url_for('static', filename='js/vendor/qrcode-generator-1.4.4.js') }}"></script>
   {% include 'admin/_update_modal.html' %}
+  {% include 'admin/_playlist_modal.html' %}
 </body>
 </html>

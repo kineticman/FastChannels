@@ -1,0 +1,314 @@
+  <!-- Add / edit a user playlist (M3U + optional XMLTV guide). Included by sources.html. -->
+  <style>
+    #playlist-modal .pl-label {
+      display: block; font-size: 0.74rem; font-weight: 700; color: var(--text-soft);
+      text-transform: uppercase; letter-spacing: .04em; margin-bottom: .35rem;
+    }
+    #playlist-modal .pl-input {
+      width: 100%; background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
+      padding: .5rem .7rem; color: var(--text); font-size: .84rem; outline: none; box-sizing: border-box;
+    }
+    #playlist-modal .pl-input:focus { border-color: var(--accent-strong); }
+    #playlist-modal .pl-field { margin-bottom: 1rem; }
+    #playlist-modal .pl-help { font-size: .74rem; color: var(--text-muted); margin-top: .3rem; line-height: 1.4; }
+    #playlist-modal .pl-status { font-size: .8rem; min-height: 1.1rem; margin: .5rem 0; }
+    #playlist-modal .pl-status.error { color: var(--danger); }
+    #playlist-modal .pl-facts { font-size: .82rem; line-height: 1.6; margin-bottom: .9rem; }
+    #playlist-modal .pl-warn { color: var(--warning-soft); }
+    #playlist-modal .pl-groups {
+      max-height: 220px; overflow-y: auto; border: 1px solid var(--border); border-radius: 6px;
+      padding: .5rem .7rem; background: var(--bg);
+    }
+    #playlist-modal .pl-groups label {
+      display: flex; align-items: center; gap: .5rem; font-size: .82rem; padding: .15rem 0; cursor: pointer;
+    }
+    #playlist-modal .pl-groups .pl-count { color: var(--text-muted); margin-left: auto; font-size: .76rem; }
+    #playlist-modal .pl-row { display: flex; gap: .75rem; flex-wrap: wrap; }
+    #playlist-modal .pl-row > div { flex: 1 1 8rem; }
+    #playlist-modal .pl-radio { display: flex; align-items: flex-start; gap: .5rem; font-size: .82rem; padding: .2rem 0; cursor: pointer; }
+    #playlist-modal .pl-link { background: none; border: none; color: var(--accent-soft); cursor: pointer; font-size: .76rem; padding: 0; }
+  </style>
+
+  <div class="modal-overlay" id="playlist-modal" onclick="closePlaylistModal(event)">
+    <div class="modal-box" style="width:580px;max-width:95vw;max-height:90vh;overflow-y:auto;padding:1.5rem 1.75rem;">
+      <h2 id="pl-title" style="font-size:1.05rem;font-weight:700;margin-bottom:1.1rem;">Add Playlist</h2>
+
+      <div class="pl-field">
+        <label class="pl-label" for="pl-name">Name <span style="color:var(--danger)">*</span></label>
+        <input id="pl-name" class="pl-input" type="text" maxlength="100" placeholder="e.g. AU/NZ Freeview">
+        <div class="pl-help" id="pl-name-help">Shown in the source list and feeds. The name you pick now also becomes part of these channels' permanent guide IDs.</div>
+      </div>
+
+      <div class="pl-field">
+        <label class="pl-label" for="pl-m3u">Playlist URL (M3U) <span style="color:var(--danger)">*</span></label>
+        <input id="pl-m3u" class="pl-input" type="text" placeholder="https://example.com/playlist.m3u8" oninput="_plInvalidatePreview()">
+      </div>
+
+      <div class="pl-field">
+        <label class="pl-label" for="pl-epg">Guide URL (XMLTV)</label>
+        <input id="pl-epg" class="pl-input" type="text" placeholder="https://example.com/epg.xml.gz  (optional)" oninput="_plInvalidatePreview()">
+        <div class="pl-help">Optional. Plain or gzipped XMLTV. Channels are matched to it by their <code>tvg-id</code>. Channels with no guide data show a placeholder.</div>
+      </div>
+
+      <button class="btn btn-run btn-sm" id="pl-check-btn" type="button" onclick="checkPlaylist()">Check playlist</button>
+      <div class="pl-status" id="pl-status"></div>
+
+      <div id="pl-result" style="display:none">
+        <div class="pl-facts" id="pl-facts"></div>
+
+        <div class="pl-field">
+          <label class="pl-label">Groups to import
+            <span style="text-transform:none;font-weight:400;letter-spacing:0;margin-left:.5rem;">
+              <button type="button" class="pl-link" onclick="_plSetAllGroups(true)">all</button> ·
+              <button type="button" class="pl-link" onclick="_plSetAllGroups(false)">none</button>
+            </span>
+          </label>
+          <div class="pl-groups" id="pl-groups"></div>
+          <div class="pl-help" id="pl-selected-count"></div>
+        </div>
+
+        <div class="pl-field pl-row">
+          <div>
+            <label class="pl-label" for="pl-lang">Language</label>
+            <input id="pl-lang" class="pl-input" type="text" maxlength="3" value="en">
+          </div>
+          <div>
+            <label class="pl-label" for="pl-country">Country</label>
+            <input id="pl-country" class="pl-input" type="text" maxlength="2" value="US">
+          </div>
+          <div class="pl-help" style="flex:1 1 100%;margin-top:0">Used for channels that don't declare their own (<code>tvg-language</code> / <code>tvg-country</code>). Two-letter codes, e.g. <code>en</code> and <code>AU</code>.</div>
+        </div>
+
+        <div class="pl-field" id="pl-enter-field">
+          <label class="pl-label">When imported</label>
+          <label class="pl-radio"><input type="radio" name="pl-enter" value="enable">
+            <span>Enable all channels now<br><span class="pl-help">They go straight into your feeds.</span></span></label>
+          <label class="pl-radio"><input type="radio" name="pl-enter" value="review">
+            <span>Send to review<br><span class="pl-help">Held out of every feed until you approve them in Channels → Needs review.</span></span></label>
+          <div class="pl-help">Either way, channels the playlist adds later are sent to review. You can change that under the source's "New channels" setting.</div>
+        </div>
+      </div>
+
+      <div class="modal-actions" style="display:flex;justify-content:flex-end;gap:.5rem;margin-top:1.1rem;">
+        <button class="btn btn-cancel" type="button" onclick="closePlaylistModal()">Cancel</button>
+        <button class="btn btn-run" id="pl-save-btn" type="button" onclick="savePlaylist()" disabled>Add playlist</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // ── Playlists (user M3U + XMLTV sources) ────────────────────────────────
+    let _plEditId = null;       // source id when editing, null when adding
+    let _plPreview = null;      // last successful preview response
+    let _plEnterTouched = false;
+
+    function _plEl(id) { return document.getElementById(id); }
+
+    function _plSetStatus(text, isError) {
+      const el = _plEl('pl-status');
+      el.textContent = text || '';
+      el.className = 'pl-status' + (isError ? ' error' : '');
+    }
+
+    // Editing a URL makes the group list on screen stale — require a re-check.
+    function _plInvalidatePreview() {
+      _plPreview = null;
+      _plEl('pl-result').style.display = 'none';
+      _plEl('pl-save-btn').disabled = true;
+    }
+
+    async function openPlaylistModal(sourceId) {
+      _plEditId = sourceId || null;
+      _plPreview = null;
+      _plEnterTouched = false;
+      _plEl('pl-name').value = '';
+      _plEl('pl-m3u').value = '';
+      _plEl('pl-epg').value = '';
+      _plEl('pl-lang').value = 'en';
+      _plEl('pl-country').value = 'US';
+      _plEl('pl-result').style.display = 'none';
+      _plEl('pl-save-btn').disabled = true;
+      _plSetStatus('');
+      _plEl('pl-title').textContent = _plEditId ? 'Edit Playlist' : 'Add Playlist';
+      _plEl('pl-save-btn').textContent = _plEditId ? 'Save' : 'Add playlist';
+      _plEl('pl-enter-field').style.display = _plEditId ? 'none' : '';
+      _plEl('pl-name-help').textContent = _plEditId
+        ? "Renaming changes how the playlist is labelled. Its channels' guide IDs and stream URLs stay as they are."
+        : "Shown in the source list and feeds. The name you pick now also becomes part of these channels' permanent guide IDs.";
+      _plEl('playlist-modal').classList.add('open');
+
+      if (!_plEditId) { _plEl('pl-name').focus(); return; }
+      try {
+        const r = await fetch(`/api/playlists/${_plEditId}`);
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        const d = await r.json();
+        _plEl('pl-name').value = d.display_name || '';
+        _plEl('pl-m3u').value = d.m3u_url || '';
+        _plEl('pl-epg').value = d.epg_url || '';
+        _plEl('pl-lang').value = d.default_language || 'en';
+        _plEl('pl-country').value = d.default_country || 'US';
+        checkPlaylist(d.groups_include || []);
+      } catch (e) {
+        _plSetStatus('Could not load this playlist: ' + e.message, true);
+      }
+    }
+
+    function closePlaylistModal(evt) {
+      if (evt && evt.target !== _plEl('playlist-modal')) return;
+      _plEl('playlist-modal').classList.remove('open');
+    }
+
+    function _plSelectedGroups() {
+      return Array.from(document.querySelectorAll('#pl-groups input[type="checkbox"]'))
+        .filter(cb => cb.checked).map(cb => cb.dataset.group);
+    }
+
+    function _plSetAllGroups(checked) {
+      document.querySelectorAll('#pl-groups input[type="checkbox"]').forEach(cb => { cb.checked = checked; });
+      _plOnGroupsChanged();
+    }
+
+    function _plOnGroupsChanged() {
+      if (!_plPreview) return;
+      const picked = new Set(_plSelectedGroups());
+      const count = _plPreview.groups.filter(g => picked.has(g.name)).reduce((n, g) => n + g.count, 0);
+      const over = count > _plPreview.max_channels;
+      const el = _plEl('pl-selected-count');
+      el.textContent = `${count} channel${count === 1 ? '' : 's'} selected` +
+        (over ? ` — over the limit of ${_plPreview.max_channels}. Select fewer groups.` : '');
+      el.className = 'pl-help' + (over ? ' pl-warn' : '');
+      _plEl('pl-save-btn').disabled = count === 0 || over;
+      if (!_plEditId && !_plEnterTouched) {
+        const want = count <= _plPreview.enable_now_threshold ? 'enable' : 'review';
+        document.querySelectorAll('input[name="pl-enter"]').forEach(rb => { rb.checked = rb.value === want; });
+      }
+    }
+
+    document.querySelectorAll('input[name="pl-enter"]').forEach(rb => {
+      rb.addEventListener('change', () => { _plEnterTouched = true; });
+    });
+
+    function _plRenderPreview(d, preselect) {
+      const facts = [];
+      facts.push(`<strong>${d.channel_count}</strong> channel${d.channel_count === 1 ? '' : 's'} found` +
+        (d.skipped ? ` (${d.skipped} skipped: no usable stream URL)` : '') + '.');
+      const epgGiven = _plEl('pl-epg').value.trim();
+      if (!epgGiven && d.guide.url_detected) {
+        _plEl('pl-epg').value = d.guide.url_detected;
+        facts.push('The playlist names its own guide; the Guide URL has been filled in.');
+      }
+      if (d.guide.error) {
+        facts.push(`<span class="pl-warn">Guide: ${escapeHtml(d.guide.error)}</span>`);
+      } else if (d.guide.checked) {
+        const cls = d.guide.matched === 0 ? ' class="pl-warn"' : '';
+        facts.push(`<span${cls}>Guide has programmes for <strong>${d.guide.matched}</strong> of ${d.channel_count} channels.</span>`);
+      } else if (_plEl('pl-epg').value.trim()) {
+        facts.push('The guide is too large to check here; it will be matched when the playlist is imported.');
+      } else {
+        facts.push('No guide URL: channels will show placeholder guide blocks.');
+      }
+      if (d.with_gracenote) facts.push(`${d.with_gracenote} carry a Gracenote station ID and can use Gracenote guide data.`);
+      if (d.with_headers) facts.push(`<span class="pl-warn">${d.with_headers} declare request headers (User-Agent/Referer). Those are not sent yet, so these streams may not play.</span>`);
+      if (d.with_drm) facts.push(`<span class="pl-warn">${d.with_drm} declare a DRM license. DRM streams from playlists are not supported.</span>`);
+      _plEl('pl-facts').innerHTML = facts.join('<br>');
+
+      const want = preselect && preselect.length ? new Set(preselect) : null;
+      _plEl('pl-groups').innerHTML = d.groups.map((g, i) => `
+        <label><input type="checkbox" data-idx="${i}" ${(!want || want.has(g.name)) ? 'checked' : ''} onchange="_plOnGroupsChanged()">
+          <span>${g.name ? escapeHtml(g.name) : '<em>(no group)</em>'}</span>
+          <span class="pl-count">${g.count}</span></label>`).join('');
+      // Group names go on via the DOM, not the markup, so quotes can't break out.
+      document.querySelectorAll('#pl-groups input[type="checkbox"]').forEach(cb => {
+        cb.dataset.group = d.groups[Number(cb.dataset.idx)].name;
+      });
+      _plEl('pl-result').style.display = '';
+      _plOnGroupsChanged();
+    }
+
+    async function checkPlaylist(preselectGroups) {
+      const m3u = _plEl('pl-m3u').value.trim();
+      if (!m3u) { _plSetStatus('Enter the playlist URL first.', true); return; }
+      const btn = _plEl('pl-check-btn');
+      btn.disabled = true;
+      _plInvalidatePreview();
+      _plSetStatus('Fetching playlist…');
+      try {
+        const body = {m3u_url: m3u, epg_url: _plEl('pl-epg').value.trim()};
+        if (_plEditId) body.source_id = _plEditId;
+        const r = await fetch('/api/playlists/preview', {
+          method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body),
+        });
+        const d = await r.json();
+        if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
+        _plPreview = d;
+        _plSetStatus('');
+        _plRenderPreview(d, Array.isArray(preselectGroups) ? preselectGroups : null);
+      } catch (e) {
+        _plSetStatus(e.message, true);
+      } finally {
+        btn.disabled = false;
+      }
+    }
+
+    async function savePlaylist() {
+      const name = _plEl('pl-name').value.trim();
+      if (!name) { _plSetStatus('Give the playlist a name.', true); _plEl('pl-name').focus(); return; }
+      if (!_plPreview) { _plSetStatus('Check the playlist first.', true); return; }
+      const picked = _plSelectedGroups();
+      const body = {
+        name,
+        m3u_url: _plEl('pl-m3u').value.trim(),
+        epg_url: _plEl('pl-epg').value.trim(),
+        // All groups selected is stored as "no filter", so groups the playlist
+        // adds later are imported too.
+        groups_include: picked.length === _plPreview.groups.length ? [] : picked,
+        default_language: _plEl('pl-lang').value.trim() || 'en',
+        default_country: _plEl('pl-country').value.trim() || 'US',
+      };
+      if (!_plEditId) {
+        body.enable_now = (document.querySelector('input[name="pl-enter"]:checked') || {}).value === 'enable';
+      }
+      const btn = _plEl('pl-save-btn');
+      btn.disabled = true;
+      _plSetStatus('Saving…');
+      try {
+        const r = await fetch(_plEditId ? `/api/playlists/${_plEditId}` : '/api/playlists', {
+          method: _plEditId ? 'PUT' : 'POST',
+          headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body),
+        });
+        const d = await r.json();
+        if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
+        // The new row (and its first import, already queued) shows up on reload.
+        window.location.reload();
+      } catch (e) {
+        _plSetStatus(e.message, true);
+        btn.disabled = false;
+      }
+    }
+
+    async function deletePlaylist(sourceId, displayName) {
+      const count = (document.getElementById(`ch-count-${sourceId}`) || {}).textContent || '0';
+      if (!confirm(`Delete the playlist "${displayName}"?\n\nThis permanently removes it and its ${count} channels, ` +
+                   `including any edits, channel numbers and feed pins you set on them. This cannot be undone.\n\n` +
+                   `To pause it and keep everything, switch it off instead.`)) return;
+      const status = document.getElementById(`playlist-status-${sourceId}`);
+      if (status) status.textContent = 'Deleting…';
+      try {
+        const r = await fetch(`/api/playlists/${sourceId}`, {method: 'DELETE'});
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        // The delete runs as a background job; wait for the source to go away.
+        for (let i = 0; i < 120; i++) {
+          await new Promise(res => setTimeout(res, 1000));
+          const check = await fetch(`/api/playlists/${sourceId}`);
+          if (check.status === 404) { window.location.reload(); return; }
+        }
+        if (status) status.textContent = 'Still deleting — reload the page in a minute.';
+      } catch (e) {
+        if (status) status.textContent = 'Delete failed: ' + e.message;
+      }
+    }
+
+    document.addEventListener('keydown', e => {
+      if (e.key === 'Escape' && _plEl('playlist-modal').classList.contains('open')) closePlaylistModal();
+    });
+  </script>

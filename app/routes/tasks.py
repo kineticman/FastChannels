@@ -396,6 +396,26 @@ def trigger_source_channel_purge(source_id: int):
         threading.Thread(target=run_source_channel_purge, args=(source_id,), daemon=True).start()
 
 
+def trigger_playlist_delete(source_id: int) -> bool:
+    """Returns True if a delete job was enqueued, False if one is already
+    queued/running for this playlist source."""
+    try:
+        q = get_maintenance_queue()
+        job_id = f'playlist-delete-{source_id}'
+        if _job_already_active(q, job_id):
+            logger.info('Playlist delete already queued/running for source_id=%s', source_id)
+            return False
+        q.enqueue('app.worker.run_playlist_delete', source_id, job_timeout=1800, job_id=job_id)
+        logger.info('Enqueued playlist delete for source_id=%s', source_id)
+        return True
+    except Exception as e:
+        logger.warning(f'RQ unavailable ({e}), falling back to thread for playlist delete {source_id}')
+        import threading
+        from app.worker import run_playlist_delete
+        threading.Thread(target=run_playlist_delete, args=(source_id,), daemon=True).start()
+        return True
+
+
 def trigger_bulk_channel_update(filters: dict, enable: bool):
     try:
         q = get_maintenance_queue()

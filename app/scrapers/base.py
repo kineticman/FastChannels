@@ -337,7 +337,8 @@ class ChannelData:
                  slug=None, category=None, language='en', country='US',
                  stream_type='hls', number=None, gracenote_id=None,
                  guide_key=None, tags=None, description=None,
-                 gracenote_mode=None, provider_number=None):
+                 gracenote_mode=None, provider_number=None,
+                 guide_title=None, guide_art=None, guide_block_minutes=None):
         self.source_channel_id = source_channel_id
         self.name        = name
         self.stream_url  = stream_url
@@ -363,6 +364,12 @@ class ChannelData:
         self.guide_key   = guide_key
         self.tags        = tags or []  # list of raw tag/group strings from source
         self.description = description  # optional long-form channel description
+        # Placeholder guide (the synthetic blocks emitted for a channel with no
+        # programmes): its title when that isn't the channel name, its image,
+        # and its block length. Only playlist channels set these.
+        self.guide_title = guide_title
+        self.guide_art = guide_art
+        self.guide_block_minutes = guide_block_minutes
 
 
 class ProgramData:

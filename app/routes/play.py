@@ -24,6 +24,7 @@ from ..hls import inspect_hls_drm, parse_stream_info
 from ..models import Channel, Source
 from ..url import public_base_url
 from ..scrapers import registry
+from ..scrapers.playlist import is_playlist_source
 from .custom_proxy import (
     _absolutize_hls_manifest,
     _custom_proxy_headers,
@@ -2976,7 +2977,14 @@ def play(source_name: str, channel_id: str):
     # and pin a tuner. LAN OTA streams also can't carry DRM, so there's nothing
     # to detect.
     _is_muxed = (channel.stream_type or '').lower() in ('mpegts', 'ts', 'mp4')
-    if channel.is_active and resolved_url and resolved_url.startswith('http') and not _is_muxed:
+    # A user's playlist isn't probed either. Its provider may count every
+    # connection against a stream limit, and this fetch comes from the server
+    # — a second IP alongside the viewer's player. It's also the user's own
+    # list: a VOD or DRM entry in it is theirs to keep or remove, not ours to
+    # auto-disable.
+    _is_playlist = is_playlist_source(source_name)
+    if (channel.is_active and resolved_url and resolved_url.startswith('http')
+            and not _is_muxed and not _is_playlist):
         from flask import current_app
         _app = current_app._get_current_object()
         _channel_id = channel.id

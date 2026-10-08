@@ -18,6 +18,7 @@ from xml.etree.ElementTree import Element, SubElement, tostring
 
 from ..extensions import db
 from ..models import Program, AppSettings
+from ..scrapers.playlist import is_playlist_source
 from ..url import proxy_logo_url
 from .m3u import (_selected_channels, _tvg_id, _channel_display_name, _source_multi_country_map,
                   _sanitize, _build_channel_query, _prismcast_capturable, _drm_bridge_query_filters)
@@ -160,6 +161,7 @@ def generate_xmltv_stream(filters: dict = None, base_url: str = None, feed_name:
     # programs id range for every artifact regardless of feed size, re-binding
     # the full channel-id IN list on every page.  A channel's 5-day window is
     # a few hundred rows, so memory stays bounded per query.
+    with_programs: set[int] = set()
     for ch_id in channel_id_list:
         programs = (
             db.session.query(Program)
@@ -171,6 +173,8 @@ def generate_xmltv_stream(filters: dict = None, base_url: str = None, feed_name:
             .order_by(Program.id.asc())
             .all()
         )
+        if programs:
+            with_programs.add(ch_id)
 
         for prog in programs:
             tvg_id = tvg_map.get(prog.channel_id)
@@ -259,7 +263,13 @@ def generate_xmltv_stream(filters: dict = None, base_url: str = None, feed_name:
     # ── Synthetic hourly blocks for custom channels ───────────────────────
     # Custom channels have no scraped Program rows.  Emit repeating 1-hour
     # slots so EPG clients show the channel name instead of a blank grid.
-    custom_channels = [ch for ch in channels if ch.source.name == 'custom']
+    # Same for a playlist channel its guide doesn't cover (no guide URL, or no
+    # matching tvg-id) — but only then, never alongside real programmes.
+    custom_channels = [
+        ch for ch in channels
+        if ch.source.name == 'custom'
+        or (is_playlist_source(ch.source.name) and ch.id not in with_programs)
+    ]
     if custom_channels:
         block_start = epg_start.replace(minute=0, second=0, microsecond=0)
         for ch in custom_channels:
@@ -276,7 +286,7 @@ def generate_xmltv_stream(filters: dict = None, base_url: str = None, feed_name:
                     'channel': tvg_id,
                 })
                 lang = ch_lang_map.get(ch.id, 'en')
-                SubElement(el, 'title', lang=lang).text = _sanitize(ch.name)
+                SubElement(el, 'title', lang=lang).text = _sanitize(ch.guide_title or ch.name)
                 if ch.description:
                     SubElement(el, 'desc', lang=lang).text = _sanitize(ch.description)
                 seen_categories = set()
@@ -288,8 +298,9 @@ def generate_xmltv_stream(filters: dict = None, base_url: str = None, feed_name:
                     _append_category(el, src_name, seen_categories, lang=lang)
                 if feed_name:
                     _append_category(el, feed_name, seen_categories, lang=lang)
-                if ch.logo_url:
-                    SubElement(el, 'icon', src=proxy_logo_url(ch.logo_url, base_url, image_proxy_enabled=_image_proxy) or ch.logo_url)
+                art = ch.guide_art or ch.logo_url
+                if art:
+                    SubElement(el, 'icon', src=proxy_logo_url(art, base_url, image_proxy_enabled=_image_proxy) or art)
                 yield tostring(el, encoding='unicode') + '\n'
                 t = slot_end
 

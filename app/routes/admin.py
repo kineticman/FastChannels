@@ -473,7 +473,7 @@ def dashboard():
     base_url       = public_base_url()
     feeds          = Feed.query.filter_by(is_enabled=True).order_by(Feed.name).all()
     app_settings   = AppSettings.get()
-    all_scrapers   = _scraper_registry.get_all()
+    all_scrapers   = _scraper_registry.get_all_including(s.name for s in sources)
     under_development = {
         name: getattr(cls, 'under_development', False)
         for name, cls in all_scrapers.items()
@@ -592,7 +592,9 @@ def dashboard():
 
 @admin_bp.route('/sources')
 def sources():
-    all_scrapers   = _scraper_registry.get_all()
+    all_scrapers   = _scraper_registry.get_all_including(
+        name for (name,) in db.session.query(Source.name).all()
+    )
     audit_enabled  = {
         name: getattr(cls, 'stream_audit_enabled', False)
         for name, cls in all_scrapers.items()
@@ -688,10 +690,10 @@ def sources():
         if source_config_status.get(s.id) == 'required' and s.is_enabled
     ]
 
-    _CAT_ORDER = {'fast': 0, 'premium': 1, 'tve': 2, 'specialty': 3, 'drm': 4, 'retired': 5}
+    _CAT_ORDER = {'fast': 0, 'premium': 1, 'tve': 2, 'specialty': 3, 'custom': 4, 'drm': 5, 'retired': 6}
 
     def _cat_for(s):
-        return source_categories.get(s.name, 'fast') if s.name != 'custom' else 'specialty'
+        return source_categories.get(s.name, 'fast') if s.name != 'custom' else 'custom'
 
     sources_list.sort(key=lambda s: (_CAT_ORDER.get(_cat_for(s), 99), s.display_name))
 

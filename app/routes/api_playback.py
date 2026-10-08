@@ -11,6 +11,7 @@ from app.config_store import persist_source_config_updates, persist_source_cache
 from ..extensions import db
 from ..models import Channel, Program, AppSettings, Feed
 from ..scrapers import registry
+from ..scrapers.playlist import is_playlist_source
 from ..scrapers.base import StreamDeadError
 from ..hls import (
     inspect_hls_drm,
@@ -625,6 +626,17 @@ def _get_playback_info(ch, fast_mode=True):
         play_url = f'/play/{ch.source.name}/{ch.source_channel_id}.m3u8'
     if not preview_url:
         preview_url = play_url
+
+    # Playlist channels: the 302 above sends the browser straight to the
+    # playlist's own host, which almost never allows cross-origin requests from
+    # this page (Shaka error 1002 — IPTV clients don't enforce CORS, browsers
+    # do). Preview through the same server-side proxy the custom-channel dialog
+    # uses. It is HTTPS-only and refuses LAN hosts; anything else keeps the
+    # direct URL. play_url is untouched, so real clients still get the redirect.
+    if (ch.source and is_playlist_source(ch.source.name) and stream_type == 'hls'
+            and (ch.stream_url or '').startswith('https://')):
+        from urllib.parse import quote as _quote
+        preview_url = f'/api/custom-channels/preview-manifest?url={_quote(ch.stream_url, safe="")}'
 
     if ch.source and ch.source.name == 'cspan' and ch.source_channel_id:
         from urllib.parse import quote as _quote

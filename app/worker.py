@@ -37,6 +37,7 @@ from app.models import Source, Channel, Program, Feed, AppSettings, SourceCache
 import time as _time
 from urllib.parse import urljoin as _urljoin
 from app.scrapers import registry
+from app.scrapers.playlist import is_playlist_source
 from app.scrapers.base import (
     StreamDeadError,
     ScrapeSkipError,
@@ -531,6 +532,14 @@ def run_scraper(source_name: str, force_full: bool = False):
                         # the other way silently dropped last_channel_fetch_at for every
                         # scraper that queues config/cache updates in the channel phase.
                         _apply_scraper_config_updates(source, scraper)
+                        if (source.config or {}).get('first_import_pending') and channels:
+                            # A playlist added with "enable all now": that choice
+                            # covers this first import only. Anything a later
+                            # refresh turns up goes to the review queue.
+                            _cfg = dict(source.config)
+                            _cfg.pop('first_import_pending', None)
+                            source.config = _cfg
+                            source.new_channel_policy = 'review'
                         if source.scrape_interval != 0:
                             # Stamp last_scraped_at as soon as channels are committed.
                             # The EPG phase below re-stamps on success, but if it
@@ -2140,6 +2149,73 @@ def run_source_channel_purge(source_id: int):
         )
 
 
+def _keeps_channels_when_disabled(source_name: str) -> bool:
+    """Built-in sources are purged on disable (a re-scrape restores them). The
+    user's own channels are not: 'custom' channels exist nowhere else, and a
+    playlist's disable is a pause — Delete is the action that removes it."""
+    return source_name == 'custom' or is_playlist_source(source_name)
+
+
+def run_playlist_delete(source_id: int):
+    """Permanently remove a user-created playlist source and everything hanging
+    off it. Background job for the same reason run_source_disable is one:
+    SQLite's writer lock is database-wide, so doing this inline can stall the
+    request behind an unrelated scrape's commits."""
+    with flask_app.app_context():
+        source = Source.query.get(source_id)
+        if not source:
+            return
+        if not is_playlist_source(source.name):
+            logger.error('[playlist-delete] refusing to delete non-playlist source %s', source.name)
+            return
+        name = source.name
+
+        from app.routes.tasks import cancel_source_jobs
+        cancel_source_jobs(name)
+
+        channel_ids = [row[0] for row in source.channels.with_entities(Channel.id).all()]
+        logo_urls = [row[0] for row in source.channels.with_entities(Channel.logo_url).all() if row[0]]
+
+        from app.models import Feed, FeedChannelNumber, SourceCache
+        # Bulk deletes bypass ORM cascades, so dependents go explicitly.
+        _ID_BATCH = 900
+        for i in range(0, len(channel_ids), _ID_BATCH):
+            FeedChannelNumber.query.filter(
+                FeedChannelNumber.channel_id.in_(channel_ids[i:i + _ID_BATCH])
+            ).delete(synchronize_session=False)
+        deleted_channels, deleted_programs = _purge_source_channels_and_programs(source)
+        SourceCache.query.filter_by(source_id=source.id).delete(synchronize_session=False)
+
+        # Scrub feeds: a leftover source name would re-attach a future playlist
+        # that reuses the slug, and SQLite can reuse a deleted channel's row id.
+        gone = set(channel_ids)
+        for feed in Feed.query.all():
+            filters = dict(feed.filters or {})
+            changed = False
+            if name in (filters.get('sources') or []):
+                filters['sources'] = [s for s in filters['sources'] if s != name]
+                changed = True
+            for key in ('channel_ids', 'excluded_channel_ids', 'pinned_channel_ids'):
+                ids = filters.get(key)
+                if isinstance(ids, list) and gone.intersection(ids):
+                    filters[key] = [cid for cid in ids if cid not in gone]
+                    changed = True
+            if changed:
+                feed.filters = filters
+
+        db.session.delete(source)
+        db.session.commit()
+
+        for url in set(logo_urls):
+            try:
+                delete_cached_logo(url)
+            except Exception:
+                pass
+        _invalidate_and_refresh_xml()
+        logger.info('[playlist-delete] removed %s: %d channels, %d programs',
+                    name, deleted_channels, deleted_programs)
+
+
 def run_source_disable(source_id: int):
     """Background counterpart to update_source's disable path (app/routes/
     api.py) — flips is_enabled off, then runs the same cancel/purge/xml-
@@ -2163,7 +2239,7 @@ def run_source_disable(source_id: int):
 
         from app.routes.tasks import cancel_source_jobs, trigger_source_channel_purge
         cancel_source_jobs(source.name)
-        if source.name != 'custom':
+        if not _keeps_channels_when_disabled(source.name):
             # Mark stale now (cheap — old M3U/EPG stays on disk and keeps
             # being served, see invalidate_xml_cache's docstring) rather than
             # running the full subprocess rebuild here: the queued purge job
@@ -2174,9 +2250,9 @@ def run_source_disable(source_id: int):
             invalidate_xml_cache()
             trigger_source_channel_purge(source.id)
         else:
-            # No purge job follows for 'custom' (its channels aren't
-            # deleted on disable), so this is the only rebuild that will
-            # happen — must be the real one.
+            # No purge job follows for 'custom' or a playlist (their
+            # channels aren't deleted on disable), so this is the only
+            # rebuild that will happen — must be the real one.
             _invalidate_and_refresh_xml()
         logger.info('[source-disable] %s disabled', source.name)
 
@@ -2777,6 +2853,14 @@ def _upsert_channels(source, channel_data_list, gracenote_auto_fill: bool = True
                 ch.description = _sanitize_description(cd.description)
             if getattr(cd, 'guide_key', None):
                 ch.guide_key = cd.guide_key
+            # Placeholder-guide fields track the source, including being
+            # removed there. None for every scraper but playlists, whose rows
+            # are NULL anyway — so this never touches a custom channel's
+            # user-set block length (custom channels aren't upserted).
+            ch.guide_title = getattr(cd, 'guide_title', None)
+            ch.guide_art = getattr(cd, 'guide_art', None)
+            if getattr(cd, 'guide_block_minutes', None) is not None or ch.guide_block_minutes is not None:
+                ch.guide_block_minutes = getattr(cd, 'guide_block_minutes', None)
             # Don't resurrect channels the stream audit flagged as Dead, VOD, NotAuthorized, or DRM
             # unless the stream URL changed (source may have fixed the channel).
             _flagged = ch.disable_reason in ('Dead', 'VOD', 'NotAuthorized') or (ch.disable_reason or '').startswith('DRM')
@@ -2829,6 +2913,9 @@ def _upsert_channels(source, channel_data_list, gracenote_auto_fill: bool = True
                 gracenote_locked  = False,
                 gracenote_mode    = (getattr(cd, 'gracenote_mode', None) or 'auto'),
                 guide_key         = getattr(cd, 'guide_key', None),
+                guide_title       = getattr(cd, 'guide_title', None),
+                guide_art         = getattr(cd, 'guide_art', None),
+                guide_block_minutes = getattr(cd, 'guide_block_minutes', None),
                 last_seen_at      = seen_at,
                 first_seen_at     = seen_at,
                 is_enabled        = not _born_pending,
@@ -3429,7 +3516,10 @@ def purge_orphaned_sources():
         known = set(registry.get_all().keys())
         now = datetime.now(timezone.utc)
         for source in Source.query.all():
-            if source.name in known:
+            # User-created playlist sources (m3u_*) share one scraper class that
+            # is never in the registry under their own names — they are not
+            # orphans, and must never start the purge clock.
+            if source.name in known or is_playlist_source(source.name):
                 if source.scraper_missing_since is not None:
                     source.scraper_missing_since = None
                     db.session.commit()
@@ -3478,17 +3568,20 @@ def purge_disabled_source_leftovers():
     queue lives in the embedded Redis (no persistence, see docker-compose), so
     that job is gone for good once that happens; nothing else re-triggers it.
 
-    'custom' is exempt, same as run_source_disable — its channels are meant to
-    survive a disable.
+    'custom' and playlist sources are exempt, same as run_source_disable — their
+    channels are meant to survive a disable.
     """
     with flask_app.app_context():
-        leftover_sources = (
-            Source.query
-            .filter(Source.is_enabled == False, Source.name != 'custom')
-            .join(Channel, Channel.source_id == Source.id)
-            .distinct()
-            .all()
-        )
+        leftover_sources = [
+            source for source in (
+                Source.query
+                .filter(Source.is_enabled == False)
+                .join(Channel, Channel.source_id == Source.id)
+                .distinct()
+                .all()
+            )
+            if not _keeps_channels_when_disabled(source.name)
+        ]
         if not leftover_sources:
             return
         any_purged = False
