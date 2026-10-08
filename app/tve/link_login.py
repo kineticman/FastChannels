@@ -507,6 +507,20 @@ _ADAPTERS = {'legacy': _Legacy, 'nbc': _Nbc, 'tcm': _Tcm, 'fox': _Fox, 'amcn': _
 
 # ── job ──────────────────────────────────────────────────────────────────────
 
+def _reenable_after_authorized_signin(network_key: str | None) -> None:
+    """See reenable_not_authorized_channels. Never fails the sign-in."""
+    try:
+        from .accounts import reenable_not_authorized_channels
+        revived = reenable_not_authorized_channels(network_key)
+        if revived:
+            logger.info('[link-login] %s: re-enabled %d channel(s) that had been switched off as not authorized',
+                        network_key, revived)
+            from ..routes.api_shared import _invalidate_and_refresh_xml
+            _invalidate_and_refresh_xml()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning('[link-login] %s: could not re-enable not-authorized channels: %s', network_key, exc)
+
+
 def run_link_login(family: str, requestor_id: str | None, mso_id: str, run_id: str) -> None:
     """RQ job: sign in one network (AMC: its four channels) through links the
     user opens on their own device. Progress goes to STATUS_KEY; quits
@@ -597,6 +611,8 @@ def run_link_login(family: str, requestor_id: str | None, mso_id: str, run_id: s
                     message = adapter.save(ctx, result)
                     steps[i].update(state='done', message=message)
                     logger.info('[link-login] %s: signed in via %s (%s)', label, getattr(adapter, 'mso_id', mso_id), message)
+                    if message == 'authorized':
+                        _reenable_after_authorized_signin(adapter.error_key)
                 except TVENotAuthorizedError as exc:
                     steps[i].update(state='failed', message=str(exc)[:160])
                     logger.info('[link-login] %s: not authorized after sign-in: %s', label, exc)

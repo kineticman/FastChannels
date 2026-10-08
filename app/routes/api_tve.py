@@ -116,14 +116,10 @@ def source_tve_signin(source_id):
         own.is_enabled = True
 
     if changed:
-        revived = clear_signin_state(source, leaving if leaving is not own or mode == 'shared' else None)
-        logger.info('[tve] %s now signs in with %s%s', source.name,
-                    'its own TV provider login' if mode == 'separate' else 'the shared TV provider login',
-                    f'; re-enabled {revived} channel(s) the previous login was not entitled to' if revived else '')
+        clear_signin_state(source, leaving if leaving is not own or mode == 'shared' else None)
+        logger.info('[tve] %s now signs in with %s', source.name,
+                    'its own TV provider login' if mode == 'separate' else 'the shared TV provider login')
     db.session.commit()
-    if changed and revived:
-        from .api_shared import _invalidate_and_refresh_xml
-        _invalidate_and_refresh_xml()
     return jsonify({**_source_signin_payload(source.name), 'signin_changed': changed})
 
 

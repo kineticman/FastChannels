@@ -170,16 +170,11 @@ def tve_account_for_network(key: str | None):
     return tve_account_for(source_for_network_key(key))
 
 
-def clear_signin_state(source, leaving_account) -> int:
+def clear_signin_state(source, leaving_account) -> None:
     """Drop what `source` (a Source row) kept from signing in with
-    `leaving_account` — see SIGNIN_STATE. Also brings back channels that
-    were switched off because that login wasn't entitled to them: the new
-    login may be, and one that isn't gets them switched off again on first
-    play or the next audit. Returns how many came back. Doesn't commit."""
-    from datetime import datetime, timezone
-
+    `leaving_account` — see SIGNIN_STATE. Doesn't commit."""
     from ..extensions import db
-    from ..models import Channel, SourceCache
+    from ..models import SourceCache
 
     state = SIGNIN_STATE.get(source.name) or {}
     conds = [SourceCache.cache_key.like(pattern) for pattern in state.get('cache_like', ())]
@@ -193,7 +188,37 @@ def clear_signin_state(source, leaving_account) -> int:
         leaving_account.config = {
             k: v for k, v in (leaving_account.config or {}).items() if k not in state['account']}
 
-    revived = Channel.query.filter_by(source_id=source.id, disable_reason='NotAuthorized').all()
+
+# Network key (lowercase) -> the channels it covers, as a LIKE pattern on
+# Channel.source_channel_id, for sources whose networks sign in separately.
+# A key that isn't here covers its whole source.
+_NETWORK_CHANNEL_PATTERNS = {
+    'tnt': 'tnt-%', 'tbs': 'tbs-%', 'trutv': 'tru-%', 'tcm': 'tcm-%',
+    'history': 'history', 'aetv': 'aetv', 'lifetime': 'lifetime', 'fyi': 'fyi',
+}
+
+
+def reenable_not_authorized_channels(network_key: str | None) -> int:
+    """Bring back the channels of one network that were switched off as
+    "not authorized", once a sign-in for it has just come back authorized
+    (e.g. after its source moved to a TV provider that carries it). Only
+    then: with a working sign-in a channel the account still isn't entitled
+    to is switched off again by its next play or audit, whereas re-enabling
+    without one would leave it enabled and unplayable. Commits; returns how
+    many channels came back."""
+    from datetime import datetime, timezone
+
+    from ..extensions import db
+    from ..models import Channel, Source
+
+    source = Source.query.filter_by(name=source_for_network_key(network_key) or '').first()
+    if not source:
+        return 0
+    query = Channel.query.filter_by(source_id=source.id, disable_reason='NotAuthorized')
+    pattern = _NETWORK_CHANNEL_PATTERNS.get((network_key or '').strip().lower())
+    if pattern:
+        query = query.filter(Channel.source_channel_id.like(pattern))
+    revived = query.all()
     for ch in revived:
         # The same fields a manual re-enable sets (app/routes/api_channels.py).
         ch.disable_reason = None
@@ -201,4 +226,6 @@ def clear_signin_state(source, leaving_account) -> int:
         ch.is_enabled = True
         ch.last_seen_at = datetime.now(timezone.utc)
         ch.missed_scrapes = 0
+    if revived:
+        db.session.commit()
     return len(revived)
