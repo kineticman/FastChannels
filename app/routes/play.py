@@ -3169,6 +3169,51 @@ def play_fc_player_bridge(source_name: str, channel_id: str):
     return Response('', status=204)
 
 
+@play_bp.route('/play/auto/<source_name>/<channel_id>.m3u8')
+def play_auto(source_name: str, channel_id: str):
+    """
+    One play URL per channel for the single-playlist output
+    (generate_combined_ah4c_m3u), routed when Channels DVR tunes rather than
+    when the playlist is built:
+      - normal channel -> identical to /play/<source>/<id>.m3u8 (resolve + 302 to CDN)
+      - bridge channel -> 302 to ah4c's /play/tuner/<source>:<id>. ah4c picks a
+        free tuner and calls back /play/fc-player/... to start playback, or
+        answers 500 itself when every tuner is busy.
+
+    Deciding here keeps a channel's URL the same when it starts or stops
+    needing the bridge, and keeps ah4c's address out of the playlist. ah4c only
+    for now: the fixed-encoder path has no "device busy" refusal, so it can't
+    share a source with channels that need no stream limit.
+    """
+    channel = (
+        Channel.query
+        .join(Source)
+        .filter(Source.name == source_name, Channel.source_channel_id == channel_id)
+        .first()
+    )
+    if not channel:
+        abort(404)
+
+    needs_bridge = bool(channel.requires_drm_bridge) and source_name in _DRM_BRIDGE_TRUSTED_SOURCES
+    if not needs_bridge:
+        return play(source_name, channel_id)
+
+    from .. import fc_player_bridge
+    from ..generators.m3u import _ah4c_play_url
+    from ..models import AppSettings
+
+    settings = AppSettings.get()
+    if not fc_player_bridge.ah4c_bridge_active(settings):
+        logger.error('[play-auto] %s/%s needs the bridge but ah4c Capture is not enabled/configured',
+                     source_name, channel_id)
+        return Response('This channel needs the bridge, and ah4c Capture is not enabled or configured.\n',
+                        status=503, mimetype='text/plain')
+    target = _ah4c_play_url(channel, (settings.effective_fc_player_bridge_ah4c_url() or '').strip().rstrip('/'))
+    logger.info('[play-auto] request_id=%s ip=%s source=%s channel_id=%s channel_name=%s -> ah4c',
+                getattr(g, 'request_id', '-'), _client_ip(), source_name, channel_id, channel.name)
+    return redirect(target, 302)
+
+
 @play_bp.route('/play/fc-player/<source_name>/<channel_id>.m3u')
 def play_fc_player_bridge_vlc(source_name: str, channel_id: str):
     """.m3u sibling of play_fc_player_bridge, same purpose as play_vlc: hand VLC (or

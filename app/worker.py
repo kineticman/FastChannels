@@ -1933,8 +1933,7 @@ def _refresh_xml_artifacts() -> None:
                     m3u_artifacts.append((
                         f'feed-{feed.slug}-combined-ah4c-m3u',
                         lambda fp, filters=filters, std_kw=std_kw: fp.write(
-                            generate_combined_ah4c_m3u(filters, base_url=base_url,
-                                                       ah4c_base_url=ah4c_url, **std_kw)
+                            generate_combined_ah4c_m3u(filters, base_url=base_url, **std_kw)
                         ),
                     ))
                 if ah4c_url:

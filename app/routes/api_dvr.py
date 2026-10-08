@@ -867,7 +867,6 @@ def push_feed_combined_ah4c_to_dvr(feed_id):
                                  'Switch Guide Mode to "One mixed playlist" first.'}), 409
     if (blocked := _mixed_guide_unsupported(dvr_url)):
         return blocked
-    ah4c_url = (settings.effective_fc_player_bridge_ah4c_url() or '').strip()
 
     base = public_base_url()
     filters = feed_to_query_filters(feed.filters or {})
@@ -894,7 +893,7 @@ def push_feed_combined_ah4c_to_dvr(feed_id):
     )
     write_artifact(
         f'feed-{feed.slug}-combined-ah4c-m3u',
-        lambda fp: fp.write(generate_combined_ah4c_m3u(filters, base_url=base, ah4c_base_url=ah4c_url, **std_kw)),
+        lambda fp: fp.write(generate_combined_ah4c_m3u(filters, base_url=base, **std_kw)),
         ext='m3u',
     )
 

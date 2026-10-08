@@ -1127,6 +1127,17 @@ def _fc_player_play_url(ch, base_url: str) -> str:
     channel_id = _url_quote(ch.source_channel_id, safe="")
     return f'{base_url}/play/fc-player/{source_name}/{channel_id}.m3u8'
 
+def _auto_play_url(ch, base_url: str) -> str:
+    # /play/auto/... decides at tune time whether this channel goes straight to
+    # its stream or through ah4c (play_auto in app/routes/play.py). C-SPAN's
+    # proxied playlist lives at its own path and never needs the bridge, so it
+    # keeps the URL every other playlist gives it.
+    source_name = ch.source.name
+    if source_name == 'cspan':
+        return _channel_play_url(ch, base_url)
+    channel_id = _url_quote(ch.source_channel_id, safe="")
+    return f'{base_url}/play/auto/{source_name}/{channel_id}.m3u8'
+
 def _ah4c_play_url(ch, ah4c_base_url: str) -> str:
     # ah4c's own /play/tuner/<channel> — <channel> is the same "source:channel_id"
     # key fc_player_bridge already uses (trigger_channel's channel_key), which the
@@ -1357,13 +1368,14 @@ def combined_ah4c_channel_count(filters: dict) -> int:
 
 
 def generate_combined_ah4c_m3u(filters: dict = None, base_url: str = None, *,
-                               ah4c_base_url: str,
                                feed_chnum_start: int = None, namespace_start: int = None,
                                feed_id: int = None) -> str:
     """
-    One playlist for a whole feed: the mixed-guide standard channels at their
-    normal /play URLs plus the FastChannels Player bridge channels routed
-    through ah4c, so Channels DVR needs a single Custom Source.
+    One playlist for a whole feed: the mixed-guide standard channels plus the
+    FastChannels Player bridge channels, so Channels DVR needs a single Custom
+    Source. Every entry is a /play/auto/... URL (_auto_play_url), which sends a
+    bridge channel through ah4c and anything else to its stream when the DVR
+    tunes — so a channel keeps its URL if it starts or stops needing the bridge.
 
     Only ah4c makes this safe. A source has one stream limit, so it can't cap
     the bridge channels without capping the free ones too; ah4c tracks its own
@@ -1380,7 +1392,6 @@ def generate_combined_ah4c_m3u(filters: dict = None, base_url: str = None, *,
     """
     filters  = filters or {}
     base_url = (base_url or '').rstrip('/')
-    ah4c_base_url = (ah4c_base_url or '').rstrip('/')
 
     _s = AppSettings.get()
     _image_proxy = _s.image_proxy_enabled if _s.image_proxy_enabled is not None else True
@@ -1435,8 +1446,7 @@ def generate_combined_ah4c_m3u(filters: dict = None, base_url: str = None, *,
             attrs.append(f'tvc-guide-categories="{guide_cat}"')
         _append_experimental_stream_attrs(attrs, _s)
         lines.append(f'#EXTINF:-1 {" ".join(attrs)},{_sanitize(display_name)}')
-        lines.append(_ah4c_play_url(ch, ah4c_base_url) if ch.id in bridge_ids
-                     else _channel_play_url(ch, base_url))
+        lines.append(_auto_play_url(ch, base_url))
 
     return '\n'.join(lines)
 
