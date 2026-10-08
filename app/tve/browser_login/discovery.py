@@ -4,7 +4,8 @@ import time
 import redis
 
 from app.worker import flask_app
-from app.models import Source, TVEAccount
+from app.models import Source
+from app.tve.accounts import tve_account_for
 from app.config_store import persist_source_cache_updates
 from app.tve.adobe_pass import TVEAuthError, TVENotAuthorizedError
 from urllib.parse import urlsplit as _urlsplit
@@ -38,6 +39,10 @@ from app.tve.browser_login.common import (
 )
 
 logger = logging.getLogger(__name__)
+
+# The source this sign-in is for — picks which TV-provider account it uses
+# (see app/tve/accounts.py).
+_SOURCE_NAME = 'discovery_tve'
 
 # Spectrum's remembered-device cookies. With them present Spectrum signs in
 # with one "Continue" click instead of a password, and Discovery's gauth
@@ -156,7 +161,7 @@ def _run_discovery_browser_assisted_login(r, set_status, source, account, scrape
         with Camoufox(**camoufox_options) as context:
             page = context.pages[0] if context.pages else context.new_page()
             _watch_spectrum_auth_results(page, 'discovery-mvpd-login')
-            _prime_google_session(context, mso_id)
+            _prime_google_session(context, mso_id, source_name=_SOURCE_NAME)
             page.on('crash', lambda p: logger.warning('[discovery-mvpd-login] page CRASH event fired (url was %s)', _safe_page_url(p)))
             page.on('close', lambda p: logger.warning('[discovery-mvpd-login] page CLOSE event fired'))
             page.on('pageerror', lambda exc: logger.warning('[discovery-mvpd-login] page JS error: %s', str(exc)[:500]))
@@ -241,6 +246,7 @@ def _run_discovery_browser_assisted_login(r, set_status, source, account, scrape
             settled = _settle_after_mvpd_navigation(
                 page, set_status=set_status,
                 respect_youtubetv_soft_block=mso_id != 'YouTubeTV',
+                source_name=_SOURCE_NAME,
             )
             landing_url = _safe_page_url(page)
             if not settled:
@@ -290,6 +296,7 @@ def _run_discovery_browser_assisted_login(r, set_status, source, account, scrape
                     page, account.username, account.password, r=r,
                     stop_key=MVPD_BROWSER_LOGIN_STOP_KEY, input_key=MVPD_BROWSER_LOGIN_INPUT_KEY,
                     navigation_already_settled=True, log_tag='discovery-mvpd-login',
+                    source_name=_SOURCE_NAME,
                 )
             set_status('running', 'Signing in to Discovery TVE…', landing_url)
 
@@ -404,7 +411,7 @@ def _run_discovery_browser_assisted_login(r, set_status, source, account, scrape
                 set_status('error', 'Discovery TVE: timed out waiting for sign-in to complete.')
                 return
             if mso_id == 'YouTubeTV':
-                _maybe_capture_google_master_token(context, mso_id)
+                _maybe_capture_google_master_token(context, mso_id, source_name=_SOURCE_NAME)
             elif mso_id == 'Comcast_SSO':
                 # Same idea as the YouTubeTV branch above, for the Xfinity
                 # cookie jar instead of a Google master_token — see
@@ -412,7 +419,7 @@ def _run_discovery_browser_assisted_login(r, set_status, source, account, scrape
                 # here entirely (unlike mvpd.py/nbc.py/fox.py), so a fully
                 # successful Discovery TVE browser login never saved
                 # anything for other TVE families' cookie-jar fast path.
-                _harvest_and_save_xfinity_cookies(context)
+                _harvest_and_save_xfinity_cookies(context, source_name=_SOURCE_NAME)
     except BaseException as exc:  # noqa: BLE001
         if isinstance(exc, SpectrumWantsCoxProvider):
             # Spectrum's IDLI-4213 "pick Cox Spectrum": a user-facing
@@ -503,7 +510,7 @@ def run_discovery_browser_login(mso_id: str):
             return
         scraper = DiscoveryTVEScraper(config=dict(source.config or {}))
 
-        account = TVEAccount.query.filter_by(provider_id='mvpd').first()
+        account = tve_account_for(_SOURCE_NAME)
         if not account or not account.is_enabled or not account.has_credentials():
             set_status('error', 'TVE credentials are not configured in Settings.')
             return

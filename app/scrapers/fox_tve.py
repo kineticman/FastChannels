@@ -805,9 +805,9 @@ def _fox_sports_recheck_token(session: requests.Session, device_id: str, mso_id:
 
 def _fox_sports_access_token(session: requests.Session, device_id: str) -> str:
     from .. import db
-    from ..models import TVEAccount
+    from ..tve.accounts import tve_account_for
 
-    account = TVEAccount.query.filter_by(provider_id='mvpd').first()
+    account = tve_account_for('fox_tve')
     now = int(datetime.now(timezone.utc).timestamp())
     if account and account.is_enabled and account.has_credentials():
         cfg = dict(account.config or {})

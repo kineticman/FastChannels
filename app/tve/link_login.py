@@ -515,7 +515,7 @@ def run_link_login(family: str, requestor_id: str | None, mso_id: str, run_id: s
     import redis
 
     from app.worker import flask_app
-    from ..models import TVEAccount
+    from .accounts import tve_account_for_network
     from .browser_login.common import _record_tve_login_error
 
     with flask_app.app_context():
@@ -540,7 +540,7 @@ def run_link_login(family: str, requestor_id: str | None, mso_id: str, run_id: s
                 r.setex(STATUS_KEY, _PER_TARGET_TIMEOUT + 300, json.dumps(
                     {**base, 'state': state, 'message': message, 'steps': steps, **extra}))
 
-        account = TVEAccount.query.filter_by(provider_id='mvpd').first()
+        account = tve_account_for_network(requestor_id if family == 'legacy' else family)
         # FOX One can sign in with its own separate login, without a shared account.
         if not account and family != 'foxone':
             set_status('error', 'Set up your TV provider under Settings → TV Everywhere first.')

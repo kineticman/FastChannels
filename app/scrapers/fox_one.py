@@ -548,9 +548,9 @@ class FoxOneScraper(MvpdCooldownMixin, BaseScraper):
                 shared=False,
             )
 
-        from ..models import TVEAccount
+        from ..tve.accounts import shared_tve_account
 
-        account = TVEAccount.query.filter_by(provider_id='mvpd').first()
+        account = shared_tve_account()
         if not (account and account.is_enabled and account.has_credentials()):
             return None
         cfg = account.config or {}
@@ -566,7 +566,7 @@ class FoxOneScraper(MvpdCooldownMixin, BaseScraper):
         """Record a sign-in outcome on the FOX One source (shown on its card),
         and on the shared TV-provider account when that's the one used."""
         from .. import db
-        from ..models import TVEAccount
+        from ..tve.accounts import shared_tve_account
 
         if error:
             self._update_config('signin_error', error[:300])
@@ -576,7 +576,7 @@ class FoxOneScraper(MvpdCooldownMixin, BaseScraper):
             self._update_config('signin_error_at', 0)
         if not login.shared:
             return
-        account = TVEAccount.query.filter_by(provider_id='mvpd').first()
+        account = shared_tve_account()
         if not account:
             return
         account.last_auth_status = 'error' if error else 'ok'
@@ -594,9 +594,9 @@ class FoxOneScraper(MvpdCooldownMixin, BaseScraper):
         own = (self.config.get('home_zip_code') or '').strip()
         if own:
             return own
-        from ..models import TVEAccount
+        from ..tve.accounts import shared_tve_account
 
-        account = TVEAccount.query.filter_by(provider_id='mvpd').first()
+        account = shared_tve_account()
         return ((account.config or {}).get('home_zip_code') or '').strip() if account else ''
 
     @staticmethod

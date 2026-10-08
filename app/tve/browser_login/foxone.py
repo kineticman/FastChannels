@@ -146,7 +146,7 @@ def _run_foxone_browser_assisted_login(r, set_status, source, login, scraper) ->
             _watch_spectrum_auth_results(page, 'foxone-mvpd-login')
             if login.shared:
                 # The saved Google session belongs to the shared account.
-                _prime_google_session(context, mso_id)
+                _prime_google_session(context, mso_id, source_name=None)
             page.on('crash', lambda p: logger.warning('[foxone-mvpd-login] page CRASH event fired (url was %s)', _safe_page_url(p)))
             page.on('close', lambda p: logger.warning('[foxone-mvpd-login] page CLOSE event fired'))
             page.on('pageerror', lambda exc: logger.warning('[foxone-mvpd-login] page JS error: %s', str(exc)[:500]))
@@ -228,6 +228,7 @@ def _run_foxone_browser_assisted_login(r, set_status, source, login, scraper) ->
             settled = _settle_after_mvpd_navigation(
                 page, set_status=set_status,
                 respect_youtubetv_soft_block=mso_id != 'YouTubeTV',
+                source_name=None,
             )
             landing_url = _safe_page_url(page)
             if not settled:
@@ -274,6 +275,7 @@ def _run_foxone_browser_assisted_login(r, set_status, source, login, scraper) ->
                     page, login.username, login.password, r=r,
                     stop_key=MVPD_BROWSER_LOGIN_STOP_KEY, input_key=MVPD_BROWSER_LOGIN_INPUT_KEY,
                     navigation_already_settled=True, log_tag='foxone-mvpd-login',
+                    source_name=None,
                 )
             set_status('running', 'Signing in to FOX One…', landing_url)
 
@@ -326,7 +328,7 @@ def _run_foxone_browser_assisted_login(r, set_status, source, login, scraper) ->
                 # the shared account, so a separate login keeps them out.
                 pass
             elif mso_id == 'YouTubeTV':
-                _maybe_capture_google_master_token(context, mso_id)
+                _maybe_capture_google_master_token(context, mso_id, source_name=None)
             elif mso_id == 'Comcast_SSO':
                 # Same idea as the YouTubeTV branch above, for the Xfinity
                 # cookie jar instead of a Google master_token — see
@@ -334,11 +336,11 @@ def _run_foxone_browser_assisted_login(r, set_status, source, login, scraper) ->
                 # here entirely (unlike mvpd.py/nbc.py/fox.py), so a fully
                 # successful FOX One browser login never saved anything for
                 # other TVE families' cookie-jar fast path.
-                _harvest_and_save_xfinity_cookies(context)
+                _harvest_and_save_xfinity_cookies(context, source_name=None)
     except BaseException as exc:  # noqa: BLE001
         if isinstance(exc, SpectrumWantsCoxProvider):
             if login.shared:
-                if _spectrum_retry_as_cox(exc, mso_id, 'FOX One', set_status):
+                if _spectrum_retry_as_cox(exc, mso_id, 'FOX One', set_status, source_name=None):
                     return _run_foxone_browser_assisted_login(r, set_status, source, replace(login, mso_id='Cox'), scraper)
                 return
             if mso_id != 'Spectrum':

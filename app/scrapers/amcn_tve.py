@@ -17,6 +17,7 @@ import requests
 from .base import BaseScraper, ChannelData, ProgramData, null_placeholder_season_episode
 from ..gracenote_map import resolve_gracenote
 from ..models import TVEAccount
+from ..tve.accounts import tve_account_for
 from ..tve.adobe_pass import (
     ADOBE_BASE,
     AdobePassCoxClient,
@@ -1011,7 +1012,7 @@ class AMCNetworksTVEScraper(MvpdCooldownMixin, BaseScraper):
         if not channel:
             raise ValueError(f'Unsupported AMC Networks TVE stream URL: {raw_url}')
 
-        account = TVEAccount.query.filter_by(provider_id='mvpd').first()
+        account = tve_account_for(self.source_name)
         if not account or not account.is_enabled or not account.has_credentials():
             raise TVEAuthError('TVE credentials are not configured in Settings.')
 

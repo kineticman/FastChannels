@@ -8,25 +8,18 @@ from datetime import datetime, timezone
 from flask import Blueprint, jsonify, request, current_app
 from ..extensions import db
 from ..models import Source, TVEAccount, SourceCache
+from ..tve.accounts import (
+    SHARED_DISPLAY_NAME, SHARED_PROVIDER_ID, get_or_create_shared_tve_account, shared_tve_account,
+)
 from ..tve.adobe_pass import TVEAuthError, verify_mvpd_history
 from ..tve.providers import unsupported_network_reason, ytdlp_adobe_mso_providers
 
 tve_bp = Blueprint('api_tve', __name__)
 
 
-def _get_tve_account(provider_id: str, display_name: str) -> TVEAccount:
-    account = TVEAccount.query.filter_by(provider_id=provider_id).first()
-    if account:
-        return account
-    account = TVEAccount(provider_id=provider_id, display_name=display_name, is_enabled=False, config={})
-    db.session.add(account)
-    db.session.flush()
-    return account
-
-
 @tve_bp.route('/settings/tve/mvpd', methods=['GET', 'POST'])
 def tve_mvpd_settings():
-    account = _get_tve_account('mvpd', 'TV Provider')
+    account = get_or_create_shared_tve_account()
     if request.method == 'POST':
         data = request.get_json(force=True) or {}
         provider_choices = {p['id']: p for p in ytdlp_adobe_mso_providers()}
@@ -77,7 +70,7 @@ def tve_mvpd_settings():
 @tve_bp.route('/settings/tve/status')
 def tve_network_status_route():
     from ..tve.status import tve_network_status
-    account = TVEAccount.query.filter_by(provider_id='mvpd').first()
+    account = shared_tve_account()
     return jsonify({'networks': tve_network_status(account)})
 
 
@@ -108,7 +101,7 @@ def tve_reset():
     """
     import shutil
 
-    account = TVEAccount.query.filter_by(provider_id='mvpd').first()
+    account = shared_tve_account()
     # home_zip_code is a user preference (FOX One's legacy fallback — see
     # FoxOneScraper._home_zip_code), not a credential or cached sign-in
     # artifact — a reset shouldn't make the user re-enter it.
@@ -118,7 +111,7 @@ def tve_reset():
         db.session.flush()
     if preserved_zip:
         db.session.add(TVEAccount(
-            provider_id='mvpd', display_name='TV Provider', is_enabled=False,
+            provider_id=SHARED_PROVIDER_ID, display_name=SHARED_DISPLAY_NAME, is_enabled=False,
             config={'home_zip_code': preserved_zip},
         ))
 
@@ -167,7 +160,7 @@ def tve_reset():
 
 @tve_bp.route('/settings/tve/mvpd/test', methods=['POST'])
 def test_tve_mvpd_settings():
-    account = _get_tve_account('mvpd', 'TV Provider')
+    account = get_or_create_shared_tve_account()
     if not account.has_credentials():
         return jsonify({'error': 'TVE username and password are required.'}), 400
     cfg = account.config or {}
@@ -211,7 +204,7 @@ def mvpd_browser_login_start():
     from ..tve.mvpd_targets import resolve_requestor_target
     from .tasks import trigger_mvpd_browser_login
 
-    account = _get_tve_account('mvpd', 'TV Provider')
+    account = get_or_create_shared_tve_account()
     if not account.is_enabled:
         return jsonify({'error': 'Enable and save the TVE account first.'}), 400
     data = request.get_json(force=True) or {}
@@ -297,7 +290,7 @@ def tve_signin_method():
     method = ((request.get_json(force=True) or {}).get('method') or '').strip()
     if method not in {'browser', 'phone'}:
         return jsonify({'error': 'Unknown sign-in method.'}), 400
-    account = _get_tve_account('mvpd', 'TV Provider')
+    account = get_or_create_shared_tve_account()
     cfg = dict(account.config or {})
     cfg['signin_method'] = method
     account.config = cfg
@@ -320,7 +313,7 @@ def tve_link_login_start():
         return jsonify({'error': 'This network can only sign in with "Sign in for me".'}), 400
     if family == 'legacy' and not requestor_id:
         return jsonify({'error': 'requestor_id is required.'}), 400
-    account = TVEAccount.query.filter_by(provider_id='mvpd').first()
+    account = shared_tve_account()
     if not account or not account.is_enabled or not account.has_credentials():
         return jsonify({'error': 'Enter and save your TV provider username and password first.'}), 400
     mso_id = tve_account_mso_id(account)
@@ -363,7 +356,7 @@ def tve_link_login_stop():
 def amcn_browser_login_start():
     from .tasks import trigger_amcn_browser_login
 
-    account = _get_tve_account('mvpd', 'TV Provider')
+    account = get_or_create_shared_tve_account()
     if not account.is_enabled:
         return jsonify({'error': 'Enable and save the TVE account first.'}), 400
     cfg = account.config or {}
@@ -376,7 +369,7 @@ def amcn_browser_login_start():
 def discovery_browser_login_start():
     from .tasks import trigger_discovery_browser_login
 
-    account = _get_tve_account('mvpd', 'TV Provider')
+    account = get_or_create_shared_tve_account()
     if not account.is_enabled:
         return jsonify({'error': 'Enable and save the TVE account first.'}), 400
     cfg = account.config or {}
@@ -407,7 +400,7 @@ tve_bp.add_url_rule('/settings/tve/discovery/browser-login/stop', 'discovery_bro
 def google_signin_start():
     from .tasks import trigger_google_signin
 
-    account = _get_tve_account('mvpd', 'TV Provider')
+    account = get_or_create_shared_tve_account()
     if not account.is_enabled:
         return jsonify({'error': 'Enable and save the TVE account first.'}), 400
     started = trigger_google_signin()
@@ -475,7 +468,7 @@ def google_signin_stop():
 def nbc_browser_login_start():
     from .tasks import trigger_nbc_browser_login
 
-    account = _get_tve_account('mvpd', 'TV Provider')
+    account = get_or_create_shared_tve_account()
     if not account.is_enabled:
         return jsonify({'error': 'Enable and save the TVE account first.'}), 400
     cfg = account.config or {}
@@ -544,7 +537,7 @@ def nbc_browser_login_stop():
 def fox_browser_login_start():
     from .tasks import trigger_fox_browser_login
 
-    account = _get_tve_account('mvpd', 'TV Provider')
+    account = get_or_create_shared_tve_account()
     if not account.is_enabled:
         return jsonify({'error': 'Enable and save the TVE account first.'}), 400
     cfg = account.config or {}

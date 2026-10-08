@@ -12,7 +12,7 @@ import requests
 
 from .base import BaseScraper, ChannelData, ProgramData
 from ..gracenote_map import resolve_gracenote
-from ..models import TVEAccount
+from ..tve.accounts import tve_account_for
 from ..tve.adobe_pass import (
     MvpdCooldownMixin,
     TVEAuthError,
@@ -445,7 +445,7 @@ class AENetworksTVEScraper(MvpdCooldownMixin, BaseScraper):
         # attempt Cox auth when an account is configured, on the chance that's
         # an oversight on A+E's end rather than a deliberate design, but never
         # let it block or slow down what already plays without it.
-        account = TVEAccount.query.filter_by(provider_id='mvpd').first()
+        account = tve_account_for(self.source_name)
         if account and account.is_enabled and account.has_credentials():
             cfg = account.config or {}
             configured_statement = (cfg.get('software_statement') or '').strip()

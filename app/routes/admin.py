@@ -8,7 +8,7 @@ from flask import Blueprint, current_app, jsonify, render_template, request
 from sqlalchemy import select, case
 from sqlalchemy.orm import load_only, defer
 from ..extensions import db
-from ..models import Source, Channel, Feed, FeedChannelNumber, AppSettings, Program, TVEAccount
+from ..models import Source, Channel, Feed, FeedChannelNumber, AppSettings, Program
 from ..generators.m3u import (
     _build_channel_query,
     _build_feed_chnum_map,
@@ -32,6 +32,7 @@ from ..source_config import (
 )
 from ..timezone_utils import timezone_choices, timezone_health
 from ..url import public_base_url, detected_base_url
+from ..tve.accounts import shared_tve_account
 from ..tve.providers import ytdlp_adobe_mso_providers
 
 admin_bp = Blueprint('admin', __name__, template_folder='../templates')
@@ -1608,7 +1609,7 @@ def settings():
             'anchor': 'settings-card-timezone',
         })
     tz_health = timezone_health(app_settings.timezone_name)
-    tve_account = TVEAccount.query.filter_by(provider_id='mvpd').first()
+    tve_account = shared_tve_account()
     tve_provider_choices = ytdlp_adobe_mso_providers()
     _url_from_env = _url_source in {'FASTCHANNELS_SERVER_URL', 'PUBLIC_BASE_URL'}
     _no_port_warning = False

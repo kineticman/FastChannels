@@ -6,7 +6,8 @@ from urllib.parse import urlsplit as _urlsplit
 import redis
 
 from app.worker import flask_app
-from app.models import Source, TVEAccount
+from app.models import Source
+from app.tve.accounts import tve_account_for
 from app.config_store import persist_source_cache_updates, persist_source_config_updates
 from app.tve.adobe_pass import TVEAuthError, TVENotAuthorizedError
 from app.tve.browser_login.common import (
@@ -40,6 +41,10 @@ from app.tve.browser_login.common import (
 )
 
 logger = logging.getLogger(__name__)
+
+# The source this sign-in is for — picks which TV-provider account it uses
+# (see app/tve/accounts.py).
+_SOURCE_NAME = 'amcn_tve'
 
 
 def _run_amcn_browser_assisted_login(r, set_status, source, account, scraper, device_id: str, mso_id: str, channels: dict) -> None:
@@ -106,7 +111,7 @@ def _run_amcn_browser_assisted_login(r, set_status, source, account, scraper, de
         with Camoufox(**camoufox_options) as context:
             page = context.pages[0] if context.pages else context.new_page()
             _watch_spectrum_auth_results(page, 'amcn-mvpd-login')
-            _prime_google_session(context, mso_id)
+            _prime_google_session(context, mso_id, source_name=_SOURCE_NAME)
             page.on('crash', lambda p: logger.warning('[amcn-mvpd-login] page CRASH event fired (url was %s)', _safe_page_url(p)))
             page.on('close', lambda p: logger.warning('[amcn-mvpd-login] page CLOSE event fired'))
             page.on('pageerror', lambda exc: logger.warning('[amcn-mvpd-login] page JS error: %s', str(exc)[:500]))
@@ -222,6 +227,7 @@ def _run_amcn_browser_assisted_login(r, set_status, source, account, scraper, de
                 settled = _settle_after_mvpd_navigation(
                     page, set_status=set_status,
                     respect_youtubetv_soft_block=mso_id != 'YouTubeTV',
+                    source_name=_SOURCE_NAME,
                 )
                 landing_url = _safe_page_url(page)
                 if not settled:
@@ -267,6 +273,7 @@ def _run_amcn_browser_assisted_login(r, set_status, source, account, scraper, de
                         page, account.username, account.password, r=r,
                         stop_key=MVPD_BROWSER_LOGIN_STOP_KEY, input_key=MVPD_BROWSER_LOGIN_INPUT_KEY,
                         navigation_already_settled=True, log_tag='amcn-mvpd-login',
+                        source_name=_SOURCE_NAME,
                     )
                 set_status('running', f'Signing in to {channel.name}…', landing_url)
 
@@ -356,7 +363,7 @@ def _run_amcn_browser_assisted_login(r, set_status, source, account, scraper, de
                     # channel wasn't entitled — see denied_message's own
                     # comment above. Cheap to call per-channel: it no-ops
                     # instantly once a master_token is already on file.
-                    _maybe_capture_google_master_token(context, mso_id)
+                    _maybe_capture_google_master_token(context, mso_id, source_name=_SOURCE_NAME)
                 elif mso_id == 'Comcast_SSO' and paired:
                     # Same idea as the YouTubeTV branch above, for the
                     # Xfinity cookie jar instead of a Google master_token —
@@ -365,7 +372,7 @@ def _run_amcn_browser_assisted_login(r, set_status, source, account, scraper, de
                     # login never saved anything for OTHER TVE families'
                     # cookie-jar fast path to reuse. See
                     # _harvest_and_save_xfinity_cookies's docstring.
-                    _harvest_and_save_xfinity_cookies(context)
+                    _harvest_and_save_xfinity_cookies(context, source_name=_SOURCE_NAME)
                 if cancelled:
                     failed.append(f'{channel.name}: cancelled')
                     break
@@ -388,7 +395,7 @@ def _run_amcn_browser_assisted_login(r, set_status, source, account, scraper, de
             persist_source_config_updates(source.id, scraper._pending_config_updates)
             persist_source_cache_updates(source.id, scraper._pending_cache_updates)
         if isinstance(exc, SpectrumWantsCoxProvider):
-            if _spectrum_retry_as_cox(exc, mso_id, 'AMC Networks TVE', set_status):
+            if _spectrum_retry_as_cox(exc, mso_id, 'AMC Networks TVE', set_status, source_name=_SOURCE_NAME):
                 return _run_amcn_browser_assisted_login(r, set_status, source, account, scraper, device_id, 'Cox', channels)
             return
         if r.exists(MVPD_BROWSER_LOGIN_STOP_KEY):
@@ -471,7 +478,7 @@ def run_amcn_browser_login(mso_id: str):
         if not source:
             set_status('error', 'AMC Networks TVE source not found.')
             return
-        account = TVEAccount.query.filter_by(provider_id='mvpd').first()
+        account = tve_account_for(_SOURCE_NAME)
         if not account or not account.is_enabled or not account.has_credentials():
             set_status('error', 'TVE credentials are not configured in Settings.')
             return
@@ -571,7 +578,7 @@ def run_amcn_browser_login(mso_id: str):
         # (confirmed live 2026-09-25, Cox → Spectrum fallback). Reload both
         # and touch the attributes it reads before popping the context.
         source = Source.query.filter_by(name='amcn_tve').first()
-        account = TVEAccount.query.filter_by(provider_id='mvpd').first()
+        account = tve_account_for(_SOURCE_NAME)
         _ = (source.id, source.config, account.username, account.password, account.config)
         _ctx.pop()
         _ctx_popped['v'] = True

@@ -15,7 +15,7 @@ import requests
 
 from .base import BaseScraper, ChannelData, ProgramData
 from ..gracenote_map import resolve_gracenote
-from ..models import TVEAccount
+from ..tve.accounts import tve_account_for
 from ..tve.adobe_pass import MvpdCooldownMixin, TVEAuthError, TVENotAuthorizedError
 
 logger = logging.getLogger(__name__)
@@ -488,7 +488,7 @@ class DiscoveryTVEScraper(MvpdCooldownMixin, BaseScraper):
         })
 
     def _authenticate(self) -> requests.Session:
-        account = TVEAccount.query.filter_by(provider_id='mvpd').first()
+        account = tve_account_for(self.source_name)
         if not account or not account.is_enabled or not account.has_credentials():
             raise TVEAuthError('TVE credentials are not configured in Settings.')
         cfg = account.config or {}

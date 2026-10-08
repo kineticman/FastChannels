@@ -4,7 +4,7 @@ import time
 import redis
 
 from app.worker import flask_app
-from app.models import TVEAccount
+from app.tve.accounts import shared_tve_account
 from app.tve.browser_login.common import (
     _mask_username,
     _safe_page_url,
@@ -88,7 +88,7 @@ def run_google_signin():
         set_status('starting', 'Launching browser…')
 
         from app.tve import adobe_pass
-        account_row = TVEAccount.query.filter_by(provider_id='mvpd').first()
+        account_row = shared_tve_account()
         if account_row is None:
             set_status('error', 'TVE account not found — save TVE settings first.')
             return
@@ -169,7 +169,7 @@ def run_google_signin():
             return
 
         set_status('running', 'Verifying with Google…')
-        data = _exchange_and_save_google_master_token(oauth_token)
+        data = _exchange_and_save_google_master_token(oauth_token, source_name=None)
         if not data:
             set_status('error', 'Google accepted the sign-in but the token exchange failed — see server logs.')
             return

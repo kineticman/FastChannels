@@ -118,6 +118,7 @@ import requests
 from .base import BaseScraper, ChannelData, ConfigField, ProgramData
 from ..gracenote_map import resolve_gracenote
 from ..models import TVEAccount
+from ..tve.accounts import tve_account_for
 from ..tve.adobe_pass import (
     MvpdCooldownMixin,
     TVEAuthError,
@@ -736,7 +737,7 @@ class NbcTveScraper(MvpdCooldownMixin, BaseScraper):
         return config
 
     def _mvpd_account(self) -> TVEAccount | None:
-        account = TVEAccount.query.filter_by(provider_id='mvpd').first()
+        account = tve_account_for(self.source_name)
         if account and account.is_enabled and account.has_credentials():
             return account
         return None

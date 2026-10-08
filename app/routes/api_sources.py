@@ -467,8 +467,8 @@ def get_source_config(source_id):
         # Older installs kept FOX One's home ZIP on the shared TV-provider
         # account (Settings > TV Everywhere); the scraper still falls back to
         # it, so show it here until it's saved on the source.
-        from ..models import TVEAccount
-        account = TVEAccount.query.filter_by(provider_id='mvpd').first()
+        from ..tve.accounts import shared_tve_account
+        account = shared_tve_account()
         values['home_zip_code'] = ((account.config or {}).get('home_zip_code') or '').strip() if account else ''
     config_complete = bool(scraper_cls and is_source_config_complete(source.name, scraper_cls, saved))
     config_status = (
@@ -496,8 +496,8 @@ def get_source_config(source_id):
 def _espn_tv_provider() -> tuple[str, str]:
     """(Adobe mvpd id, display name) of the TV provider under Settings → TV
     Everywhere — the same id the other Adobe v2 sign-ins (NBC) use."""
-    from ..models import TVEAccount
-    account = TVEAccount.query.filter_by(provider_id='mvpd').first()
+    from ..tve.accounts import tve_account_for
+    account = tve_account_for('espn')
     cfg = (account.config or {}) if account else {}
     mso_id = (cfg.get('yt_dlp_mso_id') or cfg.get('selected_mso_id') or '').strip()
     return mso_id, (cfg.get('selected_mso_name') or mso_id).strip()
@@ -519,14 +519,14 @@ def _espn_tve_info(saved: dict) -> dict:
 
 def _fox_one_signin_info(saved: dict) -> dict:
     """What FOX One's card needs to render its sign-in section."""
-    from ..models import TVEAccount
     from ..scrapers.fox_one import FoxOneScraper
+    from ..tve.accounts import shared_tve_account
     from ..tve.providers import unsupported_network_reason, ytdlp_adobe_mso_providers
 
     providers = ytdlp_adobe_mso_providers()
     names = {p['id']: p['name'] for p in providers}
     login = FoxOneScraper(config=dict(saved))._mvpd_login()
-    account = TVEAccount.query.filter_by(provider_id='mvpd').first()
+    account = shared_tve_account()
     shared_ready = bool(account and account.is_enabled and account.has_credentials())
     shared_mso = ''
     if account:

@@ -7,7 +7,7 @@ from urllib.parse import parse_qs as _parse_qs, urlsplit as _urlsplit
 
 from app.worker import flask_app
 from app.extensions import db
-from app.models import TVEAccount
+from app.tve.accounts import tve_account_for, tve_account_for_network
 from app.scrapers.base import mask_username as _mask_username
 from app.tve.adobe_pass import TVEAuthError, TVENotAuthorizedError, save_xfinity_cookie_jar
 
@@ -127,6 +127,7 @@ _MVPD_TRANSITIONAL_URL_MARKERS = ('/saml/module.php/', '/api/v2/authenticate/')
 def _settle_after_mvpd_navigation(
     page, max_seconds: float = 15.0, set_status=None,
     respect_youtubetv_soft_block: bool = True,
+    *, source_name: str | None,
 ) -> bool:
     """Pure wait — zero page.screenshot() calls, zero locator queries,
     nothing but page.wait_for_timeout() and reading page.url (a cheap local
@@ -197,7 +198,7 @@ def _settle_after_mvpd_navigation(
     try:
         from app.tve import adobe_pass
         with flask_app.app_context():
-            account_row = TVEAccount.query.filter_by(provider_id='mvpd').first()
+            account_row = tve_account_for(source_name)
             cfg = (account_row.config or {}) if account_row else {}
             current_mso_id = (cfg.get('yt_dlp_mso_id') or cfg.get('selected_mso_id') or cfg.get('adobe_mso_id') or '').strip()
             # This block only ever means "YouTubeTV's SAML bounce chain looked
@@ -284,7 +285,7 @@ def _settle_after_mvpd_navigation(
             try:
                 from app.tve import adobe_pass
                 with flask_app.app_context():
-                    account_row = TVEAccount.query.filter_by(provider_id='mvpd').first()
+                    account_row = tve_account_for(source_name)
                     if account_row is not None:
                         adobe_pass.save_adobe_youtubetv_soft_block(
                             account_row, reason=f'empty body ({len(html)} chars) on {last_url[:150]}',
@@ -553,6 +554,7 @@ def _try_autofill_credentials(
     stop_key: str | None = None, input_key: str | None = None,
     shot_key: str | None = None, hint_key: str | None = None,
     navigation_already_settled: bool = False, log_tag: str = 'mvpd-login',
+    *, source_name: str | None,
 ) -> bool:
     """Best-effort, short-timeout sibling of _autofill_sling_credentials for
     run_mvpd_browser_login's single-network browser-assisted flow.
@@ -604,7 +606,7 @@ def _try_autofill_credentials(
         page._fc_autofill_args = dict(
             username=username, password=password, wait_seconds=wait_seconds, r=r,
             stop_key=stop_key, input_key=input_key, shot_key=shot_key, hint_key=hint_key,
-            log_tag=log_tag,
+            log_tag=log_tag, source_name=source_name,
         )
     except Exception:  # noqa: BLE001
         pass
@@ -621,7 +623,7 @@ def _try_autofill_credentials(
     # delay and, on a known-dead YouTubeTV relay, used to start the 12-second
     # autofill wait that ultimately published a white screenshot.
     if not navigation_already_settled:
-        _settle_after_mvpd_navigation(page, max_seconds=min(8.0, wait_seconds))
+        _settle_after_mvpd_navigation(page, max_seconds=min(8.0, wait_seconds), source_name=source_name)
     last_relay = time.monotonic()
     # Confirmed live 2026-09-23: a genuinely fresh Spectrum profile (no prior
     # mvpd_tve history) bounces watch.spectrum.net -> id.spectrum.net for its
@@ -941,7 +943,7 @@ def _apply_sling_browser_login_input(page, cmd: dict) -> None:
         page.keyboard.press(str(cmd['key']))
 
 
-def _harvest_and_save_xfinity_cookies(context) -> None:
+def _harvest_and_save_xfinity_cookies(context, *, source_name: str | None) -> None:
     """Grabs the real, JS-matured Akamai Bot Manager + Xfinity SESSION
     cookies out of a Camoufox context right after a successful Comcast_SSO
     pairing, and persists them so authorize_mvpd() can do every SUBSEQUENT
@@ -977,7 +979,7 @@ def _harvest_and_save_xfinity_cookies(context) -> None:
         logger.info('[mvpd-login] xfinity cookie harvest found no xfinity.com cookies')
         return
     with flask_app.app_context():
-        account = TVEAccount.query.filter_by(provider_id='mvpd').first()
+        account = tve_account_for(source_name)
         if not account:
             return
         save_xfinity_cookie_jar(account, jar)
@@ -999,7 +1001,7 @@ def _record_tve_login_error(key: str, message: str) -> None:
     supersedes it.
     """
     with flask_app.app_context():
-        account = TVEAccount.query.filter_by(provider_id='mvpd').first()
+        account = tve_account_for_network(key)
         if not account:
             return
         cfg = dict(account.config or {})
@@ -1375,11 +1377,11 @@ class SpectrumWantsCoxProvider(Exception):
     can't retry."""
 
 
-def _save_tve_provider_as_cox(label: str) -> bool:
+def _save_tve_provider_as_cox(label: str, *, source_name: str | None) -> bool:
     """Persist Cox ("Cox / Cox Spectrum") as the TVE account's provider."""
     try:
         with flask_app.app_context():
-            account = TVEAccount.query.filter_by(provider_id='mvpd').first()
+            account = tve_account_for(source_name)
             if account is None:
                 return False
             cfg = dict(account.config or {})
@@ -1400,7 +1402,9 @@ def _save_tve_provider_as_cox(label: str) -> bool:
     return True
 
 
-def _spectrum_retry_as_cox(exc: SpectrumWantsCoxProvider, mso_id: str, label: str, set_status) -> bool:
+def _spectrum_retry_as_cox(
+    exc: SpectrumWantsCoxProvider, mso_id: str, label: str, set_status, *, source_name: str | None,
+) -> bool:
     """Handle SpectrumWantsCoxProvider in a TVE sign-in's error handler.
 
     When the attempt used mso_id=Spectrum: save Cox ("Cox / Cox Spectrum")
@@ -1421,7 +1425,7 @@ def _spectrum_retry_as_cox(exc: SpectrumWantsCoxProvider, mso_id: str, label: st
         set_status('error', f'{label}: Spectrum returned IDLI-4213 ("select Cox Spectrum") even '
                             f'though the TV provider is already set to {mso_id}.')
         return False
-    if not _save_tve_provider_as_cox(label):
+    if not _save_tve_provider_as_cox(label, source_name=source_name):
         set_status('error', f'{label}: Spectrum asked for "Cox Spectrum" (IDLI-4213) but switching '
                             f'the TV provider failed — choose "Cox / Cox Spectrum" in Settings.')
         return False
@@ -1708,7 +1712,7 @@ def _log_signin_timeout_snapshot(page, log_tag: str) -> None:
 _GOOGLE_SETUP_URL = 'https://accounts.google.com/embedded/setup/v2/android?ipt=&ipr=&flowName=EmbeddedSetupAndroid'
 
 
-def _prime_google_session(context, mso_id: str) -> bool:
+def _prime_google_session(context, mso_id: str, *, source_name: str | None) -> bool:
     """Best-effort: if a Google master_token is already on file for the mvpd
     TVE account (see app.tve.google_master_token's module docstring —
     captured once from a real interactive login, renewable forever with zero
@@ -1751,7 +1755,7 @@ def _prime_google_session(context, mso_id: str) -> bool:
     try:
         from app.tve import adobe_pass, google_master_token
         with flask_app.app_context():
-            account_row = TVEAccount.query.filter_by(provider_id='mvpd').first()
+            account_row = tve_account_for(source_name)
             if account_row is None:
                 return False
             saved = adobe_pass.load_google_master_token(account_row)
@@ -1768,7 +1772,7 @@ def _prime_google_session(context, mso_id: str) -> bool:
         return False
 
 
-def _exchange_and_save_google_master_token(oauth_token: str) -> dict | None:
+def _exchange_and_save_google_master_token(oauth_token: str, *, source_name: str | None) -> dict | None:
     """Shared tail end of the capture flow — exchange an oauth_token
     (harvested from Google's embedded Android setup page) for a
     master_token and persist it. Used by both _maybe_capture_google_master_
@@ -1782,7 +1786,7 @@ def _exchange_and_save_google_master_token(oauth_token: str) -> dict | None:
         if not data:
             return None
         with flask_app.app_context():
-            account_row = TVEAccount.query.filter_by(provider_id='mvpd').first()
+            account_row = tve_account_for(source_name)
             if account_row is None:
                 return None
             adobe_pass.save_google_master_token(account_row, data)
@@ -1793,7 +1797,7 @@ def _exchange_and_save_google_master_token(oauth_token: str) -> dict | None:
         return None
 
 
-def _maybe_capture_google_master_token(context, mso_id: str) -> None:
+def _maybe_capture_google_master_token(context, mso_id: str, *, source_name: str | None) -> None:
     """Best-effort opportunistic capture of a Google master_token — see
     app.tve.google_master_token's module docstring. Called right after a
     YouTubeTV-MSO'd browser-login has already confirmed a real Google-backed
@@ -1825,7 +1829,7 @@ def _maybe_capture_google_master_token(context, mso_id: str) -> None:
     try:
         from app.tve import adobe_pass
         with flask_app.app_context():
-            account_row = TVEAccount.query.filter_by(provider_id='mvpd').first()
+            account_row = tve_account_for(source_name)
             if account_row is None:
                 return
             if adobe_pass.load_google_master_token(account_row):
@@ -1854,7 +1858,7 @@ def _maybe_capture_google_master_token(context, mso_id: str) -> None:
                     _safe_page_url(capture_page),
                 )
                 return
-            _exchange_and_save_google_master_token(oauth_token)
+            _exchange_and_save_google_master_token(oauth_token, source_name=source_name)
         finally:
             capture_page.close()
     except Exception as exc:  # noqa: BLE001
@@ -1962,6 +1966,7 @@ def _sling_f5_recover(
     page, login_url: str, username: str, password: str, r=None,
     stop_key: str | None = None, input_key: str | None = None,
     shot_key: str | None = None, hint_key: str | None = None,
+    *, source_name: str | None,
 ) -> bool:
     """Detect Sling's F5 bot-defense block page ("The requested URL was
     rejected. Please consult with your administrator.") that replaces the
@@ -1984,6 +1989,7 @@ def _sling_f5_recover(
             _try_autofill_credentials(
                 page, username, password, r=r,
                 stop_key=stop_key, input_key=input_key, shot_key=shot_key, hint_key=hint_key,
+                source_name=source_name,
             )
     except Exception as exc:  # noqa: BLE001
         logger.info('[mvpd-login] F5-recovery reload failed: %s', exc)

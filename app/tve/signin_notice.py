@@ -33,9 +33,9 @@ def mark_signin_needed(key: str | None, message: str) -> None:
         if not has_app_context():
             return
         from ..extensions import db
-        from ..models import TVEAccount
+        from .accounts import tve_account_for_network
 
-        account = TVEAccount.query.filter_by(provider_id='mvpd').first()
+        account = tve_account_for_network(key)
         if not account:
             return
         cfg = dict(account.config or {})
@@ -57,10 +57,11 @@ def mark_signin_needed(key: str | None, message: str) -> None:
 def pending_signins() -> list[dict]:
     """Sign-ins that need redoing, for the dashboard banner:
     [{'label', 'message', 'at', 'href'}]."""
-    from ..models import Source, TVEAccount
+    from ..models import Source
+    from .accounts import shared_tve_account
     from .status import tve_network_status
 
-    account = TVEAccount.query.filter_by(provider_id='mvpd').first()
+    account = shared_tve_account()
     if not account:
         return []
     out = [
