@@ -1786,7 +1786,7 @@ def _exchange_and_save_google_master_token(oauth_token: str) -> dict | None:
             if account_row is None:
                 return None
             adobe_pass.save_google_master_token(account_row, data)
-        logger.info('[mvpd-login] captured a Google master_token for %s — future YouTubeTV authorizations can skip interactive login', data.get('email', '?'))
+        logger.info('[mvpd-login] captured a Google master_token for %s — future YouTubeTV authorizations can skip interactive login', _mask_username(data['email']) if data.get('email') else '?')
         return data
     except Exception as exc:  # noqa: BLE001
         logger.warning('[mvpd-login] _exchange_and_save_google_master_token failed (non-fatal): %s', exc)
