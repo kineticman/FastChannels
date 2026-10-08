@@ -936,6 +936,50 @@ def capture_directv_auth_cffi(
     }
 
 
+_AUTHN_REFRESH_URL = "https://api.cld.dtvce.com/authn-refreshgo/v3/refresh"
+
+
+def refresh_directv_auth_web(refresh_token: str) -> dict:
+    """Renew an email/password session from its refresh token instead of
+    logging in again. reqParams=ACTIVATIONTOKEN makes DirecTV return a fresh
+    DRM activation token along with the new bearer and refresh token. The
+    result has the same shape as capture_directv_auth_cffi's."""
+    if _cffi_requests is None:
+        raise DirectvAuthError('curl_cffi unavailable')
+    session = _cffi_requests.Session(impersonate=_CFFI_IMPERSONATE)
+    response = session.post(
+        _AUTHN_REFRESH_URL,
+        params={'clientID': _WEB_CLIENT_ID},
+        data=[
+            ('clientMake', 'Google'),
+            ('clientModel', 'Chrome'),
+            ('refresh_token', refresh_token),
+            ('reqParams', 'ACTIVATIONTOKEN'),
+        ],
+        headers={
+            'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+            'Accept': 'application/json, text/plain, */*',
+            'Origin': 'https://stream.directv.com',
+            'Referer': 'https://stream.directv.com/',
+        },
+        timeout=30,
+    )
+    token_data = _json_or_error(response, 'DirecTV token refresh')
+    bearer = (token_data.get('access_token') or '').strip()
+    if not bearer:
+        raise DirectvAuthError('DirecTV token refresh did not return a bearer token')
+    return {
+        'bearer_token': bearer,
+        'refresh_token': (token_data.get('refresh_token') or '').strip() or refresh_token,
+        'activation_token': _normalize_activation_token(
+            ((token_data.get('valuePairs') or {}).get('activationToken') or '').strip()
+        ),
+        'cookies': [],
+        'captured_at': time.time(),
+        'auth_method': 'curl_cffi',
+    }
+
+
 def capture_directv_auth_fast(
     username: str,
     password: str,
@@ -1291,9 +1335,10 @@ def run_directv_auth(
     refreshes. Queued refreshes pass no Flask app object, so this function
     creates one when needed and persists the captured session directly.
 
-    method='web' forces the email/password login (the Authenticate button).
-    Otherwise a code sign-in session renews from its refresh token, and the
-    email/password login is the fallback when that fails and credentials exist.
+    method='web' forces the email/password login (the Sign in button).
+    Otherwise the stored session, whichever way it was signed in, renews from
+    its refresh token, and the email/password login is the fallback when that
+    fails and credentials exist.
     """
     import redis as _redis
     r = _redis.from_url(redis_url)
@@ -1315,6 +1360,7 @@ def run_directv_auth(
                 app = create_app()
 
         result = None
+        refreshed = False
         if method != 'web':
             stored = {}
             try:
@@ -1325,21 +1371,30 @@ def run_directv_auth(
             except Exception:
                 logger.warning('[directv-auth] could not read stored session for source_id=%s',
                                source_id, exc_info=True)
-            if directv_device_auth.is_device_session(stored):
+            refresh_token = (stored.get('refresh_token') or '').strip()
+            if refresh_token:
+                code_session = directv_device_auth.is_device_session(stored)
                 try:
-                    result = directv_device_auth.refresh_session(stored['refresh_token'])
+                    if code_session:
+                        result = directv_device_auth.refresh_session(refresh_token)
+                    else:
+                        result = refresh_directv_auth_web(refresh_token)
                     if not result.get('activation_token') and not stored.get('activation_token'):
                         raise DirectvAuthError('refresh returned no DRM activation token')
+                    refreshed = True
                 except Exception as exc:
                     result = None
                     if not username or not password:
-                        logger.warning('[directv-auth] code sign-in refresh failed for source_id=%s: %s',
+                        logger.warning('[directv-auth] session refresh failed for source_id=%s: %s',
                                        source_id, exc)
                         _write_status(r, source_id, 'failed',
                                       'DirecTV sign-in expired — sign in again in source settings.')
                         return
-                    logger.warning('[directv-auth] code sign-in refresh failed for source_id=%s (%s); '
-                                   'falling back to the email/password login', source_id, exc)
+                    # Routine for an email/password session whose refresh token aged
+                    # out; worth a warning when it ends a code sign-in session.
+                    logger.log(logging.WARNING if code_session else logging.INFO,
+                               '[directv-auth] session refresh failed for source_id=%s (%s); '
+                               'falling back to the email/password login', source_id, exc)
 
         if result is None:
             try:
@@ -1367,7 +1422,7 @@ def run_directv_auth(
         except Exception as exc:
             logger.error('[directv-auth] failed to persist result directly: %s', exc)
 
-        summary = 'refreshed session' if result.get('auth_method') == directv_device_auth.AUTH_METHOD else 'captured session'
+        summary = 'refreshed session' if refreshed else 'captured session'
         if persisted:
             summary += ', persisted to config'
         if queued:
@@ -1376,7 +1431,7 @@ def run_directv_auth(
 
         # The status poll persists this result only when the write above failed.
         # Leaving it behind otherwise would let a later poll overwrite a newer
-        # session with this one, and a code sign-in's refresh token is single-use.
+        # session with this older one.
         if not persisted:
             r.set(_result_key(source_id), json.dumps(result), ex=_RESULT_TTL)
         _write_status(r, source_id, 'success', 'Logged in — session captured.')
