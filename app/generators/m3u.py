@@ -1334,6 +1334,113 @@ def generate_fc_player_m3u(filters: dict = None, base_url: str = None,
     return '\n'.join(lines)
 
 
+def _fc_player_bridge_channels(filters: dict) -> list:
+    """A feed's FastChannels Player bridge channels, both guide types: the
+    requires_drm_bridge channels from DRM_BRIDGE_TRUSTED_SOURCES, minus any
+    with a gracenote_id that is set but malformed (same rule as the mixed
+    playlist — see _apply_guide_partition)."""
+    channels, seen = [], set()
+    for ch in _build_channel_query(_drm_bridge_query_filters(filters), activity='drm_bridge').all():
+        if ch.id in seen or (ch.source.name if ch.source else None) not in DRM_BRIDGE_TRUSTED_SOURCES:
+            continue
+        if _has_gracenote_claim(ch) and not _parse_gracenote_id(ch):
+            continue
+        channels.append(ch)
+        seen.add(ch.id)
+    return channels
+
+
+def combined_ah4c_channel_count(filters: dict) -> int:
+    """How many channels generate_combined_ah4c_m3u emits for these filters."""
+    filters = filters or {}
+    return len(_selected_channels(filters, gracenote='mixed')) + len(_fc_player_bridge_channels(filters))
+
+
+def generate_combined_ah4c_m3u(filters: dict = None, base_url: str = None, *,
+                               ah4c_base_url: str,
+                               feed_chnum_start: int = None, namespace_start: int = None,
+                               feed_id: int = None) -> str:
+    """
+    One playlist for a whole feed: the mixed-guide standard channels at their
+    normal /play URLs plus the FastChannels Player bridge channels routed
+    through ah4c, so Channels DVR needs a single Custom Source.
+
+    Only ah4c makes this safe. A source has one stream limit, so it can't cap
+    the bridge channels without capping the free ones too; ah4c tracks its own
+    tuners and refuses a tune (HTTP 500) when they are all busy, where the
+    fixed-encoder path would switch the one device out from under a recording.
+
+    The source has to be registered as MPEG-TS: Channels DVR rejects ah4c's
+    transport stream in an HLS-type source ("Detected MPEG-TS instead of HLS
+    playlist") but plays HLS channels fine in an MPEG-TS-type one.
+
+    Guide and numbering follow generate_mixed_m3u — tvc-guide-stationid where
+    there is a Gracenote ID, else tvg-id, one number pool — so it pairs with
+    the feed's regular /epg.xml. No #KODIPROP lines, as in the bridge playlists.
+    """
+    filters  = filters or {}
+    base_url = (base_url or '').rstrip('/')
+    ah4c_base_url = (ah4c_base_url or '').rstrip('/')
+
+    _s = AppSettings.get()
+    _image_proxy = _s.image_proxy_enabled if _s.image_proxy_enabled is not None else True
+
+    bridge_channels = _fc_player_bridge_channels(filters)
+    bridge_ids = {ch.id for ch in bridge_channels}
+    channels = [ch for ch in _selected_channels(filters, gracenote='mixed') if ch.id not in bridge_ids]
+    channels += bridge_channels
+
+    chnum_map, warnings = _resolve_chnum_map(
+        channels,
+        feed_chnum_start=feed_chnum_start,
+        namespace_start=namespace_start,
+        feed_id=feed_id if feed_chnum_start is not None else None,
+    )
+    if feed_chnum_start is None and namespace_start is None:
+        for w in warnings:
+            log.warning('chnum overlap (combined ah4c): %s', w)
+    else:
+        _sort_by_assigned_chnum(channels, chnum_map)
+
+    multi_country_map = _source_multi_country_map(channels)
+    lines = ['#EXTM3U']
+    for ch in channels:
+        tvg_id = _tvg_id(ch)
+        gracenote_id = _parse_gracenote_id(ch)
+        display_name = _channel_display_name(ch, multi_country_map)
+        guide_attr = (f'tvc-guide-stationid="{gracenote_id}"'
+                      if gracenote_id else f'tvg-id="{tvg_id}"')
+        attrs = [
+            f'channel-id="{tvg_id}"',
+            guide_attr,
+            f'tvg-name="{_esc(display_name)}"',
+            f'group-title="{_esc(ch.category or ch.source.display_name)}"',
+        ]
+        if ch.logo_url:
+            attrs.append(f'tvg-logo="{proxy_logo_url(ch.logo_url, base_url, image_proxy_enabled=_image_proxy) or ch.logo_url}"')
+        chnum = chnum_map.get(ch.id)
+        if chnum:
+            attrs.append(f'tvg-chno="{chnum}"')
+        if ch.description:
+            attrs.append(f'tvg-description="{_esc(ch.description)}"')
+            attrs.append(f'tvc-guide-description="{_esc(ch.description)}"')
+        if ch.stream_info:
+            vcodec, acodec = _tvc_stream_codecs(ch.stream_info)
+            if vcodec:
+                attrs.append(f'tvc-stream-vcodec="{vcodec}"')
+            if acodec:
+                attrs.append(f'tvc-stream-acodec="{acodec}"')
+        guide_cat = _tvc_guide_category(ch)
+        if guide_cat:
+            attrs.append(f'tvc-guide-categories="{guide_cat}"')
+        _append_experimental_stream_attrs(attrs, _s)
+        lines.append(f'#EXTINF:-1 {" ".join(attrs)},{_sanitize(display_name)}')
+        lines.append(_ah4c_play_url(ch, ah4c_base_url) if ch.id in bridge_ids
+                     else _channel_play_url(ch, base_url))
+
+    return '\n'.join(lines)
+
+
 def generate_native_m3u(filters: dict = None, base_url: str = None,
                         feed_chnum_start: int = None, namespace_start: int = None,
                         feed_id: int = None, include_description: bool = True) -> str:

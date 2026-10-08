@@ -1763,7 +1763,7 @@ def _prewarm_logos(source_name: str, logo_urls: list[str], progress_cb=None) -> 
 
 def _refresh_xml_artifacts() -> None:
     """Refresh master/feed XML and M3U artifacts after scrape commits land."""
-    from app.generators.m3u import generate_gracenote_m3u, generate_m3u, generate_native_m3u, generate_mixed_m3u, generate_prismcast_m3u, generate_fc_player_m3u, feed_gracenote_start, feed_namespace_start, feed_to_query_filters, _MASTER_GRACENOTE_START
+    from app.generators.m3u import generate_gracenote_m3u, generate_m3u, generate_native_m3u, generate_mixed_m3u, generate_combined_ah4c_m3u, generate_prismcast_m3u, generate_fc_player_m3u, feed_gracenote_start, feed_namespace_start, feed_to_query_filters, _MASTER_GRACENOTE_START
     from app import fc_player_bridge as _fc_player_bridge
     from app.generators.xmltv import write_xmltv
 
@@ -1926,6 +1926,15 @@ def _refresh_xml_artifacts() -> None:
                         f'feed-{feed.slug}-fc-player-mixed-m3u',
                         lambda fp, filters=filters, std_kw=std_kw: fp.write(
                             generate_fc_player_m3u(filters, base_url=base_url, gracenote=None, **std_kw)
+                        ),
+                    ))
+                if ah4c_url:
+                    # Whole feed in one playlist — see generate_combined_ah4c_m3u.
+                    m3u_artifacts.append((
+                        f'feed-{feed.slug}-combined-ah4c-m3u',
+                        lambda fp, filters=filters, std_kw=std_kw: fp.write(
+                            generate_combined_ah4c_m3u(filters, base_url=base_url,
+                                                       ah4c_base_url=ah4c_url, **std_kw)
                         ),
                     ))
                 if ah4c_url:

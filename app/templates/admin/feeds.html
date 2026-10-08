@@ -849,6 +849,23 @@
                   {% if not split.get('drm_bridge_count', 0) and not split.get('drm_bridge_gracenote_count', 0) %}disabled title="No FastChannels Android Bridge channels in this feed"{% endif %}>📺 Add ah4c Capture to Channels DVR</button>
         </div>
         <p class="help" style="margin-top:0.5rem">Same channels as HDMI Capture, but every entry is routed through <a href="https://github.com/sullrich/ah4c" target="_blank" rel="noopener">ah4c</a>'s own <code>/play/tuner/&lt;channel&gt;</code> instead of the fixed encoder URL — use this if your HDMI encoder isn't the one FastChannels documents directly. If you run both HDMI Capture and ah4c Capture, import only one of the two to avoid duplicate channels.</p>
+        {% if mixed_guide %}
+        {% set single_total = standard_total + android_bridge_total %}
+        <div class="feed-urls" style="margin-top:0.9rem">
+          <div class="url-chip" onclick="copyChip(event, this, '{{ base_url }}/feeds/{{ feed.slug }}/m3u/combined/ah4c')">
+            <span style="color:var(--text-soft);font-family:sans-serif;font-size:0.7rem;flex-shrink:0">Single playlist: standard + bridge ({{ single_total }})</span>
+            <span class="url-chip-text">{{ base_url }}/feeds/{{ feed.slug }}/m3u/combined/ah4c</span>
+            <a href="{{ base_url }}/feeds/{{ feed.slug }}/m3u/combined/ah4c" target="_blank" onclick="event.stopPropagation()" style="color:var(--text-muted);font-size:0.75rem;flex-shrink:0" title="Open">↗</a>
+            <button class="copy-btn" onclick="copyChip(event, this.closest('.url-chip'), '{{ base_url }}/feeds/{{ feed.slug }}/m3u/combined/ah4c')">Copy</button>
+          </div>
+        </div>
+        <div style="margin-top:0.6rem">
+          <button class="btn btn-dvr" title="Register this whole feed (standard channels + ah4c bridge channels) as one custom M3U source in Channels DVR"
+                  onclick='pushCombinedAh4cToDvr({{ feed.id }}, {{ feed.name|tojson }}, {{ single_total }}, this)'
+                  {% if single_total == 0 %}disabled{% endif %}>📺 Add whole feed as one source <span class="badge-pill pill-beta">Beta</span></button>
+        </div>
+        <p class="help" style="margin-top:0.5rem">One Channels DVR source for the whole feed: its standard channels plus these bridge channels through ah4c, replacing the regular source and the separate ah4c source. ah4c refuses a tune when all its tuners are busy, so the free channels need no stream limit. Registered as MPEG-TS; pair with the EPG above if adding it by hand.</p>
+        {% endif %}
       </details>
       {% endif %}
     </div>
@@ -1701,6 +1718,59 @@ async function pushNativeToDvr(id, name, count, btn, force = false) {
   }
 }
 
+// ── Push the whole feed (standard + ah4c bridge) as one Channels DVR source ──
+async function pushCombinedAh4cToDvr(id, name, count, btn, force = false) {
+  if (count > 750 && !force) {
+    const ok = confirm(
+      `${name} has ${count} channels in one source.\n\nChannels DVR usually works best at 750 or fewer.\n\nAdd it anyway?`
+    );
+    if (!ok) return;
+  }
+  const orig = btn.innerHTML;
+  btn.disabled = true;
+  btn.textContent = '⏳ Adding…';
+  const restore = () => { btn.disabled = false; btn.innerHTML = orig; };
+  try {
+    const r = await fetch(`/api/feeds/${id}/push-combined-ah4c-to-dvr`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(dvrPushBody(id, force || count > 750)),
+    });
+    const data = await r.json();
+    if (!r.ok) {
+      restore();
+      if (r.status === 409 && data.requires_mixed_confirm) {
+        if (!confirm(data.error + '\n\nAdd it anyway?')) return;
+        _mixedGuideConfirmed.add(id);
+        return pushCombinedAh4cToDvr(id, name, count, btn, true);
+      }
+      if (r.status === 409 && data.requires_confirm && !force) {
+        return pushCombinedAh4cToDvr(id, name, count, btn, true);
+      }
+      if (r.status === 504 || (r.status === 502 && /could not connect|timed out/i.test(data.error || ''))) {
+        alert('Could not reach Channels DVR.\n\nGo to Settings → Channels DVR and use the Test Connection button to verify your server URL is correct and reachable.');
+      } else if (r.status === 502 && data.error) {
+        alert('Channels DVR rejected the request:\n\n' + data.error);
+      } else {
+        alert('Failed: ' + (data.error || `HTTP ${r.status}`));
+      }
+      return;
+    }
+    btn.textContent = '✓ Added!';
+    btn.style.background = 'var(--success-bg-2)';
+    btn.style.color = 'var(--success-soft)';
+    offerStaleSourceRemoval(id, data);
+    setTimeout(() => {
+      btn.style.background = '';
+      btn.style.color = '';
+      restore();
+    }, 3000);
+  } catch(e) {
+    alert('Error: ' + e.message);
+    restore();
+  }
+}
+
 // ── Push PrismCast output to Channels DVR ──────────────────────────────────
 async function pushPrismcastToDvr(id, name, stdCount, gnCount, btn, force = false) {
   // Each partition registers as its own DVR source; warn on the larger one.
@@ -1965,7 +2035,7 @@ function dvrPushBody(feedId, force) {
 async function offerStaleSourceRemoval(feedId, data) {
   for (const name of (data.stale_sources || [])) {
     const ok = confirm(
-      `"${name}" is still in Channels DVR.\n\nIts channels are now part of the mixed source, so they will appear twice until it is removed.\n\nRemove "${name}" from Channels DVR now?`
+      `"${name}" is still in Channels DVR.\n\nIts channels are now part of the source you just added, so they will appear twice until it is removed.\n\nRemove "${name}" from Channels DVR now?`
     );
     if (!ok) continue;
     try {

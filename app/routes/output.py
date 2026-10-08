@@ -811,3 +811,32 @@ def feed_m3u_fc_player_ah4c_mixed(slug):
     if not _ah4c_bridge_ready():
         return _fc_player_ah4c_not_configured()
     return _feed_bridge_mixed_artifact(slug, 'fc-player-ah4c', 'FastChannels Player ah4c')
+
+
+@output_bp.route('/feeds/<slug>/m3u/combined/ah4c')
+def feed_m3u_combined_ah4c(slug):
+    """Whole feed in one playlist: mixed-guide standard channels plus the bridge
+    channels routed through ah4c. Register it in Channels DVR as an MPEG-TS
+    source and pair it with /feeds/<slug>/epg.xml. Mixed guide mode only."""
+    if not _ah4c_bridge_ready():
+        return _fc_player_ah4c_not_configured()
+    feed = Feed.query.filter_by(slug=slug, is_enabled=True).first_or_404()
+    if (feed.guide_mode or 'split') != 'mixed':
+        return Response(
+            f'Feed {feed.slug} is not in mixed guide mode. Turn it on from the Feeds page.\n',
+            status=404,
+            mimetype='text/plain',
+        )
+    path = get_artifact(f'feed-{slug}-combined-ah4c-m3u', ext='m3u')
+    if path is None:
+        return Response(
+            f'Combined ah4c M3U artifact for {feed.slug} is warming. Retry shortly.',
+            status=503,
+            mimetype='text/plain',
+            headers={'Retry-After': '15'},
+        )
+    return _send_feed_artifact(
+        path,
+        mimetype='application/x-mpegurl',
+        download_name=f'{slug}-combined-ah4c.m3u',
+    )
