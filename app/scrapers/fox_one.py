@@ -315,6 +315,27 @@ class FoxOneScraper(MvpdCooldownMixin, BaseScraper):
     def _container_page(self, uri: str) -> dict:
         return self._get_json(uri)
 
+    def _epg_page(self, uri: str) -> dict:
+        # FOX intermittently answers a single guide page with 424/5xx while the
+        # pages around it are fine (seen 2026-10-08, page 5 of one channel).
+        for attempt in range(3):
+            try:
+                return self._container_page(uri)
+            except requests.HTTPError as exc:
+                status = exc.response.status_code if exc.response is not None else 0
+                body = (exc.response.text or '')[:300] if exc.response is not None else ''
+                logger.warning(
+                    '[fox-one] guide page HTTP %s (attempt %d/3) for %s: %s',
+                    status, attempt + 1, uri, body,
+                )
+                if attempt == 2 or not (status == 424 or status >= 500):
+                    raise
+            except (requests.ConnectionError, requests.Timeout) as exc:
+                logger.warning('[fox-one] guide page request failed (attempt %d/3) for %s: %s', attempt + 1, uri, exc)
+                if attempt == 2:
+                    raise
+            time.sleep(1 + attempt)
+
     def _discover_channels(self) -> list[FoxOneChannel]:
         page = self._get_json(_LIVE_PAGE)
         channels: list[FoxOneChannel] = []
@@ -420,8 +441,21 @@ class FoxOneScraper(MvpdCooldownMixin, BaseScraper):
             if not channel:
                 continue
             uri = f'/product/curated/container/v1/live-geo/detail/{channel.container_id}?page=1&size=15'
+            channel_start = len(programs)
             for _ in range(30):
-                data = self._container_page(uri)
+                try:
+                    data = self._epg_page(uri)
+                except requests.RequestException as exc:
+                    # A deep page failing shouldn't discard the guide already
+                    # collected; a channel with nothing at all still raises so
+                    # a real outage or auth failure surfaces on the source.
+                    if len(programs) == channel_start:
+                        raise
+                    logger.warning(
+                        '[fox-one] %s: guide page failed, keeping %d programs already fetched: %s',
+                        source_channel_id, len(programs) - channel_start, exc,
+                    )
+                    break
                 for item in data.get('items') or []:
                     if not isinstance(item, dict):
                         continue
