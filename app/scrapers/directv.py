@@ -84,6 +84,7 @@ except ImportError:
     _CFFI_IMPERSONATE = None
 
 from .directv_numbers import assign_provider_numbers
+from . import directv_device_auth
 from .base import (
     BaseScraper, ChannelData, ConfigField, ProgramData, ScrapeSkipError,
     infer_language_from_metadata,
@@ -1227,6 +1228,54 @@ def capture_directv_auth(
 
 # ── Manual admin-UI entry point ─────────────────────────────────────────────
 
+def apply_auth_result(cfg: dict, result: dict) -> None:
+    """Write a login result (web login, code sign-in or a refresh) into a source
+    config dict. Fields a result omits keep their stored value, except the
+    web-only ones, which must not outlive the session they belonged to."""
+    cfg['bearer_token'] = result['bearer_token']
+    if result.get('refresh_token'):
+        cfg['refresh_token'] = result['refresh_token']
+    if result.get('client_context'):
+        cfg['client_context'] = result['client_context']
+    else:
+        cfg.pop('client_context', None)
+    if result.get('activation_token'):
+        cfg['activation_token'] = result['activation_token']
+    cfg['cookies'] = result.get('cookies') or []
+    cfg['token_captured_at'] = result['captured_at']
+    if result.get('identity_cookie'):
+        cfg['identity_cookie'] = result['identity_cookie']
+    else:
+        cfg.pop('identity_cookie', None)
+    if result.get('identity_cookie_expires_at'):
+        cfg['identity_cookie_expires_at'] = result['identity_cookie_expires_at']
+    else:
+        cfg.pop('identity_cookie_expires_at', None)
+    if result.get('auth_method'):
+        cfg['auth_method'] = result['auth_method']
+
+
+def queue_followup_scrape(r, source_name: str) -> bool:
+    """A prior scrape may have hit the stale token, skipped itself, and left
+    DirecTV waiting for the next scheduled run (up to scrape_interval away).
+    Queue a fresh scrape now so the new session gets used within seconds
+    instead of hours."""
+    try:
+        from rq import Queue
+        from app.worker import _scrape_job_already_active
+        q = Queue('scraper', connection=r)
+        if _scrape_job_already_active(q, source_name):
+            return False
+        q.enqueue(
+            'app.worker.run_scraper', source_name,
+            job_timeout=3600, job_id=f'scrape-{source_name}',
+        )
+        return True
+    except Exception:
+        logger.warning('[directv-auth] failed to queue follow-up scrape after refresh', exc_info=True)
+        return False
+
+
 def run_directv_auth(
     redis_url: str,
     source_id: int,
@@ -1234,12 +1283,17 @@ def run_directv_auth(
     password: str,
     app=None,
     lock_key: str | None = None,
+    method: str | None = None,
 ) -> None:
     """Redis-status-driven wrapper for DirecTV authentication.
 
     Used by the admin-UI "Authenticate" button and by queued background
     refreshes. Queued refreshes pass no Flask app object, so this function
     creates one when needed and persists the captured session directly.
+
+    method='web' forces the email/password login (the Authenticate button).
+    Otherwise a code sign-in session renews from its refresh token, and the
+    email/password login is the fallback when that fails and credentials exist.
     """
     import redis as _redis
     r = _redis.from_url(redis_url)
@@ -1252,13 +1306,6 @@ def run_directv_auth(
             _write_status(r, source_id, 'running', detail)
 
     try:
-        try:
-            result = capture_directv_auth_fast(username, password, on_status=_on_status)
-        except Exception as exc:
-            logger.warning('[directv-auth] capture failed for source_id=%s: %s', source_id, exc)
-            _write_status(r, source_id, 'failed', str(exc))
-            return
-
         if app is None:
             try:
                 from flask import current_app
@@ -1266,6 +1313,41 @@ def run_directv_auth(
             except Exception:
                 from app import create_app
                 app = create_app()
+
+        result = None
+        if method != 'web':
+            stored = {}
+            try:
+                with app.app_context():
+                    from ..models import Source
+                    source = Source.query.get(source_id)
+                    stored = dict((source.config if source else None) or {})
+            except Exception:
+                logger.warning('[directv-auth] could not read stored session for source_id=%s',
+                               source_id, exc_info=True)
+            if directv_device_auth.is_device_session(stored):
+                try:
+                    result = directv_device_auth.refresh_session(stored['refresh_token'])
+                    if not result.get('activation_token') and not stored.get('activation_token'):
+                        raise DirectvAuthError('refresh returned no DRM activation token')
+                except Exception as exc:
+                    result = None
+                    if not username or not password:
+                        logger.warning('[directv-auth] code sign-in refresh failed for source_id=%s: %s',
+                                       source_id, exc)
+                        _write_status(r, source_id, 'failed',
+                                      'DirecTV sign-in expired — sign in again in source settings.')
+                        return
+                    logger.warning('[directv-auth] code sign-in refresh failed for source_id=%s (%s); '
+                                   'falling back to the email/password login', source_id, exc)
+
+        if result is None:
+            try:
+                result = capture_directv_auth_fast(username, password, on_status=_on_status)
+            except Exception as exc:
+                logger.warning('[directv-auth] capture failed for source_id=%s: %s', source_id, exc)
+                _write_status(r, source_id, 'failed', str(exc))
+                return
 
         persisted = False
         queued = False
@@ -1277,61 +1359,26 @@ def run_directv_auth(
                 source = Source.query.get(source_id)
                 if source is not None:
                     cfg = dict(source.config or {})
-                    cfg['bearer_token'] = result['bearer_token']
-                    if result.get('refresh_token'):
-                        cfg['refresh_token'] = result['refresh_token']
-                    if result.get('client_context'):
-                        cfg['client_context'] = result['client_context']
-                    else:
-                        cfg.pop('client_context', None)
-                    if result.get('activation_token'):
-                        cfg['activation_token'] = result['activation_token']
-                    cfg['cookies'] = result.get('cookies') or []
-                    cfg['token_captured_at'] = result['captured_at']
-                    if result.get('identity_cookie'):
-                        cfg['identity_cookie'] = result['identity_cookie']
-                    else:
-                        cfg.pop('identity_cookie', None)
-                    if result.get('identity_cookie_expires_at'):
-                        cfg['identity_cookie_expires_at'] = result['identity_cookie_expires_at']
-                    else:
-                        cfg.pop('identity_cookie_expires_at', None)
-                    if result.get('auth_method'):
-                        cfg['auth_method'] = result['auth_method']
+                    apply_auth_result(cfg, result)
                     source.config = cfg
                     db.session.commit()
                     persisted = True
-
-                    # A prior scrape may have hit the stale token, skipped itself,
-                    # and left DirecTV waiting for the next scheduled run (up to
-                    # scrape_interval away). Queue a fresh scrape now so the new
-                    # session gets used within seconds instead of hours.
-                    try:
-                        from rq import Queue
-                        from app.worker import _scrape_job_already_active
-                        q = Queue('scraper', connection=r)
-                        if not _scrape_job_already_active(q, source.name):
-                            q.enqueue(
-                                'app.worker.run_scraper', source.name,
-                                job_timeout=3600, job_id=f'scrape-{source.name}',
-                            )
-                            queued = True
-                    except Exception:
-                        logger.warning(
-                            '[directv-auth] failed to queue follow-up scrape after refresh',
-                            exc_info=True,
-                        )
+                    queued = queue_followup_scrape(r, source.name)
         except Exception as exc:
             logger.error('[directv-auth] failed to persist result directly: %s', exc)
 
-        summary = 'captured session'
+        summary = 'refreshed session' if result.get('auth_method') == directv_device_auth.AUTH_METHOD else 'captured session'
         if persisted:
             summary += ', persisted to config'
         if queued:
             summary += ', queued follow-up scrape'
         logger.info('[directv-auth] source_id=%s success — %s', source_id, summary)
 
-        r.set(_result_key(source_id), json.dumps(result), ex=_RESULT_TTL)
+        # The status poll persists this result only when the write above failed.
+        # Leaving it behind otherwise would let a later poll overwrite a newer
+        # session with this one, and a code sign-in's refresh token is single-use.
+        if not persisted:
+            r.set(_result_key(source_id), json.dumps(result), ex=_RESULT_TTL)
         _write_status(r, source_id, 'success', 'Logged in — session captured.')
     finally:
         if lock_key:
@@ -1361,13 +1408,16 @@ class DirectvScraper(BaseScraper):
     # scraping instead of waiting for Stream Audit to discover that fact.
     all_channels_require_drm_bridge = True
     stream_audit_enabled  = True
-    audit_requires_config = ['username', 'password']
+    # Email + password, or a code sign-in session (which stores neither).
+    audit_requires_config = [('username', 'refresh_token'), ('password', 'refresh_token')]
 
     config_schema = [
-        ConfigField('username', 'Email', required=True,
+        # Not required: "Sign in with a code" (directv_device_auth) stores neither.
+        # See is_source_config_complete for what counts as configured.
+        ConfigField('username', 'Email',
                     placeholder='you@example.com',
                     help_text='Your DirecTV Stream login email.'),
-        ConfigField('password', 'Password', field_type='password', required=True,
+        ConfigField('password', 'Password', field_type='password',
                     secret=True,
                     help_text='Your DirecTV Stream password.'),
         ConfigField('exclude_fast_channels', 'Exclude FAST channels',
@@ -1439,14 +1489,21 @@ class DirectvScraper(BaseScraper):
         captured_at = self.config.get('token_captured_at') or 0
         return (not self.config.get('bearer_token')) or (time.time() - float(captured_at)) > _TOKEN_TTL
 
+    @classmethod
+    def can_reauth(cls, config: dict | None) -> bool:
+        """Whether a stale session can renew itself unattended: saved email +
+        password, or a code sign-in session with its refresh token."""
+        cfg = config or {}
+        if (cfg.get('username') or '').strip() and (cfg.get('password') or '').strip():
+            return True
+        return directv_device_auth.is_device_session(cfg)
+
     def pre_run_setup(self) -> None:
         if not self._token_stale():
             return
-        username = (self.config.get('username') or '').strip()
-        password = (self.config.get('password') or '').strip()
-        if not username or not password:
-            raise ScrapeSkipError('DirecTV Stream: username and password are required')
-        self._start_background_reauth(username, password)
+        if not self.can_reauth(self.config):
+            raise ScrapeSkipError('DirecTV Stream: not signed in — sign in from source settings')
+        self._start_background_reauth()
         raise ScrapeSkipError(
             'DirecTV Stream: session token expired — refreshing in the background, '
             'will pick up on the next scheduled run'
@@ -1458,15 +1515,13 @@ class DirectvScraper(BaseScraper):
         # login can otherwise be overwritten by those stale updates.
         self._update_cache('directv_playback', {})
 
-        username = (self.config.get('username') or '').strip()
-        password = (self.config.get('password') or '').strip()
-        if not username or not password:
-            logger.warning('[directv] cannot auto-reauth after %s: username/password missing', reason)
+        if not self.can_reauth(self.config):
+            logger.warning('[directv] cannot auto-reauth after %s: no saved login or code sign-in', reason)
             return
-        self._start_background_reauth(username, password)
+        self._start_background_reauth()
 
-    def _start_background_reauth(self, username: str, password: str) -> None:
-        """Queue a login outside the scraper work-horse process.
+    def _start_background_reauth(self) -> None:
+        """Queue a login (or a code sign-in refresh) outside the scraper work-horse process.
 
         Scrape jobs run under RQ's forking Worker. A daemon thread started from
         pre_run_setup() can be killed as soon as the skipped scrape job exits, so
@@ -1506,8 +1561,8 @@ class DirectvScraper(BaseScraper):
                 'app.scrapers.directv.run_directv_auth',
                 current_app.config['REDIS_URL'],
                 source.id,
-                username,
-                password,
+                (self.config.get('username') or '').strip(),
+                (self.config.get('password') or '').strip(),
                 None,
                 lock_key,
                 job_timeout=1800,
@@ -1952,6 +2007,10 @@ class DirectvScraper(BaseScraper):
 
     @classmethod
     def license_request_headers(cls, config: dict) -> dict:
+        if directv_device_auth.is_device_session(config):
+            # A code sign-in session is the Android TV app's, so its DRM calls
+            # carry the app's User-Agent and no web Origin/Referer.
+            return {'User-Agent': directv_device_auth.APP_USER_AGENT}
         return {
             'Origin': 'https://stream.directv.com',
             'Referer': 'https://stream.directv.com/',

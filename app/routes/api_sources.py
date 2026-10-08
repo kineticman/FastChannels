@@ -483,6 +483,9 @@ def get_source_config(source_id):
         extra['espn'] = {'signed_in': bool(saved.get('refresh_token')),
                          'signed_in_at': saved.get('signed_in_at'),
                          **_espn_tve_info(saved)}
+    if source.name == 'directv':
+        from ..scrapers import directv_device_auth
+        extra['directv'] = {'code_signed_in': directv_device_auth.is_device_session(saved)}
     return jsonify({'schema': schema, 'values': values, 'config_complete': config_complete,
                     'config_status': config_status,
                     'oauth_token_time': saved.get('oauth_token_time'),
@@ -588,6 +591,10 @@ def save_source_config(source_id):
     # knows whether they're actually in use.
     if source.name == 'fox_one':
         _CRED_KEYS = _CRED_KEYS - {'mvpd_username', 'mvpd_password'}
+    # DirecTV signed in with a code doesn't run on the email/password — they're
+    # only its fallback — so saving or editing them must not purge that session.
+    if source.name == 'directv' and old.get('auth_method') == 'device_code':
+        _CRED_KEYS = _CRED_KEYS - {'username', 'password'}
     _AUTH_STATE  = ('access_token', 'refresh_token', 'token_time',
                     'bearer_token', 'activation_token', 'token_captured_at',
                     'client_context', 'cookies', 'identity_cookie',
@@ -1569,7 +1576,7 @@ def directv_auto_login(source_id):
     username = (cfg.get('username') or '').strip()
     password = (cfg.get('password') or '').strip()
     if not username or not password:
-        return jsonify({'error': 'username and password must be saved first'}), 400
+        return jsonify({'error': 'Enter your DirecTV email and password first.'}), 400
 
     redis_url = current_app.config['REDIS_URL']
     app = current_app._get_current_object()
@@ -1577,10 +1584,123 @@ def directv_auto_login(source_id):
     t = threading.Thread(
         target=run_directv_auth,
         args=(redis_url, source_id, username, password, app),
+        kwargs={'method': 'web'},
         daemon=True,
     )
     t.start()
     return jsonify({'status': 'started'})
+
+
+# -- DirecTV code sign-in --------------------------------------------------
+# The second sign-in method (app/scrapers/directv_device_auth.py). No job runs:
+# the pending code lives in redis and each status poll from the open settings
+# panel checks DirecTV once, so closing the panel simply stops the sign-in.
+
+_DIRECTV_SESSION_KEYS = (
+    'bearer_token', 'refresh_token', 'activation_token', 'client_context', 'cookies',
+    'token_captured_at', 'identity_cookie', 'identity_cookie_expires_at', 'auth_method',
+)
+
+
+def _directv_code_key(source_id: int) -> str:
+    return f'directv:code:{source_id}'
+
+
+def _directv_source_or_error(source_id: int):
+    source = Source.query.get_or_404(source_id)
+    if source.name != 'directv':
+        return None, (jsonify({'error': 'not a directv source'}), 400)
+    return source, None
+
+
+@sources_bp.route('/sources/<int:source_id>/directv-code-login', methods=['POST', 'DELETE'])
+def directv_code_login(source_id):
+    import redis as _redis
+    from ..scrapers import directv_device_auth
+
+    source, err = _directv_source_or_error(source_id)
+    if err:
+        return err
+    r = _redis.from_url(current_app.config['REDIS_URL'])
+    if request.method == 'DELETE':
+        r.delete(_directv_code_key(source_id))
+        return jsonify({'state': 'idle'})
+    try:
+        grant = directv_device_auth.start_grant()
+    except Exception as exc:
+        logger.warning('[directv-code] could not start sign-in: %s', exc)
+        return jsonify({'error': str(exc)}), 502
+    ttl = max(60, int(grant['expires_at'] - _time.time()))
+    r.set(_directv_code_key(source_id), json.dumps(grant), ex=ttl)
+    return jsonify({'state': 'waiting', 'code': grant['user_code'], 'url': grant['url']})
+
+
+@sources_bp.route('/sources/<int:source_id>/directv-code-state')
+def directv_code_state(source_id):
+    import redis as _redis
+    from ..config_store import persist_source_cache_updates
+    from ..extensions import db
+    from ..scrapers import directv_device_auth
+    from ..scrapers.directv import apply_auth_result, queue_followup_scrape
+
+    source, err = _directv_source_or_error(source_id)
+    if err:
+        return err
+    r = _redis.from_url(current_app.config['REDIS_URL'])
+    raw = r.get(_directv_code_key(source_id))
+    if not raw:
+        signed_in = directv_device_auth.is_device_session(source.config)
+        return jsonify({'state': 'success'} if signed_in else
+                       {'state': 'expired', 'message': 'The code expired.'})
+    grant = json.loads(raw)
+    waiting = {'state': 'waiting', 'code': grant['user_code'], 'url': grant['url']}
+    # One DirecTV poll per interval no matter how many tabs are watching.
+    if not r.set(f'{_directv_code_key(source_id)}:poll', '1', nx=True, ex=int(grant['interval'])):
+        return jsonify(waiting)
+    try:
+        result = directv_device_auth.poll_grant(grant['device_code'])
+        if result and not result.get('activation_token') and result.get('refresh_token'):
+            # The grant can come back without the DRM activation token; a refresh mints one.
+            result = directv_device_auth.refresh_session(result['refresh_token'])
+    except Exception as exc:
+        logger.warning('[directv-code] sign-in poll failed: %s', exc)
+        return jsonify(waiting)
+    if not result:
+        return jsonify(waiting)
+    r.delete(_directv_code_key(source_id))
+    if not result.get('refresh_token') or not result.get('activation_token'):
+        logger.warning('[directv-code] grant returned no refresh or activation token')
+        return jsonify({'state': 'error',
+                        'message': 'DirecTV approved the code but returned an incomplete session.'})
+    cfg = dict(source.config or {})
+    apply_auth_result(cfg, result)
+    source.config = cfg
+    db.session.commit()
+    persist_source_cache_updates(source.id, {'directv_playback': {}})
+    queue_followup_scrape(r, source.name)
+    logger.info('[directv-code] source_id=%s signed in with a code', source_id)
+    return jsonify({'state': 'success'})
+
+
+@sources_bp.route('/sources/<int:source_id>/directv-logout', methods=['POST'])
+def directv_logout(source_id):
+    """Drop the stored DirecTV session. A saved email/password stays, so the next
+    watchdog pass signs back in with it; with none saved the source is signed out."""
+    import redis as _redis
+    from ..config_store import persist_source_cache_updates
+    from ..extensions import db
+
+    source, err = _directv_source_or_error(source_id)
+    if err:
+        return err
+    cfg = dict(source.config or {})
+    for key in _DIRECTV_SESSION_KEYS:
+        cfg.pop(key, None)
+    source.config = cfg
+    db.session.commit()
+    persist_source_cache_updates(source.id, {'directv_playback': {}})
+    _redis.from_url(current_app.config['REDIS_URL']).delete(_directv_code_key(source_id))
+    return jsonify({'status': 'signed_out'})
 
 
 @sources_bp.route('/sources/<int:source_id>/directv-auth-status')
@@ -1603,28 +1723,9 @@ def directv_auth_status(source_id):
                 result = json.loads(result_raw)
                 source = Source.query.get(source_id)
                 if source:
+                    from ..scrapers.directv import apply_auth_result
                     cfg = dict(source.config or {})
-                    cfg['bearer_token'] = result['bearer_token']
-                    if result.get('refresh_token'):
-                        cfg['refresh_token'] = result['refresh_token']
-                    if result.get('client_context'):
-                        cfg['client_context'] = result['client_context']
-                    else:
-                        cfg.pop('client_context', None)
-                    if result.get('activation_token'):
-                        cfg['activation_token'] = result['activation_token']
-                    cfg['cookies'] = result.get('cookies') or []
-                    cfg['token_captured_at'] = result['captured_at']
-                    if result.get('identity_cookie'):
-                        cfg['identity_cookie'] = result['identity_cookie']
-                    else:
-                        cfg.pop('identity_cookie', None)
-                    if result.get('identity_cookie_expires_at'):
-                        cfg['identity_cookie_expires_at'] = result['identity_cookie_expires_at']
-                    else:
-                        cfg.pop('identity_cookie_expires_at', None)
-                    if result.get('auth_method'):
-                        cfg['auth_method'] = result['auth_method']
+                    apply_auth_result(cfg, result)
                     source.config = cfg
                     db.session.commit()
                     logger.info('[directv-auth] persisted session to source config source_id=%s', source_id)

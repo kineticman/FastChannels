@@ -4033,7 +4033,7 @@ if __name__ == '__main__':
                     if not source:
                         return
                     _cfg = source.config or {}
-                    if not (_cfg.get('username') or '').strip() or not (_cfg.get('password') or '').strip():
+                    if not DirectvScraper.can_reauth(_cfg):
                         return
                     scraper = DirectvScraper(config=_cfg)
                     try:

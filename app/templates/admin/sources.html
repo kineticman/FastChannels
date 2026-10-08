@@ -3167,8 +3167,9 @@
     let _directvPollTimer = null;
 
     function renderDirectvConfig(sourceId, schema, values, cfg = {}) {
-      const hasSession = cfg.config_complete === true || cfg.config_status === 'configured';
       const hasCreds = !!((values.username || '').trim() && (values.password || '').trim());
+      const codeSignedIn = !!(cfg.directv && cfg.directv.code_signed_in);
+      const webSignedIn = !codeSignedIn && hasCreds && !!cfg.token_captured_at;
       const toggleHtml = (key, fallbackLabel, fallbackHelp) => {
         const field = schema.find(f => f.key === key);
         const checked = ['1', 'true', 'yes', 'on'].includes(
@@ -3190,54 +3191,63 @@
             </div>
           </div>`;
       };
+      const ok = text => `<span style="color:var(--success-soft)">&#10003; ${text}</span>`;
+      const signedInHtml = codeSignedIn ? ok('Signed in with a code')
+        : (webSignedIn ? ok('Signed in with email and password') : 'Not signed in.');
       return `
         <div class="config-title">DirecTV Stream Settings</div>
         <div class="config-note">
           DirecTV Stream channels are DRM-protected and only play through a DRM bridge
-          (Bridge &rarr; PrismCast Capture, HDMI Capture, or ah4c Capture). ${hasSession
-            ? 'FastChannels has an active DirecTV session.'
-            : 'Connect your DirecTV Stream account below, then click Authenticate.'}
+          (Bridge &rarr; PrismCast Capture, HDMI Capture, or ah4c Capture).
         </div>
 
-        <div class="amazon-autologin-panel" id="directv-autologin-${sourceId}">
-          <div class="amazon-autologin-header">
-            <button class="btn btn-run" type="button"
-                    id="directv-login-btn-${sourceId}"
-                    ${hasCreds ? '' : 'disabled'}
-                    onclick="directvStartLogin(${sourceId})">${hasSession ? 'Re-authenticate' : 'Authenticate'}</button>
-            <span class="amazon-status-text" id="directv-status-${sourceId}">
-              ${hasSession ? '<span style="color:var(--success-soft)">&#10003; Session active</span>' : (hasCreds ? 'Account saved. Authenticate to finish setup.' : 'Add your DirecTV account below first.')}
+        <div class="signin-box" style="margin-top:0">
+          <div class="amazon-status-text">${signedInHtml}</div>
+          <div class="signin-box-row">
+            <button class="btn btn-run" type="button" id="directv-code-btn-${sourceId}"
+                    onclick="directvCodeStart(${sourceId})"
+                    title="Get a link to approve in a browser where you're signed in to DirecTV">${codeSignedIn ? 'Sign in again' : 'Sign in with a code'}</button>
+            <span class="amazon-status-text" id="directv-code-status-${sourceId}">
+              ${codeSignedIn ? '' : 'No password stored. Approve a link in your browser and FastChannels stays signed in.'}
             </span>
+            ${codeSignedIn ? `<button class="btn btn-cancel" type="button"
+                    onclick="directvSignOut(${sourceId})">Sign out</button>` : ''}
           </div>
+
+          <details class="amazon-account-details" ${webSignedIn || (hasCreds && !codeSignedIn) ? 'open' : ''}>
+            <summary>${codeSignedIn ? 'Backup: email and password' : 'Or sign in with email and password'}</summary>
+            <div class="fields-grid" style="margin-top:0.75rem;">
+              <div class="field">
+                <label for="cfg-${sourceId}-username">Email</label>
+                <input type="text" id="cfg-${sourceId}-username" data-key="username" data-secret="false"
+                       value="${escapeHtml(String(values.username || ''))}"
+                       placeholder="you@example.com" autocomplete="off">
+              </div>
+              <div class="field">
+                <label for="cfg-${sourceId}-password">Password</label>
+                <input type="password" id="cfg-${sourceId}-password" data-key="password" data-secret="true"
+                       value="${escapeHtml(String(values.password || ''))}" autocomplete="off">
+              </div>
+            </div>
+            <div class="signin-box-row">
+              ${codeSignedIn ? '' : `<button class="btn btn-run" type="button" id="directv-login-btn-${sourceId}"
+                      onclick="directvStartLogin(${sourceId})">${webSignedIn ? 'Sign in again' : 'Sign in'}</button>`}
+              <span class="amazon-status-text" id="directv-status-${sourceId}">
+                ${codeSignedIn ? 'Optional. Click Save Settings and FastChannels uses these only if the code sign-in stops working.' : ''}
+              </span>
+            </div>
+          </details>
         </div>
 
-        <div class="fields-grid">
+        <div class="fields-grid" style="margin-top:0.9rem">
           ${toggleHtml('exclude_fast_channels', 'Exclude FAST channels',
             'On = leave out free, ad-supported channels (DirecTV Stream numbers these 4000-4999).')}
           ${toggleHtml('use_provider_numbers', 'Use DirecTV channel numbers',
             'On = use DirecTV\'s own channel numbers (ESPN 206, CNN 202). Channels that share a number get subchannels, like 213.1.')}
         </div>
 
-        <details class="amazon-account-details" ${hasCreds ? '' : 'open'}>
-          <summary>Account settings</summary>
-          <div class="fields-grid" style="margin-top:0.75rem;">
-            <div class="field">
-              <label for="cfg-${sourceId}-username">Email</label>
-              <input type="text" id="cfg-${sourceId}-username" data-key="username" data-secret="false"
-                     value="${escapeHtml(String(values.username || ''))}"
-                     placeholder="you@example.com" autocomplete="off">
-            </div>
-            <div class="field">
-              <label for="cfg-${sourceId}-password">Password</label>
-              <input type="password" id="cfg-${sourceId}-password" data-key="password" data-secret="true"
-                     value="${escapeHtml(String(values.password || ''))}" autocomplete="off">
-            </div>
-          </div>
-        </details>
-
         <div class="config-actions">
           <span class="config-status" id="config-status-${sourceId}"></span>
-          <button class="btn btn-cancel" type="button" onclick="clearConfigFields(${sourceId})">Clear</button>
           <button class="btn btn-run" type="button" onclick="saveSourceConfig(${sourceId})">Save Settings</button>
         </div>`;
     }
@@ -3248,6 +3258,16 @@
       btn.disabled = true;
       statusEl.innerHTML = '<span style="color:var(--text-muted)">Starting...</span>';
       try {
+        // The login reads the saved email and password, so save just those two first.
+        const creds = {};
+        ['username', 'password'].forEach(key => {
+          creds[key] = document.getElementById(`cfg-${sourceId}-${key}`)?.value ?? '';
+        });
+        await fetch(`/api/sources/${sourceId}/config`, {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify(creds),
+        });
         const r = await fetch(`/api/sources/${sourceId}/directv-auto-login`, {method: 'POST'});
         if (!r.ok) {
           const d = await r.json().catch(() => ({}));
@@ -3282,10 +3302,10 @@
       const { status, detail } = data;
       const statusMap = {
         idle: null,
-        starting: '<span style="color:var(--text-muted)">Starting browser...</span>',
+        starting: '<span style="color:var(--text-muted)">Signing in…</span>',
         running: `<span style="color:var(--text-muted)">${escapeHtml(detail || 'Running...')}</span>`,
-        success: '<span style="color:var(--success-soft)">&#10003; Session captured.</span>',
-        failed: `<span style="color:var(--danger)">${escapeHtml(detail || 'Login failed.')}</span>`,
+        success: '<span style="color:var(--success-soft)">&#10003; Signed in.</span>',
+        failed: `<span style="color:var(--danger)">${escapeHtml(detail || 'Sign-in failed.')}</span>`,
       };
 
       if (status === 'idle' || !statusMap[status]) return;
@@ -3301,6 +3321,76 @@
       }
     }
     // -- end DirecTV auto-login ---------------------------------------------
+
+    // -- DirecTV code sign-in -----------------------------------------------
+    // The server only checks DirecTV when this panel polls, so a closed panel
+    // (no status element) ends the sign-in by itself.
+    const _directvCodeTimers = {};
+
+    async function directvCodeStart(sourceId) {
+      const btn = document.getElementById(`directv-code-btn-${sourceId}`);
+      const statusEl = document.getElementById(`directv-code-status-${sourceId}`);
+      btn.disabled = true;
+      statusEl.innerHTML = '<span style="color:var(--text-muted)">Getting a code…</span>';
+      try {
+        const r = await fetch(`/api/sources/${sourceId}/directv-code-login`, { method: 'POST' });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok) {
+          statusEl.innerHTML = `<span style="color:var(--danger-soft)">${escapeHtml(d.error || 'Could not get a code.')}</span>`;
+          return;
+        }
+        directvCodeShow(statusEl, d.code, d.url, sourceId);
+        directvCodePoll(sourceId);
+      } catch (e) {
+        statusEl.innerHTML = '<span style="color:var(--danger-soft)">Network error getting a code.</span>';
+      } finally {
+        btn.disabled = false;
+      }
+    }
+
+    function directvCodeShow(statusEl, code, url, sourceId) {
+      statusEl.innerHTML = `
+        Open <a href="${escapeHtml(url)}" target="_blank" rel="noopener">this DirecTV sign-in link</a>
+        and approve code <b style="font-size:1.4em;letter-spacing:.15em;font-family:monospace">${escapeHtml(code)}</b>
+        <span style="color:var(--text-muted)">— waiting…</span>
+        <button class="btn btn-cancel btn-sm" type="button" onclick="directvCodeCancel(${sourceId})">Cancel</button>`;
+    }
+
+    function directvCodePoll(sourceId) {
+      clearTimeout(_directvCodeTimers[sourceId]);
+      _directvCodeTimers[sourceId] = setTimeout(async () => {
+        const statusEl = document.getElementById(`directv-code-status-${sourceId}`);
+        if (!statusEl) return;  // panel gone
+        let d = {};
+        try {
+          d = await (await fetch(`/api/sources/${sourceId}/directv-code-state`)).json();
+        } catch (e) {
+          directvCodePoll(sourceId);
+          return;
+        }
+        if (d.state === 'waiting') {
+          directvCodePoll(sourceId);
+        } else if (d.state === 'success') {
+          statusEl.innerHTML = '<span style="color:var(--success-soft)">&#10003; Signed in.</span>';
+          setTimeout(() => loadSourceConfig(sourceId, 'directv'), 600);
+        } else {
+          statusEl.innerHTML = `<span style="color:var(--danger-soft)">${escapeHtml(d.message || 'Sign-in failed.')} Get a new code to try again.</span>`;
+        }
+      }, 3000);
+    }
+
+    async function directvCodeCancel(sourceId) {
+      clearTimeout(_directvCodeTimers[sourceId]);
+      await fetch(`/api/sources/${sourceId}/directv-code-login`, { method: 'DELETE' }).catch(() => {});
+      loadSourceConfig(sourceId, 'directv');
+    }
+
+    async function directvSignOut(sourceId) {
+      if (!confirm('Sign out of DirecTV? DirecTV channels stop playing until you sign in again. A saved email and password will sign back in automatically.')) return;
+      await fetch(`/api/sources/${sourceId}/directv-logout`, { method: 'POST' }).catch(() => {});
+      loadSourceConfig(sourceId, 'directv');
+    }
+    // -- end DirecTV code sign-in -------------------------------------------
 
     // ── Philo passwordless sign-in (email → code) ────────────────────────────
     function renderPhiloConfig(sourceId, schema, values) {

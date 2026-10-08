@@ -142,11 +142,10 @@ def _directv_error_requires_reauth(status: int, content: bytes) -> bool:
 
 
 def _directv_trigger_reauth(source, reason: str) -> None:
+    from ..scrapers.directv import DirectvScraper
     cfg = dict(source.config or {})
-    username = (cfg.get('username') or '').strip()
-    password = (cfg.get('password') or '').strip()
-    if not username or not password:
-        logger.warning('[directv-auth] cannot auto-reauth after %s: username/password missing', reason)
+    if not DirectvScraper.can_reauth(cfg):
+        logger.warning('[directv-auth] cannot auto-reauth after %s: no saved login or code sign-in', reason)
         return
     try:
         from ..extensions import db
@@ -164,8 +163,7 @@ def _directv_trigger_reauth(source, reason: str) -> None:
             pass
         logger.debug('[directv-auth] could not mark tokens stale after %s', reason, exc_info=True)
     try:
-        from ..scrapers.directv import DirectvScraper
-        DirectvScraper(cfg)._start_background_reauth(username, password)
+        DirectvScraper(cfg)._start_background_reauth()
         logger.info('[directv-auth] queued background reauth after %s', reason)
     except Exception:
         logger.exception('[directv-auth] failed to queue background reauth after %s', reason)

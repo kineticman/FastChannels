@@ -66,6 +66,13 @@ def is_source_config_complete(source_name: str, scraper_cls, values: dict | None
             'amazon_email', 'amazon_password', 'cookie_header',
         ))
 
+    # DirecTV has two sign-in methods: saved email + password, or a code
+    # sign-in session (app/scrapers/directv_device_auth.py), which stores neither.
+    if source_name == 'directv':
+        if saved.get('auth_method') == 'device_code' and saved.get('refresh_token'):
+            return True
+        return all((saved.get(key) or '').strip() for key in ('username', 'password'))
+
     required_fields = [field for field in schema if getattr(field, 'required', False)]
     if required_fields:
         return all((saved.get(field.key) or '').strip() for field in required_fields)
