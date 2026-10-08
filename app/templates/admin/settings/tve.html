@@ -14,9 +14,6 @@
         <div class="toggle-row-text">
           <div class="toggle-row-label">TV Provider Sign-In</div>
           <div class="toggle-row-help">Choose your TV provider, then enter the same username and password you use on that provider's site. These credentials are stored only in the local FastChannels database and are never returned to the browser after saving.</div>
-          <div style="margin-top:0.5rem;color:var(--warning-soft,#b8860b);background:var(--warning-bg-2,rgba(184,134,11,0.12));border:1px solid var(--warning-border,rgba(184,134,11,0.3));border-radius:4px;padding:0.5rem 0.7rem;font-size:0.82rem;line-height:1.4">
-            🧪 Beta — TVE sign-in has only been tested and confirmed working with <strong>Cox</strong>, <strong>Sling TV</strong>, and <strong>Xfinity/Comcast</strong>. <strong>YouTube TV</strong> is also supported but less thoroughly tested — entitlement and session refresh can be less reliable. The dropdown lists every provider Adobe Pass supports, but sign-in with providers outside those four is unverified and may fail.
-          </div>
           <div style="margin-top:0.7rem;display:grid;grid-template-columns:1fr;gap:0.45rem;max-width:520px">
             <label style="display:flex;flex-direction:column;gap:0.25rem;color:var(--text-muted);font-size:0.78rem">
               TV provider
@@ -39,7 +36,7 @@
           {# YouTube TV + "Sign in for me" only: signs our browser in to Google
              once. With "Sign in on my phone" Google's sign-in is part of each
              network's link, so the row is hidden (see
-             _updateTveGoogleRowForMethod). The Beta banner above covers YouTube TV. #}
+             _updateTveGoogleRowForMethod). #}
           <div id="tve-google-signin-row" style="display:none;margin-top:0.5rem">
             <button class="btn btn-audit" type="button" onclick="openMvpdLoginModal('google', null)">Sign in with Google</button>
             <div style="margin-top:0.3rem;color:var(--text-muted);font-size:0.78rem">One-time Google sign-in, so every YouTube TV network below can authorize without opening a browser again.</div>
