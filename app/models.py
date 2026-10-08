@@ -168,6 +168,16 @@ class TVEAccount(db.Model):
     def has_credentials(self) -> bool:
         return bool((self.username or '').strip() and (self.password or '').strip())
 
+    def is_separate(self) -> bool:
+        """A single source's own login (see app/tve/accounts.py), signed in
+        by phone link — it has no username/password."""
+        return (self.provider_id or '').startswith('mvpd:')
+
+    def is_usable(self) -> bool:
+        """Turned on and set up enough for its sources to play: the shared
+        account needs its username/password, a separate login doesn't."""
+        return bool(self.is_enabled and (self.has_credentials() or self.is_separate()))
+
     def to_safe_dict(self):
         cfg = self.config or {}
         auth_backend = (cfg.get('auth_backend') or 'native').strip()

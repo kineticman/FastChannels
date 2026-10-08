@@ -446,7 +446,7 @@ class AENetworksTVEScraper(MvpdCooldownMixin, BaseScraper):
         # an oversight on A+E's end rather than a deliberate design, but never
         # let it block or slow down what already plays without it.
         account = tve_account_for(self.source_name)
-        if account and account.is_enabled and account.has_credentials():
+        if account and account.is_usable():
             cfg = account.config or {}
             configured_statement = (cfg.get('software_statement') or '').strip()
             try:

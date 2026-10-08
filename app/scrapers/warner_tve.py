@@ -556,7 +556,7 @@ class WarnerTVEScraper(MvpdCooldownMixin, BaseScraper):
             return cached['url']
 
         account = tve_account_for(self.source_name)
-        if not account or not account.is_enabled or not account.has_credentials():
+        if not account or not account.is_usable():
             raise TVEAuthError('TVE credentials are not configured in Settings.')
 
         brand_cfg = self._brand_config(channel.brand_key)

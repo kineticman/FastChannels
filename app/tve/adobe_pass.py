@@ -1067,7 +1067,8 @@ def authorize_mvpd(
     # Adobe's "Cox" hands off to Spectrum's browser-only login page now, and
     # Spectrum's is reCAPTCHA-gated — yt-dlp's handlers can't get through
     # either, and repeated scripted attempts only invite the bot check.
-    from .mvpd import require_scripted_mvpd_login
+    from .mvpd import require_saved_login, require_scripted_mvpd_login
+    require_saved_login(username, password, key=requestor_id)
     require_scripted_mvpd_login(selected_mso_id, key=requestor_id)
     require_scripted_mvpd_login((cfg.get('yt_dlp_mso_id') or selected_mso_id).strip(), key=requestor_id)
 

@@ -20,14 +20,31 @@ SHARED_PROVIDER_ID = 'mvpd'
 SHARED_DISPLAY_NAME = 'TV Provider'
 
 # Sources that can be given a separate sign-in. Add a source here only once
-# its phone-link sign-in, status row and scripted renewal all follow its
+# its phone-link sign-in, status rows and scripted renewal all follow its
 # account.
-SEPARATE_SIGNIN_SOURCES = frozenset({'discovery_tve'})
-# source -> its 'family' in app/tve/providers.py's unsupported-provider table.
-_SOURCE_FAMILIES = {'discovery_tve': 'discovery'}
-# source -> SourceCache keys holding its signed-in session, dropped when the
-# login it signs in with changes.
-SIGNIN_CACHE_KEYS = {'discovery_tve': ('discovery_tve_session',)}
+SEPARATE_SIGNIN_SOURCES = frozenset({
+    'nbc_tve', 'fox_tve', 'warner_tve', 'aenetworks_tve', 'amcn_tve', 'discovery_tve',
+})
+
+# What a source's sign-in leaves behind outside its account row. All of it is
+# dropped when the login the source signs in with changes, so nothing from the
+# previous login can keep it playing or make it look signed in:
+#   cache / cache_like — SourceCache keys (exact / SQL LIKE) holding sessions
+#   config             — Source.config keys holding the device identity the
+#                        sign-in was bound to
+#   account            — keys on the account being left that record a
+#                        sign-in made with that device identity
+SIGNIN_STATE = {
+    'nbc_tve': {'cache': ('nbc_entitlements', 'nbc_playback'), 'cache_like': ('adobe_auth:%',),
+                'config': ('device_fingerprint',), 'account': ('nbc_mvpd_auth',)},
+    'warner_tve': {'cache': ('warner_manifest',), 'config': ('tcm_device_fingerprint',),
+                   'account': ('tcm_mvpd_auth',)},
+    'amcn_tve': {'cache_like': ('adobe_auth:%', 'adobe_session:%'), 'config': ('device_id',)},
+    'discovery_tve': {'cache': ('discovery_tve_session',)},
+    # FOX and A+E keep everything on the account row itself.
+    'fox_tve': {},
+    'aenetworks_tve': {},
+}
 
 # The keys sign-in status and errors are recorded under (tve_last_error,
 # see app/tve/signin_notice.py) -> the source that network belongs to.
@@ -122,16 +139,12 @@ def tve_account_for(source_name: str | None):
     return shared_tve_account()
 
 
-def source_family(source_name: str) -> str:
-    return _SOURCE_FAMILIES.get(source_name, '')
-
-
 def separate_signin_info(source_name: str) -> dict | None:
     """What a source's card needs to show its sign-in choice, or None when
     the source can't have a separate sign-in. Never includes a password."""
     if source_name not in SEPARATE_SIGNIN_SOURCES:
         return None
-    from .providers import UNSUPPORTED_NETWORK_PROVIDERS, tve_account_mso_id, ytdlp_adobe_mso_providers
+    from .providers import tve_account_mso_id, ytdlp_adobe_mso_providers
 
     own = separate_tve_account(source_name)
     own_cfg = (own.config or {}) if own else {}
@@ -140,10 +153,7 @@ def separate_signin_info(source_name: str) -> dict | None:
     return {
         'mode': 'separate' if own and own.is_enabled else 'shared',
         'provider_id': tve_account_mso_id(own) if own_cfg.get('selected_mso_id') else '',
-        # The phone-link sign-in to start for this source (/api/settings/tve/link-login).
-        'family': source_family(source_name),
         'providers': [{'id': p['id'], 'name': p['name']} for p in ytdlp_adobe_mso_providers()],
-        'unsupported_providers': dict(UNSUPPORTED_NETWORK_PROVIDERS.get(source_family(source_name)) or {}),
         'shared_provider': (
             ((shared.config or {}).get('selected_mso_name') or tve_account_mso_id(shared)) if shared_ready else ''),
     }
@@ -158,3 +168,37 @@ def tve_account_for_network(key: str | None):
     """tve_account_for(), for callers that only know the network's
     status/error key or requestor id."""
     return tve_account_for(source_for_network_key(key))
+
+
+def clear_signin_state(source, leaving_account) -> int:
+    """Drop what `source` (a Source row) kept from signing in with
+    `leaving_account` — see SIGNIN_STATE. Also brings back channels that
+    were switched off because that login wasn't entitled to them: the new
+    login may be, and one that isn't gets them switched off again on first
+    play or the next audit. Returns how many came back. Doesn't commit."""
+    from datetime import datetime, timezone
+
+    from ..extensions import db
+    from ..models import Channel, SourceCache
+
+    state = SIGNIN_STATE.get(source.name) or {}
+    conds = [SourceCache.cache_key.like(pattern) for pattern in state.get('cache_like', ())]
+    if state.get('cache'):
+        conds.append(SourceCache.cache_key.in_(state['cache']))
+    if conds:
+        SourceCache.query.filter(SourceCache.source_id == source.id, db.or_(*conds)).delete(synchronize_session=False)
+    if state.get('config'):
+        source.config = {k: v for k, v in (source.config or {}).items() if k not in state['config']}
+    if leaving_account is not None and state.get('account'):
+        leaving_account.config = {
+            k: v for k, v in (leaving_account.config or {}).items() if k not in state['account']}
+
+    revived = Channel.query.filter_by(source_id=source.id, disable_reason='NotAuthorized').all()
+    for ch in revived:
+        # The same fields a manual re-enable sets (app/routes/api_channels.py).
+        ch.disable_reason = None
+        ch.is_active = True
+        ch.is_enabled = True
+        ch.last_seen_at = datetime.now(timezone.utc)
+        ch.missed_scrapes = 0
+    return len(revived)

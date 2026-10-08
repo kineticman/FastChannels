@@ -15,7 +15,7 @@ import requests
 
 from .base import BaseScraper, ChannelData, ProgramData
 from ..gracenote_map import resolve_gracenote
-from ..tve.accounts import tve_account_for, uses_separate_signin
+from ..tve.accounts import tve_account_for
 from ..tve.adobe_pass import MvpdCooldownMixin, TVEAuthError, TVENotAuthorizedError
 
 logger = logging.getLogger(__name__)
@@ -492,17 +492,15 @@ class DiscoveryTVEScraper(MvpdCooldownMixin, BaseScraper):
 
     def _authenticate(self) -> requests.Session:
         account = tve_account_for(self.source_name)
-        if not account or not account.is_enabled:
+        if not account or not account.is_usable():
             raise TVEAuthError('TVE credentials are not configured in Settings.')
         cfg = account.config or {}
         mso_id = (cfg.get('yt_dlp_mso_id') or cfg.get('selected_mso_id') or cfg.get('adobe_mso_id') or 'Cox').strip()
         mso_name = (cfg.get('selected_mso_name') or mso_id).strip()
-        if not account.has_credentials():
-            if uses_separate_signin(self.source_name):
-                # A separate login signs in by phone link and has no saved
-                # username/password, so only the user can sign it in again.
-                raise _browser_signin_required(mso_name, separate=True)
-            raise TVEAuthError('TVE credentials are not configured in Settings.')
+        if account.is_separate():
+            # A separate login signs in by phone link and has no saved
+            # username/password, so only the user can sign it in again.
+            raise _browser_signin_required(mso_name, separate=True)
 
         session = self._session()
         device_id = self.config.get('device_id') or str(uuid.uuid4())

@@ -287,6 +287,11 @@ class AdobePassV2Client:
         client_creds: dict | None = None, origin: str = 'https://www.nbc.com',
     ) -> None:
         self.requestor_id = requestor_id
+        # The key this network's sign-in status is kept under (see
+        # app/tve/signin_notice.py). NBC's is 'nbc', not its Adobe requestor
+        # id — under 'nbcentertainment' a "sign in again" notice was recorded
+        # where neither NBC's status row nor the dashboard banner looked.
+        self.status_key = 'nbc' if requestor_id == REQUESTOR_ID else requestor_id.lower()
         self.software_statement = software_statement
         self.redirect_url = redirect_url
         self._client_creds = client_creds
@@ -394,7 +399,7 @@ class AdobePassV2Client:
             return {}
 
         from ..tve.mvpd import login_to_mvpd, require_scripted_mvpd_login
-        require_scripted_mvpd_login(mso_id, key=self.requestor_id.lower())
+        require_scripted_mvpd_login(mso_id, key=self.status_key)
 
         try:
             r = self.session.get(
@@ -424,7 +429,7 @@ class AdobePassV2Client:
         # pairing's cross-session polling already relies on.
         page_html, page_url = (r.text, str(r.url)) if not mso_login_url else ('', mso_login_url)
         login_to_mvpd(mso_id, page_html, page_url, username, password,
-                      cookie_jar=cookie_jar, key=self.requestor_id.lower())
+                      cookie_jar=cookie_jar, key=self.status_key)
 
         r = self._get(f'{ADOBE_BASE}/api/v2/{self.requestor_id}/profiles/{mso_id}', headers=self._bearer_headers())
         profile = ((r.json() or {}).get('profiles') or {}).get(mso_id)
@@ -738,7 +743,7 @@ class NbcTveScraper(MvpdCooldownMixin, BaseScraper):
 
     def _mvpd_account(self) -> TVEAccount | None:
         account = tve_account_for(self.source_name)
-        if account and account.is_enabled and account.has_credentials():
+        if account and account.is_usable():
             return account
         return None
 

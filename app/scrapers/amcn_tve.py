@@ -1013,7 +1013,7 @@ class AMCNetworksTVEScraper(MvpdCooldownMixin, BaseScraper):
             raise ValueError(f'Unsupported AMC Networks TVE stream URL: {raw_url}')
 
         account = tve_account_for(self.source_name)
-        if not account or not account.is_enabled or not account.has_credentials():
+        if not account or not account.is_usable():
             raise TVEAuthError('TVE credentials are not configured in Settings.')
 
         cfg = account.config or {}

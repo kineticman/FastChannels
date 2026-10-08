@@ -57,6 +57,21 @@ def require_scripted_mvpd_login(mso_id: str, *, where: str = 'for this network i
         raise TVEAuthError(message)
 
 
+def require_saved_login(username: str, password: str, *, key: str | None = None) -> None:
+    """Raise a "sign in again" TVEAuthError when there's no saved
+    username/password to sign in with — a source's separate login, which is
+    signed in by phone link (see app/tve/accounts.py). Call it wherever a
+    scripted flow is about to start a fresh MVPD login, so it never sends an
+    empty login to the provider. `key` as in require_scripted_mvpd_login."""
+    if (username or '').strip() and (password or '').strip():
+        return
+    message = ('This sign-in can\'t be renewed automatically. Use "Sign in on my phone" on the '
+               'source\'s card under Sources to sign in again.')
+    from ..signin_notice import mark_signin_needed
+    mark_signin_needed(key, message)
+    raise TVEAuthError(message)
+
+
 def login_to_mvpd(
     mso_id: str, page_html: str, page_url: str, username: str, password: str,
     *, cookie_jar: dict | None = None, key: str | None = None,
@@ -75,6 +90,7 @@ def login_to_mvpd(
     Raises TVEAuthError for any MSO with no backend registered here yet,
     or that only a browser can sign in to (see require_scripted_mvpd_login).
     """
+    require_saved_login(username, password, key=key)
     require_scripted_mvpd_login(mso_id, key=key)
     expected_host = _EXPECTED_HOST_SUBSTRING.get(mso_id)
     if expected_host and expected_host not in page_url:
