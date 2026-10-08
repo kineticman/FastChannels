@@ -2206,14 +2206,19 @@ def run_playlist_delete(source_id: int):
         db.session.delete(source)
         db.session.commit()
 
+        logger.info('[playlist-delete] removed %s: %d channels, %d programs',
+                    name, deleted_channels, deleted_programs)
         for url in set(logo_urls):
             try:
                 delete_cached_logo(url)
             except Exception:
                 pass
-        _invalidate_and_refresh_xml()
-        logger.info('[playlist-delete] removed %s: %d channels, %d programs',
-                    name, deleted_channels, deleted_programs)
+        # Queue the M3U/EPG rebuild instead of running it here. It takes a
+        # minute or two on a big install, and done inline it held this job
+        # (and any delete queued behind it) open long after the source was
+        # gone. The old artifacts stay served until the rebuild lands.
+        invalidate_xml_cache()
+        _enqueue_xml_refresh_job()
 
 
 def run_source_disable(source_id: int):

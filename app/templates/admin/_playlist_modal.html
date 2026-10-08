@@ -297,8 +297,8 @@
         const r = await fetch(`/api/playlists/${sourceId}`, {method: 'DELETE'});
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         // The delete runs as a background job; wait for the source to go away.
-        for (let i = 0; i < 120; i++) {
-          await new Promise(res => setTimeout(res, 1000));
+        for (let i = 0; i < 60; i++) {
+          await new Promise(res => setTimeout(res, 3000));
           const check = await fetch(`/api/playlists/${sourceId}`);
           if (check.status === 404) { window.location.reload(); return; }
         }
