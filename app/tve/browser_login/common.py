@@ -8,6 +8,7 @@ from urllib.parse import parse_qs as _parse_qs, urlsplit as _urlsplit
 from app.worker import flask_app
 from app.extensions import db
 from app.models import TVEAccount
+from app.scrapers.base import mask_username as _mask_username
 from app.tve.adobe_pass import TVEAuthError, TVENotAuthorizedError, save_xfinity_cookie_jar
 
 logger = logging.getLogger(__name__)
@@ -1702,21 +1703,6 @@ def _log_signin_timeout_snapshot(page, log_tag: str) -> None:
         logger.info('[%s][debug] timed out — final page text=%r', log_tag, text)
     except Exception:  # noqa: BLE001
         pass
-
-
-def _mask_username(username: str) -> str:
-    """Log-safe form of an account username/email: the browser-login
-    activity log is shown in the UI, and users paste screenshots of it
-    into public forum threads (confirmed 2026-09-24, post #3223 — a full
-    Spectrum username ended up public that way). Keeps just enough to
-    recognize which account was used."""
-    name = (username or '').strip()
-    local, sep, domain = name.partition('@')
-    if len(local) <= 4:
-        masked = local[:1] + '***'
-    else:
-        masked = f'{local[:2]}***{local[-2:]}'
-    return masked + (sep + domain if sep else '')
 
 
 _GOOGLE_SETUP_URL = 'https://accounts.google.com/embedded/setup/v2/android?ipt=&ipr=&flowName=EmbeddedSetupAndroid'

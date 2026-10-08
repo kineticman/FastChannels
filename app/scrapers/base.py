@@ -254,6 +254,20 @@ def is_transient_network_error(exc: Exception) -> bool:
     return False
 
 
+def mask_username(username: str | None) -> str:
+    """Log-safe form of an account username/email: logs and the browser-login
+    activity log get pasted into public forum threads (confirmed 2026-09-24,
+    post #3223 — a full Spectrum username ended up public that way). Keeps
+    just enough to recognize which account was used."""
+    name = (username or '').strip()
+    local, sep, domain = name.partition('@')
+    if len(local) <= 4:
+        masked = local[:1] + '***'
+    else:
+        masked = f'{local[:2]}***{local[-2:]}'
+    return masked + (sep + domain if sep else '')
+
+
 def merge_config_updates(existing: dict | None, updates: dict | None) -> dict:
     """Recursively merge scraper config updates into existing config JSON."""
     merged = copy.deepcopy(existing or {})
