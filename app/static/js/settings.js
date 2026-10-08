@@ -989,14 +989,19 @@ async function loadTveNetworkStatus() {
         const errAge = _tveRelativeTime(n.last_error_at);
         note = `<div style="color:var(--danger);font-size:0.72rem;margin:0.05rem 0 0.35rem">Last attempt failed ${errAge}: ${_escapeHtml(n.last_error_message)}</div>`;
       }
+      // Set when this network signs in with its own TV provider login (chosen on
+      // its card under Sources) instead of the one saved above.
+      const separate = n.separate_provider
+        ? ` <span style="color:var(--text-dim);font-size:0.72rem" title="Chosen on this source's card under Sources, where it can also be signed in">· separate sign-in: ${_escapeHtml(n.separate_provider)}</span>`
+        : '';
       const requestorArg = n.requestor_id ? `'${n.requestor_id}'` : 'null';
       let button = '';
       if (n.family && !n.unsupported) {
         const needsStyle = n.needs_signin ? ';background:var(--warning-soft,#b8860b);color:#1a1a1a;border-color:transparent;font-weight:600' : '';
-        button = `<button class="btn btn-audit" style="padding:0.15rem 0.55rem;font-size:0.74rem${needsStyle}" type="button" title="Sign in to just this network — reuses your saved credentials, doesn't touch any other network's sign-in" onclick="openMvpdLoginModal('${n.family}', ${requestorArg})">Sign in</button>`;
+        button = `<button class="btn btn-audit" style="padding:0.15rem 0.55rem;font-size:0.74rem${needsStyle}" type="button" title="Sign in to just this network — reuses your saved credentials, doesn't touch any other network's sign-in" onclick="openMvpdLoginModal('${n.family}', ${requestorArg}, ${n.signin_method ? `'${n.signin_method}'` : 'null'})">Sign in</button>`;
       }
       return `<div style="display:flex;justify-content:space-between;align-items:center;gap:0.75rem;padding:0.15rem 0">
-        <span>${n.label}</span>
+        <span>${n.label}${separate}</span>
         <span style="display:flex;align-items:center;gap:0.5rem;white-space:nowrap">
           <span style="color:${ageColor}">${age}</span>${button}
         </span>
@@ -1008,9 +1013,11 @@ async function loadTveNetworkStatus() {
   }
 }
 
-function openMvpdLoginModal(family, requestorId) {
+// method: a network with its own separate login passes 'phone', the only way
+// that login signs in; everything else follows the page's choice.
+function openMvpdLoginModal(family, requestorId, method) {
   family = family || 'legacy';
-  if ((family === 'tcm' || _tveSigninMethod() === 'phone') && TVE_LINK_FAMILIES.has(family)) {
+  if ((family === 'tcm' || (method || _tveSigninMethod()) === 'phone') && TVE_LINK_FAMILIES.has(family)) {
     openTveLinkModal(family, requestorId);
     return;
   }
@@ -1018,7 +1025,7 @@ function openMvpdLoginModal(family, requestorId) {
   const cfg = MVPD_LOGIN_FAMILIES[family];
   if (!cfg) return;
   if (cfg.needsRequestor && !requestorId) return;
-  _mvpdLoginRetryArgs = { family, requestorId };
+  _mvpdLoginRetryArgs = { family, requestorId, method };
   _mvpdLoginFamily = family;
   _mvpdLoginRequestorId = requestorId || null;
   _mvpdLoginActive = true;
@@ -1128,7 +1135,7 @@ async function forceStopMvpdLogin() {
   await Promise.allSettled(stopUrls.map((u) => fetch(u, { method: 'POST' })));
   const retry = _mvpdLoginRetryArgs;
   setTimeout(() => {
-    if (retry) openMvpdLoginModal(retry.family, retry.requestorId);
+    if (retry) openMvpdLoginModal(retry.family, retry.requestorId, retry.method);
   }, 1500);
 }
 
@@ -1326,7 +1333,9 @@ async function signInToAllTve() {
     const d = await r.json();
     // Networks that can't work with the selected TV provider (see
     // UNSUPPORTED_NETWORK_PROVIDERS in app/tve/providers.py) are skipped.
-    networks = (d.networks || []).filter(n => !n.unsupported && n.family && MVPD_LOGIN_FAMILIES[n.family]);
+    // ...and so are networks with their own separate login: a different
+    // account, signed in from its own row.
+    networks = (d.networks || []).filter(n => !n.unsupported && !n.separate_provider && n.family && MVPD_LOGIN_FAMILIES[n.family]);
   } catch (e) {
     _mvpdLoginDone = true;
     status.style.color = 'var(--danger)';
@@ -2783,7 +2792,7 @@ async function signInToAllTveByLink() {
   let networks;
   try {
     const d = await (await fetch('/api/settings/tve/status')).json();
-    networks = (d.networks || []).filter(n => !n.unsupported && n.family);
+    networks = (d.networks || []).filter(n => !n.unsupported && !n.separate_provider && n.family);
   } catch (e) {
     _mvpdLoginDone = true;
     status.style.color = 'var(--danger)';

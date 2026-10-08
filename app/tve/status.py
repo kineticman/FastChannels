@@ -20,14 +20,14 @@ def tve_network_status(account) -> list[dict]:
     entries: list[dict] = []
     errors = cfg.get('tve_last_error') or {}
 
-    def _needs_signin(key: str, last_signed_in_at) -> bool:
+    def _needs_signin(key: str, last_signed_in_at, errors=errors) -> bool:
         """A newer-than-last-success error that says only a person can fix it
         (see app/tve/signin_notice.py)."""
         err = errors.get(key) or {}
         at = err.get('at')
         return bool(err.get('needs_signin') and at and not (last_signed_in_at and at <= last_signed_in_at))
 
-    def _last_error(key: str, last_signed_in_at) -> tuple[str | None, int | None]:
+    def _last_error(key: str, last_signed_in_at, errors=errors) -> tuple[str | None, int | None]:
         """A network that's never signed in successfully just shows "Never"
         with no indication why (confirmed live 2026-08-11: FYI came back
         "not entitled" while its A+E siblings all succeeded, and there was
@@ -148,7 +148,15 @@ def tve_network_status(account) -> list[dict]:
         disco_cached_at = (disco_cache.get('discovery_tve_session') or {}).get('cached_at')
     except Exception:  # noqa: BLE001
         pass
-    disco_error_message, disco_error_at = _last_error('discovery', disco_cached_at)
+    # A source with a separate sign-in keeps its errors on its own account
+    # (see app/tve/accounts.py), and is judged against that provider below.
+    from .accounts import tve_account_for, uses_separate_signin
+    from .providers import tve_account_mso_id, unsupported_network_reason
+    disco_separate = uses_separate_signin('discovery_tve')
+    disco_account = tve_account_for('discovery_tve') if disco_separate else account
+    disco_cfg = (disco_account.config or {}) if disco_account else {}
+    disco_errors = disco_cfg.get('tve_last_error') or {}
+    disco_error_message, disco_error_at = _last_error('discovery', disco_cached_at, disco_errors)
     entries.append({
         'label': 'Discovery TVE',
         'last_signed_in_at': disco_cached_at,
@@ -157,11 +165,17 @@ def tve_network_status(account) -> list[dict]:
         'requestor_id': None,
         'last_error_message': disco_error_message,
         'last_error_at': disco_error_at,
-        'needs_signin': _needs_signin('discovery', disco_cached_at),
+        'needs_signin': _needs_signin('discovery', disco_cached_at, disco_errors),
+        # Provider name when this network signs in with its own login
+        # instead of the shared one.
+        'separate_provider': (
+            (disco_cfg.get('selected_mso_name') or tve_account_mso_id(disco_account)) if disco_separate else None),
+        # ...which only signs in by phone link, whatever the page-wide choice.
+        'signin_method': 'phone' if disco_separate else None,
+        '_mso_id': tve_account_mso_id(disco_account) if disco_separate else None,
     })
 
-    from .providers import tve_account_mso_id, unsupported_network_reason
     mso_id = tve_account_mso_id(account)
     for entry in entries:
-        entry['unsupported'] = unsupported_network_reason(entry.get('family') or '', mso_id)
+        entry['unsupported'] = unsupported_network_reason(entry.get('family') or '', entry.pop('_mso_id', None) or mso_id)
     return entries

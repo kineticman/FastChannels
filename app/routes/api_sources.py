@@ -483,6 +483,10 @@ def get_source_config(source_id):
         extra['espn'] = {'signed_in': bool(saved.get('refresh_token')),
                          'signed_in_at': saved.get('signed_in_at'),
                          **_espn_tve_info(saved)}
+    from ..tve.accounts import SEPARATE_SIGNIN_SOURCES
+    if source.name in SEPARATE_SIGNIN_SOURCES:
+        from .api_tve import _source_signin_payload
+        extra['tve_signin'] = _source_signin_payload(source.name)
     if source.name == 'directv':
         from ..scrapers import directv_device_auth
         extra['directv'] = {'code_signed_in': directv_device_auth.is_device_session(saved)}

@@ -9,7 +9,9 @@ from flask import Blueprint, jsonify, request, current_app
 from ..extensions import db
 from ..models import Source, TVEAccount, SourceCache
 from ..tve.accounts import (
-    SHARED_DISPLAY_NAME, SHARED_PROVIDER_ID, get_or_create_shared_tve_account, shared_tve_account,
+    SEPARATE_SIGNIN_SOURCES, SHARED_DISPLAY_NAME, SHARED_PROVIDER_ID, SIGNIN_CACHE_KEYS,
+    get_or_create_separate_tve_account, get_or_create_shared_tve_account, separate_signin_info,
+    separate_tve_account, shared_tve_account, source_family, tve_account_for, tve_account_for_network,
 )
 from ..tve.adobe_pass import TVEAuthError, verify_mvpd_history
 from ..tve.providers import unsupported_network_reason, ytdlp_adobe_mso_providers
@@ -67,6 +69,71 @@ def tve_mvpd_settings():
     return jsonify(account.to_safe_dict())
 
 
+@tve_bp.route('/sources/<int:source_id>/tve-signin', methods=['GET', 'POST'])
+def source_tve_signin(source_id):
+    """Which TV provider login one TVE source signs in with: the shared one
+    (Settings → TV Everywhere) or a separate one of its own, which is signed
+    in by phone link from the source's card."""
+    source = Source.query.get_or_404(source_id)
+    if source.name not in SEPARATE_SIGNIN_SOURCES:
+        return jsonify({'error': 'This source always uses the shared TV provider sign-in.'}), 400
+    if request.method == 'GET':
+        return jsonify(_source_signin_payload(source.name))
+
+    data = request.get_json(force=True) or {}
+    mode = (data.get('mode') or '').strip()
+    if mode not in {'shared', 'separate'}:
+        return jsonify({'error': 'Unknown sign-in choice.'}), 400
+    own = separate_tve_account(source.name)
+    was_separate = bool(own and own.is_enabled)
+    changed = was_separate != (mode == 'separate')
+
+    if mode == 'shared':
+        # Keep the provider choice so switching back doesn't mean redoing it.
+        if own:
+            own.is_enabled = False
+    else:
+        provider_choices = {p['id']: p for p in ytdlp_adobe_mso_providers()}
+        provider_id = (data.get('provider_id') or '').strip()
+        if provider_id not in provider_choices:
+            return jsonify({'error': 'Choose a TV provider.'}), 400
+        reason = unsupported_network_reason(source_family(source.name), provider_id)
+        if reason:
+            return jsonify({'error': reason}), 400
+        own = own or get_or_create_separate_tve_account(source.name)
+        cfg = dict(own.config or {})
+        if cfg.get('selected_mso_id') != provider_id:
+            changed = True
+            cfg = {}  # nothing recorded for the old provider applies to this one
+        # Same keys the shared account's settings form writes.
+        cfg.update({'selected_mso_id': provider_id, 'selected_mso_name': provider_choices[provider_id]['name'],
+                    'adobe_mso_id': provider_id, 'yt_dlp_mso_id': provider_id})
+        own.config = cfg
+        own.is_enabled = True
+
+    if changed:
+        # The saved session belongs to the login used until now.
+        keys = SIGNIN_CACHE_KEYS.get(source.name) or ()
+        if keys:
+            SourceCache.query.filter(
+                SourceCache.source_id == source.id, SourceCache.cache_key.in_(keys),
+            ).delete(synchronize_session=False)
+        logger.info('[tve] %s now signs in with %s', source.name,
+                    'its own TV provider login' if mode == 'separate' else 'the shared TV provider login')
+    db.session.commit()
+    return jsonify({**_source_signin_payload(source.name), 'signin_changed': changed})
+
+
+def _source_signin_payload(source_name: str) -> dict:
+    """separate_signin_info() plus this source's row from the status list."""
+    from ..tve.status import tve_network_status
+    info = separate_signin_info(source_name)
+    family = info.get('family')
+    row = next((n for n in tve_network_status(shared_tve_account()) if n.get('family') == family), {})
+    info['status'] = {k: row.get(k) for k in ('last_signed_in_at', 'needs_signin', 'last_error_message', 'last_error_at')}
+    return info
+
+
 @tve_bp.route('/settings/tve/status')
 def tve_network_status_route():
     from ..tve.status import tve_network_status
@@ -114,6 +181,12 @@ def tve_reset():
             provider_id=SHARED_PROVIDER_ID, display_name=SHARED_DISPLAY_NAME, is_enabled=False,
             config={'home_zip_code': preserved_zip},
         ))
+
+    # Separate per-source sign-ins are saved TVE credentials too.
+    for name in SEPARATE_SIGNIN_SOURCES:
+        own = separate_tve_account(name)
+        if own:
+            db.session.delete(own)
 
     sources = Source.query.filter(Source.name.in_(_TVE_SOURCE_NAMES)).all()
     source_ids = [s.id for s in sources]
@@ -313,8 +386,10 @@ def tve_link_login_start():
         return jsonify({'error': 'This network can only sign in with "Sign in for me".'}), 400
     if family == 'legacy' and not requestor_id:
         return jsonify({'error': 'requestor_id is required.'}), 400
-    account = shared_tve_account()
-    if not account or not account.is_enabled or not account.has_credentials():
+    account = tve_account_for_network(requestor_id if family == 'legacy' else family)
+    # A source's separate login is phone-only, with no username/password saved.
+    needs_credentials = not account or account.provider_id == SHARED_PROVIDER_ID
+    if not account or not account.is_enabled or (needs_credentials and not account.has_credentials()):
         return jsonify({'error': 'Enter and save your TV provider username and password first.'}), 400
     mso_id = tve_account_mso_id(account)
     run_id = uuid.uuid4().hex
@@ -369,9 +444,12 @@ def amcn_browser_login_start():
 def discovery_browser_login_start():
     from .tasks import trigger_discovery_browser_login
 
-    account = get_or_create_shared_tve_account()
+    get_or_create_shared_tve_account()
+    account = tve_account_for('discovery_tve')
     if not account.is_enabled:
         return jsonify({'error': 'Enable and save the TVE account first.'}), 400
+    if account.provider_id != SHARED_PROVIDER_ID:
+        return jsonify({'error': 'Discovery TVE uses a separate login, which signs in on your phone.'}), 400
     cfg = account.config or {}
     mso_id = (cfg.get('yt_dlp_mso_id') or cfg.get('selected_mso_id') or 'Cox').strip()
     reason = unsupported_network_reason('discovery', mso_id)

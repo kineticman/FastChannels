@@ -2946,7 +2946,7 @@
 
         // ESPN's only setting is its activation-code panel — its schema reaches the
         // UI empty (the one field is hidden) but it still needs renderEspnConfig.
-        if (!schema.length && sourceName !== 'espn') {
+        if (!schema.length && sourceName !== 'espn' && !cfg.tve_signin) {
           if (badge) {
             badge.textContent = 'Auto';
             badge.className = 'config-badge auto';
@@ -4555,7 +4555,232 @@
       _slingLoginSendInput({ type: 'key', key: event.key });
     }
 
+    // ── TVE source: shared or separate TV provider sign-in ──────────────────
+    // cfg.tve_signin is only sent for sources that can sign in with their own
+    // TV provider login instead of the one under Settings → TV Everywhere. A
+    // separate login is signed in right here, by a link opened on a phone.
+    function _tveSigninAgo(epoch) {
+      const mins = Math.max(0, Math.round((Date.now() / 1000 - epoch) / 60));
+      if (mins < 1) return 'just now';
+      if (mins < 60) return `${mins} min ago`;
+      if (mins < 48 * 60) return `${Math.round(mins / 60)} h ago`;
+      return `${Math.round(mins / 1440)} days ago`;
+    }
+
+    function _tveSigninStatusHtml(info) {
+      const st = info.status || {};
+      if (st.needs_signin) {
+        return `<span style="color:var(--warning-soft,#b8860b)">Sign in again — ${escapeHtml(st.last_error_message || 'the saved sign-in stopped working.')}</span>`;
+      }
+      const signedIn = st.last_signed_in_at ? `Signed in ${_tveSigninAgo(st.last_signed_in_at)}.` : 'Not signed in yet.';
+      const failed = st.last_error_message
+        ? ` <span style="color:var(--danger)">Last attempt failed ${_tveSigninAgo(st.last_error_at)}: ${escapeHtml(st.last_error_message)}</span>`
+        : '';
+      return signedIn + failed;
+    }
+
+    function renderTveSigninConfig(sourceId, info) {
+      const separate = info.mode === 'separate';
+      const providerOpts = ['<option value="">Choose a TV provider…</option>'].concat(
+        (info.providers || []).map(p => {
+          const label = p.id !== p.name ? `${p.name} (${p.id})` : p.name;
+          return `<option value="${escapeHtml(p.id)}" ${p.id === info.provider_id ? 'selected' : ''}>${escapeHtml(label)}</option>`;
+        })).join('');
+      const settingsLink = '<a href="/admin/settings#settings-card-tve">Settings → TV Everywhere</a>';
+      const sharedNote = info.shared_provider
+        ? `Uses the TV provider saved under ${settingsLink} (${escapeHtml(info.shared_provider)}), and signs in there.`
+        : `No TV provider is saved under ${settingsLink} yet. Add one there, or use a different sign-in here.`;
+      return `
+        <div class="config-title">TV Provider Sign-In</div>
+        <div class="config-note">Choose which TV provider login this source signs in with.</div>
+        <div class="fields-grid">
+          <div class="field field-full">
+            <label for="tve-signin-${sourceId}-mode">Sign in with</label>
+            <select id="tve-signin-${sourceId}-mode" data-family="${escapeHtml(info.family || '')}"
+                    onchange="tveSigninModeChanged(${sourceId}, this.value)">
+              <option value="shared" ${separate ? '' : 'selected'}>Shared TV provider (Settings → TV Everywhere)</option>
+              <option value="separate" ${separate ? 'selected' : ''}>A different sign-in, just for this source</option>
+            </select>
+            <div class="help" id="tve-signin-${sourceId}-shared-note" ${separate ? 'style="display:none"' : ''}>${sharedNote}</div>
+          </div>
+        </div>
+        <div class="subfields" id="tve-signin-${sourceId}-separate" ${separate ? '' : 'style="display:none"'}>
+          <div class="fields-grid">
+            <div class="field field-full">
+              <label for="tve-signin-${sourceId}-provider">TV provider</label>
+              <input type="text" placeholder="Search TV providers" autocomplete="off" style="margin-bottom:0.35rem"
+                     oninput="tveSigninFilterProviders(${sourceId}, this.value)">
+              <select id="tve-signin-${sourceId}-provider">${providerOpts}</select>
+              <div class="help">You sign in on your phone or computer with a link — no username or password is stored here.</div>
+            </div>
+          </div>
+          <div class="help" id="tve-signin-${sourceId}-state" style="margin-top:0.5rem">${separate ? _tveSigninStatusHtml(info) : ''}</div>
+          <div style="margin-top:0.5rem">
+            <button class="btn btn-run" type="button" id="tve-signin-${sourceId}-start" onclick="tveSigninByPhone(${sourceId})"
+                    title="Get a link and QR code to sign in on your own phone or computer">Sign in on my phone</button>
+          </div>
+          <div id="tve-signin-${sourceId}-link" style="display:none;margin-top:0.75rem;padding:0.8rem 0.9rem;border:1px solid var(--border);border-radius:6px">
+            <div id="tve-signin-${sourceId}-link-status" style="margin-bottom:0.5rem">Getting a sign-in link…</div>
+            <div id="tve-signin-${sourceId}-link-body" style="display:none">
+              <div id="tve-signin-${sourceId}-link-code-row" style="display:none;margin:0 0 0.55rem">
+                Enter this code on the page below: <b id="tve-signin-${sourceId}-link-code" style="font-size:1.6em;letter-spacing:0.15em;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace"></b>
+              </div>
+              <div style="display:flex;flex-wrap:wrap;gap:0.9rem;align-items:center;margin-bottom:0.45rem">
+                <div id="tve-signin-${sourceId}-link-qr" style="width:200px;height:200px;flex:none;background:#fff;border-radius:6px;padding:6px;box-sizing:border-box"></div>
+                <div class="help" style="flex:1;min-width:220px">Scan the QR code with your phone's camera, or open the link below on any phone or computer, and sign in to this TV provider there. Use a private/incognito tab if that browser is already signed in to a different TV provider account. The link works for about 10 minutes.</div>
+              </div>
+              <a id="tve-signin-${sourceId}-link-url" href="#" target="_blank" rel="noopener" style="font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:0.8rem;word-break:break-all"></a>
+            </div>
+            <div style="margin-top:0.6rem">
+              <button class="btn btn-cancel" type="button" id="tve-signin-${sourceId}-link-close" onclick="tveSigninCloseLink(${sourceId})">Cancel</button>
+            </div>
+          </div>
+        </div>
+        <div class="config-actions">
+          <span class="config-status" id="config-status-${sourceId}"></span>
+          <button class="btn btn-run" type="button" onclick="saveTveSignin(${sourceId})">Save</button>
+        </div>`;
+    }
+
+    // The provider list is several hundred long.
+    function tveSigninFilterProviders(sourceId, query) {
+      const q = query.trim().toLowerCase();
+      const select = document.getElementById(`tve-signin-${sourceId}-provider`);
+      let firstMatch = null;
+      [...select.options].forEach(o => {
+        if (!o.value) return;
+        o.hidden = !!q && !o.textContent.toLowerCase().includes(q);
+        if (!o.hidden && !firstMatch) firstMatch = o;
+      });
+      if (q && select.selectedOptions[0]?.hidden && firstMatch) select.value = firstMatch.value;
+    }
+
+    function tveSigninModeChanged(sourceId, mode) {
+      document.getElementById(`tve-signin-${sourceId}-separate`).style.display = mode === 'separate' ? '' : 'none';
+      document.getElementById(`tve-signin-${sourceId}-shared-note`).style.display = mode === 'separate' ? 'none' : '';
+    }
+
+    // Saves the choice and redraws the section. Returns the saved info, or
+    // null after showing the error.
+    async function saveTveSignin(sourceId) {
+      const status = document.getElementById(`config-status-${sourceId}`);
+      const field = name => document.getElementById(`tve-signin-${sourceId}-${name}`).value;
+      _tveSigninStopPolling(sourceId, true);
+      status.textContent = 'Saving…';
+      status.className = 'config-status';
+      try {
+        const r = await fetch(`/api/sources/${sourceId}/tve-signin`, {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({ mode: field('mode'), provider_id: field('provider') }),
+        });
+        const data = await r.json();
+        if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
+        document.getElementById(`source-config-${sourceId}`).innerHTML = renderTveSigninConfig(sourceId, data);
+        const after = document.getElementById(`config-status-${sourceId}`);
+        after.textContent = !data.signin_changed ? '✓ Saved'
+          : (data.mode === 'separate' ? '✓ Saved — now sign in on your phone' : '✓ Saved — now using the shared TV provider');
+        after.className = 'config-status ok';
+        return data;
+      } catch (e) {
+        status.textContent = e.message;
+        status.className = 'config-status error';
+        return null;
+      }
+    }
+
+    // One phone-link sign-in at a time (the server keeps a single one too).
+    let _tveSigninLink = null;  // {sourceId, runId, timer, done}
+
+    function _tveSigninStopPolling(sourceId, cancelOnServer) {
+      const link = _tveSigninLink;
+      if (!link || link.sourceId !== sourceId) return;
+      if (link.timer) clearTimeout(link.timer);
+      _tveSigninLink = null;
+      if (cancelOnServer && !link.done) {
+        fetch('/api/settings/tve/link-login/stop', { method: 'POST' }).catch(() => {});
+      }
+    }
+
+    function tveSigninCloseLink(sourceId) {
+      _tveSigninStopPolling(sourceId, true);
+      const panel = document.getElementById(`tve-signin-${sourceId}-link`);
+      if (panel) panel.style.display = 'none';
+      const start = document.getElementById(`tve-signin-${sourceId}-start`);
+      if (start) start.disabled = false;
+    }
+
+    async function tveSigninByPhone(sourceId) {
+      const saved = await saveTveSignin(sourceId);  // the link is for the provider chosen above
+      if (!saved || saved.mode !== 'separate') return;
+      const el = name => document.getElementById(`tve-signin-${sourceId}-${name}`);
+      const status = el('link-status');
+      const finish = (ok, message) => {
+        if (_tveSigninLink && _tveSigninLink.sourceId === sourceId) _tveSigninLink.done = true;
+        el('link-body').style.display = 'none';
+        status.style.color = ok ? 'var(--success-soft)' : 'var(--danger)';
+        status.textContent = (ok ? '✓ ' : '✗ ') + message;
+        el('link-close').textContent = 'Close';
+        el('start').disabled = false;
+      };
+      el('link').style.display = '';
+      el('start').disabled = true;
+      document.getElementById(`config-status-${sourceId}`).textContent = '';
+      let runId;
+      try {
+        const r = await fetch('/api/settings/tve/link-login/start', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({ family: el('mode').dataset.family }),
+        });
+        const d = await r.json();
+        if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
+        runId = d.run_id;
+      } catch (e) {
+        _tveSigninLink = { sourceId, done: true };
+        finish(false, e.message);
+        return;
+      }
+      _tveSigninLink = { sourceId, runId, timer: null, done: false };
+      const poll = async () => {
+        const link = _tveSigninLink;
+        if (!link || link.runId !== runId) return;  // cancelled, or a newer one started
+        try {
+          const d = await (await fetch('/api/settings/tve/link-login/state')).json();
+          if (_tveSigninLink !== link) return;
+          if (d.run_id !== runId) {
+            finish(false, d.state === 'idle' ? 'The sign-in was stopped.' : 'Another sign-in was started, so this one stopped.');
+            return;
+          }
+          if (d.state === 'waiting' && d.url) {
+            status.style.color = '';
+            status.textContent = 'Waiting for you to sign in…';
+            const a = el('link-url');
+            if (a.getAttribute('href') !== d.url) {
+              a.href = d.url;
+              a.textContent = d.url;
+              renderQrCode(el('link-qr'), d.url);
+            }
+            el('link-code-row').style.display = d.code ? '' : 'none';
+            el('link-code').textContent = d.code || '';
+            el('link-body').style.display = '';
+          } else if (d.state === 'success' || d.state === 'error') {
+            finish(d.state === 'success', d.message || (d.state === 'success' ? 'Signed in.' : 'Sign-in failed.'));
+            try {
+              const info = await (await fetch(`/api/sources/${sourceId}/tve-signin`)).json();
+              const state = el('state');
+              if (state) state.innerHTML = _tveSigninStatusHtml(info);
+            } catch (e) { /* the status line just stays as it was */ }
+            return;
+          }
+        } catch (e) { /* transient; keep polling */ }
+        link.timer = setTimeout(poll, 2000);
+      };
+      poll();
+    }
+
     function renderConfigFields(sourceId, sourceName, schema, values, cfg) {
+      if (cfg && cfg.tve_signin) return renderTveSigninConfig(sourceId, cfg.tve_signin);
       let primarySchema = schema;
       let advancedSchema = [];
       let advancedTitle = '';

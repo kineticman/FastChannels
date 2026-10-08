@@ -58,18 +58,20 @@ def pending_signins() -> list[dict]:
     """Sign-ins that need redoing, for the dashboard banner:
     [{'label', 'message', 'at', 'href'}]."""
     from ..models import Source
-    from .accounts import shared_tve_account
+    from .accounts import any_separate_signin, shared_tve_account
     from .status import tve_network_status
 
     account = shared_tve_account()
-    if not account:
+    # No shared account is still worth a look when a source signs in on its own.
+    if not account and not any_separate_signin():
         return []
     out = [
         {'label': n['label'], 'message': n.get('last_error_message'), 'at': n.get('last_error_at'),
-         'href': '/admin/settings#settings-card-tve'}
+         # A separate login is signed in from its source's card.
+         'href': '/admin/sources' if n.get('separate_provider') else '/admin/settings#settings-card-tve'}
         for n in tve_network_status(account) if n.get('needs_signin')
     ]
-    errors = (account.config or {}).get('tve_last_error') or {}
+    errors = ((account.config or {}) if account else {}).get('tve_last_error') or {}
     # Premium sources with their own sign-in: superseded by their own latest one.
     for key, source_name, label, success_key in (
         ('foxone', 'fox_one', 'FOX One', 'access_token_captured_at'),
