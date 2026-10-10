@@ -475,7 +475,7 @@ def run_scraper(source_name: str, force_full: bool = False):
                     'epg',
                     scraper.fetch_epg,
                     epg_input,
-                    skip_ids=_fresh_epg_sids(source),
+                    skip_ids=_fresh_epg_sids(source, horizon_hours=12.0 if source.name == 'roku' else 2.0),
                     enabled_ids=enabled_ids,
                 )
                 for _attempt in range(3):
@@ -619,7 +619,7 @@ def run_scraper(source_name: str, force_full: bool = False):
                     'epg',
                     scraper.fetch_epg,
                     channels,
-                    skip_ids=_fresh_epg_sids(source),
+                    skip_ids=_fresh_epg_sids(source, horizon_hours=12.0 if source.name == 'roku' else 2.0),
                     enabled_ids=enabled_ids,
                 )
                 for _attempt in range(3):
