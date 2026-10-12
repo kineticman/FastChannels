@@ -48,7 +48,8 @@ adobe-pass-failed-authorization — they need an ESPN plan, which matches the
 same forum report (tested via HENA). With both sign-ins, the account is tried
 first and the TV provider covers what its plan doesn't.
 
-ESPN+ events are event-based and aren't handled here yet.
+ESPN+ event channels are opt-in. Their airing IDs come from the same Watch Graph
+schedule, while playback is minted only when the event is tuned.
 """
 
 from __future__ import annotations
@@ -67,7 +68,7 @@ import requests
 
 from ..gracenote_map import resolve_gracenote
 from ..tve.adobe_pass import TVEAuthError, TVENotAuthorizedError, refresh_adobe_client_token
-from .base import BaseScraper, ChannelData, ConfigField, ProgramData
+from .base import BaseScraper, ChannelData, ConfigField, ProgramData, EVENT_CHANNEL_TAG
 
 logger = logging.getLogger(__name__)
 
@@ -126,11 +127,17 @@ NETWORKS = {
 _ACCESS_REFRESH_MARGIN = 10 * 60   # refresh the 4h BAM token this early
 _STREAM_CACHE_TTL = 10 * 60        # reuse a minted manifest + rights context this long
 _EPG_DAYS = 3
+_EVENT_LOOKAHEAD_HOURS = 48
+EVENT_CHANNEL_PREFIX = 'airing:'
+EVENT_STREAM_PREFIX = 'espn://airing/'
+EVENT_END_GRACE_SECONDS = 2 * 3600
 _ACTIVATION_TIMEOUT = 600
 
 _Q_AIRINGS = '''query($day:String!,$tz:String!){ airings(countryCode:"us", deviceType:SETTOP, tz:$tz, day:$day, limit:3000){
   id name shortName type startDateTime endDateTime description isReAir
-  network{ id } sport{ name } league{ name } image{ url } source{ playbackId } } }'''
+  network{ id } sport{ name } league{ name } category{ name } subcategory{ name }
+  image{ url } source{ playbackId }
+  packages{ name } feedName feedType language } }'''
 
 
 class ESPNAuthError(RuntimeError):
@@ -521,6 +528,7 @@ class ESPNScraper(BaseScraper):
     # it only renders that button for sources with a non-empty schema.
     config_schema = [
         ConfigField('refresh_token', 'ESPN session', field_type='password', secret=True, hidden=True),
+        ConfigField('include_espn_plus_events', 'Include ESPN+ events', field_type='toggle', default='false'),
     ]
 
     # ── auth ──
@@ -577,7 +585,7 @@ class ESPNScraper(BaseScraper):
 
     def fetch_channels(self) -> list[ChannelData]:
         logos = self._network_logos()
-        return [
+        channels = [
             ChannelData(
                 source_channel_id=network_id,
                 name=meta['name'],
@@ -592,6 +600,53 @@ class ESPNScraper(BaseScraper):
             )
             for network_id, meta in NETWORKS.items()
         ]
+        if self._events_enabled():
+            self._event_airings = self._fetch_event_airings()
+            for airing in self._event_airings:
+                airing_id = airing['id']
+                end = _parse_time(airing.get('endDateTime'))
+                feed = (airing.get('feedName') or '').strip()
+                title = airing.get('name') or airing.get('shortName') or 'ESPN+ Event'
+                if feed:
+                    title = f'{title} ({feed})'
+                league = ((airing.get('league') or {}).get('name') or '').strip()
+                sport = ((airing.get('sport') or {}).get('name') or '').strip()
+                label = league or sport or 'ESPN+'
+                channels.append(ChannelData(
+                    source_channel_id=EVENT_CHANNEL_PREFIX + airing_id,
+                    name=f'{label} - {title}'[:256],
+                    stream_url=f'{EVENT_STREAM_PREFIX}{airing_id}?end={int(end.timestamp())}',
+                    logo_url=(airing.get('image') or {}).get('url'),
+                    category='Sports',
+                    language=(airing.get('language') or 'en')[:16],
+                    stream_type='hls',
+                    guide_key=EVENT_CHANNEL_PREFIX + airing_id,
+                    tags=[EVENT_CHANNEL_TAG, 'ESPN+ Events'],
+                    gracenote_mode='off',
+                    retire_at=end + timedelta(seconds=EVENT_END_GRACE_SECONDS),
+                    delete_at=end + timedelta(seconds=EVENT_END_GRACE_SECONDS + 24 * 3600),
+                ))
+        return channels
+
+    def _events_enabled(self) -> bool:
+        return str(self.config.get('include_espn_plus_events', 'false')).strip().lower() in ('1', 'true', 'yes', 'on')
+
+    def _fetch_event_airings(self) -> list[dict]:
+        now = datetime.now(timezone.utc)
+        horizon = now + timedelta(hours=_EVENT_LOOKAHEAD_HOURS)
+        found: dict[str, dict] = {}
+        for offset in range(_EPG_DAYS):
+            day = (now.date() + timedelta(days=offset)).isoformat()
+            for airing in self._airings(day):
+                airing_id = airing.get('id')
+                start = _parse_time(airing.get('startDateTime'))
+                end = _parse_time(airing.get('endDateTime'))
+                packages = {p.get('name') for p in (airing.get('packages') or []) if isinstance(p, dict)}
+                if (not airing_id or not start or not end or end <= start or end <= now or start >= horizon
+                        or 'ESPN_PLUS' not in packages):
+                    continue
+                found[airing_id] = airing
+        return sorted(found.values(), key=lambda a: (a.get('startDateTime') or '', a['id']))
 
     def _airings(self, day: str, tz: str = 'UTC') -> list[dict]:
         r = self.session.post(_WATCH_API, params={'apiKey': _WATCH_API_KEY, 'features': 'pbov7'},
@@ -599,13 +654,35 @@ class ESPNScraper(BaseScraper):
                                        'Referer': 'https://www.espn.com/'},
                               json={'query': _Q_AIRINGS, 'variables': {'day': day, 'tz': tz}}, timeout=30)
         r.raise_for_status()
-        return ((r.json().get('data') or {}).get('airings')) or []
+        data = r.json()
+        if data.get('errors'):
+            raise RuntimeError(f"ESPN airing schedule: {data['errors'][0].get('message', 'GraphQL error')}")
+        return ((data.get('data') or {}).get('airings')) or []
 
     def fetch_epg(self, channels: list[ChannelData], **kwargs) -> list[ProgramData]:
         wanted = {ch.source_channel_id for ch in channels}
         today = datetime.now(timezone.utc).date()
         seen: set[str] = set()
         programs: list[ProgramData] = []
+        for a in getattr(self, '_event_airings', []):
+            cid = EVENT_CHANNEL_PREFIX + a['id']
+            if cid not in wanted:
+                continue
+            start, end = _parse_time(a.get('startDateTime')), _parse_time(a.get('endDateTime'))
+            if not start or not end or end <= start:
+                continue
+            programs.append(ProgramData(
+                source_channel_id=cid,
+                title=a.get('name') or a.get('shortName') or 'ESPN+ Event',
+                start_time=start,
+                end_time=end,
+                description=a.get('description') or None,
+                poster_url=(a.get('image') or {}).get('url'),
+                category=_event_epg_categories(a),
+                episode_title=(a.get('feedName') or (a.get('league') or {}).get('name')),
+                is_live=a.get('type') == 'LIVE' and not a.get('isReAir'),
+                episode_id=a['id'],
+            ))
         for offset in range(-1, _EPG_DAYS):
             day = (today + timedelta(days=offset)).isoformat()
             try:
@@ -685,6 +762,10 @@ class ESPNScraper(BaseScraper):
     # ESPN appends #EXT-X-ENDLIST (often well after the scheduled endDateTime),
     # so whatever tunes lanes has to re-tune on that, not on the schedule.
     def resolve_airing(self, airing_id: str) -> str:
+        streams = dict(self.cache.get('espn_streams') or {})
+        cached = streams.get(EVENT_CHANNEL_PREFIX + airing_id)
+        if cached and time.time() - float(cached.get('cached_at', 0)) < _STREAM_CACHE_TTL:
+            return cached['manifest_url']
         r = self.session.post(_WATCH_API, params={'apiKey': _WATCH_API_KEY, 'features': 'pbov7'},
                               headers={'User-Agent': _UA, 'Origin': 'https://www.espn.com'},
                               json={'query': 'query($id:ID!){ airing(id:$id, countryCode:"us", deviceType:SETTOP, tz:"UTC"){ source{ playbackId } } }',
@@ -696,8 +777,7 @@ class ESPNScraper(BaseScraper):
         # content-key.invalid-linear-key for them (confirmed 2026-09-26).
         entry = self._mint_playback(pid, f'airing {airing_id}')
         entry['license_url'] = _EVENT_LICENSE_URL
-        streams = dict(self.cache.get('espn_streams') or {})
-        streams[f'airing:{airing_id}'] = entry
+        streams[EVENT_CHANNEL_PREFIX + airing_id] = entry
         self._update_cache('espn_streams', streams)
         return entry['manifest_url']
 
@@ -789,6 +869,15 @@ class ESPNScraper(BaseScraper):
                 'cached_at': time.time()}
 
     def resolve(self, raw_url: str) -> str:
+        if raw_url.startswith(EVENT_STREAM_PREFIX):
+            airing_id = raw_url[len(EVENT_STREAM_PREFIX):].split('?', 1)[0]
+            if not re.fullmatch(r'[0-9a-fA-F-]{36}', airing_id):
+                raise ValueError('Invalid ESPN+ airing ID')
+            end = event_end_timestamp(raw_url)
+            if end is not None and time.time() >= end + EVENT_END_GRACE_SECONDS:
+                from .base import StreamDeadError
+                raise StreamDeadError('ESPN+ event has ended')
+            return self.resolve_airing(airing_id)
         network_id = raw_url.removeprefix(SCHEME)
         if network_id not in NETWORKS:
             raise ValueError(f'Unsupported ESPN stream URL: {raw_url}')
@@ -801,6 +890,10 @@ class ESPNScraper(BaseScraper):
         return streams[network_id]['manifest_url']
 
     def audit_resolve(self, raw_url: str) -> str:
+        if raw_url.startswith(EVENT_STREAM_PREFIX):
+            # Upcoming events have no playbackId until shortly before they air.
+            # Their schedule presence is the audit check; playback is tested at tune time.
+            return raw_url
         # Validate entitlement, then hand back the opaque URL so the audit skips
         # manifest inspection (see warner_tve.py — the CENC markers live in the
         # variant playlists, so the master reads as clear HLS).
@@ -834,5 +927,35 @@ def _parse_time(value: str | None) -> datetime | None:
         return None
     try:
         return datetime.fromisoformat(value.replace('Z', '+00:00'))
+    except ValueError:
+        return None
+
+
+def _event_epg_categories(airing: dict) -> str:
+    """Keep ESPN+ provider, sport, and league searchable in XMLTV categories."""
+    values = (
+        'Sports Event',
+        (airing.get('sport') or {}).get('name'),
+        (airing.get('category') or {}).get('name'),
+        (airing.get('league') or {}).get('name'),
+        (airing.get('subcategory') or {}).get('name'),
+        'ESPN+',
+    )
+    result = []
+    seen = set()
+    for value in values:
+        label = (value or '').strip()
+        if label and label.casefold() not in seen:
+            result.append(label)
+            seen.add(label.casefold())
+    return ';'.join(result)
+
+
+def event_end_timestamp(raw_url: str | None) -> int | None:
+    """Scheduled end embedded in an ESPN+ event channel's opaque stream URL."""
+    if not raw_url or not raw_url.startswith(EVENT_STREAM_PREFIX) or '?end=' not in raw_url:
+        return None
+    try:
+        return int(raw_url.rsplit('?end=', 1)[1])
     except ValueError:
         return None

@@ -519,6 +519,10 @@ def ensure_runtime_schema() -> None:
                     "UPDATE channels SET went_inactive_at = last_seen_at "
                     "WHERE is_active = 0 AND last_seen_at IS NOT NULL"
                 ))
+            if "retire_at" not in ch_cols:
+                conn.execute(text("ALTER TABLE channels ADD COLUMN retire_at DATETIME"))
+            if "delete_at" not in ch_cols:
+                conn.execute(text("ALTER TABLE channels ADD COLUMN delete_at DATETIME"))
             if "returned_at" not in ch_cols:
                 conn.execute(text(
                     "ALTER TABLE channels ADD COLUMN returned_at DATETIME"

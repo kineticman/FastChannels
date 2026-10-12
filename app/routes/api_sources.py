@@ -657,6 +657,11 @@ def save_source_config(source_id):
         _toggle_enabled(old, key) != _toggle_enabled(current, key)
         for key in ('exclude_fast_channels', 'use_provider_numbers')
     )
+    espn_events_changed = source.name == 'espn' and (
+        _toggle_enabled(old, 'include_espn_plus_events') != _toggle_enabled(current, 'include_espn_plus_events')
+    )
+    if source.name == 'espn' and _toggle_enabled(current, 'include_espn_plus_events') and not hasattr(Channel, 'retire_at'):
+        return jsonify({'error': 'ESPN+ events require a FastChannels image rebuild and restart.'}), 503
     if creds_changed or sling_subscription_changed:
         for tk in _AUTH_STATE:
             if data.get(tk) in (None, '', '••••••••'):  # skip values set in this save
@@ -723,6 +728,14 @@ def save_source_config(source_id):
                         db.session.delete(ch)
                         pbs_deleted += 1
 
+    espn_deleted = 0
+    if espn_events_changed and not _toggle_enabled(current, 'include_espn_plus_events'):
+        from ..models import FeedChannelNumber
+        for ch in source.channels.filter(Channel.source_channel_id.like('airing:%')).all():
+            FeedChannelNumber.query.filter_by(channel_id=ch.id).delete(synchronize_session=False)
+            db.session.delete(ch)
+            espn_deleted += 1
+
     source.config = current
     auto_enabled = False
     if (
@@ -734,7 +747,7 @@ def save_source_config(source_id):
         source.is_enabled = True
         auto_enabled = True
     db.session.commit()
-    if pbs_deleted:
+    if pbs_deleted or espn_deleted:
         _invalidate_and_refresh_xml()
     full_scrape_queued = False
     if source.name == 'sling' and (creds_changed or sling_lineup_changed) and source.is_enabled:
@@ -747,6 +760,9 @@ def save_source_config(source_id):
         # Same rationale as Sling above — the FAST-exclusion and numbering
         # toggles change which channels come back from fetch_channels().
         trigger_scrape(source.name, force_full=True)
+        full_scrape_queued = True
+    elif espn_events_changed and source.is_enabled and _toggle_enabled(current, 'include_espn_plus_events'):
+        trigger_scrape('espn', force_full=True)
         full_scrape_queued = True
     elif source.name == 'pbs' and old != current and source.is_enabled:
         # Any PBS config change (curated toggle, ZIP codes, or hand-editing
@@ -767,7 +783,7 @@ def save_source_config(source_id):
         'is_enabled': source.is_enabled,
         'auto_enabled': auto_enabled,
         'full_scrape_queued': full_scrape_queued,
-        'deleted_channels': pbs_deleted,
+        'deleted_channels': pbs_deleted + espn_deleted,
         'config_complete': config_complete,
         'config_status': config_status,
     })

@@ -3626,6 +3626,23 @@
               ? `<span style="color:var(--success-soft)">&#10003; Signed in with ${escapeHtml(tveProvider || 'your TV provider')}</span>`
               : (tveProvider ? `<span style="color:var(--text-muted)">Provider: ${escapeHtml(tveProvider)}</span>` : '')}
           </span>
+        </div>
+        <div class="config-subtitle" style="margin-top:1rem;font-weight:600">ESPN+ events</div>
+        <div class="config-note">
+          Adds upcoming ESPN+ events as temporary channels with event guide data. An ESPN account
+          with ESPN+ access is required. Channels retire two hours after their scheduled end and
+          are deleted a day later.
+        </div>
+        <div class="field field-full" style="margin:.65rem 0">
+          <label style="display:flex;align-items:center;gap:.5rem">
+            <input type="checkbox" data-key="include_espn_plus_events"
+                   ${String(values.include_espn_plus_events || 'false').toLowerCase() === 'true' ? 'checked' : ''}>
+            Include ESPN+ events
+          </label>
+        </div>
+        <div class="config-actions">
+          <span class="config-status" id="config-status-${sourceId}"></span>
+          <button class="btn btn-run" type="button" onclick="saveSourceConfig(${sourceId})">Save settings</button>
         </div>`;
     }
 

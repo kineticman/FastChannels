@@ -96,6 +96,15 @@ def _gone_response() -> Response:
     )
 
 
+def _channel_is_retired(channel: Channel) -> bool:
+    deadline = getattr(channel, 'retire_at', None)
+    if deadline is None:
+        return False
+    if deadline.tzinfo is None:
+        deadline = deadline.replace(tzinfo=timezone.utc)
+    return datetime.now(timezone.utc) >= deadline
+
+
 def _unavailable_response() -> Response:
     """503 + Retry-After for a transient upstream failure (timeout, CDN hiccup,
     expired token). Well-behaved clients back off and retry instead of hammering
@@ -2711,6 +2720,8 @@ def play(source_name: str, channel_id: str):
     if not channel:
         logger.warning('[play] request ip=%s unknown channel %s/%s', client_ip, source_name, channel_id)
         abort(404)
+    if _channel_is_retired(channel):
+        return _gone_response()
 
     # Custom channels log full detail (incl. cache/resolver) via _log_custom_play_path
     _log_play_req = logger.debug if source_name == 'custom' else logger.info
@@ -3105,6 +3116,8 @@ def play_fc_player_bridge(source_name: str, channel_id: str):
     )
     if not channel:
         abort(404)
+    if _channel_is_retired(channel):
+        return _gone_response()
 
     needs_bridge = bool(channel.requires_drm_bridge) and source_name in _DRM_BRIDGE_TRUSTED_SOURCES
     if not needs_bridge:
@@ -3193,6 +3206,8 @@ def play_auto(source_name: str, channel_id: str):
     )
     if not channel:
         abort(404)
+    if _channel_is_retired(channel):
+        return _gone_response()
 
     needs_bridge = bool(channel.requires_drm_bridge) and source_name in _DRM_BRIDGE_TRUSTED_SOURCES
     if not needs_bridge:

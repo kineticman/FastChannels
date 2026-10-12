@@ -253,6 +253,8 @@ class Channel(db.Model):
     last_seen_at      = db.Column(db.DateTime(timezone=True), nullable=True)
     first_seen_at     = db.Column(db.DateTime(timezone=True), nullable=True)  # set once on true insert; survives guide_key row-rebind
     went_inactive_at  = db.Column(db.DateTime(timezone=True), nullable=True)
+    retire_at         = db.Column(db.DateTime(timezone=True), nullable=True)
+    delete_at         = db.Column(db.DateTime(timezone=True), nullable=True)
     returned_at       = db.Column(db.DateTime(timezone=True), nullable=True)
     identity_changed_at = db.Column(db.DateTime(timezone=True), nullable=True)  # set by scraper when an enabled slot's content changed upstream (guide_key/name swap) — needs Gracenote review
     previous_name       = db.Column(db.String(256), nullable=True)  # the occupant's name before the last content swap (paired with identity_changed_at)
@@ -322,6 +324,8 @@ class Channel(db.Model):
             'redetect_on_play':  bool(self.redetect_on_play),
             'guide_block_minutes': self.guide_block_minutes,
             'last_seen_at':     self.last_seen_at.isoformat() if self.last_seen_at else None,
+            'retire_at':       self.retire_at.isoformat() if self.retire_at else None,
+            'delete_at':       self.delete_at.isoformat() if self.delete_at else None,
             'identity_changed_at': self.identity_changed_at.isoformat() if self.identity_changed_at else None,
             'previous_name':    self.previous_name,
             'previous_gracenote_id': self.previous_gracenote_id,

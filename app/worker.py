@@ -39,6 +39,7 @@ from urllib.parse import urljoin as _urljoin
 from app.scrapers import registry
 from app.scrapers.playlist import is_playlist_source
 from app.scrapers.base import (
+    EVENT_CHANNEL_TAG,
     StreamDeadError,
     ScrapeSkipError,
     is_ssl_handshake_failure,
@@ -861,7 +862,12 @@ def run_stream_audit(source_name: str):
         # channels out of the bridge feed.
         _sync_intrinsic_drm_bridge(source)
 
-        channels = source.channels.filter(
+        channels_query = source.channels
+        if hasattr(Channel, 'retire_at'):
+            channels_query = channels_query.filter(
+                or_(Channel.retire_at.is_(None), Channel.retire_at > datetime.now(timezone.utc))
+            )
+        channels = channels_query.filter(
             db.or_(
                 Channel.is_active == True,
                 Channel.disable_reason.in_(['Dead', 'VOD', 'NotAuthorized']),
@@ -2853,6 +2859,8 @@ def _upsert_channels(source, channel_data_list, gracenote_auto_fill: bool = True
                     ch.identity_changed_at = seen_at
             ch.name          = cd.name
             ch.stream_url    = cd.stream_url
+            ch.retire_at     = getattr(cd, 'retire_at', None)
+            ch.delete_at     = getattr(cd, 'delete_at', None)
             ch.stream_type   = cd.stream_type
             ch.provider_number = cd.provider_number
             old_logo_url = ch.logo_url
@@ -2894,6 +2902,9 @@ def _upsert_channels(source, channel_data_list, gracenote_auto_fill: bool = True
                 ch.is_active = True
                 if stream_url_changed and _flagged:
                     ch.disable_reason = None  # clear flag; let next audit re-check
+            if ch.retire_at and _utc_aware(ch.retire_at) <= seen_at:
+                ch.is_active = False
+                ch.went_inactive_at = ch.went_inactive_at or seen_at
             ch.last_seen_at = seen_at
             ch.missed_scrapes = 0
             if cd.source_channel_id in pinned_channel_ids and not ch.scrape_pinned:
@@ -2915,7 +2926,7 @@ def _upsert_channels(source, channel_data_list, gracenote_auto_fill: bool = True
                 elif gracenote_id is not None:
                     ch.gracenote_id = gracenote_id
         else:
-            db.session.add(Channel(
+            new_channel = Channel(
                 source_id         = source.id,
                 source_channel_id = cd.source_channel_id,
                 name              = cd.name,
@@ -2939,11 +2950,16 @@ def _upsert_channels(source, channel_data_list, gracenote_auto_fill: bool = True
                 guide_block_minutes = getattr(cd, 'guide_block_minutes', None),
                 last_seen_at      = seen_at,
                 first_seen_at     = seen_at,
+                is_active         = not (getattr(cd, 'retire_at', None) and _utc_aware(cd.retire_at) <= seen_at),
                 is_enabled        = not _born_pending,
                 review_state      = 'pending' if _born_pending else 'approved',
                 missed_scrapes    = 0,
                 scrape_pinned     = cd.source_channel_id in pinned_channel_ids,
-            ))
+            )
+            if hasattr(Channel, 'retire_at'):
+                new_channel.retire_at = getattr(cd, 'retire_at', None)
+                new_channel.delete_at = getattr(cd, 'delete_at', None)
+            db.session.add(new_channel)
 
     seen = {cd.source_channel_id for cd in channel_data_list}
     existing_active_ids = {ch_id for ch_id, ch in existing.items() if ch.is_active}
@@ -3105,6 +3121,40 @@ def _prune_old_programs(batch_size: int = 1000):
 
     if total_deleted:
         logger.info('[worker] pruned %d expired EPG entries', total_deleted)
+
+
+def _retire_expired_event_channels() -> int:
+    """Apply scraper-supplied deadlines to channels tagged as events."""
+    from app.models import FeedChannelNumber
+
+    if not hasattr(Channel, 'retire_at'):
+        return 0
+
+    now = datetime.now(timezone.utc)
+    retired = 0
+    deleted = 0
+    due = Channel.query.filter(or_(
+        Channel.retire_at <= now,
+        Channel.delete_at <= now,
+    )).all()
+    for ch in due:
+        if EVENT_CHANNEL_TAG not in (ch.tags or '').split(','):
+            continue
+        # SQLite returns naive datetimes even for timezone-aware columns.
+        delete_at = _utc_aware(ch.delete_at)
+        retire_at = _utc_aware(ch.retire_at)
+        if delete_at and now >= delete_at:
+            FeedChannelNumber.query.filter_by(channel_id=ch.id).delete(synchronize_session=False)
+            db.session.delete(ch)
+            deleted += 1
+        elif ch.is_active and retire_at and now >= retire_at:
+            ch.is_active = False
+            ch.went_inactive_at = now
+            retired += 1
+    if retired or deleted:
+        db.session.commit()
+        logger.info('[worker] retired %d time-limited channel(s), deleted %d', retired, deleted)
+    return retired + deleted
 
 
 # Shared by _prune_bogus_programs and _upsert_programs, which must agree on
@@ -3629,6 +3679,12 @@ def purge_disabled_source_leftovers():
 def _rq_prune():
     """RQ job target: prune expired EPG entries. Runs inside the RQ worker process."""
     with flask_app.app_context():
+        try:
+            if _retire_expired_event_channels():
+                _invalidate_and_refresh_xml()
+        except Exception:
+            db.session.rollback()
+            logger.exception('[worker] channel retirement failed')
         _prune_old_programs()
 
 
