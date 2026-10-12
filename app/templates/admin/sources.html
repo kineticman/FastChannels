@@ -1111,7 +1111,7 @@
                   <button class="btn-delete-inactive" type="button"
                           onclick='deletePlaylist({{ source.id }}, {{ source.display_name | tojson }})'>Delete playlist</button>
                   <span class="save-status" id="playlist-status-{{ source.id }}"></span>
-                  <div class="help">Edit changes the playlist or guide URL, the groups imported, and the default language and country. Turning the playlist off (the Enabled switch) pauses it and keeps its channels; Delete removes it and its channels for good.</div>
+                  <div class="help">Edit changes the playlist or guide URL, the groups imported, default language and country, and whether channels without guide data get placeholder programmes. Turning the playlist off (the Enabled switch) pauses it and keeps its channels; Delete removes it and its channels for good.</div>
                 </div>
                 {% endif %}
 

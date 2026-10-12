@@ -17,6 +17,7 @@ from ..scrapers.playlist import (
     _download, fetch_playlist, is_playlist_source, validate_url,
 )
 from ..scrapers.xmltv_import import iter_xmltv
+from .api_shared import _invalidate_and_refresh_xml
 from .tasks import trigger_playlist_delete, trigger_scrape
 
 logger = logging.getLogger(__name__)
@@ -173,6 +174,10 @@ def _apply_dialog_fields(config: dict, data: dict) -> dict:
             config['epg_url'] = validate_url(epg_url, 'Guide URL')
         else:
             config.pop('epg_url', None)
+    if 'fill_missing_epg' in data:
+        if not isinstance(data['fill_missing_epg'], bool):
+            raise PlaylistError('Fill missing guide data must be true or false')
+        config['fill_missing_epg'] = data['fill_missing_epg']
     if 'groups_include' in data:
         groups = _clean_groups(data.get('groups_include'))
         if groups:
@@ -198,6 +203,7 @@ def _playlist_dict(source: Source) -> dict:
     d.update({
         'm3u_url':          cfg.get('m3u_url') or '',
         'epg_url':          cfg.get('epg_url') or '',
+        'fill_missing_epg': cfg.get('fill_missing_epg', True),
         'groups_include':   cfg.get('groups_include') or [],
         'default_language': cfg.get('default_language') or 'en',
         'default_country':  cfg.get('default_country') or 'US',
@@ -217,6 +223,7 @@ def create_playlist():
         config = _apply_dialog_fields({}, {
             'm3u_url':          data.get('m3u_url'),
             'epg_url':          data.get('epg_url'),
+            'fill_missing_epg': data.get('fill_missing_epg', True),
             'groups_include':   data.get('groups_include'),
             'default_language': data.get('default_language'),
             'default_country':  data.get('default_country'),
@@ -290,6 +297,8 @@ def update_playlist(source_id):
     )
     if rescrape:
         trigger_scrape(source.name, force_full=True)
+    elif old.get('fill_missing_epg', True) != config.get('fill_missing_epg', True):
+        _invalidate_and_refresh_xml()
     d = _playlist_dict(source)
     d['scrape_queued'] = rescrape
     return jsonify(d)

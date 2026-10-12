@@ -268,7 +268,9 @@ def generate_xmltv_stream(filters: dict = None, base_url: str = None, feed_name:
     custom_channels = [
         ch for ch in channels
         if ch.source.name == 'custom'
-        or (is_playlist_source(ch.source.name) and ch.id not in with_programs)
+        or (is_playlist_source(ch.source.name)
+            and (ch.source.config or {}).get('fill_missing_epg', True)
+            and ch.id not in with_programs)
     ]
     if custom_channels:
         block_start = epg_start.replace(minute=0, second=0, microsecond=0)

@@ -47,7 +47,12 @@
       <div class="pl-field">
         <label class="pl-label" for="pl-epg">Guide URL (XMLTV)</label>
         <input id="pl-epg" class="pl-input" type="text" placeholder="https://example.com/epg.xml.gz  (optional)" oninput="_plInvalidatePreview()">
-        <div class="pl-help">Optional. Plain or gzipped XMLTV. Channels are matched to it by their <code>tvg-id</code>. Channels with no guide data show a placeholder.</div>
+        <div class="pl-help">Optional. Plain or gzipped XMLTV. Channels are matched to it by their <code>tvg-id</code>.</div>
+      </div>
+
+      <div class="pl-field">
+        <label class="pl-radio"><input id="pl-fill-missing-epg" type="checkbox" checked onchange="_plOnFillMissingEpgChanged()">
+          <span>Fill missing guide data<br><span class="pl-help">Show repeating guide blocks for channels with no programmes. Turn off to leave their guide empty.</span></span></label>
       </div>
 
       <button class="btn btn-run btn-sm" id="pl-check-btn" type="button" onclick="checkPlaylist()">Check playlist</button>
@@ -124,6 +129,7 @@
       _plEl('pl-name').value = '';
       _plEl('pl-m3u').value = '';
       _plEl('pl-epg').value = '';
+      _plEl('pl-fill-missing-epg').checked = true;
       _plEl('pl-lang').value = 'en';
       _plEl('pl-country').value = 'US';
       _plEl('pl-result').style.display = 'none';
@@ -145,6 +151,7 @@
         _plEl('pl-name').value = d.display_name || '';
         _plEl('pl-m3u').value = d.m3u_url || '';
         _plEl('pl-epg').value = d.epg_url || '';
+        _plEl('pl-fill-missing-epg').checked = d.fill_missing_epg !== false;
         _plEl('pl-lang').value = d.default_language || 'en';
         _plEl('pl-country').value = d.default_country || 'US';
         checkPlaylist(d.groups_include || []);
@@ -184,6 +191,13 @@
       }
     }
 
+    function _plOnFillMissingEpgChanged() {
+      const notice = _plEl('pl-no-guide-notice');
+      if (notice) notice.textContent = _plEl('pl-fill-missing-epg').checked
+        ? 'No guide URL: channels will show placeholder guide blocks.'
+        : 'No guide URL: channels will have an empty guide.';
+    }
+
     document.querySelectorAll('input[name="pl-enter"]').forEach(rb => {
       rb.addEventListener('change', () => { _plEnterTouched = true; });
     });
@@ -205,7 +219,10 @@
       } else if (_plEl('pl-epg').value.trim()) {
         facts.push('The guide is too large to check here; it will be matched when the playlist is imported.');
       } else {
-        facts.push('No guide URL: channels will show placeholder guide blocks.');
+        const message = _plEl('pl-fill-missing-epg').checked
+          ? 'No guide URL: channels will show placeholder guide blocks.'
+          : 'No guide URL: channels will have an empty guide.';
+        facts.push(`<span id="pl-no-guide-notice">${message}</span>`);
       }
       if (d.with_gracenote) facts.push(`${d.with_gracenote} carry a Gracenote station ID and can use Gracenote guide data.`);
       if (d.with_headers) facts.push(`<span class="pl-warn">${d.with_headers} declare request headers (User-Agent/Referer). Those are not sent yet, so these streams may not play.</span>`);
@@ -259,6 +276,7 @@
         name,
         m3u_url: _plEl('pl-m3u').value.trim(),
         epg_url: _plEl('pl-epg').value.trim(),
+        fill_missing_epg: _plEl('pl-fill-missing-epg').checked,
         // All groups selected is stored as "no filter", so groups the playlist
         // adds later are imported too.
         groups_include: picked.length === _plPreview.groups.length ? [] : picked,
