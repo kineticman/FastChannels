@@ -6,6 +6,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import contains_eager
 from ..extensions import db
 from ..models import Channel, Source, Feed, AppSettings
+from ..channel_tags import event_filter_clause
 from ..url import proxy_logo_url
 from ..scrapers import registry as _scraper_registry
 from ..drm_bridge import DRM_BRIDGE_TRUSTED_SOURCES
@@ -277,6 +278,8 @@ def _build_channel_query(filters: dict, *, activity: str = 'active'):
         Source.epg_only    == False,
         Channel.stream_url != None,
     )
+    if (event_clause := event_filter_clause(filters.get('event'))) is not None:
+        query = query.filter(event_clause)
     if channel_ids := filters.get('channel_ids'):
         query = query.filter(Channel.id.in_(channel_ids))
     else:
@@ -338,6 +341,8 @@ def _build_channel_stub_query(filters: dict):
         Source.epg_only == False,
         Channel.stream_url != None,
     )
+    if (event_clause := event_filter_clause(filters.get('event'))) is not None:
+        query = query.filter(event_clause)
     if channel_ids := filters.get('channel_ids'):
         query = query.filter(Channel.id.in_(channel_ids))
     else:
@@ -444,7 +449,9 @@ def _selected_channels(filters: dict | None = None, *, gracenote: bool | None = 
         existing_ids = {ch.id for ch in channels}
         extra_ids = [i for i in pinned_ids if i not in existing_ids]
         if extra_ids:
-            channels = list(channels) + _build_channel_query({'channel_ids': extra_ids}).all()
+            channels = list(channels) + _build_channel_query({
+                'channel_ids': extra_ids, 'event': filters.get('event'),
+            }).all()
 
     return _apply_guide_partition(channels, gracenote, filters.get('max_channels'))
 
@@ -526,6 +533,8 @@ def feed_gracenote_start(feed: Feed) -> int:
 def feed_to_query_filters(feed_filters: dict) -> dict:
     """Translate Feed.filters (plural keys) to _build_channel_query format."""
     f = {}
+    if feed_filters.get('event') in ('0', '1'):
+        f['event'] = feed_filters['event']
     if channel_ids := feed_filters.get('channel_ids'):
         # Explicit channel list overrides source/category/language filters.
         f['channel_ids'] = channel_ids

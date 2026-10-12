@@ -611,7 +611,10 @@ class ESPNScraper(BaseScraper):
                     title = f'{title} ({feed})'
                 league = ((airing.get('league') or {}).get('name') or '').strip()
                 sport = ((airing.get('sport') or {}).get('name') or '').strip()
-                label = league or sport or 'ESPN+'
+                # A numeric league prefix (e.g. "3. Liga") is less useful as a
+                # channel's first word than its sport; keep descriptive league
+                # names such as NHL, LALIGA 2, and NCAA Football.
+                label = (sport if league[:1].isdigit() and sport else league) or sport or 'ESPN+'
                 channels.append(ChannelData(
                     source_channel_id=EVENT_CHANNEL_PREFIX + airing_id,
                     name=f'{label} - {title}'[:256],

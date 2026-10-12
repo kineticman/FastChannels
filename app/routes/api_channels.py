@@ -47,7 +47,8 @@ def list_channels():
     if request.args.get('slim') in ('1', 'true'):
         items = [{'id': ch.id, 'name': ch.name, 'source_name': ch.source.name,
                   'category': ch.category, 'language': ch.language,
-                  'country': ch.country, 'gracenote_id': ch.gracenote_id}
+                  'country': ch.country, 'gracenote_id': ch.gracenote_id,
+                  'is_event': 'event' in (ch.tags or '').split(',')}
                  for ch in pag.items]
     else:
         items = [ch.to_dict() for ch in pag.items]

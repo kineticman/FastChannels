@@ -523,6 +523,11 @@
           <option value="{{ feed.id }}"{% if feed_id == feed.id %} selected{% endif %}>{{ feed.name }}</option>
           {% endfor %}
         </select>
+        <select name="event" onchange="this.form.submit()" aria-label="Events" title="Events">
+          <option value=""{% if not event_filter %} selected{% endif %}>All channels</option>
+          <option value="1"{% if event_filter == '1' %} selected{% endif %}>Events only</option>
+          <option value="0"{% if event_filter == '0' %} selected{% endif %}>Non-event channels</option>
+        </select>
         <details class="ms-dd" ontoggle="msOnToggle(this)" aria-label="Category">
           <summary>{% if category %}Category ({{ category|length }}){% else %}All Categories{% endif %}</summary>
           <div class="ms-dd-panel">
@@ -549,7 +554,7 @@
           <div class="guide-search-history" id="guide-search-history" hidden></div>
         </div>
         <button type="submit" class="btn btn-sm">Search</button>
-        {% if source_id or feed_id or category or search or state != 'enabled' %}<a href="/admin/guide" class="btn btn-sm btn-ghost">Clear</a>{% endif %}
+        {% if source_id or feed_id or event_filter or category or search or state != 'enabled' %}<a href="/admin/guide" class="btn btn-sm btn-ghost">Clear</a>{% endif %}
         <div class="guide-toolbar-sep"></div>
         <div class="guide-time-nav">
           <button type="button" class="btn btn-sm btn-ghost" onclick="shiftTime(-2)" title="Go back 2 hours">&#8592; 2h</button>
@@ -573,7 +578,7 @@
       <p style="font-size:0.75rem;color:var(--text-muted);margin-bottom:0.5rem">
         {% if state == 'disabled' %}Showing <strong>disabled</strong> channels only — these are excluded from M3U output.
         {% elif state == 'both' %}Showing enabled <em>and</em> disabled channels; disabled ones are dimmed and excluded from M3U output.
-        {% else %}Showing enabled channels — the same set included in M3U output.{% endif %}
+        {% else %}Showing enabled channels eligible for M3U output, including bridge playlists.{% endif %}
         Toggle a channel's state on the <a href="/admin/channels" style="color:var(--accent)">Channels</a> page.</p>
 
       <div class="guide-outer" id="guide-outer">

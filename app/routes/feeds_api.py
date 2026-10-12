@@ -8,6 +8,7 @@ from sqlalchemy.exc import OperationalError
 from ..extensions import db
 from ..generators.m3u import get_global_chnum_overlaps, _selected_channel_stubs, feed_to_query_filters
 from ..models import Channel, Feed, FeedChannelNumber, Source
+from ..channel_tags import event_filter_clause
 from ..url import public_base_url
 from ..xml_cache import delete_xml_artifact, invalidate_xml_cache
 from .tasks import trigger_xml_refresh, trigger_xml_refresh_catchup
@@ -104,6 +105,10 @@ def channel_membership():
         f_filters = feed.filters or {}
         pinned = set(int(i) for i in (f_filters.get('pinned_channel_ids') or []))
         q_filters = feed_to_query_filters(f_filters)
+        if pinned and (event_clause := event_filter_clause(q_filters.get('event'))) is not None:
+            pinned = set(r[0] for r in db.session.query(Channel.id).filter(
+                Channel.id.in_(pinned), event_clause,
+            ).all())
         matched_ids = set(
             r[0] for r in _build_channel_query(q_filters)
             .with_entities(Channel.id)
@@ -704,6 +709,8 @@ def _clean_filters(raw: dict) -> dict:
     builder treats them as 'no filter on this dimension'.
     """
     out = {}
+    if raw.get('event') in ('0', '1'):
+        out['event'] = raw['event']
     if channel_ids := raw.get('channel_ids'):
         out['channel_ids'] = [int(i) for i in channel_ids if str(i).isdigit() or isinstance(i, int)]
         if max_ch := raw.get('max_channels'):
@@ -711,7 +718,7 @@ def _clean_filters(raw: dict) -> dict:
                 out['max_channels'] = max(1, int(max_ch))
             except (ValueError, TypeError):
                 pass
-        return out  # channel_ids overrides all other filters
+        return out  # channel_ids overrides other filters; event remains a hard limit
     if sources := raw.get('sources'):
         out['sources'] = [str(s) for s in sources if s]
     if categories := raw.get('categories'):

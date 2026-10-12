@@ -22,6 +22,7 @@ from ..generators.m3u import (
     feed_to_query_filters,
 )
 from ..scrapers import registry as _scraper_registry
+from ..channel_tags import event_filter_clause
 from ..drm_bridge import DRM_BRIDGE_TRUSTED_SOURCES
 from .. import fc_player_bridge as _fc_player_bridge
 from ..source_config import (
@@ -324,6 +325,8 @@ def _category_clause(values):
 def _apply_admin_feed_membership_filters(query, feed: Feed):
     """Apply a feed's membership rules without forcing enabled/active output constraints."""
     filters = feed_to_query_filters(feed.filters or {})
+    if (event_clause := event_filter_clause(filters.get('event'))) is not None:
+        query = query.filter(event_clause)
     if channel_ids := filters.get('channel_ids'):
         # A channel pinned into the feed but absent from its explicit whitelist should
         # still count as a member here — same gap as the M3U/EPG generators had (see
@@ -744,6 +747,7 @@ def channels():
     epg_filter       = request.args.get('epg', '')
     resolution_filter = request.args.get('resolution', '')
     featured_filter  = request.args.get('featured', '')
+    event_filter     = request.args.get('event', '')
     sort_by          = request.args.get('sort', 'name')
     sort_dir         = request.args.get('dir', 'asc')
 
@@ -850,6 +854,8 @@ def channels():
             Channel.tags.ilike('%featured%'),
             Channel.content_swap_count > 0,
         ))
+    if (event_clause := event_filter_clause(event_filter)) is not None:
+        q = q.filter(event_clause)
 
     if duplicates_filter == '1':
         q = q.filter(db.or_(
@@ -1028,6 +1034,7 @@ def channels():
         'epg': epg_filter,
         'resolution': resolution_filter,
         'featured': featured_filter,
+        'event': event_filter,
         'sort': sort_by, 'dir': sort_dir,
     }.items() if v}, doseq=True)
 
@@ -1051,6 +1058,7 @@ def channels():
                            epg_filter=epg_filter,
                            resolution_filter=resolution_filter,
                            featured_filter=featured_filter,
+                           event_filter=event_filter,
                            duplicate_names=duplicate_names,
                            possible_duplicate_names=possible_duplicate_names,
                            gn_duplicate_ids=gn_duplicate_page_ids,
@@ -1106,6 +1114,9 @@ def guide():
 
     source_id = request.args.get('source_id', type=int)
     feed_id   = request.args.get('feed_id',   type=int)
+    event_filter = request.args.get('event', '')
+    if event_filter not in ('0', '1'):
+        event_filter = ''
     category  = [c.strip() for c in request.args.getlist('category') if c.strip()]
     search    = request.args.get('search',    type=str, default='').strip()
     # Channel-state filter (mirrors the Channels tab). Default 'enabled'
@@ -1129,6 +1140,8 @@ def guide():
         cat_count_q = cat_count_q.filter(Channel.is_enabled == True)
     elif state == 'disabled':
         cat_count_q = cat_count_q.filter(Channel.is_enabled == False)
+    if (event_clause := event_filter_clause(event_filter)) is not None:
+        cat_count_q = cat_count_q.filter(event_clause)
     categories = cat_count_q.group_by(Channel.category).order_by(Channel.category).all()
 
     q = Channel.query.options(load_only(
@@ -1146,6 +1159,8 @@ def guide():
         if selected_feed:
             q = q.join(Source, Channel.source_id == Source.id)
             q = _apply_admin_feed_membership_filters(q, selected_feed)
+    if (event_clause := event_filter_clause(event_filter)) is not None:
+        q = q.filter(event_clause)
     if (cat_clause := _category_clause(category)) is not None:
         q = q.filter(cat_clause)
     if search:
@@ -1225,6 +1240,7 @@ def guide():
         categories=categories,
         source_id=source_id,
         feed_id=feed_id,
+        event_filter=event_filter,
         category=category,
         search=search,
         state=state,

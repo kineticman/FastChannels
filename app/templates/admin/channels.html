@@ -1380,6 +1380,7 @@
       new:            {{ new_filter            | tojson }},
       epg:            {{ epg_filter            | tojson }},
       featured:       {{ featured_filter       | tojson }},
+      event:          {{ event_filter          | tojson }},
       resolution:     {{ resolution_filter     | tojson }},
       duplicates: {{ duplicates_filter| tojson }},
     };
@@ -1412,8 +1413,8 @@
           <button type="button" class="btn-resolve-dupes" onclick="openResolveDupesModal()">⚡ Resolve Dupes</button>
         </div>
       </div>
-      {% set _adv_count = (1 if feed_filter else 0) + (1 if category_filter else 0) + (1 if enabled_filter else 0) + (1 if presence_filter else 0) + (1 if drm_filter else 0) + (1 if language_filter else 0) + (1 if country_filter else 0) + (1 if gracenote_filter else 0) + (1 if gracenote_mode_filter else 0) + (1 if duplicates_filter else 0) + (1 if new_filter else 0) + (1 if epg_filter else 0) + (1 if resolution_filter else 0) + (1 if featured_filter else 0) %}
-      <details class="toolbar-advanced" id="toolbar-advanced" {% if feed_filter or category_filter or enabled_filter or presence_filter or drm_filter or language_filter or country_filter or gracenote_filter or gracenote_mode_filter or duplicates_filter or new_filter or epg_filter or resolution_filter or featured_filter %}open{% endif %}>
+      {% set _adv_count = (1 if feed_filter else 0) + (1 if category_filter else 0) + (1 if enabled_filter else 0) + (1 if presence_filter else 0) + (1 if drm_filter else 0) + (1 if language_filter else 0) + (1 if country_filter else 0) + (1 if gracenote_filter else 0) + (1 if gracenote_mode_filter else 0) + (1 if duplicates_filter else 0) + (1 if new_filter else 0) + (1 if epg_filter else 0) + (1 if resolution_filter else 0) + (1 if featured_filter else 0) + (1 if event_filter in ('0', '1') else 0) %}
+      <details class="toolbar-advanced" id="toolbar-advanced" {% if feed_filter or category_filter or enabled_filter or presence_filter or drm_filter or language_filter or country_filter or gracenote_filter or gracenote_mode_filter or duplicates_filter or new_filter or epg_filter or resolution_filter or featured_filter or event_filter in ('0', '1') %}open{% endif %}>
         <summary>More filters{% if _adv_count %} <span class="filter-adv-badge">{{ _adv_count }}</span>{% endif %}</summary>
         <div class="toolbar-secondary">
           <div class="filter-group">
@@ -1574,6 +1575,14 @@
               <option value="1" {% if featured_filter == '1' %}selected{% endif %}>♻️ Rotating / featured only</option>
             </select>
           </div>
+          <div class="filter-group">
+            <label class="filter-label" for="event-filter">Events</label>
+            <select id="event-filter" name="event">
+              <option value="" {% if event_filter not in ('0', '1') %}selected{% endif %}>All channels</option>
+              <option value="1" {% if event_filter == '1' %}selected{% endif %}>Events only</option>
+              <option value="0" {% if event_filter == '0' %}selected{% endif %}>Non-event channels</option>
+            </select>
+          </div>
         </div>
       </details>
       <input type="hidden" name="sort" value="{{ sort_by }}">
@@ -1640,7 +1649,10 @@
       {% if featured_filter == '1' %}
       <span class="filter-chip"><strong>Channel Type</strong>♻️ Rotating / featured only</span>
       {% endif %}
-      {% if not (search or source_filter or feed_filter or category_filter or enabled_filter or review_filter or presence_filter or drm_filter or language_filter or country_filter or gracenote_filter or gracenote_mode_filter or duplicates_filter in ('1', 'unique') or new_filter in ('1','3','7','14') or epg_filter or featured_filter) %}
+      {% if event_filter in ('0', '1') %}
+      <span class="filter-chip"><strong>Events</strong>{{ 'Events only' if event_filter == '1' else 'Non-event channels' }}</span>
+      {% endif %}
+      {% if not (search or source_filter or feed_filter or category_filter or enabled_filter or review_filter or presence_filter or drm_filter or language_filter or country_filter or gracenote_filter or gracenote_mode_filter or duplicates_filter in ('1', 'unique') or new_filter in ('1','3','7','14') or epg_filter or featured_filter or event_filter in ('0', '1')) %}
       <span class="filter-chip"><strong>View</strong>All channels</span>
       {% endif %}
       <button type="button" class="btn-hide-disabled{% if enabled_filter == '1' %} active{% endif %}" onclick="toggleHideDisabled()">{% if enabled_filter == '1' %}◉ Hiding disabled{% else %}○ Hide disabled{% endif %}</button>
