@@ -81,6 +81,8 @@ _SUCCESS_SUPPRESS_PATTERNS = (
     'GET /api/settings/fc-player/devices HTTP',  # Bridge devices card list, on page load
     'GET /api/settings/fc-player/ah4c-activity HTTP',  # Bridge activity card polls every 15s while visible
     'POST /api/settings/fc-player/devices/probe',  # read-only adb probe, one per device per page load
+    'GET /api/custom-channels/preview-manifest?url=',  # HLS preview refreshes the manifest during playback
+    'GET /api/custom-channels/preview-segment?url=',  # HLS preview fetches a segment every few seconds
     # Feed editor: fired on every open and every filter/order change.
     'POST /api/feeds/preview-order',       # read-only order/number preview (POST only for the big filters body)
     'GET /api/feeds/channel-membership',   # which channels other feeds already include
