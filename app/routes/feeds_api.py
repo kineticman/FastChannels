@@ -411,11 +411,11 @@ def create_feed():
     err = _safe_flush()  # make new feed visible to overlap check
     if err:
         return err
-    if feed.guide_mode == 'mixed' and feed.chnum_start is None:
-        # Nothing to preserve on a new feed: number it in one run from its
-        # auto-assigned block (the refresh below fills the pool).
-        from ..generators.m3u import feed_namespace_start
-        feed.chnum_start = feed_namespace_start(feed, gracenote=False)
+    if feed.chnum_start is None:
+        # Save the first available block so later feeds cannot shift this one.
+        # Both guide partitions draw from the same sticky number pool.
+        from ..generators.m3u import available_feed_start
+        feed.chnum_start = available_feed_start(feed)
     # A new chnum_start feed needs its FeedChannelNumber store populated before
     # the overlap check / XML refresh, so its std and gracenote M3Us draw from one
     # unified pool instead of both numbering from chnum_start and colliding.

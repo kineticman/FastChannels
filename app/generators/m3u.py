@@ -459,6 +459,48 @@ def feed_namespace_start(feed: Feed, *, gracenote: bool) -> int:
     return base + (_CHNUM_NAMESPACE_BLOCK if gracenote else 0)
 
 
+def available_feed_start(feed: Feed) -> int:
+    """Find an unused automatic number block for a new unified-pool feed.
+
+    Namespace positions depend on feed slugs, while a mixed feed saves its
+    starting number. Check the actual numbers of existing feeds after the new
+    feed is visible, so an older mixed feed cannot occupy the proposed block.
+    """
+    filters = feed_to_query_filters(feed.filters or {})
+    channels = (_selected_channel_stubs(filters, gracenote=False)
+                + _selected_channel_stubs(filters, gracenote=True))
+    provider_sources = _provider_number_sources()
+    fixed_ids = {
+        ch.id for ch in channels
+        if ch.number_pinned or (ch.provider_number and ch.source.name in provider_sources)
+    }
+    occupied: dict[str, set[int]] = {}
+    for other in Feed.query.filter(Feed.is_enabled == True, Feed.id != feed.id).all():
+        other_filters = feed_to_query_filters(other.filters or {})
+        for gracenote in (False, True):
+            selected = _selected_channel_stubs(other_filters, gracenote=gracenote)
+            start = None if other.chnum_start is not None else feed_namespace_start(other, gracenote=gracenote)
+            numbers, _ = _resolve_chnum_map(
+                selected, feed_chnum_start=other.chnum_start,
+                namespace_start=start,
+                feed_id=other.id if other.chnum_start is not None else None,
+            )
+            for channel in selected:
+                number = numbers.get(channel.id)
+                if number is not None:
+                    occupied.setdefault(str(number), set()).add(channel.id)
+
+    candidate = _FEED_NAMESPACE_BASE
+    while True:
+        numbers, _ = _resolve_chnum_map(channels, feed_chnum_start=candidate)
+        # A pin or provider number cannot be moved by changing the start.
+        # Let the normal overlap validation report those conflicts.
+        if all(channel_id in fixed_ids or not (occupied.get(str(number), set()) - {channel_id})
+               for channel_id, number in numbers.items()):
+            return candidate
+        candidate += _CHNUM_NAMESPACE_BLOCK * 2
+
+
 def feed_gracenote_start(feed: Feed) -> int:
     """
     Starting channel number for a feed's Gracenote namespace M3U.
