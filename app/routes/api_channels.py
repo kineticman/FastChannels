@@ -253,7 +253,7 @@ def update_channel(channel_id):
                         'automatically — no need to toggle it manually.'
                     )
             ch.is_active = True
-            if ch.disable_reason in ('Dead', 'VOD', 'NotAuthorized') or was_drm_disabled:
+            if ch.disable_reason in ('Dead', 'VOD', 'NotAuthorized', 'Missing from playlist') or was_drm_disabled:
                 ch.disable_reason = None
             ch.last_seen_at = datetime.now(timezone.utc)
             ch.missed_scrapes = 0

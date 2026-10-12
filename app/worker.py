@@ -2748,6 +2748,14 @@ def _upsert_channels(source, channel_data_list, gracenote_auto_fill: bool = True
                      allow_suspicious_collapse: bool = False, pinned_channel_ids: frozenset = frozenset(),
                      excluded_channel_ids: frozenset = frozenset()):
     existing = {ch.source_channel_id: ch for ch in source.channels.all()}
+    # Only user playlists can opt into a sticky disable after a channel
+    # disappears. Keep counting after the usual inactive threshold if needed.
+    disable_after_misses = 0
+    if is_playlist_source(source.name):
+        try:
+            disable_after_misses = max(0, min(30, int((source.config or {}).get('disable_after_misses') or 0)))
+        except (TypeError, ValueError):
+            pass
 
     # Build a guide_key → channel index so we can re-use an existing DB row
     # when a scraper assigns a new uuid to the same content (e.g. Vidaa rotating
@@ -3010,11 +3018,18 @@ def _upsert_channels(source, channel_data_list, gracenote_auto_fill: bool = True
     else:
         for ch_id, ch in existing.items():
             if ch_id not in seen and ch_id not in region_removed_ids and ch_id not in filtered_ids:
-                if not ch.is_active:
-                    continue  # already inactive — don't touch to avoid bumping updated_at
+                if not ch.is_active and not (disable_after_misses and ch.is_enabled and not ch.scrape_pinned):
+                    continue  # already inactive and no pending playlist auto-disable
                 next_missed = (ch.missed_scrapes or 0) + 1
                 ch.missed_scrapes = next_missed
-                if next_missed >= miss_threshold:
+                if disable_after_misses and next_missed >= disable_after_misses and ch.is_enabled and not ch.scrape_pinned:
+                    ch.is_enabled = False
+                    ch.disable_reason = 'Missing from playlist'
+                    logger.info(
+                        '[%s] auto-disabled after %d missed playlist imports: %s (%s)',
+                        source.name, next_missed, ch.name, ch.source_channel_id,
+                    )
+                if ch.is_active and next_missed >= miss_threshold:
                     if ch.scrape_pinned:
                         logger.info(
                             '[%s] missed %d scrapes but scrape_pinned — keeping active: %s (%s)',

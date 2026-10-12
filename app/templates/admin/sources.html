@@ -1081,6 +1081,24 @@
                   <div class="help">How channels found by a scrape enter. "Hold for review" adds them disabled — find them in Channels under the "Needs review" filter and enable the ones you want.</div>
                 </div>
 
+                {% if is_playlist %}
+                <div class="interval-control">
+                  <label for="disable-after-misses-{{ source.id }}">Disable missing channels</label>
+                  <input type="number" id="disable-after-misses-{{ source.id }}"
+                         min="0" max="30" step="1"
+                         value="{{ (source.config or {}).get('disable_after_misses', 0) }}"
+                         {% if not source.is_enabled %}disabled{% endif %}
+                         onkeydown="if (event.key === 'Enter') savePlaylistMissLimit({{ source.id }})">
+                  <span class="unit">missed imports</span>
+                  <button class="btn btn-cancel btn-sm" type="button"
+                          id="disable-after-misses-save-{{ source.id }}"
+                          onclick="savePlaylistMissLimit({{ source.id }})"
+                          {% if not source.is_enabled %}disabled{% endif %}>Save</button>
+                  <span class="save-status" id="disable-after-misses-status-{{ source.id }}"></span>
+                  <div class="help">0 = off. After this many successful playlist imports omit a channel, turn it off. If it returns, it stays off until you enable it. Pinned channels are exempt; unusually large lineup drops are ignored as a safety check.</div>
+                </div>
+                {% endif %}
+
                 <div class="delete-inactive-row">
                   <button class="btn-delete-inactive" type="button" onclick="deleteInactiveChannels({{ source.id }})">Delete Inactive</button>
                   <span class="delete-inactive-status" id="delete-status-{{ source.id }}"></span>
@@ -1486,6 +1504,35 @@
 
     function saveScrapeInterval(sourceId) { return saveSchedule(sourceId); }
 
+    async function savePlaylistMissLimit(sourceId) {
+      const input = document.getElementById(`disable-after-misses-${sourceId}`);
+      const button = document.getElementById(`disable-after-misses-save-${sourceId}`);
+      const status = document.getElementById(`disable-after-misses-status-${sourceId}`);
+      const raw = input?.value.trim();
+      const value = Number(raw);
+      if (raw === '' || !Number.isInteger(value) || value < 0 || value > 30) {
+        if (status) status.textContent = 'Enter a whole number from 0 to 30';
+        return;
+      }
+      button.disabled = true;
+      if (status) status.textContent = 'Saving…';
+      try {
+        const r = await fetch(`/api/sources/${sourceId}`, {
+          method: 'PATCH',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({disable_after_misses: value}),
+        });
+        const data = await r.json();
+        if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
+        if (status) status.textContent = 'Saved';
+      } catch (e) {
+        if (status) status.textContent = e.message;
+        console.error('Failed to save playlist miss limit:', e);
+      } finally {
+        button.disabled = false;
+      }
+    }
+
     async function saveNewChannelPolicy(sourceId) {
       const sel = document.getElementById(`newchan-policy-${sourceId}`);
       const status = document.getElementById(`newchan-status-${sourceId}`);
@@ -1766,6 +1813,8 @@
       const cronSelect      = document.getElementById(`cron-preset-${sourceId}`);
       const cronOffsetInput = document.getElementById(`cron-offset-${sourceId}`);
       const schedSaveBtn    = document.getElementById(`schedule-save-${sourceId}`);
+      const missLimitInput  = document.getElementById(`disable-after-misses-${sourceId}`);
+      const missLimitSave   = document.getElementById(`disable-after-misses-save-${sourceId}`);
 
       if (checkbox) checkbox.checked = enabled;
       if (labelEl) {
@@ -1790,6 +1839,8 @@
       if (cronSelect)      cronSelect.disabled        = !enabled;
       if (cronOffsetInput) cronOffsetInput.disabled   = !enabled;
       if (schedSaveBtn)    schedSaveBtn.disabled      = !enabled;
+      if (missLimitInput)  missLimitInput.disabled    = !enabled;
+      if (missLimitSave)   missLimitSave.disabled     = !enabled;
     }
 
     // Disabling a source while it's mid-scrape can't apply instantly — the

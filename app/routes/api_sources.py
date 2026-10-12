@@ -400,6 +400,21 @@ def update_source(source_id):
             return jsonify({'error': 'new_channel_policy must be inherit, enabled, or review'}), 422
         source.new_channel_policy = policy
         changed = True
+    if 'disable_after_misses' in data:
+        if not source.name.startswith('m3u_'):
+            return jsonify({'error': 'This setting is only available for playlist sources'}), 422
+        value = data['disable_after_misses']
+        if isinstance(value, bool):
+            return jsonify({'error': 'disable_after_misses must be a whole number from 0 to 30'}), 422
+        try:
+            misses = int(value)
+        except (TypeError, ValueError):
+            return jsonify({'error': 'disable_after_misses must be a whole number from 0 to 30'}), 422
+        if str(value).strip() != str(misses) or not 0 <= misses <= 30:
+            return jsonify({'error': 'disable_after_misses must be a whole number from 0 to 30'}), 422
+        config = dict(source.config or {})
+        config['disable_after_misses'] = misses
+        source.config = config
     if changed:
         baseline_warnings = set(get_global_chnum_overlaps())
         db.session.flush()
