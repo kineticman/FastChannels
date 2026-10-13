@@ -355,8 +355,7 @@
       background: var(--success-bg); border-radius: 4px; padding: 0.05rem 0.3rem; flex-shrink: 0;
     }
     .ch-pinned-item .ord-num { cursor: default; }
-    .ord-actions { display: flex; gap: 0.15rem; flex-shrink: 0; opacity: 0; transition: opacity 0.1s; }
-    .ord-row:hover .ord-actions { opacity: 1; }
+    .ord-actions { display: flex; gap: 0.15rem; flex-shrink: 0; }
     .ord-actions button { background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: 0.8rem; padding: 0 0.2rem; line-height: 1; }
     .ord-actions button:hover { color: var(--accent); }
     .ord-num-input {
@@ -1002,7 +1001,7 @@
         <div class="ord-list" id="order-list"></div>
         <div class="ord-hint">
           Sort or drag rows to reorder, then save the feed. Locked and provider numbers stay fixed, so those rows may appear outside the sorted groups. tvg-chno is reassigned sequentially from the starting number as you go.
-          You can also hover a row for ⤒ / ⤓. Click a number to set that channel's number yourself — any number, e.g. 500 — which locks it in every feed.
+          Use ⤒ / ⤓ to move a row. Feed numbers are saved with this feed and normally stay put. Click a number and press Enter to set a global lock; pressing Enter without changing it locks its current number. The Lock globally button does the same. A global lock changes this channel's number in every feed, so it is blocked when another feed uses a different number.
           🔒 rows have a fixed number (locked, or the provider's own, e.g. DirecTV) and can't be dragged; ✕ unlocks your own locks. PIN-badged rows are pinned into this feed and reorder freely.
           Channels that match your filters later are appended to the end of the order.
         </div>
@@ -2338,9 +2337,9 @@ function renderOrderList() {
     if (!r.pinned) row.draggable = true;
     row.innerHTML =
       `<span class="ord-grip">${r.pinned ? '🔒' : '⋮⋮'}</span>` +
-      `<span class="ord-num" title="${r.locked ? 'Locked to this number in every feed. Click to change it, ✕ to unlock.'
-                                    : r.number_source === 'provider' ? 'Set by DirecTV channel numbers. Click to lock a different number (applies in every feed).'
-                                    : 'Click to set this channel\'s number (locks it in every feed). Drag to reorder the automatic numbers.'}"></span>` +
+      `<span class="ord-num" title="${r.locked ? 'Locked globally. Click to change it, ✕ to unlock.'
+                                    : r.number_source === 'provider' ? 'Set by provider channel numbers. Click to set a global lock.'
+                                    : 'Click and press Enter to lock this number globally, or enter a different global number.'}"></span>` +
       `<span class="ord-name"></span>` +
       (r.feed_pinned ? `<span class="ord-fpin" title="Manually pinned into this feed — included regardless of filters">PIN</span>` : '') +
       (r.gracenote ? `<span class="ord-gn" title="Served from this feed's Gracenote M3U">GN</span>` : '') +
@@ -2349,6 +2348,7 @@ function renderOrderList() {
         ? `<span class="ord-actions"><button type="button" data-act="unlock" title="Unlock — back to automatic numbering">✕</button></span>`
         : r.pinned ? '' :
         `<span class="ord-actions">` +
+          `<button type="button" data-act="lock" title="Lock this number globally in every feed">Lock globally</button>` +
           `<button type="button" data-act="top" title="Move to top">⤒</button>` +
           `<button type="button" data-act="bottom" title="Move to bottom">⤓</button>` +
         `</span>`);
@@ -2425,7 +2425,8 @@ function beginNumEdit(id, chip) {
   const cur = _orderRows.find(r => r.id === id);
   if (!cur) return;
   const input = document.createElement('input');
-  input.type = 'number';
+  input.type = 'text';
+  input.inputMode = 'decimal';
   input.className = 'ord-num-input';
   input.value = cur.number ?? '';
   chip.replaceWith(input);
@@ -2435,36 +2436,55 @@ function beginNumEdit(id, chip) {
   const commit = () => {
     if (done) return;
     done = true;
-    // A typed number is an override: it locks the channel to exactly that
-    // number in every feed (the feed's range only drives automatic numbers;
-    // drag or ⤒/⤓ to change those).
     const raw = String(input.value).trim();
-    if (!raw || raw === String(cur.number ?? '')) { renderOrderList(); return; }
+    if (!raw || (cur.locked && raw === String(cur.number ?? ''))) {
+      renderOrderList();
+      return;
+    }
     const decimal = raw.includes('.');
     if (decimal ? (!/^\d{1,5}\.\d{1,3}$/.test(raw) || /\.0+$/.test(raw)) : !/^\d+$/.test(raw) || parseInt(raw, 10) < 1) {
       alert('Enter a whole number like 500, or a decimal like 700.1.');
       renderOrderList();
       return;
     }
-    if (!confirm(`Lock "${cur.name}" to channel ${raw}?\n\nA locked number is this channel's number in every feed.`)) {
-      renderOrderList();
-      return;
-    }
-    saveChannelNumber(id, raw);
+    confirmFeedNumberLock(cur, raw);
   };
-  input.addEventListener('blur', commit);
+  // Leaving the field is a cancel, not a global channel-number change.
+  input.addEventListener('blur', () => { if (!done) renderOrderList(); });
   input.addEventListener('keydown', ev => {
-    if (ev.key === 'Enter')  { ev.preventDefault(); input.blur(); }
+    if (ev.key === 'Enter')  { ev.preventDefault(); commit(); }
     if (ev.key === 'Escape') { done = true; renderOrderList(); }
   });
 }
 
+function confirmFeedNumberLock(row, raw) {
+  if (_orderDirty || _orderStale || !document.getElementById('edit-id').value) {
+    alert('Save this feed first, then lock the number. Unsaved feed changes cannot be used for a global lock.');
+    renderOrderList();
+    return;
+  }
+  const action = row.locked ? 'Change the global lock' : 'Lock globally';
+  let impact = row.locked
+    ? 'This changes the number in every feed containing the channel.'
+    : 'This number applies in every feed containing the channel. If another feed shows a different number, the lock will be blocked.';
+  if (raw !== String(row.number ?? '')) {
+    impact += ' Changing a number may replace saved feed assignments; unlocking may not restore them.';
+  }
+  if (!confirm(`${action} for "${row.name}" to channel ${raw}?\n\n` +
+               impact)) {
+    renderOrderList();
+    return;
+  }
+  saveChannelNumber(row.id, raw, !row.locked);
+}
+
 // Lock a channel to `raw` ("500" or "700.1") everywhere, or unlock it (raw=null),
 // through the same channel API the Channels page uses, then refresh the preview.
-async function saveChannelNumber(id, raw) {
+async function saveChannelNumber(id, raw, fromFeed = false) {
   const body = raw === null ? {number_pinned: false}
              : raw.includes('.') ? {pinned_chno: raw}
              : {number: parseInt(raw, 10), number_pinned: true};
+  if (fromFeed) body.lock_from_feed_id = parseInt(document.getElementById('edit-id').value, 10);
   try {
     const r = await fetch(`/api/channels/${id}`, {
       method: 'PATCH',
@@ -2539,7 +2559,17 @@ async function saveChannelNumber(id, raw) {
     const id = parseInt(row.dataset.id, 10);
     const btn = e.target.closest('.ord-actions button');
     if (btn && btn.dataset.act === 'unlock') {
-      saveChannelNumber(id, null);
+      const current = _orderRows.find(r => r.id === id);
+      if (current && confirm(`Unlock "${current.name}" globally?\n\nIts numbers may be reassigned. Previous feed numbers are not guaranteed to return.`)) {
+        if (_orderDirty || _orderStale) {
+          alert('Save this feed first, then unlock the channel.');
+        } else {
+          saveChannelNumber(id, null);
+        }
+      }
+    } else if (btn && btn.dataset.act === 'lock') {
+      const current = _orderRows.find(r => r.id === id);
+      if (current && current.number != null) confirmFeedNumberLock(current, String(current.number));
     } else if (btn) {
       moveOrderRow(id, btn.dataset.act === 'top' ? 0 : _orderRows.length);
     } else if (e.target.classList.contains('ord-num')) {

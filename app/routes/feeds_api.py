@@ -194,7 +194,8 @@ def preview_order():
 
     feed = Feed.query.get(data['feed_id']) if data.get('feed_id') else None
 
-    start = _parse_chnum_start(data.get('chnum_start'))
+    explicit_start = _parse_chnum_start(data.get('chnum_start'))
+    start = explicit_start
     if start is None and feed is not None:
         start = feed.chnum_start or feed_namespace_start(feed, gracenote=False)
     if start is None:
@@ -218,7 +219,18 @@ def preview_order():
                 r.channel_id: r.number
                 for r in FeedChannelNumber.query.filter_by(feed_id=feed.id).all()
             }
-        num_map = _build_feed_chnum_map(stubs, start, stored_numbers=stored)
+        if feed is not None and explicit_start is None and feed.chnum_start is None:
+            # An implicit-start feed displays separate standard and Gracenote
+            # number blocks. Preview those same blocks instead of numbering
+            # both partitions from the standard block's start.
+            std = [ch for ch in stubs if ch.id not in gn_ids]
+            gn = [ch for ch in stubs if ch.id in gn_ids]
+            num_map = {
+                **_build_feed_chnum_map(std, start),
+                **_build_feed_chnum_map(gn, feed_namespace_start(feed, gracenote=True)),
+            }
+        else:
+            num_map = _build_feed_chnum_map(stubs, start, stored_numbers=stored)
         # With a saved number pool, members that have no stored number are
         # slotted into whatever numbers are free (gaps first, then the end).
         # No pool means everything is numbered fresh, so nothing is "new".
