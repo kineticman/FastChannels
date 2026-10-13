@@ -489,6 +489,31 @@
       display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap;
     }
     .amazon-status-text { font-size: 0.82rem; color: var(--text-soft); flex: 1; }
+    .espn-auth-options { display: grid; gap: 0.55rem; margin: 0.55rem 0 1rem; }
+    .espn-auth-option {
+      border: 1px solid var(--border); border-radius: 8px;
+      background: var(--surface-2); overflow: hidden;
+    }
+    .espn-auth-option summary {
+      display: flex; align-items: center; gap: 0.8rem; padding: 0.75rem 0.9rem;
+      cursor: pointer; list-style: none;
+    }
+    .espn-auth-option summary::-webkit-details-marker { display: none; }
+    .espn-auth-option summary:hover { background: var(--surface-4); }
+    .espn-auth-option summary:focus-visible { outline: 2px solid var(--focus-accent); outline-offset: -2px; }
+    .espn-auth-option summary::after {
+      content: '▾'; color: var(--text-muted); font-size: 0.8rem; margin-left: auto;
+      transition: transform 0.15s;
+    }
+    .espn-auth-option[open] summary::after { transform: rotate(180deg); }
+    .espn-auth-label { min-width: 0; flex: 1; }
+    .espn-auth-label strong { display: block; font-size: 0.84rem; color: var(--text); }
+    .espn-auth-label small { display: block; margin-top: 0.15rem; font-size: 0.76rem; color: var(--text-muted); }
+    .espn-auth-state { font-size: 0.76rem; color: var(--text-muted); white-space: nowrap; }
+    .espn-auth-state.signed-in { color: var(--success-soft); }
+    .espn-auth-body { border-top: 1px solid var(--border); padding: 0.8rem 0.9rem 0.9rem; }
+    .espn-auth-body .config-note { margin-bottom: 0.6rem; }
+    .espn-auth-body .amazon-autologin-panel { border: 0; padding: 0; background: none; }
     .amazon-account-details {
       margin-top: 0.9rem; border-top: 1px solid var(--border); padding-top: 0.75rem;
     }
@@ -2948,8 +2973,7 @@
           return;
         }
 
-        // ESPN's only setting is its activation-code panel — its schema reaches the
-        // UI empty (the one field is hidden) but it still needs renderEspnConfig.
+        // ESPN's visible settings are rendered separately from its hidden schema.
         if (!schema.length && sourceName !== 'espn' && !cfg.tve_signin) {
           if (badge) {
             badge.textContent = 'Auto';
@@ -3540,51 +3564,51 @@
       ).join('');
       return `
         <div class="config-title">ESPN Settings</div>
-        <div class="config-note">
-          Two ways to sign in; use either or both. Playback goes through the DRM bridge.
-        </div>
-        <div class="config-subtitle" style="margin-top:.75rem;font-weight:600">ESPN account</div>
-        <div class="config-note">
-          For ESPN Unlimited on your ESPN (MyDisney) account, bought directly or included by your TV
-          provider. Get a code here, then enter it at espn.com/activate on any device where you're
-          signed in. Plain ESPN+ doesn't include the linear networks.
-        </div>
-        <div class="amazon-autologin-panel" id="espn-login-${sourceId}">
-          <div class="amazon-autologin-header">
-            <button class="btn btn-run" type="button" id="espn-code-btn-${sourceId}"
-                    onclick="espnStartActivation(${sourceId})">${info.signed_in ? 'Sign in again' : 'Get code'}</button>
-            ${info.signed_in ? `<button class="btn btn-cancel btn-sm" type="button"
-                    onclick="espnClearAuth(${sourceId})">Sign out</button>` : ''}
-          </div>
-          <span class="amazon-status-text" id="espn-status-${sourceId}">
-            ${info.signed_in ? `<span style="color:var(--success-soft)">&#10003; Signed in</span>` : ''}
-          </span>
-        </div>
-        <div class="config-subtitle" style="margin-top:1rem;font-weight:600">TV provider</div>
-        <div class="config-note">
-          For cable or streaming TV subscribers without ESPN Unlimited: plays whichever of ESPN, ESPN2,
-          ESPNU, ESPNews, ESPN Deportes, SEC Network and ACC Network your TV package includes (the
-          stream audit switches off the rest). NFL Network and MLB Network need an ESPN plan. Pick your
-          TV provider, get a sign-in link here, open it on your phone or computer, and sign in there.
-          ${info.settings_mvpd_id ? '' : `<br>Defaults to the provider from
-            <a href="/admin/settings#settings-card-tve">Settings → TV Everywhere</a> — none is set, so choose one here.`}
-        </div>
-        <div class="field field-full" style="max-width:360px;margin:0.4rem 0 0.6rem">
-          <label for="espn-tve-provider-${sourceId}">TV provider</label>
-          <select id="espn-tve-provider-${sourceId}">${provOpts}</select>
-        </div>
-        <div class="amazon-autologin-panel" id="espn-tve-${sourceId}">
-          <div class="amazon-autologin-header">
-            <button class="btn btn-run" type="button" id="espn-tve-btn-${sourceId}"
-                    onclick="espnTveStart(${sourceId})">${info.tve_signed_in ? 'Sign in again' : 'Get sign-in link'}</button>
-            ${info.tve_signed_in ? `<button class="btn btn-cancel btn-sm" type="button"
-                    onclick="espnTveClear(${sourceId})">Sign out</button>` : ''}
-          </div>
-          <span class="amazon-status-text" id="espn-tve-status-${sourceId}">
-            ${info.tve_signed_in
-              ? `<span style="color:var(--success-soft)">&#10003; Signed in with ${escapeHtml(tveProvider || 'your TV provider')}</span>`
-              : (tveProvider ? `<span style="color:var(--text-muted)">Provider: ${escapeHtml(tveProvider)}</span>` : '')}
-          </span>
+        <div class="config-subtitle" style="font-weight:600">Sign in</div>
+        <div class="config-note">Use an ESPN account, a TV provider, or both. Playback uses the DRM bridge.</div>
+        <div class="espn-auth-options">
+          <details class="espn-auth-option">
+            <summary>
+              <span class="espn-auth-label"><strong>ESPN account</strong><small>ESPN+ events; Unlimited also adds linear channels</small></span>
+              <span class="espn-auth-state ${info.signed_in ? 'signed-in' : ''}">${info.signed_in ? '&#10003; Signed in' : 'Not signed in'}</span>
+            </summary>
+            <div class="espn-auth-body">
+              <div class="config-note">Get a code and enter it at espn.com/activate using your ESPN (MyDisney) account. Plain ESPN+ does not include linear networks.</div>
+              <div class="amazon-autologin-panel" id="espn-login-${sourceId}">
+                <div class="amazon-autologin-header">
+                  <button class="btn btn-run" type="button" id="espn-code-btn-${sourceId}"
+                          onclick="espnStartActivation(${sourceId})">${info.signed_in ? 'Sign in again' : 'Get code'}</button>
+                  ${info.signed_in ? `<button class="btn btn-cancel btn-sm" type="button"
+                          onclick="espnClearAuth(${sourceId})">Sign out</button>` : ''}
+                </div>
+                <span class="amazon-status-text" id="espn-status-${sourceId}"></span>
+              </div>
+            </div>
+          </details>
+          <details class="espn-auth-option">
+            <summary>
+              <span class="espn-auth-label"><strong>TV provider</strong><small>Linear networks included in your TV package</small></span>
+              <span class="espn-auth-state ${info.tve_signed_in ? 'signed-in' : ''}">${info.tve_signed_in ? '&#10003; Signed in' : 'Not signed in'}</span>
+            </summary>
+            <div class="espn-auth-body">
+              <div class="config-note">Choose a provider, then open the sign-in link on your phone or computer. Available channels depend on your TV package; NFL Network and MLB Network need an ESPN plan.</div>
+              <div class="field field-full" style="max-width:360px;margin:0.4rem 0 0.6rem">
+                <label for="espn-tve-provider-${sourceId}">TV provider</label>
+                <select id="espn-tve-provider-${sourceId}">${provOpts}</select>
+              </div>
+              <div class="amazon-autologin-panel" id="espn-tve-${sourceId}">
+                <div class="amazon-autologin-header">
+                  <button class="btn btn-run" type="button" id="espn-tve-btn-${sourceId}"
+                          onclick="espnTveStart(${sourceId})">${info.tve_signed_in ? 'Sign in again' : 'Get sign-in link'}</button>
+                  ${info.tve_signed_in ? `<button class="btn btn-cancel btn-sm" type="button"
+                          onclick="espnTveClear(${sourceId})">Sign out</button>` : ''}
+                </div>
+                <span class="amazon-status-text" id="espn-tve-status-${sourceId}">
+                  ${info.tve_signed_in ? `Signed in with ${escapeHtml(tveProvider || 'your TV provider')}` : ''}
+                </span>
+              </div>
+            </div>
+          </details>
         </div>
         <div class="config-subtitle" style="margin-top:1rem;font-weight:600">Event channels</div>
         <div class="config-note">
