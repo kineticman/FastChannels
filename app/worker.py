@@ -46,7 +46,8 @@ from app.scrapers.base import (
     is_transient_network_error,
 )
 from app.scrapers.category_utils import category_for_channel
-from app.channel_tags import EVENT_RETIRED_REASON, EVENT_MISSING_REASON
+from app.channel_tags import AUTO_EVENT_REASONS, EVENT_RETIRED_REASON, EVENT_MISSING_REASON
+from app.event_lifecycle import hide_event, restore_event, delete_event
 from app.tve.adobe_pass import TVENotAuthorizedError
 from app.xml_cache import ensure_xml_artifact, get_artifact, invalidate_xml_cache, write_artifact
 from app.routes.images import delete_cached_logo
@@ -2287,7 +2288,7 @@ def run_bulk_channel_update(filters: dict, enable: bool):
                 # decision, so a later schedule extension must not turn it on.
                 Channel.query.filter(
                     Channel.id.in_(ids),
-                    Channel.disable_reason.in_((EVENT_RETIRED_REASON, EVENT_MISSING_REASON)),
+                    Channel.disable_reason.in_(AUTO_EVENT_REASONS),
                 ).update({'disable_reason': None}, synchronize_session=False)
             # Any explicit bulk enable/disable counts as reviewing the channel, so
             # clear the 'pending' marker — it leaves the "Needs review" filter.
@@ -2762,7 +2763,6 @@ def _upsert_channels(source, channel_data_list, gracenote_auto_fill: bool = True
                      allow_suspicious_collapse: bool = False, pinned_channel_ids: frozenset = frozenset(),
                      excluded_channel_ids: frozenset = frozenset()):
     existing = {ch.source_channel_id: ch for ch in source.channels.all()}
-    from app.models import FeedChannelNumber
     # Only user playlists can opt into a sticky disable after a channel
     # disappears. Keep counting after the usual inactive threshold if needed.
     disable_after_misses = 0
@@ -2911,23 +2911,15 @@ def _upsert_channels(source, channel_data_list, gracenote_auto_fill: bool = True
                     ch.returned_at = seen_at
                 ch.is_active = True
                 if ch.disable_reason == EVENT_MISSING_REASON:
-                    ch.is_enabled = True
-                    ch.disable_reason = None
+                    restore_event(ch, EVENT_MISSING_REASON)
                 if stream_url_changed and _flagged:
                     ch.disable_reason = None  # clear flag; let next audit re-check
             if ch.retire_at and _utc_aware(ch.retire_at) <= seen_at:
-                if ch.is_enabled:
-                    ch.disable_reason = EVENT_RETIRED_REASON
-                ch.is_active = False
-                ch.is_enabled = False
-                ch.went_inactive_at = ch.went_inactive_at or seen_at
+                hide_event(ch, EVENT_RETIRED_REASON, seen_at)
             elif ch.disable_reason == EVENT_RETIRED_REASON:
                 # A later scrape moved the event past its old retirement time.
                 # Restore only channels that retirement itself disabled.
-                ch.is_active = True
-                ch.is_enabled = True
-                ch.disable_reason = None
-                ch.went_inactive_at = None
+                restore_event(ch, EVENT_RETIRED_REASON)
             ch.last_seen_at = seen_at
             ch.missed_scrapes = 0
             if cd.source_channel_id in pinned_channel_ids and not ch.scrape_pinned:
@@ -2974,11 +2966,8 @@ def _upsert_channels(source, channel_data_list, gracenote_auto_fill: bool = True
                 guide_block_minutes = getattr(cd, 'guide_block_minutes', None),
                 last_seen_at      = seen_at,
                 first_seen_at     = seen_at,
-                is_active         = not (getattr(cd, 'retire_at', None) and _utc_aware(cd.retire_at) <= seen_at),
-                is_enabled        = not _born_pending and not (
-                    getattr(cd, 'retire_at', None)
-                    and _utc_aware(cd.retire_at) <= seen_at
-                ),
+                is_active         = True,
+                is_enabled        = not _born_pending,
                 review_state      = 'pending' if _born_pending else 'approved',
                 missed_scrapes    = 0,
                 scrape_pinned     = cd.source_channel_id in pinned_channel_ids,
@@ -2986,9 +2975,8 @@ def _upsert_channels(source, channel_data_list, gracenote_auto_fill: bool = True
             if hasattr(Channel, 'retire_at'):
                 new_channel.retire_at = getattr(cd, 'retire_at', None)
                 new_channel.delete_at = getattr(cd, 'delete_at', None)
-                if (new_channel.retire_at and not _born_pending
-                        and _utc_aware(new_channel.retire_at) <= seen_at):
-                    new_channel.disable_reason = EVENT_RETIRED_REASON
+                if new_channel.retire_at and _utc_aware(new_channel.retire_at) <= seen_at:
+                    hide_event(new_channel, EVENT_RETIRED_REASON, seen_at)
             db.session.add(new_channel)
 
     seen = {cd.source_channel_id for cd in channel_data_list}
@@ -3074,17 +3062,11 @@ def _upsert_channels(source, channel_data_list, gracenote_auto_fill: bool = True
                     next_missed = (ch.missed_scrapes or 0) + 1
                     ch.missed_scrapes = next_missed
                     if next_missed >= event_limit:
-                        FeedChannelNumber.query.filter_by(channel_id=ch.id).delete(synchronize_session=False)
-                        db.session.delete(ch)
+                        delete_event(ch)
                         logger.info('[%s] deleted event after %d missed playlist imports: %s (%s)',
                                     source.name, next_missed, ch.name, ch.source_channel_id)
                     else:
-                        if ch.is_active:
-                            ch.went_inactive_at = seen_at
-                        ch.is_active = False
-                        if ch.is_enabled:
-                            ch.is_enabled = False
-                            ch.disable_reason = EVENT_MISSING_REASON
+                        hide_event(ch, EVENT_MISSING_REASON, seen_at)
                         if next_missed == 1:
                             logger.info('[%s] hid missing event; delete after %d missed imports: %s (%s)',
                                         source.name, event_limit, ch.name, ch.source_channel_id)
@@ -3180,8 +3162,6 @@ def _prune_old_programs(batch_size: int = 1000):
 
 def _retire_expired_event_channels() -> int:
     """Apply scraper-supplied deadlines to channels tagged as events."""
-    from app.models import FeedChannelNumber
-
     if not hasattr(Channel, 'retire_at'):
         return 0
 
@@ -3199,17 +3179,11 @@ def _retire_expired_event_channels() -> int:
         delete_at = _utc_aware(ch.delete_at)
         retire_at = _utc_aware(ch.retire_at)
         if delete_at and now >= delete_at:
-            FeedChannelNumber.query.filter_by(channel_id=ch.id).delete(synchronize_session=False)
-            db.session.delete(ch)
+            delete_event(ch)
             deleted += 1
-        elif retire_at and now >= retire_at and (ch.is_active or ch.is_enabled):
-            if ch.is_active:
-                ch.went_inactive_at = now
-            if ch.is_enabled:
-                ch.disable_reason = EVENT_RETIRED_REASON
-            ch.is_active = False
-            ch.is_enabled = False
-            retired += 1
+        elif retire_at and now >= retire_at:
+            if hide_event(ch, EVENT_RETIRED_REASON, now):
+                retired += 1
     if retired or deleted:
         db.session.commit()
         logger.info('[worker] retired %d time-limited channel(s), deleted %d', retired, deleted)
