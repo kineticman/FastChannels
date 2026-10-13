@@ -732,6 +732,9 @@ class ESPNScraper(BaseScraper):
     def _fetch_event_airings(self) -> list[dict]:
         enabled = self._enabled_event_services()
         candidates = self._candidate_event_airings()
+        # A completed event inventory can retire old event rows on this scrape.
+        # The generic three-miss rule is for persistent linear channels.
+        self.hide_missing_event_channels = True
         included = [a for a in candidates if event_services(a) & enabled and event_matches_filter(a, self.config)]
         included_ids = {a['id'] for a in included}
         # Explicitly filtered events disappear from output on this scrape,

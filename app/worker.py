@@ -527,6 +527,7 @@ def run_scraper(source_name: str, force_full: bool = False):
                                 allow_suspicious_collapse=getattr(scraper, 'allow_suspicious_channel_collapse', False),
                                 pinned_channel_ids=getattr(scraper, 'pinned_channel_ids', frozenset()),
                                 excluded_channel_ids=getattr(scraper, 'excluded_channel_ids', frozenset()),
+                                hide_missing_event_channels=getattr(scraper, 'hide_missing_event_channels', False),
                             )
                         # Persist scraper config/cache FIRST. persist_*() call
                         # db.session.expire_all(), which DISCARDS unflushed attribute
@@ -2761,7 +2762,8 @@ def _sync_intrinsic_drm_bridge(source) -> None:
 def _upsert_channels(source, channel_data_list, gracenote_auto_fill: bool = True, active_geos: set | None = None,
                      miss_threshold: int = _CHANNEL_MISS_THRESHOLD, rehome_by_guide_key: bool = False,
                      allow_suspicious_collapse: bool = False, pinned_channel_ids: frozenset = frozenset(),
-                     excluded_channel_ids: frozenset = frozenset()):
+                     excluded_channel_ids: frozenset = frozenset(),
+                     hide_missing_event_channels: bool = False):
     existing = {ch.source_channel_id: ch for ch in source.channels.all()}
     # Build a guide_key → channel index so we can re-use an existing DB row
     # when a scraper assigns a new uuid to the same content (e.g. Vidaa rotating
@@ -2986,6 +2988,23 @@ def _upsert_channels(source, channel_data_list, gracenote_auto_fill: bool = True
         ch.last_seen_at = seen_at
         ch.missed_scrapes = 0
 
+    # Event inventories are short-lived: a successful refresh that no longer
+    # lists an event should remove it from output immediately. Keep its row and
+    # user choices until the normal event deletion deadline.
+    missing_event_ids = {
+        ch_id for ch_id in missing_active_ids - filtered_ids
+        if hide_missing_event_channels
+        and EVENT_CHANNEL_TAG in (existing[ch_id].tags or '').split(',')
+        and not existing[ch_id].scrape_pinned
+    }
+    for ch_id in missing_event_ids:
+        ch = existing[ch_id]
+        ch.is_active = False
+        ch.went_inactive_at = seen_at
+        ch.missed_scrapes = (ch.missed_scrapes or 0) + 1
+    if missing_event_ids:
+        logger.info('[%s] hid %d events absent from refreshed schedule', source.name, len(missing_event_ids))
+
     # Channels from regions the scraper no longer has configured are intentionally
     # absent — exclude them from the collapse ratio so a region removal doesn't
     # trigger the false-positive guard.
@@ -2996,13 +3015,13 @@ def _upsert_channels(source, channel_data_list, gracenote_auto_fill: bool = True
         }
     else:
         region_removed_ids = set()
-    missing_active_organic = missing_active_ids - region_removed_ids - filtered_ids
+    missing_active_organic = missing_active_ids - region_removed_ids - filtered_ids - missing_event_ids
 
     # Guard against upstream/parser glitches returning a tiny partial lineup.
     # If we previously had a substantial active set and the new fetch would
     # deactivate most of it, keep the old rows active and log loudly instead
     # of collapsing the source to a handful of channels.
-    organic_existing = len(existing_active_ids - region_removed_ids - filtered_ids)
+    organic_existing = len(existing_active_ids - region_removed_ids - filtered_ids - missing_event_ids)
     if organic_existing > 0:
         missing_ratio = len(missing_active_organic) / max(organic_existing, 1)
     else:
@@ -3042,7 +3061,7 @@ def _upsert_channels(source, channel_data_list, gracenote_auto_fill: bool = True
         )
     else:
         for ch_id, ch in existing.items():
-            if ch_id not in seen and ch_id not in region_removed_ids and ch_id not in filtered_ids:
+            if ch_id not in seen and ch_id not in region_removed_ids and ch_id not in filtered_ids and ch_id not in missing_event_ids:
                 # Event groups are short-lived. Keep their policy in the source
                 # config even when the entire group is absent from this import.
                 group = ch.playlist_group
