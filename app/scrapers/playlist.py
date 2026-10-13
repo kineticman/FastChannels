@@ -25,7 +25,7 @@ import requests
 
 from .base import (
     BaseScraper, ChannelData, ConfigField, ProgramData, ScrapeSkipError,
-    infer_language_from_metadata,
+    infer_language_from_metadata, EVENT_CHANNEL_TAG,
 )
 from .m3u_import import (
     M3UEntry, M3UPlaylist, assign_channel_ids, decode_m3u, parse_m3u, slugify,
@@ -71,6 +71,22 @@ class PlaylistError(ScrapeSkipError):
 
 def is_playlist_source(name: str | None) -> bool:
     return bool(name) and name.startswith(SOURCE_PREFIX)
+
+
+def event_group_miss_limit(config: dict, group: str | None) -> int:
+    """Return an event group's deletion limit, or zero for a linear group."""
+    policies = (config or {}).get('group_lifecycle') or {}
+    if not isinstance(policies, dict) or group is None:
+        return 0
+    policy = next((value for name, value in policies.items()
+                   if isinstance(name, str) and name.casefold() == group.casefold()), None)
+    if not isinstance(policy, dict) or policy.get('type') != 'event':
+        return 0
+    try:
+        limit = int(policy.get('delete_after_misses'))
+    except (TypeError, ValueError):
+        return 0
+    return limit if 1 <= limit <= 30 else 0
 
 
 def redact_url(url: str | None) -> str:
@@ -243,6 +259,8 @@ def entries_to_channels(entries: list[M3UEntry], config: dict) -> list[ChannelDa
         tags = ([group] if group else []) + [
             t for t in genres + _split_values(entry.attr('tvc-guide-tags')) if t != group
         ]
+        if event_group_miss_limit(config, group) and EVENT_CHANNEL_TAG not in tags:
+            tags.append(EVENT_CHANNEL_TAG)
         guide_title = entry.attr('tvc-guide-title')
         channels.append(ChannelData(
             source_channel_id=channel_id,
@@ -263,6 +281,7 @@ def entries_to_channels(entries: list[M3UEntry], config: dict) -> list[ChannelDa
             # The untouched tvg-id is what the XMLTV guide is keyed on.
             guide_key=entry.attr('tvg-id') or None,
             tags=tags,
+            playlist_group=group,
             # Shown in the placeholder guide blocks of a channel the XMLTV
             # doesn't cover, and passed on in our own M3U.
             description=entry.attr('tvc-guide-description', 'tvg-description') or None,

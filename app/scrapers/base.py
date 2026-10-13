@@ -356,7 +356,7 @@ class ChannelData:
                  guide_key=None, tags=None, description=None,
                  gracenote_mode=None, provider_number=None,
                  guide_title=None, guide_art=None, guide_block_minutes=None,
-                 retire_at=None, delete_at=None):
+                 retire_at=None, delete_at=None, playlist_group=None):
         self.source_channel_id = source_channel_id
         self.name        = name
         self.stream_url  = stream_url
@@ -381,6 +381,7 @@ class ChannelData:
         self.gracenote_mode = gracenote_mode
         self.guide_key   = guide_key
         self.tags        = tags or []  # list of raw tag/group strings from source
+        self.playlist_group = playlist_group
         if (retire_at or delete_at) and EVENT_CHANNEL_TAG not in self.tags:
             raise ValueError('Channels with retirement or deletion deadlines must have the event tag')
         self.description = description  # optional long-form channel description

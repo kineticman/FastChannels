@@ -19,10 +19,11 @@
       max-height: 220px; overflow-y: auto; border: 1px solid var(--border); border-radius: 6px;
       padding: .5rem .7rem; background: var(--bg);
     }
-    #playlist-modal .pl-groups label {
-      display: flex; align-items: center; gap: .5rem; font-size: .82rem; padding: .15rem 0; cursor: pointer;
-    }
+    #playlist-modal .pl-group-row { display: flex; align-items: center; gap: .5rem; padding: .2rem 0; flex-wrap: wrap; }
+    #playlist-modal .pl-group-row label { display: flex; align-items: center; gap: .5rem; font-size: .82rem; cursor: pointer; flex: 1 1 12rem; }
     #playlist-modal .pl-groups .pl-count { color: var(--text-muted); margin-left: auto; font-size: .76rem; }
+    #playlist-modal .pl-group-type, #playlist-modal .pl-event-limit { background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: 5px; padding: .3rem; font-size: .78rem; }
+    #playlist-modal .pl-event-limit { width: 3.5rem; }
     #playlist-modal .pl-row { display: flex; gap: .75rem; flex-wrap: wrap; }
     #playlist-modal .pl-row > div { flex: 1 1 8rem; }
     #playlist-modal .pl-radio { display: flex; align-items: flex-start; gap: .5rem; font-size: .82rem; padding: .2rem 0; cursor: pointer; }
@@ -70,6 +71,7 @@
           </label>
           <div class="pl-groups" id="pl-groups"></div>
           <div class="pl-help" id="pl-selected-count"></div>
+          <div class="pl-help">Choose Event for temporary groups. Missing events leave M3U/EPG after one accepted import and are deleted from the database after the selected number of missed imports. Saved group rules remain when a group temporarily disappears from the playlist.</div>
         </div>
 
         <div class="pl-field pl-row">
@@ -106,6 +108,8 @@
     let _plEditId = null;       // source id when editing, null when adding
     let _plPreview = null;      // last successful preview response
     let _plEnterTouched = false;
+    let _plGroupLifecycle = {};
+    let _plSavedGroups = [];
 
     function _plEl(id) { return document.getElementById(id); }
 
@@ -126,12 +130,15 @@
       _plEditId = sourceId || null;
       _plPreview = null;
       _plEnterTouched = false;
+      _plGroupLifecycle = {};
+      _plSavedGroups = [];
       _plEl('pl-name').value = '';
       _plEl('pl-m3u').value = '';
       _plEl('pl-epg').value = '';
       _plEl('pl-fill-missing-epg').checked = true;
       _plEl('pl-lang').value = 'en';
       _plEl('pl-country').value = 'US';
+      _plEl('pl-groups').innerHTML = '';
       _plEl('pl-result').style.display = 'none';
       _plEl('pl-save-btn').disabled = true;
       _plSetStatus('');
@@ -154,6 +161,8 @@
         _plEl('pl-fill-missing-epg').checked = d.fill_missing_epg !== false;
         _plEl('pl-lang').value = d.default_language || 'en';
         _plEl('pl-country').value = d.default_country || 'US';
+        _plGroupLifecycle = d.group_lifecycle || {};
+        _plSavedGroups = d.groups_include || [];
         checkPlaylist(d.groups_include || []);
       } catch (e) {
         _plSetStatus('Could not load this playlist: ' + e.message, true);
@@ -189,6 +198,23 @@
         const want = count <= _plPreview.enable_now_threshold ? 'enable' : 'review';
         document.querySelectorAll('input[name="pl-enter"]').forEach(rb => { rb.checked = rb.value === want; });
       }
+    }
+
+    function _plOnGroupTypeChanged(select) {
+      const row = select.closest('.pl-group-row');
+      row.querySelector('.pl-event-count').style.display = select.value === 'event' ? '' : 'none';
+      const group = row.querySelector('input[type="checkbox"]').dataset.group;
+      if (select.value === 'event') {
+        _plGroupLifecycle[group] = {type: 'event', delete_after_misses: Number(row.querySelector('.pl-event-limit').value) || 3};
+      } else {
+        delete _plGroupLifecycle[group];
+      }
+    }
+
+    function _plCaptureGroupLifecycle() {
+      document.querySelectorAll('#pl-groups .pl-group-row').forEach(row => {
+        _plOnGroupTypeChanged(row.querySelector('.pl-group-type'));
+      });
     }
 
     function _plOnFillMissingEpgChanged() {
@@ -229,14 +255,30 @@
       if (d.with_drm) facts.push(`<span class="pl-warn">${d.with_drm} declare a DRM license. DRM streams from playlists are not supported.</span>`);
       _plEl('pl-facts').innerHTML = facts.join('<br>');
 
-      const want = preselect && preselect.length ? new Set(preselect) : null;
-      _plEl('pl-groups').innerHTML = d.groups.map((g, i) => `
-        <label><input type="checkbox" data-idx="${i}" ${(!want || want.has(g.name)) ? 'checked' : ''} onchange="_plOnGroupsChanged()">
-          <span>${g.name ? escapeHtml(g.name) : '<em>(no group)</em>'}</span>
-          <span class="pl-count">${g.count}</span></label>`).join('');
+      const present = new Set(d.groups.map(g => g.name.toLocaleLowerCase()));
+      const absent = [...new Set([...Object.keys(_plGroupLifecycle), ..._plSavedGroups])]
+        .filter(name => !present.has(name.toLocaleLowerCase()));
+      const rows = [...d.groups, ...absent.map(name => ({name, count: 0, absent: true}))];
+      const want = preselect && preselect.length ? new Set(preselect.map(name => name.toLocaleLowerCase())) : null;
+      _plEl('pl-groups').innerHTML = rows.map((g, i) => {
+        const policyKey = Object.keys(_plGroupLifecycle).find(name => name.toLocaleLowerCase() === g.name.toLocaleLowerCase());
+        const policy = _plGroupLifecycle[policyKey] || {};
+        const isEvent = policy.type === 'event';
+        const limit = Number(policy.delete_after_misses) || 3;
+        return `<div class="pl-group-row">
+          <label><input type="checkbox" data-idx="${i}" ${(!want || want.has(g.name.toLocaleLowerCase())) ? 'checked' : ''} onchange="_plOnGroupsChanged()">
+            <span>${g.name ? escapeHtml(g.name) : '<em>(no group)</em>'}${g.absent ? ' <span class="pl-warn">(absent now)</span>' : ''}</span>
+            <span class="pl-count">${g.count}</span></label>
+          <select class="pl-group-type" aria-label="Channel type" onchange="_plOnGroupTypeChanged(this)">
+            <option value="linear" ${isEvent ? '' : 'selected'}>Linear</option>
+            <option value="event" ${isEvent ? 'selected' : ''}>Event</option>
+          </select>
+          <span class="pl-event-count" style="display:${isEvent ? '' : 'none'};font-size:.76rem;">Delete after <input class="pl-event-limit" type="number" min="1" max="30" step="1" value="${limit}"> misses</span>
+        </div>`;
+      }).join('');
       // Group names go on via the DOM, not the markup, so quotes can't break out.
       document.querySelectorAll('#pl-groups input[type="checkbox"]').forEach(cb => {
-        cb.dataset.group = d.groups[Number(cb.dataset.idx)].name;
+        cb.dataset.group = rows[Number(cb.dataset.idx)].name;
       });
       _plEl('pl-result').style.display = '';
       _plOnGroupsChanged();
@@ -246,6 +288,7 @@
       const m3u = _plEl('pl-m3u').value.trim();
       if (!m3u) { _plSetStatus('Enter the playlist URL first.', true); return; }
       const btn = _plEl('pl-check-btn');
+      _plCaptureGroupLifecycle();
       btn.disabled = true;
       _plInvalidatePreview();
       _plSetStatus('Fetching playlist…');
@@ -272,6 +315,19 @@
       if (!name) { _plSetStatus('Give the playlist a name.', true); _plEl('pl-name').focus(); return; }
       if (!_plPreview) { _plSetStatus('Check the playlist first.', true); return; }
       const picked = _plSelectedGroups();
+      const groupLifecycle = {};
+      for (const row of document.querySelectorAll('#pl-groups .pl-group-row')) {
+        const group = row.querySelector('input[type="checkbox"]').dataset.group;
+        if (row.querySelector('.pl-group-type').value !== 'event') continue;
+        const input = row.querySelector('.pl-event-limit');
+        const limit = Number(input.value);
+        if (!Number.isInteger(limit) || limit < 1 || limit > 30) {
+          _plSetStatus(`Enter 1–30 missed imports for ${group || '(no group)'}.`, true);
+          input.focus();
+          return;
+        }
+        groupLifecycle[group] = {type: 'event', delete_after_misses: limit};
+      }
       const body = {
         name,
         m3u_url: _plEl('pl-m3u').value.trim(),
@@ -279,7 +335,8 @@
         fill_missing_epg: _plEl('pl-fill-missing-epg').checked,
         // All groups selected is stored as "no filter", so groups the playlist
         // adds later are imported too.
-        groups_include: picked.length === _plPreview.groups.length ? [] : picked,
+        groups_include: (!_plSavedGroups.length && picked.length === document.querySelectorAll('#pl-groups input[type="checkbox"]').length) ? [] : picked,
+        group_lifecycle: groupLifecycle,
         default_language: _plEl('pl-lang').value.trim() || 'en',
         default_country: _plEl('pl-country').value.trim() || 'US',
       };

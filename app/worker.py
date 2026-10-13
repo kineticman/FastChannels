@@ -37,7 +37,7 @@ from app.models import Source, Channel, Program, Feed, AppSettings, SourceCache
 import time as _time
 from urllib.parse import urljoin as _urljoin
 from app.scrapers import registry
-from app.scrapers.playlist import is_playlist_source
+from app.scrapers.playlist import is_playlist_source, event_group_miss_limit
 from app.scrapers.base import (
     EVENT_CHANNEL_TAG,
     StreamDeadError,
@@ -46,7 +46,7 @@ from app.scrapers.base import (
     is_transient_network_error,
 )
 from app.scrapers.category_utils import category_for_channel
-from app.channel_tags import EVENT_RETIRED_REASON
+from app.channel_tags import EVENT_RETIRED_REASON, EVENT_MISSING_REASON
 from app.tve.adobe_pass import TVENotAuthorizedError
 from app.xml_cache import ensure_xml_artifact, get_artifact, invalidate_xml_cache, write_artifact
 from app.routes.images import delete_cached_logo
@@ -2287,7 +2287,7 @@ def run_bulk_channel_update(filters: dict, enable: bool):
                 # decision, so a later schedule extension must not turn it on.
                 Channel.query.filter(
                     Channel.id.in_(ids),
-                    Channel.disable_reason == EVENT_RETIRED_REASON,
+                    Channel.disable_reason.in_((EVENT_RETIRED_REASON, EVENT_MISSING_REASON)),
                 ).update({'disable_reason': None}, synchronize_session=False)
             # Any explicit bulk enable/disable counts as reviewing the channel, so
             # clear the 'pending' marker — it leaves the "Needs review" filter.
@@ -2762,6 +2762,7 @@ def _upsert_channels(source, channel_data_list, gracenote_auto_fill: bool = True
                      allow_suspicious_collapse: bool = False, pinned_channel_ids: frozenset = frozenset(),
                      excluded_channel_ids: frozenset = frozenset()):
     existing = {ch.source_channel_id: ch for ch in source.channels.all()}
+    from app.models import FeedChannelNumber
     # Only user playlists can opt into a sticky disable after a channel
     # disappears. Keep counting after the usual inactive threshold if needed.
     disable_after_misses = 0
@@ -2866,6 +2867,7 @@ def _upsert_channels(source, channel_data_list, gracenote_auto_fill: bool = True
                                    old_gk or None, new_gk or None)
                     ch.identity_changed_at = seen_at
             ch.name          = cd.name
+            ch.playlist_group = getattr(cd, 'playlist_group', None)
             ch.stream_url    = cd.stream_url
             ch.retire_at     = getattr(cd, 'retire_at', None)
             ch.delete_at     = getattr(cd, 'delete_at', None)
@@ -2908,6 +2910,9 @@ def _upsert_channels(source, channel_data_list, gracenote_auto_fill: bool = True
                 if (ch.missed_scrapes or 0) > 0:
                     ch.returned_at = seen_at
                 ch.is_active = True
+                if ch.disable_reason == EVENT_MISSING_REASON:
+                    ch.is_enabled = True
+                    ch.disable_reason = None
                 if stream_url_changed and _flagged:
                     ch.disable_reason = None  # clear flag; let next audit re-check
             if ch.retire_at and _utc_aware(ch.retire_at) <= seen_at:
@@ -2956,6 +2961,7 @@ def _upsert_channels(source, channel_data_list, gracenote_auto_fill: bool = True
                 language          = cd.language,
                 country           = cd.country,
                 tags              = ','.join(cd.tags) if getattr(cd, 'tags', None) else None,
+                playlist_group    = getattr(cd, 'playlist_group', None),
                 description       = _sanitize_description(cd.description) if getattr(cd, 'description', None) else None,
                 number            = None,
                 provider_number   = cd.provider_number,
@@ -3058,6 +3064,31 @@ def _upsert_channels(source, channel_data_list, gracenote_auto_fill: bool = True
     else:
         for ch_id, ch in existing.items():
             if ch_id not in seen and ch_id not in region_removed_ids and ch_id not in filtered_ids:
+                # Event groups are short-lived. Keep their policy in the source
+                # config even when the entire group is absent from this import.
+                group = ch.playlist_group
+                if group is None and is_playlist_source(source.name):
+                    group = (ch.tags or '').split(',', 1)[0]
+                event_limit = event_group_miss_limit(source.config or {}, group) if is_playlist_source(source.name) else 0
+                if event_limit and not ch.scrape_pinned:
+                    next_missed = (ch.missed_scrapes or 0) + 1
+                    ch.missed_scrapes = next_missed
+                    if next_missed >= event_limit:
+                        FeedChannelNumber.query.filter_by(channel_id=ch.id).delete(synchronize_session=False)
+                        db.session.delete(ch)
+                        logger.info('[%s] deleted event after %d missed playlist imports: %s (%s)',
+                                    source.name, next_missed, ch.name, ch.source_channel_id)
+                    else:
+                        if ch.is_active:
+                            ch.went_inactive_at = seen_at
+                        ch.is_active = False
+                        if ch.is_enabled:
+                            ch.is_enabled = False
+                            ch.disable_reason = EVENT_MISSING_REASON
+                        if next_missed == 1:
+                            logger.info('[%s] hid missing event; delete after %d missed imports: %s (%s)',
+                                        source.name, event_limit, ch.name, ch.source_channel_id)
+                    continue
                 if not ch.is_active and not (disable_after_misses and ch.is_enabled and not ch.scrape_pinned):
                     continue  # already inactive and no pending playlist auto-disable
                 next_missed = (ch.missed_scrapes or 0) + 1

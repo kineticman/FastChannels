@@ -1095,7 +1095,7 @@
                           onclick="savePlaylistMissLimit({{ source.id }})"
                           {% if not source.is_enabled %}disabled{% endif %}>Save</button>
                   <span class="save-status" id="disable-after-misses-status-{{ source.id }}"></span>
-                  <div class="help">0 = off. After this many successful playlist imports omit a channel, turn it off. If it returns, it stays off until you enable it. Pinned channels are exempt; unusually large lineup drops are ignored as a safety check.</div>
+                  <div class="help">0 = off. After this many successful playlist imports omit a linear channel, turn it off. If it returns, it stays off until you enable it. Event groups have their own deletion limit in Edit. Pinned channels are exempt; unusually large lineup drops are ignored as a safety check.</div>
                 </div>
                 {% endif %}
 

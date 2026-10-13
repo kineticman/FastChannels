@@ -1874,6 +1874,8 @@
                   <span class="flag-icon flag-clickable" onclick="openReenableModal({{ ch.id }}, 'VOD')" title="VOD — this channel serves on-demand content, not a live stream. Click to re-enable.">📼</span>
                   {% elif ch.disable_reason == 'Missing from playlist' %}
                   <span class="flag-icon" title="Automatically disabled after missing from its playlist. Enable it to include it in feeds when present.">📋</span>
+                  {% elif ch.disable_reason == 'Event missing from playlist' %}
+                  <span class="flag-icon" title="Event is absent from its playlist. It will return automatically if listed again before its deletion limit.">📅</span>
                   {% endif %}
                   {% if ch.identity_changed_at %}
                   <span class="flag-icon flag-clickable" onclick="openGracenoteSuggestModal({{ ch.id }}, {onApplied: channelsGnOnApplied})" title="Content changed upstream — this slot now carries a different channel. Review/confirm its Gracenote ID so the guide matches the new content.">🔁</span>

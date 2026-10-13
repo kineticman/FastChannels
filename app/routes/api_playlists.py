@@ -10,7 +10,7 @@ import requests
 from flask import Blueprint, abort, jsonify, request
 
 from ..extensions import db
-from ..models import Source
+from ..models import Source, Channel
 from ..scrapers.m3u_import import slugify
 from ..scrapers.playlist import (
     DEFAULT_MAX_CHANNELS, MAX_SLUG_LEN, SOURCE_PREFIX, PlaylistError, PlaylistScraper,
@@ -52,6 +52,22 @@ def _clean_groups(value) -> list[str]:
     if not isinstance(value, list):
         return []
     return [str(g) for g in value]
+
+
+def _clean_group_lifecycle(value) -> dict:
+    if not isinstance(value, dict):
+        raise PlaylistError('Group settings must be an object')
+    cleaned = {}
+    for group, policy in value.items():
+        if not isinstance(group, str) or not isinstance(policy, dict):
+            raise PlaylistError('Invalid group setting')
+        if len(group) > 256 or policy.get('type') != 'event':
+            raise PlaylistError('Group type must be Event or Linear')
+        limit = policy.get('delete_after_misses')
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 30:
+            raise PlaylistError('Event deletion limit must be 1 to 30 missed imports')
+        cleaned[group] = {'type': 'event', 'delete_after_misses': limit}
+    return cleaned
 
 
 def _guide_channel_ids(session: requests.Session, epg_url: str, user_agent: str | None):
@@ -184,6 +200,12 @@ def _apply_dialog_fields(config: dict, data: dict) -> dict:
             config['groups_include'] = groups
         else:
             config.pop('groups_include', None)
+    if 'group_lifecycle' in data:
+        policies = _clean_group_lifecycle(data['group_lifecycle'])
+        if policies:
+            config['group_lifecycle'] = policies
+        else:
+            config.pop('group_lifecycle', None)
     if 'default_language' in data:
         lang = (data.get('default_language') or 'en').strip().lower()
         if not (2 <= len(lang) <= 3 and lang.isalpha()):
@@ -205,6 +227,7 @@ def _playlist_dict(source: Source) -> dict:
         'epg_url':          cfg.get('epg_url') or '',
         'fill_missing_epg': cfg.get('fill_missing_epg', True),
         'groups_include':   cfg.get('groups_include') or [],
+        'group_lifecycle':  cfg.get('group_lifecycle') or {},
         'default_language': cfg.get('default_language') or 'en',
         'default_country':  cfg.get('default_country') or 'US',
     })
@@ -225,6 +248,7 @@ def create_playlist():
             'epg_url':          data.get('epg_url'),
             'fill_missing_epg': data.get('fill_missing_epg', True),
             'groups_include':   data.get('groups_include'),
+            'group_lifecycle':  data.get('group_lifecycle', {}),
             'default_language': data.get('default_language'),
             'default_country':  data.get('default_country'),
         })
@@ -282,6 +306,23 @@ def update_playlist(source_id):
         # and play URL already handed to clients.
         source.display_name = display_name
 
+    # A newly assigned event rule starts its own miss count. Otherwise an old
+    # linear channel already missing for several imports could be deleted on
+    # the very next import, before the user's chosen event limit has elapsed.
+    old_policies = old.get('group_lifecycle') or {}
+    new_policies = config.get('group_lifecycle') or {}
+    changed_event_groups = {
+        group.casefold() for group, policy in new_policies.items()
+        if policy != old_policies.get(group)
+    }
+    if changed_event_groups:
+        for ch in Channel.query.filter_by(source_id=source.id).all():
+            group = ch.playlist_group
+            if group is None:
+                group = (ch.tags or '').split(',', 1)[0]
+            if group.casefold() in changed_event_groups:
+                ch.missed_scrapes = 0
+
     source.config = config
     try:
         db.session.commit()
@@ -293,7 +334,7 @@ def update_playlist(source_id):
 
     rescrape = source.is_enabled and any(
         old.get(key) != config.get(key)
-        for key in ('m3u_url', 'epg_url', 'groups_include', 'default_language', 'default_country')
+        for key in ('m3u_url', 'epg_url', 'groups_include', 'group_lifecycle', 'default_language', 'default_country')
     )
     if rescrape:
         trigger_scrape(source.name, force_full=True)

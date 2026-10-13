@@ -225,6 +225,7 @@ class Channel(db.Model):
     language_override = db.Column(db.String(16), nullable=True)   # set by user; beats scraper value
     country           = db.Column(db.String(8), default='US')
     tags              = db.Column(db.Text, nullable=True)          # comma-separated raw tags/groups from source
+    playlist_group    = db.Column(db.Text, nullable=True)          # exact M3U group-title, even when the group disappears upstream
     number            = db.Column(db.Integer)
     number_pinned     = db.Column(db.Boolean, default=False, nullable=False, server_default=db.text('0'))  # True when user has manually set/locked this channel number
     provider_number   = db.Column(db.String(16), nullable=True)   # upstream's own channel number as text (may be a sub-channel, e.g. "305.2"); refreshed every scrape, never used by the integer allocator
@@ -308,6 +309,7 @@ class Channel(db.Model):
             'gracenote_locked': self.gracenote_locked,
             'gracenote_mode':   self.gracenote_mode or 'auto',
             'guide_key':        self.guide_key,
+            'playlist_group':   self.playlist_group,
             'description':      self.description,
             'user_note':        self.user_note,
             'is_active':        self.is_active,
