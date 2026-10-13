@@ -9,6 +9,7 @@ from flask import Blueprint, jsonify, request
 from sqlalchemy.exc import OperationalError
 from ..extensions import db
 from ..models import Source, Channel
+from ..channel_tags import EVENT_RETIRED_REASON
 from ..drm_bridge import drm_bridge_mode_for
 from .tasks import (
     trigger_bulk_channel_update,
@@ -232,6 +233,8 @@ def update_channel(channel_id):
         # 'pending' marker so it leaves the "Needs review" filter.
         if 'is_enabled' in data:
             ch.review_state = 'approved'
+            if data['is_enabled'] is False and ch.disable_reason == EVENT_RETIRED_REASON:
+                ch.disable_reason = None
         if data.get('review_action') == 'keep_disabled':
             ch.review_state = 'approved'
         if data.get('is_enabled') is True and 'is_active' not in data:
@@ -254,7 +257,7 @@ def update_channel(channel_id):
                         'automatically — no need to toggle it manually.'
                     )
             ch.is_active = True
-            if ch.disable_reason in ('Dead', 'VOD', 'NotAuthorized', 'Missing from playlist') or was_drm_disabled:
+            if ch.disable_reason in ('Dead', 'VOD', 'NotAuthorized', 'Missing from playlist', EVENT_RETIRED_REASON) or was_drm_disabled:
                 ch.disable_reason = None
             ch.last_seen_at = datetime.now(timezone.utc)
             ch.missed_scrapes = 0

@@ -46,6 +46,7 @@ from app.scrapers.base import (
     is_transient_network_error,
 )
 from app.scrapers.category_utils import category_for_channel
+from app.channel_tags import EVENT_RETIRED_REASON
 from app.tve.adobe_pass import TVENotAuthorizedError
 from app.xml_cache import ensure_xml_artifact, get_artifact, invalidate_xml_cache, write_artifact
 from app.routes.images import delete_cached_logo
@@ -2281,6 +2282,13 @@ def run_bulk_channel_update(filters: dict, enable: bool):
         ids = _channel_ids_for_filters(filters or {})
         updated = 0
         if ids:
+            if not enable:
+                # An explicit bulk disable replaces the automatic retirement
+                # decision, so a later schedule extension must not turn it on.
+                Channel.query.filter(
+                    Channel.id.in_(ids),
+                    Channel.disable_reason == EVENT_RETIRED_REASON,
+                ).update({'disable_reason': None}, synchronize_session=False)
             # Any explicit bulk enable/disable counts as reviewing the channel, so
             # clear the 'pending' marker — it leaves the "Needs review" filter.
             values = {'is_enabled': enable, 'review_state': 'approved'}
@@ -2903,9 +2911,18 @@ def _upsert_channels(source, channel_data_list, gracenote_auto_fill: bool = True
                 if stream_url_changed and _flagged:
                     ch.disable_reason = None  # clear flag; let next audit re-check
             if ch.retire_at and _utc_aware(ch.retire_at) <= seen_at:
+                if ch.is_enabled:
+                    ch.disable_reason = EVENT_RETIRED_REASON
                 ch.is_active = False
                 ch.is_enabled = False
                 ch.went_inactive_at = ch.went_inactive_at or seen_at
+            elif ch.disable_reason == EVENT_RETIRED_REASON:
+                # A later scrape moved the event past its old retirement time.
+                # Restore only channels that retirement itself disabled.
+                ch.is_active = True
+                ch.is_enabled = True
+                ch.disable_reason = None
+                ch.went_inactive_at = None
             ch.last_seen_at = seen_at
             ch.missed_scrapes = 0
             if cd.source_channel_id in pinned_channel_ids and not ch.scrape_pinned:
@@ -2963,6 +2980,9 @@ def _upsert_channels(source, channel_data_list, gracenote_auto_fill: bool = True
             if hasattr(Channel, 'retire_at'):
                 new_channel.retire_at = getattr(cd, 'retire_at', None)
                 new_channel.delete_at = getattr(cd, 'delete_at', None)
+                if (new_channel.retire_at and not _born_pending
+                        and _utc_aware(new_channel.retire_at) <= seen_at):
+                    new_channel.disable_reason = EVENT_RETIRED_REASON
             db.session.add(new_channel)
 
     seen = {cd.source_channel_id for cd in channel_data_list}
@@ -3154,6 +3174,8 @@ def _retire_expired_event_channels() -> int:
         elif retire_at and now >= retire_at and (ch.is_active or ch.is_enabled):
             if ch.is_active:
                 ch.went_inactive_at = now
+            if ch.is_enabled:
+                ch.disable_reason = EVENT_RETIRED_REASON
             ch.is_active = False
             ch.is_enabled = False
             retired += 1

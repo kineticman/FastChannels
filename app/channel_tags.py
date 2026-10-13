@@ -5,6 +5,8 @@ from sqlalchemy import func, literal
 from .models import Channel
 from .scrapers.base import EVENT_CHANNEL_TAG
 
+EVENT_RETIRED_REASON = 'Event ended'
+
 
 def event_channel_clause():
     tags = literal(',') + func.coalesce(Channel.tags, '') + literal(',')
