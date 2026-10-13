@@ -48,8 +48,8 @@ adobe-pass-failed-authorization — they need an ESPN plan, which matches the
 same forum report (tested via HENA). With both sign-ins, the account is tried
 first and the TV provider covers what its plan doesn't.
 
-ESPN+ event channels are opt-in. Their airing IDs come from the same Watch Graph
-schedule, while playback is minted only when the event is tuned.
+ESPN+, ACC Extra, and SEC Plus event channels are opt-in. Their airing IDs come
+from the same Watch Graph schedule; playback is minted only when tuned.
 """
 
 from __future__ import annotations
@@ -131,6 +131,13 @@ _EVENT_LOOKAHEAD_HOURS = 48
 EVENT_CHANNEL_PREFIX = 'airing:'
 EVENT_STREAM_PREFIX = 'espn://airing/'
 EVENT_END_GRACE_SECONDS = 2 * 3600
+EVENT_UNCATEGORIZED = '(Uncategorized)'
+EVENT_SERVICE_LABELS = {
+    'espn_plus': 'ESPN+ Events',
+    'acc_extra': 'ACC Extra Events',
+    'sec_plus': 'SEC Plus Events',
+}
+_EVENT_NETWORK_SERVICES = {'accextra': 'acc_extra', 'secplus': 'sec_plus'}
 _ACTIVATION_TIMEOUT = 600
 
 _Q_AIRINGS = '''query($day:String!,$tz:String!){ airings(countryCode:"us", deviceType:SETTOP, tz:$tz, day:$day, limit:3000){
@@ -138,6 +145,64 @@ _Q_AIRINGS = '''query($day:String!,$tz:String!){ airings(countryCode:"us", devic
   network{ id } sport{ name } league{ name } category{ name } subcategory{ name }
   image{ url } source{ playbackId }
   packages{ name } feedName feedType language } }'''
+
+
+def event_services(airing: dict) -> set[str]:
+    """Service membership is separate from sport/league labels."""
+    services = set()
+    packages = {p.get('name') for p in (airing.get('packages') or []) if isinstance(p, dict)}
+    if 'ESPN_PLUS' in packages:
+        services.add('espn_plus')
+    network = ((airing.get('network') or {}).get('id') or '').lower()
+    if network in _EVENT_NETWORK_SERVICES:
+        services.add(_EVENT_NETWORK_SERVICES[network])
+    return services
+
+
+def event_sport(airing: dict) -> str:
+    return ((airing.get('sport') or {}).get('name') or '').strip() or EVENT_UNCATEGORIZED
+
+
+def event_league(airing: dict) -> str:
+    return ((airing.get('league') or {}).get('name') or '').strip() or EVENT_UNCATEGORIZED
+
+
+def clean_event_filter(value) -> dict:
+    """Validate the saved filter; 'all' includes categories added in the future."""
+    if value is None:
+        return {'sport_mode': 'all', 'sports': {}}
+    if not isinstance(value, dict) or value.get('sport_mode') not in ('all', 'selected'):
+        raise ValueError('Event sports must be All or Only selected')
+    raw_sports = value.get('sports', {})
+    if not isinstance(raw_sports, dict) or len(raw_sports) > 100:
+        raise ValueError('Too many event sports')
+    sports = {}
+    for name, rule in raw_sports.items():
+        if not isinstance(name, str) or not name.strip() or len(name) > 100 or not isinstance(rule, dict):
+            raise ValueError('Invalid event sport')
+        mode = rule.get('league_mode')
+        if mode not in ('all', 'selected'):
+            raise ValueError('Event leagues must be All or Only selected')
+        leagues = rule.get('leagues', [])
+        if not isinstance(leagues, list) or len(leagues) > 100 or any(
+            not isinstance(league, str) or not league.strip() or len(league) > 100 for league in leagues
+        ):
+            raise ValueError('Invalid event league')
+        sports[name.strip()] = {'league_mode': mode, 'leagues': list(dict.fromkeys(league.strip() for league in leagues))}
+    return {'sport_mode': value['sport_mode'], 'sports': sports}
+
+
+def event_matches_filter(airing: dict, config: dict) -> bool:
+    policy = clean_event_filter((config or {}).get('event_filter'))
+    if policy['sport_mode'] == 'all':
+        return True
+    sport = event_sport(airing).casefold()
+    rule = next((rule for name, rule in policy['sports'].items() if name.casefold() == sport), None)
+    if not rule:
+        return False
+    return rule['league_mode'] == 'all' or event_league(airing).casefold() in {
+        league.casefold() for league in rule['leagues']
+    }
 
 
 class ESPNAuthError(RuntimeError):
@@ -529,6 +594,8 @@ class ESPNScraper(BaseScraper):
     config_schema = [
         ConfigField('refresh_token', 'ESPN session', field_type='password', secret=True, hidden=True),
         ConfigField('include_espn_plus_events', 'Include ESPN+ events', field_type='toggle', default='false'),
+        ConfigField('include_acc_extra_events', 'Include ACC Extra events', field_type='toggle', default='false'),
+        ConfigField('include_sec_plus_events', 'Include SEC Plus events', field_type='toggle', default='false'),
     ]
 
     # ── auth ──
@@ -606,7 +673,9 @@ class ESPNScraper(BaseScraper):
                 airing_id = airing['id']
                 end = _parse_time(airing.get('endDateTime'))
                 feed = (airing.get('feedName') or '').strip()
-                title = airing.get('name') or airing.get('shortName') or 'ESPN+ Event'
+                services = event_services(airing)
+                service = next((key for key in ('acc_extra', 'sec_plus', 'espn_plus') if key in services), 'espn_plus')
+                title = airing.get('name') or airing.get('shortName') or 'ESPN Event'
                 if feed:
                     title = f'{title} ({feed})'
                 league = ((airing.get('league') or {}).get('name') or '').strip()
@@ -614,7 +683,7 @@ class ESPNScraper(BaseScraper):
                 # A numeric league prefix (e.g. "3. Liga") is less useful as a
                 # channel's first word than its sport; keep descriptive league
                 # names such as NHL, LALIGA 2, and NCAA Football.
-                label = (sport if league[:1].isdigit() and sport else league) or sport or 'ESPN+'
+                label = (sport if league[:1].isdigit() and sport else league) or sport or EVENT_SERVICE_LABELS[service]
                 channels.append(ChannelData(
                     source_channel_id=EVENT_CHANNEL_PREFIX + airing_id,
                     name=f'{label} - {title}'[:256],
@@ -624,7 +693,7 @@ class ESPNScraper(BaseScraper):
                     language=(airing.get('language') or 'en')[:16],
                     stream_type='hls',
                     guide_key=EVENT_CHANNEL_PREFIX + airing_id,
-                    tags=[EVENT_CHANNEL_TAG, 'ESPN+ Events'],
+                    tags=[EVENT_CHANNEL_TAG, EVENT_SERVICE_LABELS[service]],
                     gracenote_mode='off',
                     retire_at=end + timedelta(seconds=EVENT_END_GRACE_SECONDS),
                     delete_at=end + timedelta(seconds=EVENT_END_GRACE_SECONDS + 24 * 3600),
@@ -632,9 +701,19 @@ class ESPNScraper(BaseScraper):
         return channels
 
     def _events_enabled(self) -> bool:
-        return str(self.config.get('include_espn_plus_events', 'false')).strip().lower() in ('1', 'true', 'yes', 'on')
+        return bool(self._enabled_event_services())
 
-    def _fetch_event_airings(self) -> list[dict]:
+    def _enabled_event_services(self) -> set[str]:
+        keys = {
+            'espn_plus': 'include_espn_plus_events',
+            'acc_extra': 'include_acc_extra_events',
+            'sec_plus': 'include_sec_plus_events',
+        }
+        return {service for service, key in keys.items()
+                if str(self.config.get(key, 'false')).strip().lower() in ('1', 'true', 'yes', 'on')}
+
+    def _candidate_event_airings(self) -> list[dict]:
+        """All supported event services in the 48-hour window, before user filters."""
         now = datetime.now(timezone.utc)
         horizon = now + timedelta(hours=_EVENT_LOOKAHEAD_HOURS)
         found: dict[str, dict] = {}
@@ -644,12 +723,23 @@ class ESPNScraper(BaseScraper):
                 airing_id = airing.get('id')
                 start = _parse_time(airing.get('startDateTime'))
                 end = _parse_time(airing.get('endDateTime'))
-                packages = {p.get('name') for p in (airing.get('packages') or []) if isinstance(p, dict)}
                 if (not airing_id or not start or not end or end <= start or end <= now or start >= horizon
-                        or 'ESPN_PLUS' not in packages):
+                        or not event_services(airing)):
                     continue
                 found[airing_id] = airing
         return sorted(found.values(), key=lambda a: (a.get('startDateTime') or '', a['id']))
+
+    def _fetch_event_airings(self) -> list[dict]:
+        enabled = self._enabled_event_services()
+        candidates = self._candidate_event_airings()
+        included = [a for a in candidates if event_services(a) & enabled and event_matches_filter(a, self.config)]
+        included_ids = {a['id'] for a in included}
+        # Explicitly filtered events disappear from output on this scrape,
+        # while their DB rows retain manual edits until their delete deadline.
+        self.excluded_channel_ids = frozenset(
+            EVENT_CHANNEL_PREFIX + a['id'] for a in candidates if a['id'] not in included_ids
+        )
+        return included
 
     def _airings(self, day: str, tz: str = 'UTC') -> list[dict]:
         r = self.session.post(_WATCH_API, params={'apiKey': _WATCH_API_KEY, 'features': 'pbov7'},
@@ -758,10 +848,8 @@ class ESPNScraper(BaseScraper):
                                         'needs an ESPN plan; a TV-provider sign-in doesn\'t include it')
         raise ESPNAuthError('ESPN is not signed in — use the Sources page to sign in.')
 
-    # Groundwork for ESPN+ events played on behalf of an external lane planner
-    # (FruitDeepLinks / ESPN4CC4C): nothing routes here yet. The stream is
-    # cached under 'airing:<id>' so /play/espn/license?channel_id=airing:<id>
-    # finds its rights context and license route. At the real end of an event
+    # Event streams are cached under 'airing:<id>' so the license route finds
+    # their rights context. At the real end of an event
     # ESPN appends #EXT-X-ENDLIST (often well after the scheduled endDateTime),
     # so whatever tunes lanes has to re-tune on that, not on the schedule.
     def resolve_airing(self, airing_id: str) -> str:
@@ -875,11 +963,11 @@ class ESPNScraper(BaseScraper):
         if raw_url.startswith(EVENT_STREAM_PREFIX):
             airing_id = raw_url[len(EVENT_STREAM_PREFIX):].split('?', 1)[0]
             if not re.fullmatch(r'[0-9a-fA-F-]{36}', airing_id):
-                raise ValueError('Invalid ESPN+ airing ID')
+                raise ValueError('Invalid ESPN airing ID')
             end = event_end_timestamp(raw_url)
             if end is not None and time.time() >= end + EVENT_END_GRACE_SECONDS:
                 from .base import StreamDeadError
-                raise StreamDeadError('ESPN+ event has ended')
+                raise StreamDeadError('ESPN event has ended')
             return self.resolve_airing(airing_id)
         network_id = raw_url.removeprefix(SCHEME)
         if network_id not in NETWORKS:
@@ -935,14 +1023,15 @@ def _parse_time(value: str | None) -> datetime | None:
 
 
 def _event_epg_categories(airing: dict) -> str:
-    """Keep ESPN+ provider, sport, and league searchable in XMLTV categories."""
+    """Keep event service, sport, and league searchable in XMLTV categories."""
+    services = event_services(airing)
     values = (
         'Sports Event',
         (airing.get('sport') or {}).get('name'),
         (airing.get('category') or {}).get('name'),
         (airing.get('league') or {}).get('name'),
         (airing.get('subcategory') or {}).get('name'),
-        'ESPN+',
+        *(EVENT_SERVICE_LABELS[key] for key in ('espn_plus', 'acc_extra', 'sec_plus') if key in services),
     )
     result = []
     seen = set()

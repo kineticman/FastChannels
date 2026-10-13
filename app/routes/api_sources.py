@@ -484,6 +484,7 @@ def get_source_config(source_id):
     if source.name == 'espn':
         extra['espn'] = {'signed_in': bool(saved.get('refresh_token')),
                          'signed_in_at': saved.get('signed_in_at'),
+                         'event_filter': saved.get('event_filter') or {'sport_mode': 'all', 'sports': {}},
                          **_espn_tve_info(saved)}
     from ..tve.accounts import SEPARATE_SIGNIN_SOURCES
     if source.name in SEPARATE_SIGNIN_SOURCES:
@@ -497,6 +498,23 @@ def get_source_config(source_id):
                     'oauth_token_time': saved.get('oauth_token_time'),
                     'token_captured_at': saved.get('token_captured_at'),
                     'retired': retired, **extra})
+
+
+@sources_bp.route('/sources/<int:source_id>/espn-event-preview')
+def espn_event_preview(source_id):
+    source = Source.query.get_or_404(source_id)
+    if source.name != 'espn':
+        return jsonify({'error': 'Not an ESPN source'}), 404
+    from ..scrapers.espn import ESPNScraper, event_services, event_sport, event_league
+    try:
+        airings = ESPNScraper(config=source.config or {})._candidate_event_airings()
+    except Exception:
+        logger.exception('[espn] event lineup preview failed')
+        return jsonify({'error': 'Could not load the ESPN event schedule'}), 502
+    return jsonify({'window_hours': 48, 'events': [
+        {'services': sorted(event_services(a)), 'sport': event_sport(a), 'league': event_league(a)}
+        for a in airings
+    ]})
 
 
 def _espn_tv_provider() -> tuple[str, str]:
@@ -570,6 +588,12 @@ def save_source_config(source_id):
             current.pop(key, None)
         else:
             current[key] = val
+    if source.name == 'espn' and 'event_filter' in data:
+        from ..scrapers.espn import clean_event_filter
+        try:
+            current['event_filter'] = clean_event_filter(data['event_filter'])
+        except ValueError as exc:
+            return jsonify({'error': str(exc)}), 422
     # If login credentials changed, purge any cached auth state so the next run
     # is forced through a fresh login. Otherwise scrapers that cache auth in
     # config keep authenticating as the *old* account — the new credentials are
@@ -644,11 +668,15 @@ def save_source_config(source_id):
         _toggle_enabled(old, key) != _toggle_enabled(current, key)
         for key in ('exclude_fast_channels', 'use_provider_numbers')
     )
+    espn_event_keys = ('include_espn_plus_events', 'include_acc_extra_events', 'include_sec_plus_events')
     espn_events_changed = source.name == 'espn' and (
-        _toggle_enabled(old, 'include_espn_plus_events') != _toggle_enabled(current, 'include_espn_plus_events')
+        any(_toggle_enabled(old, key) != _toggle_enabled(current, key) for key in espn_event_keys)
+        or (old.get('event_filter') or {'sport_mode': 'all', 'sports': {}})
+           != (current.get('event_filter') or {'sport_mode': 'all', 'sports': {}})
     )
-    if source.name == 'espn' and _toggle_enabled(current, 'include_espn_plus_events') and not hasattr(Channel, 'retire_at'):
-        return jsonify({'error': 'ESPN+ events require a FastChannels image rebuild and restart.'}), 503
+    espn_any_events = any(_toggle_enabled(current, key) for key in espn_event_keys)
+    if source.name == 'espn' and espn_any_events and not hasattr(Channel, 'retire_at'):
+        return jsonify({'error': 'ESPN events require a FastChannels image rebuild and restart.'}), 503
     if creds_changed or sling_subscription_changed:
         for tk in _AUTH_STATE:
             if data.get(tk) in (None, '', '••••••••'):  # skip values set in this save
@@ -716,7 +744,7 @@ def save_source_config(source_id):
                         pbs_deleted += 1
 
     espn_deleted = 0
-    if espn_events_changed and not _toggle_enabled(current, 'include_espn_plus_events'):
+    if espn_events_changed and not espn_any_events:
         from ..models import FeedChannelNumber
         for ch in source.channels.filter(Channel.source_channel_id.like('airing:%')).all():
             FeedChannelNumber.query.filter_by(channel_id=ch.id).delete(synchronize_session=False)
@@ -748,7 +776,7 @@ def save_source_config(source_id):
         # toggles change which channels come back from fetch_channels().
         trigger_scrape(source.name, force_full=True)
         full_scrape_queued = True
-    elif espn_events_changed and source.is_enabled and _toggle_enabled(current, 'include_espn_plus_events'):
+    elif espn_events_changed and source.is_enabled and espn_any_events:
         trigger_scrape('espn', force_full=True)
         full_scrape_queued = True
     elif source.name == 'pbs' and old != current and source.is_enabled:
