@@ -317,6 +317,37 @@ def set_channel_order(feed_id):
     return jsonify(feed.to_dict(public_base_url()))
 
 
+def _displayed_feed_chnum_map(feed: Feed) -> dict[int, int]:
+    """Return the app numbers currently shown in a feed's playlists."""
+    from ..generators.m3u import _build_feed_chnum_map, feed_namespace_start
+
+    if feed.slug == 'default':
+        from .admin import _default_feed_chnum_map_full
+        return _default_feed_chnum_map_full()
+
+    q_filters = feed_to_query_filters(feed.filters or {})
+    stored = (
+        {row.channel_id: row.number
+         for row in FeedChannelNumber.query.filter_by(feed_id=feed.id).all()}
+        if feed.chnum_start is not None else None
+    )
+    # Match the standard and Gracenote output paths. With an explicit start,
+    # both partitions use the same stored pool; otherwise each has its own
+    # namespace and no stored assignments.
+    std = _selected_channel_stubs(q_filters, gracenote=False)
+    gn = _selected_channel_stubs(q_filters, gracenote=True)
+    return {
+        **_build_feed_chnum_map(
+            std, feed.chnum_start or feed_namespace_start(feed, gracenote=False),
+            stored_numbers=stored,
+        ),
+        **_build_feed_chnum_map(
+            gn, feed.chnum_start or feed_namespace_start(feed, gracenote=True),
+            stored_numbers=stored,
+        ),
+    }
+
+
 @feeds_api_bp.route('/<int:feed_id>/chnum-lock-all', methods=['POST'])
 def chnum_lock_all(feed_id):
     """Pin every member channel to its currently-displayed number in this feed.
@@ -328,27 +359,8 @@ def chnum_lock_all(feed_id):
     to one feed, so it also fixes that number in every other feed the
     channel happens to belong to.
     """
-    from ..generators.m3u import _build_feed_chnum_map, feed_namespace_start
     feed = Feed.query.get_or_404(feed_id)
-
-    if feed.slug == 'default':
-        # The default feed's "no explicit chnum_start" numbering is the
-        # source-chnum scheme, not the namespace-block scheme every other
-        # feed falls back to — reuse the admin page's already-correct
-        # resolver instead of re-deriving that special case here.
-        from .admin import _default_feed_chnum_map_full
-        num_map = _default_feed_chnum_map_full()
-    else:
-        q_filters = feed_to_query_filters(feed.filters or {})
-        stubs, _ = _feed_member_stubs(q_filters)
-        if not stubs:
-            return jsonify({'locked': 0})
-        start = feed.chnum_start or feed_namespace_start(feed, gracenote=False)
-        stored = {
-            r.channel_id: r.number
-            for r in FeedChannelNumber.query.filter_by(feed_id=feed.id).all()
-        }
-        num_map = _build_feed_chnum_map(stubs, start, stored_numbers=stored)
+    num_map = _displayed_feed_chnum_map(feed)
 
     if not num_map:
         return jsonify({'locked': 0})
@@ -368,6 +380,31 @@ def chnum_lock_all(feed_id):
             ch for ch in unpinned
             if not (ch.provider_number and ch.source and ch.source.name in provider_sources)
         ]
+
+    # A channel-wide lock overrides its assignment in every other feed. Stop
+    # before changing anything if even one of those feeds displays a different
+    # number; their stored assignments can be overwritten on the next refresh.
+    target_ids = {ch.id for ch in unpinned}
+    conflicts: dict[str, int] = {}
+    if target_ids:
+        for other in Feed.query.filter(Feed.id != feed.id).all():
+            other_map = _displayed_feed_chnum_map(other)
+            different = sum(
+                1 for channel_id in target_ids & other_map.keys()
+                if other_map[channel_id] != num_map[channel_id]
+            )
+            if different:
+                conflicts[other.name] = different
+    if conflicts:
+        summary = ', '.join(f'{name} ({count})' for name, count in list(conflicts.items())[:3])
+        if len(conflicts) > 3:
+            summary += f', and {len(conflicts) - 3} more'
+        return jsonify({
+            'error': 'Lock All stopped: these feeds show different numbers for shared channels: '
+                     f'{summary}. No locks were changed.',
+            'conflicts': conflicts,
+        }), 409
+
     for ch in unpinned:
         ch.number = num_map[ch.id]
         ch.number_pinned = True
