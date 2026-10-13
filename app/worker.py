@@ -2904,6 +2904,7 @@ def _upsert_channels(source, channel_data_list, gracenote_auto_fill: bool = True
                     ch.disable_reason = None  # clear flag; let next audit re-check
             if ch.retire_at and _utc_aware(ch.retire_at) <= seen_at:
                 ch.is_active = False
+                ch.is_enabled = False
                 ch.went_inactive_at = ch.went_inactive_at or seen_at
             ch.last_seen_at = seen_at
             ch.missed_scrapes = 0
@@ -2951,7 +2952,10 @@ def _upsert_channels(source, channel_data_list, gracenote_auto_fill: bool = True
                 last_seen_at      = seen_at,
                 first_seen_at     = seen_at,
                 is_active         = not (getattr(cd, 'retire_at', None) and _utc_aware(cd.retire_at) <= seen_at),
-                is_enabled        = not _born_pending,
+                is_enabled        = not _born_pending and not (
+                    getattr(cd, 'retire_at', None)
+                    and _utc_aware(cd.retire_at) <= seen_at
+                ),
                 review_state      = 'pending' if _born_pending else 'approved',
                 missed_scrapes    = 0,
                 scrape_pinned     = cd.source_channel_id in pinned_channel_ids,
@@ -3147,9 +3151,11 @@ def _retire_expired_event_channels() -> int:
             FeedChannelNumber.query.filter_by(channel_id=ch.id).delete(synchronize_session=False)
             db.session.delete(ch)
             deleted += 1
-        elif ch.is_active and retire_at and now >= retire_at:
+        elif retire_at and now >= retire_at and (ch.is_active or ch.is_enabled):
+            if ch.is_active:
+                ch.went_inactive_at = now
             ch.is_active = False
-            ch.went_inactive_at = now
+            ch.is_enabled = False
             retired += 1
     if retired or deleted:
         db.session.commit()
