@@ -37,7 +37,7 @@ from app.models import Source, Channel, Program, Feed, AppSettings, SourceCache
 import time as _time
 from urllib.parse import urljoin as _urljoin
 from app.scrapers import registry
-from app.scrapers.playlist import is_playlist_source, event_group_miss_limit
+from app.scrapers.playlist import is_playlist_source, event_group_miss_limit, linear_group_miss_limit
 from app.scrapers.base import (
     EVENT_CHANNEL_TAG,
     StreamDeadError,
@@ -2763,15 +2763,6 @@ def _upsert_channels(source, channel_data_list, gracenote_auto_fill: bool = True
                      allow_suspicious_collapse: bool = False, pinned_channel_ids: frozenset = frozenset(),
                      excluded_channel_ids: frozenset = frozenset()):
     existing = {ch.source_channel_id: ch for ch in source.channels.all()}
-    # Only user playlists can opt into a sticky disable after a channel
-    # disappears. Keep counting after the usual inactive threshold if needed.
-    disable_after_misses = 0
-    if is_playlist_source(source.name):
-        try:
-            disable_after_misses = max(0, min(30, int((source.config or {}).get('disable_after_misses') or 0)))
-        except (TypeError, ValueError):
-            pass
-
     # Build a guide_key → channel index so we can re-use an existing DB row
     # when a scraper assigns a new uuid to the same content (e.g. Vidaa rotating
     # a channel slot).  Only channels with a guide_key participate; if two DB rows
@@ -3071,6 +3062,7 @@ def _upsert_channels(source, channel_data_list, gracenote_auto_fill: bool = True
                             logger.info('[%s] hid missing event; delete after %d missed imports: %s (%s)',
                                         source.name, event_limit, ch.name, ch.source_channel_id)
                     continue
+                disable_after_misses = linear_group_miss_limit(source.config or {}, group) if is_playlist_source(source.name) else 0
                 if not ch.is_active and not (disable_after_misses and ch.is_enabled and not ch.scrape_pinned):
                     continue  # already inactive and no pending playlist auto-disable
                 next_missed = (ch.missed_scrapes or 0) + 1

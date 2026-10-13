@@ -61,12 +61,19 @@ def _clean_group_lifecycle(value) -> dict:
     for group, policy in value.items():
         if not isinstance(group, str) or not isinstance(policy, dict):
             raise PlaylistError('Invalid group setting')
-        if len(group) > 256 or policy.get('type') != 'event':
+        if len(group) > 256 or policy.get('type') not in ('event', 'linear'):
             raise PlaylistError('Group type must be Event or Linear')
-        limit = policy.get('delete_after_misses')
-        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 30:
-            raise PlaylistError('Event deletion limit must be 1 to 30 missed imports')
-        cleaned[group] = {'type': 'event', 'delete_after_misses': limit}
+        if policy['type'] == 'event':
+            limit = policy.get('delete_after_misses')
+            if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 30:
+                raise PlaylistError('Event deletion limit must be 1 to 30 missed imports')
+            cleaned[group] = {'type': 'event', 'delete_after_misses': limit}
+        else:
+            limit = policy.get('disable_after_misses')
+            if isinstance(limit, bool) or not isinstance(limit, int) or not 0 <= limit <= 30:
+                raise PlaylistError('Linear disable limit must be 0 to 30 missed imports')
+            if limit:
+                cleaned[group] = {'type': 'linear', 'disable_after_misses': limit}
     return cleaned
 
 
@@ -306,21 +313,20 @@ def update_playlist(source_id):
         # and play URL already handed to clients.
         source.display_name = display_name
 
-    # A newly assigned event rule starts its own miss count. Otherwise an old
-    # linear channel already missing for several imports could be deleted on
-    # the very next import, before the user's chosen event limit has elapsed.
+    # A changed group rule starts its own miss count. Otherwise an already
+    # missing channel could hit a new disable or deletion limit immediately.
     old_policies = old.get('group_lifecycle') or {}
     new_policies = config.get('group_lifecycle') or {}
-    changed_event_groups = {
+    changed_groups = {
         group.casefold() for group, policy in new_policies.items()
         if policy != old_policies.get(group)
     }
-    if changed_event_groups:
+    if changed_groups:
         for ch in Channel.query.filter_by(source_id=source.id).all():
             group = ch.playlist_group
             if group is None:
                 group = (ch.tags or '').split(',', 1)[0]
-            if group.casefold() in changed_event_groups:
+            if group.casefold() in changed_groups:
                 ch.missed_scrapes = 0
 
     source.config = config

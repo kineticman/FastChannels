@@ -22,8 +22,8 @@
     #playlist-modal .pl-group-row { display: flex; align-items: center; gap: .5rem; padding: .2rem 0; flex-wrap: wrap; }
     #playlist-modal .pl-group-row label { display: flex; align-items: center; gap: .5rem; font-size: .82rem; cursor: pointer; flex: 1 1 12rem; }
     #playlist-modal .pl-groups .pl-count { color: var(--text-muted); margin-left: auto; font-size: .76rem; }
-    #playlist-modal .pl-group-type, #playlist-modal .pl-event-limit { background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: 5px; padding: .3rem; font-size: .78rem; }
-    #playlist-modal .pl-event-limit { width: 3.5rem; }
+    #playlist-modal .pl-group-type, #playlist-modal .pl-event-limit, #playlist-modal .pl-linear-limit { background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: 5px; padding: .3rem; font-size: .78rem; }
+    #playlist-modal .pl-event-limit, #playlist-modal .pl-linear-limit { width: 3.5rem; }
     #playlist-modal .pl-row { display: flex; gap: .75rem; flex-wrap: wrap; }
     #playlist-modal .pl-row > div { flex: 1 1 8rem; }
     #playlist-modal .pl-radio { display: flex; align-items: flex-start; gap: .5rem; font-size: .82rem; padding: .2rem 0; cursor: pointer; }
@@ -71,7 +71,7 @@
           </label>
           <div class="pl-groups" id="pl-groups"></div>
           <div class="pl-help" id="pl-selected-count"></div>
-          <div class="pl-help">Choose Event for temporary groups. Missing events leave M3U/EPG after one accepted import and are deleted from the database after the selected number of missed imports. Saved group rules remain when a group temporarily disappears from the playlist.</div>
+          <div class="pl-help">Linear: disable a missing channel after 0–30 imports (0 = off); it stays disabled if it returns. Event: hide after one missed import and delete after 1–30. Pinned channels are exempt, and suspicious partial imports are ignored. Saved rules remain when a group temporarily disappears.</div>
         </div>
 
         <div class="pl-field pl-row">
@@ -193,7 +193,9 @@
       el.textContent = `${count} channel${count === 1 ? '' : 's'} selected` +
         (over ? ` — over the limit of ${_plPreview.max_channels}. Select fewer groups.` : '');
       el.className = 'pl-help' + (over ? ' pl-warn' : '');
-      _plEl('pl-save-btn').disabled = count === 0 || over;
+      const onlyAbsentEvents = _plEditId && picked.size > 0 && [...picked].every(group =>
+        Object.entries(_plGroupLifecycle).some(([name, policy]) => name === group && policy.type === 'event'));
+      _plEl('pl-save-btn').disabled = (count === 0 && !onlyAbsentEvents) || over;
       if (!_plEditId && !_plEnterTouched) {
         const want = count <= _plPreview.enable_now_threshold ? 'enable' : 'review';
         document.querySelectorAll('input[name="pl-enter"]').forEach(rb => { rb.checked = rb.value === want; });
@@ -203,12 +205,16 @@
     function _plOnGroupTypeChanged(select) {
       const row = select.closest('.pl-group-row');
       row.querySelector('.pl-event-count').style.display = select.value === 'event' ? '' : 'none';
+      row.querySelector('.pl-linear-count').style.display = select.value === 'linear' ? '' : 'none';
       const group = row.querySelector('input[type="checkbox"]').dataset.group;
       if (select.value === 'event') {
         _plGroupLifecycle[group] = {type: 'event', delete_after_misses: Number(row.querySelector('.pl-event-limit').value) || 3};
       } else {
-        delete _plGroupLifecycle[group];
+        const limit = Number(row.querySelector('.pl-linear-limit').value);
+        if (limit > 0) _plGroupLifecycle[group] = {type: 'linear', disable_after_misses: limit};
+        else delete _plGroupLifecycle[group];
       }
+      _plOnGroupsChanged();
     }
 
     function _plCaptureGroupLifecycle() {
@@ -265,6 +271,7 @@
         const policy = _plGroupLifecycle[policyKey] || {};
         const isEvent = policy.type === 'event';
         const limit = Number(policy.delete_after_misses) || 3;
+        const linearLimit = Number(policy.disable_after_misses) || 0;
         return `<div class="pl-group-row">
           <label><input type="checkbox" data-idx="${i}" ${(!want || want.has(g.name.toLocaleLowerCase())) ? 'checked' : ''} onchange="_plOnGroupsChanged()">
             <span>${g.name ? escapeHtml(g.name) : '<em>(no group)</em>'}${g.absent ? ' <span class="pl-warn">(absent now)</span>' : ''}</span>
@@ -274,6 +281,7 @@
             <option value="event" ${isEvent ? 'selected' : ''}>Event</option>
           </select>
           <span class="pl-event-count" style="display:${isEvent ? '' : 'none'};font-size:.76rem;">Delete after <input class="pl-event-limit" type="number" min="1" max="30" step="1" value="${limit}"> misses</span>
+          <span class="pl-linear-count" style="display:${isEvent ? 'none' : ''};font-size:.76rem;">Disable after <input class="pl-linear-limit" type="number" min="0" max="30" step="1" value="${linearLimit}"> misses</span>
         </div>`;
       }).join('');
       // Group names go on via the DOM, not the markup, so quotes can't break out.
@@ -318,10 +326,22 @@
       const groupLifecycle = {};
       for (const row of document.querySelectorAll('#pl-groups .pl-group-row')) {
         const group = row.querySelector('input[type="checkbox"]').dataset.group;
-        if (row.querySelector('.pl-group-type').value !== 'event') continue;
+        if (row.querySelector('.pl-group-type').value === 'linear') {
+          const input = row.querySelector('.pl-linear-limit');
+          const raw = input.value.trim();
+          const limit = Number(raw);
+          if (raw === '' || !Number.isInteger(limit) || limit < 0 || limit > 30) {
+            _plSetStatus(`Enter 0–30 missed imports for ${group || '(no group)'}.`, true);
+            input.focus();
+            return;
+          }
+          if (limit) groupLifecycle[group] = {type: 'linear', disable_after_misses: limit};
+          continue;
+        }
         const input = row.querySelector('.pl-event-limit');
-        const limit = Number(input.value);
-        if (!Number.isInteger(limit) || limit < 1 || limit > 30) {
+        const raw = input.value.trim();
+        const limit = Number(raw);
+        if (raw === '' || !Number.isInteger(limit) || limit < 1 || limit > 30) {
           _plSetStatus(`Enter 1–30 missed imports for ${group || '(no group)'}.`, true);
           input.focus();
           return;

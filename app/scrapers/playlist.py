@@ -73,20 +73,29 @@ def is_playlist_source(name: str | None) -> bool:
     return bool(name) and name.startswith(SOURCE_PREFIX)
 
 
-def event_group_miss_limit(config: dict, group: str | None) -> int:
-    """Return an event group's deletion limit, or zero for a linear group."""
+def group_miss_limit(config: dict, group: str | None, kind: str) -> int:
+    """Return a group's configured miss limit, or zero when it has none."""
     policies = (config or {}).get('group_lifecycle') or {}
     if not isinstance(policies, dict) or group is None:
         return 0
     policy = next((value for name, value in policies.items()
                    if isinstance(name, str) and name.casefold() == group.casefold()), None)
-    if not isinstance(policy, dict) or policy.get('type') != 'event':
+    if not isinstance(policy, dict) or policy.get('type') != kind:
         return 0
     try:
-        limit = int(policy.get('delete_after_misses'))
+        key = 'delete_after_misses' if kind == 'event' else 'disable_after_misses'
+        limit = int(policy.get(key))
     except (TypeError, ValueError):
         return 0
     return limit if 1 <= limit <= 30 else 0
+
+
+def event_group_miss_limit(config: dict, group: str | None) -> int:
+    return group_miss_limit(config, group, 'event')
+
+
+def linear_group_miss_limit(config: dict, group: str | None) -> int:
+    return group_miss_limit(config, group, 'linear')
 
 
 def redact_url(url: str | None) -> str:
@@ -338,9 +347,18 @@ class PlaylistScraper(BaseScraper):
     def fetch_channels(self) -> list[ChannelData]:
         # Any failure raises. Returning [] would read as "every channel is gone"
         # to the reconcile step.
+        self.allow_suspicious_channel_collapse = False
         playlist = fetch_playlist(self.session, self.config.get('m3u_url'), self._user_agent())
         entries = filter_entries(playlist.entries, self.config)
         if not entries:
+            selected = self.config.get('groups_include') or []
+            # A valid playlist may temporarily omit every selected event group.
+            # Count that as an accepted empty import so those events can retire.
+            if selected and all(event_group_miss_limit(self.config, group) for group in selected):
+                self.allow_suspicious_channel_collapse = True
+                logger.info('[%s] selected event groups absent from playlist; accepting empty event import',
+                            self.source_name)
+                return []
             raise PlaylistError(
                 f'The playlist has {len(playlist.entries)} channels but none match the selected groups'
             )
