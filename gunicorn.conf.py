@@ -83,6 +83,7 @@ _SUCCESS_SUPPRESS_PATTERNS = (
     'POST /api/settings/fc-player/devices/probe',  # read-only adb probe, one per device per page load
     'GET /api/custom-channels/preview-manifest?url=',  # HLS preview refreshes the manifest during playback
     'GET /api/custom-channels/preview-segment?url=',  # HLS preview fetches a segment every few seconds
+    'GET /play/pluto/variant?url=',  # Pluto preview refreshes signed variant playlists
     # Feed editor: fired on every open and every filter/order change.
     'POST /api/feeds/preview-order',       # read-only order/number preview (POST only for the big filters body)
     'GET /api/feeds/channel-membership',   # which channels other feeds already include
@@ -95,6 +96,7 @@ _DASH_RE = re.compile(r'(?:GET|HEAD) /play/(amazon_prime_free|cox|philo|sling|pb
 # query-form URLs (/license?channel_id=<id>) — matched via the separator below. Sling's
 # fire on every tune, block-boundary swap, and FC Player ad-gap rejoin.
 _LICENSE_RE = re.compile(r'POST /play/(directv|cox|vidaa|fubo|sling)/license(?:/|\?channel_id=)')
+_PLUTO_VARIANT_QUERY_RE = re.compile(r'("(?:GET|HEAD) /play/pluto/variant)\?[^ ]+')
 
 
 class _AccessFilter(logging.Filter):
@@ -117,6 +119,10 @@ class _AccessFilter(logging.Filter):
             return False
         if _SUPPRESS_WATCH_RE.search(msg):
             return False
+        # Failed variant requests remain visible, without the signed Pluto URL.
+        if _PLUTO_VARIANT_QUERY_RE.search(msg):
+            record.msg = _PLUTO_VARIANT_QUERY_RE.sub(r'\1?[redacted]', msg)
+            record.args = ()
         return True
 
 

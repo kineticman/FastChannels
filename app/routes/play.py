@@ -781,7 +781,8 @@ def pluto_variant_proxy():
         r = _requests.get(url, headers=_variant_hdrs, timeout=10)
         r.raise_for_status()
     except Exception as e:
-        logger.warning('[pluto-variant] fetch failed for %s: %s', url[:80], e)
+        # Requests exceptions can include the full URL and its signed JWT.
+        logger.warning('[pluto-variant] fetch failed for host %s: %s', host, type(e).__name__)
         abort(502)
     return Response(
         r.content,
