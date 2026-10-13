@@ -505,14 +505,15 @@ def espn_event_preview(source_id):
     source = Source.query.get_or_404(source_id)
     if source.name != 'espn':
         return jsonify({'error': 'Not an ESPN source'}), 404
-    from ..scrapers.espn import ESPNScraper, event_services, event_sport, event_league
+    from ..scrapers.espn import ESPNScraper, event_services, event_sport, event_league, event_is_likely_show
     try:
         airings = ESPNScraper(config=source.config or {})._candidate_event_airings()
     except Exception:
         logger.exception('[espn] event lineup preview failed')
         return jsonify({'error': 'Could not load the ESPN event schedule'}), 502
     return jsonify({'window_hours': 48, 'events': [
-        {'services': sorted(event_services(a)), 'sport': event_sport(a), 'league': event_league(a)}
+        {'services': sorted(event_services(a)), 'sport': event_sport(a), 'league': event_league(a),
+         'likely_show': event_is_likely_show(a)}
         for a in airings
     ]})
 

@@ -143,6 +143,7 @@ _ACTIVATION_TIMEOUT = 600
 _Q_AIRINGS = '''query($day:String!,$tz:String!){ airings(countryCode:"us", deviceType:SETTOP, tz:$tz, day:$day, limit:3000){
   id name shortName type startDateTime endDateTime description isReAir
   network{ id } sport{ name } league{ name } category{ name } subcategory{ name }
+  program{ isStudio }
   image{ url } source{ playbackId }
   packages{ name } feedName feedType language } }'''
 
@@ -167,12 +168,20 @@ def event_league(airing: dict) -> str:
     return ((airing.get('league') or {}).get('name') or '').strip() or EVENT_UNCATEGORIZED
 
 
+def event_is_likely_show(airing: dict) -> bool:
+    """ESPN's studio flag misses some shows; a missing sport catches more."""
+    return (airing.get('program') or {}).get('isStudio') is True or event_sport(airing) == EVENT_UNCATEGORIZED
+
+
 def clean_event_filter(value) -> dict:
     """Validate the saved filter; 'all' includes categories added in the future."""
     if value is None:
-        return {'sport_mode': 'all', 'sports': {}}
+        return {'sport_mode': 'all', 'sports': {}, 'hide_likely_shows': False}
     if not isinstance(value, dict) or value.get('sport_mode') not in ('all', 'selected'):
         raise ValueError('Event sports must be All or Only selected')
+    hide_likely_shows = value.get('hide_likely_shows', False)
+    if not isinstance(hide_likely_shows, bool):
+        raise ValueError('Hide likely shows must be on or off')
     raw_sports = value.get('sports', {})
     if not isinstance(raw_sports, dict) or len(raw_sports) > 100:
         raise ValueError('Too many event sports')
@@ -189,11 +198,14 @@ def clean_event_filter(value) -> dict:
         ):
             raise ValueError('Invalid event league')
         sports[name.strip()] = {'league_mode': mode, 'leagues': list(dict.fromkeys(league.strip() for league in leagues))}
-    return {'sport_mode': value['sport_mode'], 'sports': sports}
+    return {'sport_mode': value['sport_mode'], 'sports': sports,
+            'hide_likely_shows': hide_likely_shows}
 
 
 def event_matches_filter(airing: dict, config: dict) -> bool:
     policy = clean_event_filter((config or {}).get('event_filter'))
+    if policy['hide_likely_shows'] and event_is_likely_show(airing):
+        return False
     if policy['sport_mode'] == 'all':
         return True
     sport = event_sport(airing).casefold()

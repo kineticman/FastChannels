@@ -3632,7 +3632,7 @@
                    onchange="renderEspnEventFilters(${sourceId})">SEC Plus
           </label>
         </div>
-        <div class="config-note" id="espn-event-summary-${sourceId}">${_espnEventPolicy[sourceId].sport_mode === 'selected' ? 'Only selected sports' : 'All sports and leagues, including future ones'}</div>
+        <div class="config-note" id="espn-event-summary-${sourceId}">${_espnEventPolicy[sourceId].sport_mode === 'selected' ? 'Only selected sports' : 'All sports and leagues, including future ones'}${_espnEventPolicy[sourceId].hide_likely_shows ? '; likely shows hidden' : ''}</div>
         <button class="btn btn-cancel btn-sm" type="button" onclick="loadEspnEventPreview(${sourceId})">Choose sports and leagues…</button>
         <div id="espn-event-filter-${sourceId}" style="display:none;margin:.7rem 0"></div>
         <div class="config-actions">
@@ -3653,6 +3653,7 @@
     }
 
     function _espnEventIncluded(event, policy) {
+      if (policy.hide_likely_shows && event.likely_show) return false;
       if (policy.sport_mode === 'all') return true;
       const rule = Object.entries(policy.sports).find(([sport]) =>
         sport.toLocaleLowerCase() === event.sport.toLocaleLowerCase())?.[1];
@@ -3664,16 +3665,18 @@
       const policy = _espnEventPolicy[sourceId];
       if (!policy) return;
       const summary = document.getElementById(`espn-event-summary-${sourceId}`);
-      summary.textContent = policy.sport_mode === 'all'
+      summary.textContent = (policy.sport_mode === 'all'
         ? 'All sports and leagues, including future ones'
-        : `${Object.keys(policy.sports).length} selected sport(s); new sports stay out until selected`;
+        : `${Object.keys(policy.sports).length} selected sport(s); new sports stay out until selected`)
+        + (policy.hide_likely_shows ? '; likely shows hidden' : '');
       const preview = _espnEventPreview[sourceId];
       if (!preview) return;
       const services = _espnSelectedServices(sourceId);
       const events = preview.events.filter(event => event.services.some(service => services.includes(service)));
       const included = events.filter(event => _espnEventIncluded(event, policy)).length;
+      const browsable = policy.hide_likely_shows ? events.filter(event => !event.likely_show) : events;
       const bySport = new Map();
-      for (const event of events) {
+      for (const event of browsable) {
         if (!bySport.has(event.sport)) bySport.set(event.sport, {count: 0, leagues: new Map()});
         const entry = bySport.get(event.sport);
         entry.count++;
@@ -3710,6 +3713,11 @@
       });
       document.getElementById(`espn-event-filter-${sourceId}`).innerHTML = `
         <div class="config-note">${included} of ${events.length} upcoming event(s) match your choices in the next ${preview.window_hours} hours. Saved sports and leagues remain listed at 0 when out of season.</div>
+        <label style="display:flex;align-items:center;gap:.5rem;font-size:.8rem;margin-bottom:.35rem">
+          <input type="checkbox" ${policy.hide_likely_shows ? 'checked' : ''}
+            onchange="espnSetHideLikelyShows(${sourceId},this.checked)">Hide likely shows
+        </label>
+        <div class="config-note" style="margin-bottom:.7rem">Uses ESPN's studio label and missing sport. Some shows may still appear.</div>
         <label style="font-size:.8rem">Sports:
           <select onchange="espnSetSportMode(${sourceId},this.value)">
             <option value="all" ${policy.sport_mode === 'all' ? 'selected' : ''}>All, including future</option>
@@ -3740,6 +3748,11 @@
 
     function espnSetSportMode(sourceId, mode) {
       _espnEventPolicy[sourceId].sport_mode = mode;
+      renderEspnEventFilters(sourceId);
+    }
+
+    function espnSetHideLikelyShows(sourceId, checked) {
+      _espnEventPolicy[sourceId].hide_likely_shows = checked;
       renderEspnEventFilters(sourceId);
     }
 
