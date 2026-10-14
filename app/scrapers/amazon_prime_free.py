@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import html as _html
+import hashlib
 import json
 import logging
 import re
@@ -149,6 +150,9 @@ class AmazonPrimeFreeScraper(BaseScraper):
     _STREAM_URL_TTL = 5400   # 1.5 hours — well under Amazon's 2-hour TTL
     _MAX_VIDEO_RESOLUTION = '480p'
     _NATIVE_MAX_VIDEO_RESOLUTION = '1080p'
+    # A channel without a current free playback envelope cannot obtain a
+    # license, so do not leave it visible through the default three misses.
+    channel_miss_threshold = 1
     _PRS_WORKERS = 20        # parallel HTTP workers for bulk resolution
     _PRS_TIMEOUT = 10        # per-request timeout (seconds)
 
@@ -248,11 +252,12 @@ class AmazonPrimeFreeScraper(BaseScraper):
         import time as _time
         entry = (config.get('channel_pe') or {}).get(title_id) or {}
         pe = entry.get('pe')
-        # expiry is epoch-ms; refresh a minute early to avoid races
-        if pe and float(entry.get('expiry', 0)) / 1000.0 > _time.time() + 60:
+        # expiry is epoch-ms when Amazon supplies it; 0 means unspecified.
+        # Freshly harvested carousel envelopes often have no expiry field.
+        expiry = float(entry.get('expiry') or 0) / 1000.0
+        if pe and (not expiry or expiry > _time.time() + 60):
             return pe
-        fresh = cls._enrich_pe(config, entry.get('asin'))
-        return fresh or pe or None
+        return cls._enrich_pe(config, entry.get('asin'))
 
     @classmethod
     def _enrich_pe(cls, config: dict, asin: str | None) -> str | None:
@@ -550,9 +555,29 @@ class AmazonPrimeFreeScraper(BaseScraper):
             return raw_url
 
         station_id = raw_url[len("primefree://"):]
+        # The scrape may drop a channel's free playback envelope while the
+        # channel row and a previously resolved manifest are still cached.
+        # That manifest cannot be licensed without the matching envelope.
+        pe = self._channel_pe_for({**self.config, **self.cache}, station_id)
+        if not pe:
+            logger.warning("[%s] no current playback envelope for %s",
+                           self.source_name, station_id[:40])
+            return None
+        pe_entry = self._channel_pe.get(station_id) or {}
+        known_expiry = float(pe_entry.get('expiry') or 0) / 1000
+        if pe_entry and (pe_entry.get('pe') != pe
+                         or (known_expiry and known_expiry <= time.time() + 60)):
+            # enrichItemMetadata returned a fresh envelope. Reuse it for the
+            # following manifest polls and the license proxy's SHT request.
+            refreshed = {**pe_entry, 'pe': pe, 'expiry': int((time.time() + 300) * 1000)}
+            self._channel_pe[station_id] = refreshed
+            self._update_cache('channel_pe', {**(self.cache.get('channel_pe') or {}),
+                                              station_id: refreshed})
+        pe_fingerprint = hashlib.sha256(pe.encode('utf-8')).hexdigest()[:16]
         cache_key = self._stream_cache_key(station_id)
         cached = self._stream_url_cache.get(cache_key)
-        if cached and cached.get("expires_at", 0) > time.time():
+        if (cached and cached.get("expires_at", 0) > time.time()
+                and cached.get("pe_fingerprint") == pe_fingerprint):
             logger.debug("[%s] resolve cache hit for %s", self.source_name, station_id[:40])
             return cached["url"]
 
@@ -560,14 +585,6 @@ class AmazonPrimeFreeScraper(BaseScraper):
             logger.warning("[%s] no cookie_header — cannot resolve stream URL for %s",
                            self.source_name, station_id[:40])
             return raw_url
-        # _channel_pe_for reads channel_pe (now in self.cache) plus config creds (cookie_header);
-        # pass a merged view so the classmethod sees both.
-        pe = self._channel_pe_for({**self.config, **self.cache}, station_id)
-        if not pe:
-            logger.warning("[%s] no playback envelope for %s — cannot resolve entitled stream "
-                           "(re-scrape to refresh)", self.source_name, station_id[:40])
-            return None
-
         logger.debug("[%s] resolving live stream for %s", self.source_name, station_id[:40])
         url = self._resolve_live(station_id, pe)
         if not url:
@@ -579,6 +596,7 @@ class AmazonPrimeFreeScraper(BaseScraper):
             self._stream_url_cache[cache_key] = {
                 "url": url,
                 "expires_at": time.time() + self._STREAM_URL_TTL,
+                "pe_fingerprint": pe_fingerprint,
             }
             updated = dict(self.cache.get("stream_url_cache") or {})
             updated[cache_key] = self._stream_url_cache[cache_key]

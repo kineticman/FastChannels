@@ -2429,6 +2429,24 @@ def license_proxy(source_name: str, channel_id: str | None = None):
     channel_id = channel_id or request.args.get('channel_id') or None
     if source_name == 'amazon_prime_free' and request.args.get('hd') == '1':
         cfg['_amazon_max_video_resolution'] = scraper_cls._NATIVE_MAX_VIDEO_RESOLUTION
+    amazon_pe_fingerprint = None
+    if source_name == 'amazon_prime_free':
+        if not channel_id:
+            return jsonify({'error': 'Amazon license request is missing channel_id.'}), 400
+        pe = scraper_cls._channel_pe_for(cfg, channel_id)
+        if not pe:
+            logger.warning('[amazon-license] no current playback envelope for %s', channel_id[:40])
+            return jsonify({'error': 'Amazon Free playback is unavailable for this channel.'}), 503
+        # A refreshed envelope must be used by both the SHT request and the
+        # license body in this request, even before the next carousel scrape.
+        pe_entry = (cfg.get('channel_pe') or {}).get(channel_id) or {}
+        known_expiry = float(pe_entry.get('expiry') or 0) / 1000
+        if pe_entry.get('pe') != pe or (known_expiry and known_expiry <= _time.time() + 60):
+            cfg['channel_pe'] = {**(cfg.get('channel_pe') or {}), channel_id: {
+                **pe_entry, 'pe': pe, 'expiry': int((_time.time() + 300) * 1000),
+            }}
+        import hashlib as _hashlib
+        amazon_pe_fingerprint = _hashlib.sha256(pe.encode('utf-8')).hexdigest()[:16]
     license_url = scraper_cls.get_license_url(cfg, channel_id=channel_id)
     if not license_url:
         abort(404)
@@ -2441,7 +2459,7 @@ def license_proxy(source_name: str, channel_id: str | None = None):
     if channel_id and source_name == 'amazon_prime_free':
         rdb = _amazon_sht_redis()
         cap = cfg.get('_amazon_max_video_resolution') or scraper_cls._MAX_VIDEO_RESOLUTION
-        _sht_key = f'amz_sht:{source_name}:{channel_id}:{cap}'
+        _sht_key = f'amz_sht:{source_name}:{channel_id}:{cap}:{amazon_pe_fingerprint}'
         if rdb:
             try:
                 sht = rdb.get(_sht_key)
