@@ -7,7 +7,10 @@ from .scrapers.base import EVENT_CHANNEL_TAG
 
 EVENT_RETIRED_REASON = 'Event ended'
 EVENT_MISSING_REASON = 'Event missing from playlist'
-AUTO_EVENT_REASONS = (EVENT_RETIRED_REASON, EVENT_MISSING_REASON)
+EVENT_SCHEDULE_MISSING_REASON = 'Event missing from schedule'
+EVENT_FILTERED_REASON = 'Event excluded by filter'
+AUTO_EVENT_REASONS = (EVENT_RETIRED_REASON, EVENT_MISSING_REASON,
+                      EVENT_SCHEDULE_MISSING_REASON, EVENT_FILTERED_REASON)
 
 
 def event_channel_clause():

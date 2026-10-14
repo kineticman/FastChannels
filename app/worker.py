@@ -46,7 +46,8 @@ from app.scrapers.base import (
     is_transient_network_error,
 )
 from app.scrapers.category_utils import category_for_channel
-from app.channel_tags import AUTO_EVENT_REASONS, EVENT_RETIRED_REASON, EVENT_MISSING_REASON
+from app.channel_tags import (AUTO_EVENT_REASONS, EVENT_RETIRED_REASON, EVENT_MISSING_REASON,
+                              EVENT_SCHEDULE_MISSING_REASON, EVENT_FILTERED_REASON)
 from app.event_lifecycle import hide_event, restore_event, delete_event
 from app.tve.adobe_pass import TVENotAuthorizedError
 from app.xml_cache import ensure_xml_artifact, get_artifact, invalidate_xml_cache, write_artifact
@@ -2903,8 +2904,9 @@ def _upsert_channels(source, channel_data_list, gracenote_auto_fill: bool = True
                 if (ch.missed_scrapes or 0) > 0:
                     ch.returned_at = seen_at
                 ch.is_active = True
-                if ch.disable_reason == EVENT_MISSING_REASON:
-                    restore_event(ch, EVENT_MISSING_REASON)
+                if ch.disable_reason in (EVENT_MISSING_REASON, EVENT_SCHEDULE_MISSING_REASON,
+                                         EVENT_FILTERED_REASON):
+                    restore_event(ch, ch.disable_reason)
                 if stream_url_changed and _flagged:
                     ch.disable_reason = None  # clear flag; let next audit re-check
             if ch.retire_at and _utc_aware(ch.retire_at) <= seen_at:
@@ -2980,9 +2982,12 @@ def _upsert_channels(source, channel_data_list, gracenote_auto_fill: bool = True
     filtered_ids = (set(excluded_channel_ids) & set(existing)) - seen
     for ch_id in filtered_ids:
         ch = existing[ch_id]
-        if ch.is_active:
-            ch.went_inactive_at = seen_at
-        ch.is_active = False
+        if hide_missing_event_channels and EVENT_CHANNEL_TAG in (ch.tags or '').split(','):
+            hide_event(ch, EVENT_FILTERED_REASON, seen_at)
+        else:
+            if ch.is_active:
+                ch.went_inactive_at = seen_at
+            ch.is_active = False
         # Keep user settings and refresh last_seen_at while upstream still
         # lists the channel, so orphan cleanup does not erase filtered rows.
         ch.last_seen_at = seen_at
@@ -2992,16 +2997,16 @@ def _upsert_channels(source, channel_data_list, gracenote_auto_fill: bool = True
     # lists an event should remove it from output immediately. Keep its row and
     # user choices until the normal event deletion deadline.
     missing_event_ids = {
-        ch_id for ch_id in missing_active_ids - filtered_ids
+        ch_id for ch_id in set(existing) - seen - filtered_ids
         if hide_missing_event_channels
         and EVENT_CHANNEL_TAG in (existing[ch_id].tags or '').split(',')
         and not existing[ch_id].scrape_pinned
     }
     for ch_id in missing_event_ids:
         ch = existing[ch_id]
-        ch.is_active = False
-        ch.went_inactive_at = seen_at
-        ch.missed_scrapes = (ch.missed_scrapes or 0) + 1
+        if ch.is_active:
+            ch.missed_scrapes = (ch.missed_scrapes or 0) + 1
+        hide_event(ch, EVENT_SCHEDULE_MISSING_REASON, seen_at)
     if missing_event_ids:
         logger.info('[%s] hid %d events absent from refreshed schedule', source.name, len(missing_event_ids))
 
