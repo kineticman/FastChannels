@@ -848,7 +848,10 @@ class AmazonPrimeFreeScraper(BaseScraper):
             if not cids:
                 continue
             gti = cids[-1]
-            if gti in self._channel_pe:
+            # Cached envelopes are from prior scrapes and must be refreshed and
+            # marked as harvested on this scrape. Only skip duplicate envelopes
+            # found earlier in the current HTML response.
+            if gti in self._harvested_channel_pe_ids:
                 continue
             exp = re.search(r'"expiryTime":(\d+)', html[m.start():m.start() + 400])
             fb = re.findall(r'"fallbackUrl":"([^"]+)"', back)
