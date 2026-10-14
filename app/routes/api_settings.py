@@ -525,12 +525,19 @@ def bridge_live_test():
         from .api_playback import _get_playback_info
         info = _get_playback_info(channel, fast_mode=False)
         manifest_url = info.get('preview_url') or info.get('play_url') or ''
+        license_url = info.get('license_url') or None
+        if channel.source.name == 'amazon_prime_free':
+            from urllib.parse import quote as _quote
+            encoded_id = _quote(channel.source_channel_id, safe='')
+            manifest_url = f'/play/amazon_prime_free/{encoded_id}/dash.mpd?hd=1'
+            license_url = (f'{request.host_url.rstrip("/")}/play/amazon_prime_free/license'
+                           f'?channel_id={encoded_id}&hd=1')
         if manifest_url.startswith('/'):
             manifest_url = urljoin(request.host_url, manifest_url.lstrip('/'))
         if not manifest_url:
             return jsonify({'error': 'FastChannels could not resolve a playable stream for this channel.'}), 502
         triggered = fc_player_bridge.trigger_channel(
-            manifest_url, info.get('license_url') or None,
+            manifest_url, license_url,
             name=channel.name or 'FastChannels',
             channel_key=f'{channel.source.name}:{channel.source_channel_id}',
         )

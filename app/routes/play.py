@@ -1558,7 +1558,6 @@ def amazon_dash_proxy(channel_id: str):
     """
     from urllib.parse import unquote as _unquote, urljoin as _urljoin, quote as _quote
     from ..scrapers.amazon_prime_free import AmazonPrimeFreeScraper
-
     raw_id = _unquote(channel_id)
     channel = (
         Channel.query
@@ -1569,7 +1568,10 @@ def amazon_dash_proxy(channel_id: str):
     if not channel:
         abort(404)
 
-    scraper = AmazonPrimeFreeScraper(config=channel.source.config or {})
+    config = dict(channel.source.config or {})
+    if request.args.get('hd') == '1':
+        config['_amazon_max_video_resolution'] = AmazonPrimeFreeScraper._NATIVE_MAX_VIDEO_RESOLUTION
+    scraper = AmazonPrimeFreeScraper(config=config)
     dash_url = scraper.resolve(channel.stream_url)
 
     if scraper._pending_config_updates:
@@ -1599,7 +1601,7 @@ def amazon_dash_proxy(channel_id: str):
         # the rest of the TTL.
         station_id = channel.stream_url[len('primefree://'):] \
             if channel.stream_url.startswith('primefree://') else None
-        if station_id and scraper._stream_url_cache.pop(station_id, None):
+        if station_id and scraper._stream_url_cache.pop(scraper._stream_cache_key(station_id), None):
             fresh_url = scraper.resolve(channel.stream_url)
             if getattr(scraper, '_pending_cache_updates', None):
                 try:
@@ -2425,6 +2427,8 @@ def license_proxy(source_name: str, channel_id: str | None = None):
     # classmethods that read playback envelopes see them — they moved out of config.
     cfg = {**(source.config or {}), **load_source_cache(source.id)}
     channel_id = channel_id or request.args.get('channel_id') or None
+    if source_name == 'amazon_prime_free' and request.args.get('hd') == '1':
+        cfg['_amazon_max_video_resolution'] = scraper_cls._NATIVE_MAX_VIDEO_RESOLUTION
     license_url = scraper_cls.get_license_url(cfg, channel_id=channel_id)
     if not license_url:
         abort(404)
@@ -2436,7 +2440,8 @@ def license_proxy(source_name: str, channel_id: str | None = None):
     sht = None
     if channel_id and source_name == 'amazon_prime_free':
         rdb = _amazon_sht_redis()
-        _sht_key = f'amz_sht:{channel_id}'
+        cap = cfg.get('_amazon_max_video_resolution') or scraper_cls._MAX_VIDEO_RESOLUTION
+        _sht_key = f'amz_sht:{source_name}:{channel_id}:{cap}'
         if rdb:
             try:
                 sht = rdb.get(_sht_key)
@@ -3140,9 +3145,16 @@ def play_fc_player_bridge(source_name: str, channel_id: str):
 
     info = _get_playback_info(channel, fast_mode=False)
     manifest_url = info.get('preview_url') or info.get('play_url') or ''
+    if source_name == 'amazon_prime_free':
+        from urllib.parse import quote as _quote
+        encoded_id = _quote(channel.source_channel_id, safe='')
+        manifest_url = f'/play/amazon_prime_free/{encoded_id}/dash.mpd?hd=1'
+        license_url = (f'{request.host_url.rstrip("/")}/play/amazon_prime_free/license'
+                       f'?channel_id={encoded_id}&hd=1')
+    else:
+        license_url = info.get('license_url') or None
     if manifest_url.startswith('/'):
         manifest_url = urljoin(request.host_url, manifest_url.lstrip('/'))
-    license_url = info.get('license_url') or None
 
     if not manifest_url:
         logger.error('[fc-player] no manifest URL resolved for %s/%s', source_name, channel_id)
