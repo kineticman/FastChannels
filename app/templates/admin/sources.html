@@ -705,6 +705,11 @@
     .btn-audit-reenable:hover:not(:disabled) { background: var(--accent-bg); }
     .btn-audit-reenable:disabled { opacity: 0.5; cursor: not-allowed; }
     .audit-no-results { color: var(--text-muted); font-size: 0.85rem; text-align: center; padding: 2rem 0; flex-shrink: 0; }
+    .audit-scope { border: 1px solid var(--border); border-radius: 8px; padding: 0.65rem 0.85rem; margin-top: 0.7rem; flex-shrink: 0; }
+    .audit-scope legend { padding: 0 0.3rem; color: var(--text-strong); font-size: 0.8rem; font-weight: 700; }
+    .audit-scope-option { display: flex; align-items: flex-start; gap: 0.5rem; padding: 0.3rem 0; color: var(--text); font-size: 0.82rem; cursor: pointer; }
+    .audit-scope-option input { margin-top: 0.15rem; flex-shrink: 0; }
+    .audit-scope-option small { display: block; color: var(--text-muted); font-size: 0.74rem; line-height: 1.35; margin-top: 0.1rem; }
     .audit-modal-actions {
       display: flex; gap: 0.75rem; justify-content: flex-end;
       margin-top: 0.75rem; padding-top: 0.75rem; border-top: 1px solid var(--surface); flex-shrink: 0;
@@ -787,7 +792,7 @@
         <button class="btn btn-run actions-btn" id="force-refresh-btn" onclick="forceCompleteRefresh()"
                 title="Clears saved scrape times and queues a full channel + guide refresh for every enabled source.">Force Complete Refresh</button>
         <button class="btn btn-run actions-btn" id="audit-all-btn" onclick="auditAll()"
-                title="Tests every active channel across all sources for stream health and DRM. Can take several minutes per source.">Audit All Sources</button>
+                title="Tests linear channels across all sources for stream health and DRM. Scheduled event channels are skipped.">Audit All Sources</button>
         <button class="btn btn-run actions-btn" id="cleanup-inactive-btn" onclick="openCleanupModal()"
                 title="Permanently delete channels that have been missing from scrapes for a configurable number of days.">Clean Up Inactive Channels<span class="inactive-pill" id="cleanup-inactive-pill" hidden></span></button>
       </div>
@@ -959,7 +964,7 @@
                 <button class="btn btn-audit btn-sm" data-label="Stream<br>Audit"
                         onclick='openAuditModal({{ source.id }}, {{ source.display_name | tojson }})'
                         {% if not source.is_enabled %}disabled{% endif %}
-                        title="Test each channel's stream URL to check if it's live, DRM-protected, or dead. Flags problem channels automatically.">Stream<br>Audit</button>
+                        title="Check linear stream health and DRM. You can include scheduled events in the audit modal.">Stream<br>Audit</button>
                 {% endif %}
               </div>
               {% endif %}
@@ -1568,7 +1573,7 @@
     }
 
     async function auditAll() {
-      if (!confirm('Run a stream audit for all sources? This tests every active channel for stream health and DRM, and can take several minutes per source.')) return;
+      if (!confirm('Run a stream audit for all sources? This checks linear channels and skips scheduled events. It can take several minutes per source.')) return;
       const btn = document.getElementById('audit-all-btn');
       const status = document.getElementById('global-status');
       btn.disabled = true;
@@ -1925,10 +1930,13 @@
     let _auditModalPollTimer  = null;
     let _auditModalGrace      = 0;
     const _lastRecheckIds     = {};
+    const _auditScopeBySource = {};
+    const _auditEventCount    = {};
 
     function openAuditModal(sourceId, sourceName) {
       _auditModalSourceId   = sourceId;
       _auditModalSourceName = sourceName;
+      _auditScopeBySource[sourceId] = 'linear';
       if (_auditModalPollTimer) { clearTimeout(_auditModalPollTimer); _auditModalPollTimer = null; }
       const modal   = document.getElementById('audit-modal');
       const content = document.getElementById('audit-modal-content');
@@ -1953,6 +1961,7 @@
       try {
         const r = await fetch(`/api/sources/${_auditModalSourceId}/audit-status`);
         const d = await r.json();
+        _auditEventCount[_auditModalSourceId] = d.event_count ?? _auditEventCount[_auditModalSourceId] ?? 0;
         const content = document.getElementById('audit-modal-content');
         if (!content || !_auditModalSourceId) return;
         content.innerHTML = _renderAuditModalContent(_auditModalSourceId, _auditModalSourceName, d);
@@ -1969,8 +1978,13 @@
       const isRunning = data.status === 'running' || data.status === 'queued';
       const result    = data.last_result;
       const report    = data.last_report;
+      const eventCount = data.event_count ?? _auditEventCount[sourceId] ?? 0;
+      const selectedScope = _auditScopeBySource[sourceId] || 'linear';
 
       let html = `<div class="audit-modal-header"><div class="audit-modal-title">Stream Audit — ${escapeHtml(sourceName)}</div></div>`;
+      if (isRunning) {
+        html += `<div class="audit-running-note">Scope: ${data.scope === 'all' ? 'All channels, including events' : 'Linear channels only'}${data.skipped_events ? ` · ${data.skipped_events} event channels skipped` : ''}</div>`;
+      }
 
       if (isRunning) {
         const done  = data.done  || 0;
@@ -2014,6 +2028,8 @@
           const ok  = Math.max(0, (result.checked || 0) - (result.vod || 0) - (result.flagged || 0) - (result.bridged || 0));
           const bits = [
             result.total       ? (result.aborted_reason && result.channel_count ? `${result.total} of ${result.channel_count} scanned` : `${result.total} scanned`) + (result.not_in_output ? ` (${result.not_in_output} not in output)` : '') : null,
+            result.scope ? (result.scope === 'all' ? 'all channels' : 'linear only') : null,
+            result.skipped_events ? `${result.skipped_events} event channels skipped` : null,
             `<span class="aud-ok">${ok} ok</span>`,
             result.dead        ? `<span class="aud-dead">${result.dead} dead</span>`               : null,
             result.vod         ? `<span class="aud-vod">${result.vod} VOD</span>`                  : null,
@@ -2079,10 +2095,21 @@
           html += `</div>`;
           _lastRecheckIds[sourceId] = limited.map(c => c.id).filter(Boolean);
         } else if (!result) {
-          html += `<div class="audit-no-results">No audit has been run yet. Run an audit to check all channels for dead streams, DRM, and VOD-only content.</div>`;
+          html += `<div class="audit-no-results">No audit has been run yet. Choose which channels to check below.</div>`;
+        } else if (result && result.channel_count === 0) {
+          html += `<div class="audit-no-results">No channels matched this audit scope.</div>`;
         } else if (result && result.checked > 0) {
           html += `<div class="audit-no-results" style="color:var(--success-soft)">✓ All ${result.total || result.checked} channels are healthy.</div>`;
         }
+      }
+
+      if (!isRunning && eventCount > 0) {
+        html += `<fieldset class="audit-scope"><legend>Channels to check</legend>
+          <label class="audit-scope-option"><input type="radio" name="audit-scope" value="linear" ${selectedScope === 'linear' ? 'checked' : ''} onchange="_auditScopeBySource[${Number(sourceId)}]='linear'">
+            <span>Linear channels only <small>Recommended · skips ${eventCount} scheduled event channel${eventCount === 1 ? '' : 's'}.</small></span></label>
+          <label class="audit-scope-option"><input type="radio" name="audit-scope" value="all" ${selectedScope === 'all' ? 'checked' : ''} onchange="_auditScopeBySource[${Number(sourceId)}]='all'">
+            <span>All channels, including events <small>${sourceName === 'ESPN' ? 'ESPN checks scheduled events against its lineup; stream playback is checked when you tune.' : 'Upcoming events may have no playable stream yet. An audit can mark them dead.'}</small></span></label>
+        </fieldset>`;
       }
 
       const recheckIds = _lastRecheckIds[sourceId] || [];
@@ -2099,13 +2126,15 @@
     async function runAudit(sourceId) {
       const content = document.getElementById('audit-modal-content');
       if (!content) return;
+      const scope = _auditScopeBySource[sourceId] || 'linear';
       if (_auditModalPollTimer) { clearTimeout(_auditModalPollTimer); _auditModalPollTimer = null; }
       content.innerHTML = _renderAuditModalContent(sourceId, _auditModalSourceName,
-        {status: 'queued', last_result: null, last_report: null});
+        {status: 'queued', scope, last_result: null, last_report: null});
       try {
         const r = await fetch(`/api/sources/${sourceId}/stream-audit`, {
           method: 'POST',
           headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({scope}),
         });
         const d = await r.json();
         if (d.status === 'queued') {
@@ -2314,6 +2343,8 @@
       const bits  = [];
       if (r.total)            bits.push((r.aborted_reason && r.channel_count ? `${r.total} of ${r.channel_count} scanned` : `${r.total} scanned`)
                                 + (r.not_in_output ? ` (${r.not_in_output} not in output)` : ''));
+      if (r.scope)            bits.push(r.scope === 'all' ? 'all channels' : 'linear only');
+      if (r.skipped_events)   bits.push(`${r.skipped_events} events skipped`);
       if (r.checked != null)  bits.push(`<span class="aud-ok">${ok} ok</span>`);
       if (r.dead)             bits.push(`<span class="aud-dead">${r.dead} dead</span>`);
       if (r.vod)              bits.push(`<span class="aud-vod">${r.vod} VOD</span>`);

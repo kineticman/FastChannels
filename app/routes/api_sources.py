@@ -131,8 +131,14 @@ def stream_audit_source(source_id):
     source = Source.query.get_or_404(source_id)
     if not source.is_enabled:
         return jsonify({'error': 'Source is disabled'}), 409
-    trigger_stream_audit(source.name)
-    return jsonify({'status': 'queued', 'source': source.name})
+    payload = request.get_json(silent=True)
+    if payload is not None and not isinstance(payload, dict):
+        return jsonify({'error': 'Invalid audit request'}), 400
+    scope = (payload or {}).get('scope', 'linear')
+    if scope not in ('linear', 'all'):
+        return jsonify({'error': 'Invalid audit scope'}), 400
+    trigger_stream_audit(source.name, scope)
+    return jsonify({'status': 'queued', 'source': source.name, 'scope': scope})
 
 
 @sources_bp.route('/sources/stream-audit-all', methods=['POST'])
@@ -275,8 +281,10 @@ def audit_status(source_id):
     import redis as _redis
     from rq import Queue
     from rq.registry import StartedJobRegistry
+    from ..channel_tags import event_channel_clause
 
     source = Source.query.get_or_404(source_id)
+    event_count = source.channels.filter(Channel.is_active == True, event_channel_clause()).count()
     try:
         r = _redis.from_url(current_app.config['REDIS_URL'])
         key = f'audit:progress:{source.name}'
@@ -287,14 +295,17 @@ def audit_status(source_id):
             if _time.time() - data.get('ts', 0) > 90:
                 r.delete(key)
             else:
-                return jsonify({'status': 'running', **data})
+                return jsonify({'status': 'running', 'event_count': event_count, **data})
         q = Queue('scraper', connection=r)
         for job_id in q.get_job_ids():
             try:
                 job = q.fetch_job(job_id)
                 if job and job.args and job.args[0] == source.name \
                         and 'stream_audit' in (job.func_name or ''):
-                    return jsonify({'status': 'queued'})
+                    scope = (job.args[1] if len(job.args) > 1 and isinstance(job.args[1], str)
+                             else (load_source_cache(source.id).get('last_audit_result') or {}).get('scope', 'linear'))
+                    return jsonify({'status': 'queued', 'event_count': event_count,
+                                    'scope': scope})
             except Exception:
                 pass
         registry = StartedJobRegistry('scraper', connection=r)
@@ -304,7 +315,11 @@ def audit_status(source_id):
                 job = Job.fetch(job_id, connection=r)
                 if job.args and job.args[0] == source.name \
                         and 'stream_audit' in (job.func_name or ''):
-                    return jsonify({'status': 'running', 'phase': 'starting'})
+                    scope = (job.args[1] if len(job.args) > 1 and isinstance(job.args[1], str)
+                             else (load_source_cache(source.id).get('last_audit_result') or {}).get('scope', 'linear'))
+                    return jsonify({'status': 'running', 'phase': 'starting',
+                                    'event_count': event_count,
+                                    'scope': scope})
             except Exception:
                 pass
     except Exception:
@@ -312,7 +327,8 @@ def audit_status(source_id):
     _audit_cache = load_source_cache(source.id)
     last_result = _audit_cache.get('last_audit_result')
     last_report = _audit_cache.get('last_audit_report')
-    return jsonify({'status': 'idle', 'last_result': last_result, 'last_report': last_report})
+    return jsonify({'status': 'idle', 'event_count': event_count,
+                    'last_result': last_result, 'last_report': last_report})
 
 
 @sources_bp.route('/sources/chnum-overlaps')

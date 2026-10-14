@@ -47,7 +47,8 @@ from app.scrapers.base import (
 )
 from app.scrapers.category_utils import category_for_channel
 from app.channel_tags import (AUTO_EVENT_REASONS, EVENT_RETIRED_REASON, EVENT_MISSING_REASON,
-                              EVENT_SCHEDULE_MISSING_REASON, EVENT_FILTERED_REASON)
+                              EVENT_SCHEDULE_MISSING_REASON, EVENT_FILTERED_REASON,
+                              event_channel_clause)
 from app.event_lifecycle import hide_event, restore_event, delete_event
 from app.tve.adobe_pass import TVENotAuthorizedError
 from app.xml_cache import ensure_xml_artifact, get_artifact, invalidate_xml_cache, write_artifact
@@ -792,9 +793,9 @@ def _active_bridge_label(source_name: str) -> str:
     return active_bridge_label(source_name)
 
 
-def run_stream_audit(source_name: str):
+def run_stream_audit(source_name: str, scope: str = 'linear'):
     """
-    Stream Audit — resolves every channel (active and previously dead/VOD) via
+    Stream Audit — resolves selected channels (active and previously dead/VOD) via
     the scraper, fetches the HLS manifest using the scraper's session (so
     source-specific headers like Origin/Referer are included), drills master →
     variant playlist, and checks for dead streams, VOD-only content, and
@@ -802,6 +803,8 @@ def run_stream_audit(source_name: str):
     they drop out of M3U/EPG output; previously-dead channels that pass are
     re-activated automatically.
     """
+    if scope not in ('linear', 'all'):
+        raise ValueError(f'Invalid stream audit scope: {scope}')
     with flask_app.app_context():
         source = Source.query.filter_by(name=source_name).first()
         if not source:
@@ -871,7 +874,7 @@ def run_stream_audit(source_name: str):
             channels_query = channels_query.filter(
                 or_(Channel.retire_at.is_(None), Channel.retire_at > datetime.now(timezone.utc))
             )
-        channels = channels_query.filter(
+        audit_candidates = channels_query.filter(
             db.or_(
                 Channel.is_active == True,
                 Channel.disable_reason.in_(['Dead', 'VOD', 'NotAuthorized']),
@@ -884,7 +887,12 @@ def run_stream_audit(source_name: str):
                 Channel.disable_reason == 'DRM',
                 Channel.disable_reason.like('DRM:%'),
             )
-        ).all()
+        )
+        skipped_events = 0
+        if scope == 'linear':
+            skipped_events = audit_candidates.filter(event_channel_clause()).count()
+            audit_candidates = audit_candidates.filter(~event_channel_clause())
+        channels = audit_candidates.all()
         total    = len(channels)
         _audit_ids = [ch.id for ch in channels]
         checked  = 0
@@ -923,7 +931,8 @@ def run_stream_audit(source_name: str):
         _audit_ignore_4xx = getattr(scraper_cls, 'audit_ignore_4xx', False)
         _audit_ignore_vod = getattr(scraper_cls, 'audit_ignore_vod', False)
 
-        logger.info('[audit] %s: checking %d channels…', source_name, total)
+        logger.info('[audit] %s: checking %d channels (scope=%s, events skipped=%d)…',
+                    source_name, total, scope, skipped_events)
 
         # Live progress → Redis key audit:progress:{source_name}
         _audit_key = f'audit:progress:{source_name}'
@@ -961,6 +970,7 @@ def run_stream_audit(source_name: str):
                             _cd_reason = getattr(scraper, '_cooldown_reason', None)
                     _redis_audit.setex(_audit_key, 600, _json_audit.dumps({
                         'phase': phase, 'done': done, 'total': total_,
+                        'scope': scope, 'skipped_events': skipped_events,
                         'flagged': flagged_, 'dead': dead_, 'vod': vod_, 'errors': errors_,
                         'skipped_403': skipped_403_,
                         'not_authorized': not_authorized_,
@@ -1514,6 +1524,7 @@ def run_stream_audit(source_name: str):
                 # channel count — so the UI doesn't claim channels were checked.
                 'total': scanned if aborted_reason else total,
                 'channel_count': total, 'aborted_reason': aborted_reason,
+                'scope': scope, 'skipped_events': skipped_events,
                 'not_in_output': not_in_output,
                 'checked': checked, 'flagged': flagged, 'bridged': bridged,
                 'dead': dead, 'vod': vod, 'not_authorized': not_authorized, 'errors': errors, 'skipped_403': skipped_403,
@@ -1558,7 +1569,11 @@ def run_stream_audit_recheck(source_name: str, channel_ids: list):
         except Exception:
             pass
 
-        channels = Channel.query.filter(Channel.id.in_(channel_ids)).all()
+        previous_scope = (load_source_cache(source.id).get('last_audit_result') or {}).get('scope', 'linear')
+        channels_query = Channel.query.filter(Channel.id.in_(channel_ids), Channel.source_id == source.id)
+        if previous_scope != 'all':
+            channels_query = channels_query.filter(~event_channel_clause())
+        channels = channels_query.all()
         total = len(channels)
         if not total:
             return
@@ -1580,6 +1595,7 @@ def run_stream_audit_recheck(source_name: str, channel_ids: list):
                 else:
                     _redis_rc.setex(_audit_key, 600, _json_rc.dumps({
                         'phase': 'recheck', 'done': done, 'total': total_,
+                        'scope': previous_scope,
                         'ts': _time.time(),
                     }))
             except Exception:
