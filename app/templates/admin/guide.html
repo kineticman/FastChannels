@@ -260,6 +260,14 @@
       -webkit-line-clamp: 2;
       -webkit-box-orient: vertical;
     }
+    .guide-event-icon {
+      display: inline-block;
+      width: 13px;
+      height: 13px;
+      margin-right: 3px;
+      color: var(--accent-strong);
+      vertical-align: -2px;
+    }
 
     /* ── Disabled channels (visible when state filter includes them) ── */
     .guide-row.ch-disabled .ch-cell { opacity: 0.55; }
@@ -600,7 +608,7 @@
           <div class="guide-row{% if not row.is_enabled %} ch-disabled{% endif %}" data-channel-id="{{ row.channel.id }}" data-sort-letter="{{ row.sort_letter }}">
             <div class="ch-cell" onclick="openGuideChannelModal({{ row.channel.id }}, this.closest('.guide-row'))">
               {% if row.channel.logo_url %}<img src="{{ row.channel.logo_display_url or row.channel.logo_url }}" alt="" class="ch-logo" loading="lazy" decoding="async">{% endif %}
-              <span class="ch-name">{{ row.channel.name }}{% if not row.is_enabled %} <span class="ch-disabled-tag">disabled</span>{% endif %}</span>
+              <span class="ch-name">{% if row.channel.tags and 'event' in row.channel.tags.split(',') %}<svg class="guide-event-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="Event channel" title="Event channel"><rect x="2" y="3.5" width="12" height="10.5" rx="1.5"/><path d="M5 2v3M11 2v3M2 7h12M5 10h2"/></svg>{% endif %}{{ row.channel.name }}{% if not row.is_enabled %} <span class="ch-disabled-tag">disabled</span>{% endif %}</span>
             </div>
             <div class="programs-track" data-channel-id="{{ row.channel.id }}">
               <div class="now-line" style="left:{{ now_pct }}%"></div>
