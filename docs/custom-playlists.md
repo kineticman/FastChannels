@@ -30,7 +30,8 @@ You can rename the playlist later; the IDs stay the same, so nothing breaks in y
 
 Channels are matched to the guide by `tvg-id`. A channel with no `tvg-id` is matched by name against
 the guide's display names. Channels the guide doesn't cover get hourly placeholder blocks so they
-still appear in the grid.
+still appear in the grid. To leave their guide empty instead, untick **Fill missing guide data** when
+adding or editing the playlist.
 
 If a playlist entry carries a `tvc-guide-stationid`, it is stored as the channel's Gracenote ID, and
 the channel uses Gracenote guide data in Channels DVR like any other Gracenote-mapped channel.
@@ -49,6 +50,23 @@ only: after approving channels there, click
 Some details in your XMLTV file have nowhere to go and are dropped on import: cast and crew,
 star ratings, and "new" / "previously shown" flags. Titles, descriptions, times, artwork, category,
 rating, season and episode numbers, episode titles, air dates and live flags are kept.
+
+## Channels that drop out of the playlist
+
+Each group can have a rule for what happens when one of its channels is missing from a refresh. Set
+it per group under **Configure → Edit playlist…**:
+
+- **Linear** (the default): the channel is kept. Set **Disable after** to a number of missed
+  imports (1–30) to have it switched off once it has been missing that many times in a row; 0 keeps
+  it on indefinitely. A channel disabled this way stays disabled if it comes back, so check
+  **Channels** if a station returns.
+- **Event**: for groups of one-off events (games, PPVs). The channels are
+  [event channels](../README.md#event-channels): one is hidden from your output as soon as it's
+  missing, comes back if it reappears, and is deleted after **Delete after** missed imports (1–30).
+
+Pinned channels are exempt from both rules. A refresh that suddenly loses most of the playlist is
+treated as a bad download and changes nothing. Rules are kept for a group even while it is missing
+from the playlist.
 
 ## Refreshing, pausing, deleting
 
@@ -73,6 +91,6 @@ channels are left alone and the error is shown on the source row.
   down, or raise **Channel limit** under **Configure**.
 - FastChannels never contacts a playlist's streams itself; your player is the only thing that
   connects to them, so nothing extra counts against a provider's stream limit. That also means
-  playlist channels get no resolution badge and are never disabled automatically if a stream dies.
-  Disable or remove dead ones yourself.
+  playlist channels get no resolution badge, have no Stream Audit, and are never disabled
+  automatically if a stream dies while it's still listed. Disable or remove dead ones yourself.
 - We can't help with why a third-party playlist's streams don't play.
