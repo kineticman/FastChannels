@@ -500,7 +500,7 @@ def get_source_config(source_id):
     if source.name == 'espn':
         extra['espn'] = {'signed_in': bool(saved.get('refresh_token')),
                          'signed_in_at': saved.get('signed_in_at'),
-                         'event_filter': saved.get('event_filter') or {'sport_mode': 'all', 'sports': {}},
+                         'event_filter': _espn_event_filter(saved) or {'sport_mode': 'all', 'sports': {}, 'teams': []},
                          **_espn_tve_info(saved)}
     from ..tve.accounts import SEPARATE_SIGNIN_SOURCES
     if source.name in SEPARATE_SIGNIN_SOURCES:
@@ -528,12 +528,19 @@ def espn_event_preview(source_id):
     if source.name != 'espn':
         return jsonify({'error': 'Not an ESPN source'}), 404
     from ..config_store import load_source_cache, persist_source_cache_updates
-    from ..scrapers.espn import (EVENT_END_GRACE_SECONDS, EVENT_PREVIEW_CACHE_KEY, ESPNScraper,
-                                 event_preview_summary)
-    summary = load_source_cache(source.id).get(EVENT_PREVIEW_CACHE_KEY)
-    if not isinstance(summary, dict) or _time.time() - float(summary.get('fetched_at') or 0) > 12 * 3600:
+    from ..scrapers.espn import (EVENT_END_GRACE_SECONDS, EVENT_PREVIEW_CACHE_KEY, EVENT_TEAMS_CACHE_KEY,
+                                 ESPNScraper, attach_event_teams, event_preview_summary)
+    cache = load_source_cache(source.id)
+    summary = cache.get(EVENT_PREVIEW_CACHE_KEY)
+    # Summaries saved before team filtering have no teams for the team picker.
+    if (not isinstance(summary, dict) or _time.time() - float(summary.get('fetched_at') or 0) > 12 * 3600
+            or any('teams' not in e for e in summary.get('events') or [])):
         try:
-            summary = event_preview_summary(ESPNScraper(config=source.config or {})._candidate_event_airings())
+            airings = ESPNScraper(config=source.config or {})._candidate_event_airings()
+            # Teams the last scrape looked up; new events fall back to their
+            # titles rather than making the picker wait on hundreds of lookups.
+            attach_event_teams(airings, cache.get(EVENT_TEAMS_CACHE_KEY), fetch=False)
+            summary = event_preview_summary(airings)
         except Exception:
             logger.exception('[espn] event lineup preview failed')
             return jsonify({'error': 'Could not load the ESPN event schedule'}), 502
@@ -552,6 +559,16 @@ def _espn_tv_provider() -> tuple[str, str]:
     cfg = (account.config or {}) if account else {}
     mso_id = (cfg.get('yt_dlp_mso_id') or cfg.get('selected_mso_id') or '').strip()
     return mso_id, (cfg.get('selected_mso_name') or mso_id).strip()
+
+
+def _espn_event_filter(cfg: dict) -> dict | None:
+    """A saved event filter in its normalized form, so filters saved before a
+    field was added compare equal to the same filter saved after."""
+    from ..scrapers.espn import clean_event_filter
+    try:
+        return clean_event_filter(cfg.get('event_filter'))
+    except ValueError:
+        return None
 
 
 def _espn_tve_info(saved: dict) -> dict:
@@ -698,8 +715,7 @@ def save_source_config(source_id):
     espn_event_keys = ('include_espn_plus_events', 'include_acc_extra_events', 'include_sec_plus_events')
     espn_events_changed = source.name == 'espn' and (
         any(_toggle_enabled(old, key) != _toggle_enabled(current, key) for key in espn_event_keys)
-        or (old.get('event_filter') or {'sport_mode': 'all', 'sports': {}})
-           != (current.get('event_filter') or {'sport_mode': 'all', 'sports': {}})
+        or _espn_event_filter(old) != _espn_event_filter(current)
     )
     espn_any_events = any(_toggle_enabled(current, key) for key in espn_event_keys)
     if source.name == 'espn' and espn_any_events and not hasattr(Channel, 'retire_at'):
