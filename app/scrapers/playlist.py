@@ -265,8 +265,9 @@ def entries_to_channels(entries: list[M3UEntry], config: dict) -> list[ChannelDa
         # Channels DVR's per-channel guide hints. tvc-guide-genres/-tags are
         # free-form labels; kept with the group name as the channel's raw tags.
         genres = _split_values(entry.attr('tvc-guide-genres'))
-        tags = ([group] if group else []) + [
-            t for t in genres + _split_values(entry.attr('tvc-guide-tags')) if t != group
+        tags = ([group] if group and group != EVENT_CHANNEL_TAG else []) + [
+            t for t in genres + _split_values(entry.attr('tvc-guide-tags'))
+            if t != group and t != EVENT_CHANNEL_TAG
         ]
         if event_group_miss_limit(config, group) and EVENT_CHANNEL_TAG not in tags:
             tags.append(EVENT_CHANNEL_TAG)

@@ -5,6 +5,7 @@ logger = logging.getLogger(__name__)
 from flask import Blueprint, jsonify, request
 from ..extensions import db
 from ..models import Source, Channel, Program, Feed
+from ..channel_tags import is_event_channel
 from ..generators.m3u import (
     feed_to_query_filters,
     _selected_channel_stubs,
@@ -111,7 +112,7 @@ def channel_feed_membership(channel_id):
     channel = db.session.get(Channel, channel_id)
     if channel is None:
         return jsonify({'error': 'Not found'}), 404
-    is_event = 'event' in (channel.tags or '').split(',')
+    is_event = is_event_channel(channel)
     feeds = Feed.query.filter(Feed.is_enabled == True, Feed.slug != 'default').order_by(Feed.name).all()
     result = []
     for feed in feeds:

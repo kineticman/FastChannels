@@ -9,7 +9,7 @@ from flask import Blueprint, jsonify, request
 from sqlalchemy.exc import OperationalError
 from ..extensions import db
 from ..models import Source, Channel, Feed
-from ..channel_tags import AUTO_EVENT_REASONS
+from ..channel_tags import AUTO_EVENT_REASONS, is_event_channel
 from ..drm_bridge import drm_bridge_mode_for
 from .tasks import (
     trigger_bulk_channel_update,
@@ -49,7 +49,7 @@ def list_channels():
         items = [{'id': ch.id, 'name': ch.name, 'source_name': ch.source.name,
                   'category': ch.category, 'language': ch.language,
                   'country': ch.country, 'gracenote_id': ch.gracenote_id,
-                  'is_event': 'event' in (ch.tags or '').split(',')}
+                  'is_event': is_event_channel(ch)}
                  for ch in pag.items]
     else:
         items = [ch.to_dict() for ch in pag.items]

@@ -13,6 +13,10 @@ AUTO_EVENT_REASONS = (EVENT_RETIRED_REASON, EVENT_MISSING_REASON,
                       EVENT_SCHEDULE_MISSING_REASON, EVENT_FILTERED_REASON)
 
 
+def is_event_channel(channel) -> bool:
+    return EVENT_CHANNEL_TAG in (channel.tags or '').split(',')
+
+
 def event_channel_clause():
     tags = literal(',') + func.coalesce(Channel.tags, '') + literal(',')
     return func.instr(tags, f',{EVENT_CHANNEL_TAG},') > 0

@@ -346,7 +346,10 @@ class ConfigField:
         return d
 
 
-EVENT_CHANNEL_TAG = 'event'
+# Marks a temporary event channel in Channel.tags. Reserved: tags otherwise hold
+# raw upstream strings, so a plain word like 'event' (a playlist group-title, a
+# tvc-guide-tags value) would turn an ordinary channel into an event.
+EVENT_CHANNEL_TAG = 'fc:event'
 
 
 class ChannelData:

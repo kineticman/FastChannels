@@ -108,6 +108,9 @@ def create_app(config_class=Config):
             ),
         }
 
+    from .channel_tags import is_event_channel
+    app.jinja_env.globals['is_event_channel'] = is_event_channel
+
     @app.template_filter('localtime')
     def localtime_filter(dt):
         """Format a UTC datetime in the user-selected timezone."""

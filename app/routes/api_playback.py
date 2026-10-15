@@ -12,7 +12,8 @@ from ..extensions import db
 from ..models import Channel, Program, AppSettings, Feed
 from ..scrapers import registry
 from ..scrapers.playlist import is_playlist_source
-from ..scrapers.base import StreamDeadError
+from ..scrapers.base import EVENT_CHANNEL_TAG, StreamDeadError
+from ..channel_tags import is_event_channel
 from ..hls import (
     inspect_hls_drm,
     parse_stream_info as _parse_stream_info,
@@ -48,9 +49,9 @@ def _channel_feed_summaries(ch: Channel) -> list[dict]:
 
     for feed in feeds:
         filters = feed.filters or {}
-        if filters.get('event') == '1' and 'event' not in (ch.tags or '').split(','):
+        if filters.get('event') == '1' and not is_event_channel(ch):
             continue
-        if filters.get('event') == '0' and 'event' in (ch.tags or '').split(','):
+        if filters.get('event') == '0' and is_event_channel(ch):
             continue
         pinned = channel_id in (filters.get('pinned_channel_ids') or [])
         excluded = channel_id in (filters.get('excluded_channel_ids') or [])
@@ -894,7 +895,7 @@ def preview_channel(channel_id):
             'category': ch.category,
             'language': ch.language,
             'country': ch.country,
-            'tags': [t for t in (ch.tags or '').split(',') if t] if ch.tags else [],
+            'tags': [t for t in (ch.tags or '').split(',') if t and t != EVENT_CHANNEL_TAG] if ch.tags else [],
             'logo_url': ch.logo_url,
             'logo_display_url': ch.logo_display_url,
             'disable_reason': ch.disable_reason,
