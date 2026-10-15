@@ -131,8 +131,14 @@ def stream_audit_source(source_id):
     source = Source.query.get_or_404(source_id)
     if not source.is_enabled:
         return jsonify({'error': 'Source is disabled'}), 409
-    trigger_stream_audit(source.name)
-    return jsonify({'status': 'queued', 'source': source.name})
+    payload = request.get_json(silent=True)
+    if payload is not None and not isinstance(payload, dict):
+        return jsonify({'error': 'Invalid audit request'}), 400
+    scope = (payload or {}).get('scope', 'linear')
+    if scope not in ('linear', 'all'):
+        return jsonify({'error': 'Invalid audit scope'}), 400
+    trigger_stream_audit(source.name, scope)
+    return jsonify({'status': 'queued', 'source': source.name, 'scope': scope})
 
 
 @sources_bp.route('/sources/stream-audit-all', methods=['POST'])
@@ -275,8 +281,10 @@ def audit_status(source_id):
     import redis as _redis
     from rq import Queue
     from rq.registry import StartedJobRegistry
+    from ..channel_tags import event_channel_clause
 
     source = Source.query.get_or_404(source_id)
+    event_count = source.channels.filter(Channel.is_active == True, event_channel_clause()).count()
     try:
         r = _redis.from_url(current_app.config['REDIS_URL'])
         key = f'audit:progress:{source.name}'
@@ -287,14 +295,17 @@ def audit_status(source_id):
             if _time.time() - data.get('ts', 0) > 90:
                 r.delete(key)
             else:
-                return jsonify({'status': 'running', **data})
+                return jsonify({'status': 'running', 'event_count': event_count, **data})
         q = Queue('scraper', connection=r)
         for job_id in q.get_job_ids():
             try:
                 job = q.fetch_job(job_id)
                 if job and job.args and job.args[0] == source.name \
                         and 'stream_audit' in (job.func_name or ''):
-                    return jsonify({'status': 'queued'})
+                    scope = (job.args[1] if len(job.args) > 1 and isinstance(job.args[1], str)
+                             else (load_source_cache(source.id).get('last_audit_result') or {}).get('scope', 'linear'))
+                    return jsonify({'status': 'queued', 'event_count': event_count,
+                                    'scope': scope})
             except Exception:
                 pass
         registry = StartedJobRegistry('scraper', connection=r)
@@ -304,7 +315,11 @@ def audit_status(source_id):
                 job = Job.fetch(job_id, connection=r)
                 if job.args and job.args[0] == source.name \
                         and 'stream_audit' in (job.func_name or ''):
-                    return jsonify({'status': 'running', 'phase': 'starting'})
+                    scope = (job.args[1] if len(job.args) > 1 and isinstance(job.args[1], str)
+                             else (load_source_cache(source.id).get('last_audit_result') or {}).get('scope', 'linear'))
+                    return jsonify({'status': 'running', 'phase': 'starting',
+                                    'event_count': event_count,
+                                    'scope': scope})
             except Exception:
                 pass
     except Exception:
@@ -312,7 +327,8 @@ def audit_status(source_id):
     _audit_cache = load_source_cache(source.id)
     last_result = _audit_cache.get('last_audit_result')
     last_report = _audit_cache.get('last_audit_report')
-    return jsonify({'status': 'idle', 'last_result': last_result, 'last_report': last_report})
+    return jsonify({'status': 'idle', 'event_count': event_count,
+                    'last_result': last_result, 'last_report': last_report})
 
 
 @sources_bp.route('/sources/chnum-overlaps')
@@ -400,6 +416,8 @@ def update_source(source_id):
             return jsonify({'error': 'new_channel_policy must be inherit, enabled, or review'}), 422
         source.new_channel_policy = policy
         changed = True
+    if 'disable_after_misses' in data:
+        return jsonify({'error': 'Set missing-channel limits per group in Edit playlist'}), 422
     if changed:
         baseline_warnings = set(get_global_chnum_overlaps())
         db.session.flush()
@@ -467,8 +485,8 @@ def get_source_config(source_id):
         # Older installs kept FOX One's home ZIP on the shared TV-provider
         # account (Settings > TV Everywhere); the scraper still falls back to
         # it, so show it here until it's saved on the source.
-        from ..models import TVEAccount
-        account = TVEAccount.query.filter_by(provider_id='mvpd').first()
+        from ..tve.accounts import shared_tve_account
+        account = shared_tve_account()
         values['home_zip_code'] = ((account.config or {}).get('home_zip_code') or '').strip() if account else ''
     config_complete = bool(scraper_cls and is_source_config_complete(source.name, scraper_cls, saved))
     config_status = (
@@ -482,7 +500,15 @@ def get_source_config(source_id):
     if source.name == 'espn':
         extra['espn'] = {'signed_in': bool(saved.get('refresh_token')),
                          'signed_in_at': saved.get('signed_in_at'),
+                         'event_filter': saved.get('event_filter') or {'sport_mode': 'all', 'sports': {}},
                          **_espn_tve_info(saved)}
+    from ..tve.accounts import SEPARATE_SIGNIN_SOURCES
+    if source.name in SEPARATE_SIGNIN_SOURCES:
+        from .api_tve import _source_signin_payload
+        extra['tve_signin'] = _source_signin_payload(source.name)
+    if source.name == 'directv':
+        from ..scrapers import directv_device_auth
+        extra['directv'] = {'code_signed_in': directv_device_auth.is_device_session(saved)}
     return jsonify({'schema': schema, 'values': values, 'config_complete': config_complete,
                     'config_status': config_status,
                     'oauth_token_time': saved.get('oauth_token_time'),
@@ -490,11 +516,39 @@ def get_source_config(source_id):
                     'retired': retired, **extra})
 
 
+@sources_bp.route('/sources/<int:source_id>/espn-event-preview')
+def espn_event_preview(source_id):
+    """Sports and leagues in the event window, for the ESPN card's picker.
+
+    Served from the summary the last scrape saved, so the picker opens at
+    once; a live schedule fetch is the fallback before any scrape has saved
+    one, or once it is older than a scrape interval or two.
+    """
+    source = Source.query.get_or_404(source_id)
+    if source.name != 'espn':
+        return jsonify({'error': 'Not an ESPN source'}), 404
+    from ..config_store import load_source_cache, persist_source_cache_updates
+    from ..scrapers.espn import (EVENT_END_GRACE_SECONDS, EVENT_PREVIEW_CACHE_KEY, ESPNScraper,
+                                 event_preview_summary)
+    summary = load_source_cache(source.id).get(EVENT_PREVIEW_CACHE_KEY)
+    if not isinstance(summary, dict) or _time.time() - float(summary.get('fetched_at') or 0) > 12 * 3600:
+        try:
+            summary = event_preview_summary(ESPNScraper(config=source.config or {})._candidate_event_airings())
+        except Exception:
+            logger.exception('[espn] event lineup preview failed')
+            return jsonify({'error': 'Could not load the ESPN event schedule'}), 502
+        persist_source_cache_updates(source.id, {EVENT_PREVIEW_CACHE_KEY: summary})
+    # Drop events whose retirement grace has passed since the summary was made.
+    cutoff = _time.time() - EVENT_END_GRACE_SECONDS
+    events = [e for e in summary.get('events') or [] if not e.get('end') or e['end'] > cutoff]
+    return jsonify({'window_hours': 48, 'fetched_at': summary.get('fetched_at'), 'events': events})
+
+
 def _espn_tv_provider() -> tuple[str, str]:
     """(Adobe mvpd id, display name) of the TV provider under Settings → TV
     Everywhere — the same id the other Adobe v2 sign-ins (NBC) use."""
-    from ..models import TVEAccount
-    account = TVEAccount.query.filter_by(provider_id='mvpd').first()
+    from ..tve.accounts import tve_account_for
+    account = tve_account_for('espn')
     cfg = (account.config or {}) if account else {}
     mso_id = (cfg.get('yt_dlp_mso_id') or cfg.get('selected_mso_id') or '').strip()
     return mso_id, (cfg.get('selected_mso_name') or mso_id).strip()
@@ -516,14 +570,14 @@ def _espn_tve_info(saved: dict) -> dict:
 
 def _fox_one_signin_info(saved: dict) -> dict:
     """What FOX One's card needs to render its sign-in section."""
-    from ..models import TVEAccount
     from ..scrapers.fox_one import FoxOneScraper
+    from ..tve.accounts import shared_tve_account
     from ..tve.providers import unsupported_network_reason, ytdlp_adobe_mso_providers
 
     providers = ytdlp_adobe_mso_providers()
     names = {p['id']: p['name'] for p in providers}
     login = FoxOneScraper(config=dict(saved))._mvpd_login()
-    account = TVEAccount.query.filter_by(provider_id='mvpd').first()
+    account = shared_tve_account()
     shared_ready = bool(account and account.is_enabled and account.has_credentials())
     shared_mso = ''
     if account:
@@ -561,6 +615,12 @@ def save_source_config(source_id):
             current.pop(key, None)
         else:
             current[key] = val
+    if source.name == 'espn' and 'event_filter' in data:
+        from ..scrapers.espn import clean_event_filter
+        try:
+            current['event_filter'] = clean_event_filter(data['event_filter'])
+        except ValueError as exc:
+            return jsonify({'error': str(exc)}), 422
     # If login credentials changed, purge any cached auth state so the next run
     # is forced through a fresh login. Otherwise scrapers that cache auth in
     # config keep authenticating as the *old* account — the new credentials are
@@ -588,6 +648,10 @@ def save_source_config(source_id):
     # knows whether they're actually in use.
     if source.name == 'fox_one':
         _CRED_KEYS = _CRED_KEYS - {'mvpd_username', 'mvpd_password'}
+    # DirecTV signed in with a code doesn't run on the email/password — they're
+    # only its fallback — so saving or editing them must not purge that session.
+    if source.name == 'directv' and old.get('auth_method') == 'device_code':
+        _CRED_KEYS = _CRED_KEYS - {'username', 'password'}
     _AUTH_STATE  = ('access_token', 'refresh_token', 'token_time',
                     'bearer_token', 'activation_token', 'token_captured_at',
                     'client_context', 'cookies', 'identity_cookie',
@@ -631,6 +695,15 @@ def save_source_config(source_id):
         _toggle_enabled(old, key) != _toggle_enabled(current, key)
         for key in ('exclude_fast_channels', 'use_provider_numbers')
     )
+    espn_event_keys = ('include_espn_plus_events', 'include_acc_extra_events', 'include_sec_plus_events')
+    espn_events_changed = source.name == 'espn' and (
+        any(_toggle_enabled(old, key) != _toggle_enabled(current, key) for key in espn_event_keys)
+        or (old.get('event_filter') or {'sport_mode': 'all', 'sports': {}})
+           != (current.get('event_filter') or {'sport_mode': 'all', 'sports': {}})
+    )
+    espn_any_events = any(_toggle_enabled(current, key) for key in espn_event_keys)
+    if source.name == 'espn' and espn_any_events and not hasattr(Channel, 'retire_at'):
+        return jsonify({'error': 'ESPN events require a FastChannels image rebuild and restart.'}), 503
     if creds_changed or sling_subscription_changed:
         for tk in _AUTH_STATE:
             if data.get(tk) in (None, '', '••••••••'):  # skip values set in this save
@@ -697,6 +770,14 @@ def save_source_config(source_id):
                         db.session.delete(ch)
                         pbs_deleted += 1
 
+    espn_deleted = 0
+    if espn_events_changed and not espn_any_events:
+        from ..models import FeedChannelNumber
+        for ch in source.channels.filter(Channel.source_channel_id.like('airing:%')).all():
+            FeedChannelNumber.query.filter_by(channel_id=ch.id).delete(synchronize_session=False)
+            db.session.delete(ch)
+            espn_deleted += 1
+
     source.config = current
     auto_enabled = False
     if (
@@ -708,7 +789,7 @@ def save_source_config(source_id):
         source.is_enabled = True
         auto_enabled = True
     db.session.commit()
-    if pbs_deleted:
+    if pbs_deleted or espn_deleted:
         _invalidate_and_refresh_xml()
     full_scrape_queued = False
     if source.name == 'sling' and (creds_changed or sling_lineup_changed) and source.is_enabled:
@@ -721,6 +802,9 @@ def save_source_config(source_id):
         # Same rationale as Sling above — the FAST-exclusion and numbering
         # toggles change which channels come back from fetch_channels().
         trigger_scrape(source.name, force_full=True)
+        full_scrape_queued = True
+    elif espn_events_changed and source.is_enabled and espn_any_events:
+        trigger_scrape('espn', force_full=True)
         full_scrape_queued = True
     elif source.name == 'pbs' and old != current and source.is_enabled:
         # Any PBS config change (curated toggle, ZIP codes, or hand-editing
@@ -741,7 +825,7 @@ def save_source_config(source_id):
         'is_enabled': source.is_enabled,
         'auto_enabled': auto_enabled,
         'full_scrape_queued': full_scrape_queued,
-        'deleted_channels': pbs_deleted,
+        'deleted_channels': pbs_deleted + espn_deleted,
         'config_complete': config_complete,
         'config_status': config_status,
     })
@@ -1569,7 +1653,7 @@ def directv_auto_login(source_id):
     username = (cfg.get('username') or '').strip()
     password = (cfg.get('password') or '').strip()
     if not username or not password:
-        return jsonify({'error': 'username and password must be saved first'}), 400
+        return jsonify({'error': 'Enter your DirecTV email and password first.'}), 400
 
     redis_url = current_app.config['REDIS_URL']
     app = current_app._get_current_object()
@@ -1577,10 +1661,123 @@ def directv_auto_login(source_id):
     t = threading.Thread(
         target=run_directv_auth,
         args=(redis_url, source_id, username, password, app),
+        kwargs={'method': 'web'},
         daemon=True,
     )
     t.start()
     return jsonify({'status': 'started'})
+
+
+# -- DirecTV code sign-in --------------------------------------------------
+# The second sign-in method (app/scrapers/directv_device_auth.py). No job runs:
+# the pending code lives in redis and each status poll from the open settings
+# panel checks DirecTV once, so closing the panel simply stops the sign-in.
+
+_DIRECTV_SESSION_KEYS = (
+    'bearer_token', 'refresh_token', 'activation_token', 'client_context', 'cookies',
+    'token_captured_at', 'identity_cookie', 'identity_cookie_expires_at', 'auth_method',
+)
+
+
+def _directv_code_key(source_id: int) -> str:
+    return f'directv:code:{source_id}'
+
+
+def _directv_source_or_error(source_id: int):
+    source = Source.query.get_or_404(source_id)
+    if source.name != 'directv':
+        return None, (jsonify({'error': 'not a directv source'}), 400)
+    return source, None
+
+
+@sources_bp.route('/sources/<int:source_id>/directv-code-login', methods=['POST', 'DELETE'])
+def directv_code_login(source_id):
+    import redis as _redis
+    from ..scrapers import directv_device_auth
+
+    source, err = _directv_source_or_error(source_id)
+    if err:
+        return err
+    r = _redis.from_url(current_app.config['REDIS_URL'])
+    if request.method == 'DELETE':
+        r.delete(_directv_code_key(source_id))
+        return jsonify({'state': 'idle'})
+    try:
+        grant = directv_device_auth.start_grant()
+    except Exception as exc:
+        logger.warning('[directv-code] could not start sign-in: %s', exc)
+        return jsonify({'error': str(exc)}), 502
+    ttl = max(60, int(grant['expires_at'] - _time.time()))
+    r.set(_directv_code_key(source_id), json.dumps(grant), ex=ttl)
+    return jsonify({'state': 'waiting', 'code': grant['user_code'], 'url': grant['url']})
+
+
+@sources_bp.route('/sources/<int:source_id>/directv-code-state')
+def directv_code_state(source_id):
+    import redis as _redis
+    from ..config_store import persist_source_cache_updates
+    from ..extensions import db
+    from ..scrapers import directv_device_auth
+    from ..scrapers.directv import apply_auth_result, queue_followup_scrape
+
+    source, err = _directv_source_or_error(source_id)
+    if err:
+        return err
+    r = _redis.from_url(current_app.config['REDIS_URL'])
+    raw = r.get(_directv_code_key(source_id))
+    if not raw:
+        signed_in = directv_device_auth.is_device_session(source.config)
+        return jsonify({'state': 'success'} if signed_in else
+                       {'state': 'expired', 'message': 'The code expired.'})
+    grant = json.loads(raw)
+    waiting = {'state': 'waiting', 'code': grant['user_code'], 'url': grant['url']}
+    # One DirecTV poll per interval no matter how many tabs are watching.
+    if not r.set(f'{_directv_code_key(source_id)}:poll', '1', nx=True, ex=int(grant['interval'])):
+        return jsonify(waiting)
+    try:
+        result = directv_device_auth.poll_grant(grant['device_code'])
+        if result and not result.get('activation_token') and result.get('refresh_token'):
+            # The grant can come back without the DRM activation token; a refresh mints one.
+            result = directv_device_auth.refresh_session(result['refresh_token'])
+    except Exception as exc:
+        logger.warning('[directv-code] sign-in poll failed: %s', exc)
+        return jsonify(waiting)
+    if not result:
+        return jsonify(waiting)
+    r.delete(_directv_code_key(source_id))
+    if not result.get('refresh_token') or not result.get('activation_token'):
+        logger.warning('[directv-code] grant returned no refresh or activation token')
+        return jsonify({'state': 'error',
+                        'message': 'DirecTV approved the code but returned an incomplete session.'})
+    cfg = dict(source.config or {})
+    apply_auth_result(cfg, result)
+    source.config = cfg
+    db.session.commit()
+    persist_source_cache_updates(source.id, {'directv_playback': {}})
+    queue_followup_scrape(r, source.name)
+    logger.info('[directv-code] source_id=%s signed in with a code', source_id)
+    return jsonify({'state': 'success'})
+
+
+@sources_bp.route('/sources/<int:source_id>/directv-logout', methods=['POST'])
+def directv_logout(source_id):
+    """Drop the stored DirecTV session. A saved email/password stays, so the next
+    watchdog pass signs back in with it; with none saved the source is signed out."""
+    import redis as _redis
+    from ..config_store import persist_source_cache_updates
+    from ..extensions import db
+
+    source, err = _directv_source_or_error(source_id)
+    if err:
+        return err
+    cfg = dict(source.config or {})
+    for key in _DIRECTV_SESSION_KEYS:
+        cfg.pop(key, None)
+    source.config = cfg
+    db.session.commit()
+    persist_source_cache_updates(source.id, {'directv_playback': {}})
+    _redis.from_url(current_app.config['REDIS_URL']).delete(_directv_code_key(source_id))
+    return jsonify({'status': 'signed_out'})
 
 
 @sources_bp.route('/sources/<int:source_id>/directv-auth-status')
@@ -1603,28 +1800,9 @@ def directv_auth_status(source_id):
                 result = json.loads(result_raw)
                 source = Source.query.get(source_id)
                 if source:
+                    from ..scrapers.directv import apply_auth_result
                     cfg = dict(source.config or {})
-                    cfg['bearer_token'] = result['bearer_token']
-                    if result.get('refresh_token'):
-                        cfg['refresh_token'] = result['refresh_token']
-                    if result.get('client_context'):
-                        cfg['client_context'] = result['client_context']
-                    else:
-                        cfg.pop('client_context', None)
-                    if result.get('activation_token'):
-                        cfg['activation_token'] = result['activation_token']
-                    cfg['cookies'] = result.get('cookies') or []
-                    cfg['token_captured_at'] = result['captured_at']
-                    if result.get('identity_cookie'):
-                        cfg['identity_cookie'] = result['identity_cookie']
-                    else:
-                        cfg.pop('identity_cookie', None)
-                    if result.get('identity_cookie_expires_at'):
-                        cfg['identity_cookie_expires_at'] = result['identity_cookie_expires_at']
-                    else:
-                        cfg.pop('identity_cookie_expires_at', None)
-                    if result.get('auth_method'):
-                        cfg['auth_method'] = result['auth_method']
+                    apply_auth_result(cfg, result)
                     source.config = cfg
                     db.session.commit()
                     logger.info('[directv-auth] persisted session to source config source_id=%s', source_id)

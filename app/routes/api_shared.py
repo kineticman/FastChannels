@@ -14,6 +14,7 @@ from ..xml_cache import (
     invalidate_xml_cache,
 )
 from .admin import _apply_admin_feed_membership_filters, _category_clause, _duplicate_name_sets, _language_clause
+from ..channel_tags import event_filter_clause
 
 _GRACENOTE_RE = re.compile(r'^(\d+|(EP|SH|MV|SP|TR)\d+)$', re.I)
 _GRACENOTE_MODES = {'auto', 'manual', 'off'}
@@ -149,6 +150,8 @@ def _apply_channel_filters(q, filters: dict | None = None):
         q = q.filter(Channel.country == country)
     if filters.get('featured') == '1':
         q = q.filter(or_(Channel.tags.ilike('%featured%'), Channel.content_swap_count > 0))
+    if (event_clause := event_filter_clause(filters.get('event'))) is not None:
+        q = q.filter(event_clause)
     if filters.get('new') in ('1', '3', '7', '14'):
         from datetime import timedelta
         cutoff = datetime.now(timezone.utc) - timedelta(days=int(filters['new']))

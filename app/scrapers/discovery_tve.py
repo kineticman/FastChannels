@@ -15,7 +15,7 @@ import requests
 
 from .base import BaseScraper, ChannelData, ProgramData
 from ..gracenote_map import resolve_gracenote
-from ..models import TVEAccount
+from ..tve.accounts import tve_account_for
 from ..tve.adobe_pass import MvpdCooldownMixin, TVEAuthError, TVENotAuthorizedError
 
 logger = logging.getLogger(__name__)
@@ -205,13 +205,16 @@ class DiscoveryBrowserSignInRequired(TVEAuthError):
     browser sign-in in Settings fixes it."""
 
 
-def _browser_signin_required(provider: str) -> DiscoveryBrowserSignInRequired:
+def _browser_signin_required(provider: str, *, separate: bool = False) -> DiscoveryBrowserSignInRequired:
     """Builds the error and records it for the settings page, so an expired
     session shows "sign in again" instead of just silently failing to play.
-    A later successful sign-in supersedes the recorded error."""
+    A later successful sign-in supersedes the recorded error. `separate`:
+    the source has its own login, signed in from its card under Sources."""
+    where = ('Use "Sign in on my phone" on the Discovery TVE card under Sources.' if separate
+             else 'Use Sign in under Settings → TV Everywhere (on your phone works too).')
     message = (
         f'Discovery TVE needs you to sign in again: {provider} sign-in can\'t be renewed '
-        'automatically. Use Sign in under Settings → TV Everywhere (on your phone works too).'
+        f'automatically. {where}'
     )
     from ..tve.signin_notice import mark_signin_needed
     mark_signin_needed('discovery', message)
@@ -488,12 +491,16 @@ class DiscoveryTVEScraper(MvpdCooldownMixin, BaseScraper):
         })
 
     def _authenticate(self) -> requests.Session:
-        account = TVEAccount.query.filter_by(provider_id='mvpd').first()
-        if not account or not account.is_enabled or not account.has_credentials():
+        account = tve_account_for(self.source_name)
+        if not account or not account.is_usable():
             raise TVEAuthError('TVE credentials are not configured in Settings.')
         cfg = account.config or {}
         mso_id = (cfg.get('yt_dlp_mso_id') or cfg.get('selected_mso_id') or cfg.get('adobe_mso_id') or 'Cox').strip()
         mso_name = (cfg.get('selected_mso_name') or mso_id).strip()
+        if account.is_separate():
+            # A separate login signs in by phone link and has no saved
+            # username/password, so only the user can sign it in again.
+            raise _browser_signin_required(mso_name, separate=True)
 
         session = self._session()
         device_id = self.config.get('device_id') or str(uuid.uuid4())

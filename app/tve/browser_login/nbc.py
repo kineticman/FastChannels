@@ -8,7 +8,8 @@ import redis
 
 from app.worker import flask_app
 from app.extensions import db
-from app.models import Source, TVEAccount
+from app.models import Source
+from app.tve.accounts import tve_account_for
 from app.config_store import persist_source_cache_updates, persist_source_config_updates
 from app.tve.adobe_pass import (
     TVEAuthError,
@@ -48,6 +49,10 @@ from app.tve.browser_login.common import (
 
 logger = logging.getLogger(__name__)
 
+# The source this sign-in is for — picks which TV-provider account it uses
+# (see app/tve/accounts.py).
+_SOURCE_NAME = 'nbc_tve'
+
 
 NBC_BROWSER_LOGIN_STATUS_KEY = 'nbc-mvpd:browser-login:status'
 NBC_BROWSER_LOGIN_SHOT_KEY = 'nbc-mvpd:browser-login:screenshot'
@@ -71,7 +76,7 @@ def _save_nbc_mvpd_auth(mso_id: str, client, device_fingerprint: str) -> None:
     Called mid-browser-session, after run_nbc_browser_login has already
     popped its outer one before launching Camoufox."""
     with flask_app.app_context():
-        account = TVEAccount.query.filter_by(provider_id='mvpd').first()
+        account = tve_account_for(_SOURCE_NAME)
         if not account:
             return
         cfg = dict(account.config or {})
@@ -177,7 +182,7 @@ def run_nbc_browser_login(mso_id: str, _attempt: int = 1, _deadline: float | Non
             # TVENotAuthorizedError is NOT retried via browser, same as
             # every other MSO fast-path in this file, since a browser login
             # can't change Adobe's actual entitlement decision.
-            cookie_jar_account = TVEAccount.query.filter_by(provider_id='mvpd').first()
+            cookie_jar_account = tve_account_for(_SOURCE_NAME)
             cookie_jar = (cookie_jar_account.config or {}).get('xfinity_cookie_jar') if cookie_jar_account else None
             if cookie_jar:
                 set_status('running', 'Trying saved sign-in (no browser needed)…')
@@ -216,7 +221,7 @@ def run_nbc_browser_login(mso_id: str, _attempt: int = 1, _deadline: float | Non
         # never reset the clock).
         deadline = _deadline if _deadline is not None else time.monotonic() + _NBC_BROWSER_LOGIN_TIMEOUT_SECONDS
 
-        account_row = TVEAccount.query.filter_by(provider_id='mvpd').first()
+        account_row = tve_account_for(_SOURCE_NAME)
         mvpd_username = (account_row.username if account_row else '') or ''
         mvpd_password = (account_row.password if account_row else '') or ''
 
@@ -305,9 +310,9 @@ def run_nbc_browser_login(mso_id: str, _attempt: int = 1, _deadline: float | Non
                 if profile:
                     _save_nbc_mvpd_auth(mso_id, client, device_fingerprint)
                     if mso_id == 'Comcast_SSO':
-                        _harvest_and_save_xfinity_cookies(context)
+                        _harvest_and_save_xfinity_cookies(context, source_name=_SOURCE_NAME)
                     elif mso_id == 'YouTubeTV':
-                        _maybe_capture_google_master_token(context, mso_id)
+                        _maybe_capture_google_master_token(context, mso_id, source_name=_SOURCE_NAME)
                     set_status('success', f'Signed in — NBC TVE authorized via {mso_id}.')
                     logger.info('[nbc-mvpd-login] paired mso_id=%s (completed after the page closed itself)', mso_id)
                     return True
@@ -356,7 +361,7 @@ def run_nbc_browser_login(mso_id: str, _attempt: int = 1, _deadline: float | Non
             with Camoufox(**camoufox_options) as context:
                 page = context.pages[0] if context.pages else context.new_page()
                 _watch_spectrum_auth_results(page, 'nbc-mvpd-login')
-                google_session_primed = _prime_google_session(context, mso_id)
+                google_session_primed = _prime_google_session(context, mso_id, source_name=_SOURCE_NAME)
                 if mso_id == 'YouTubeTV':
                     logger.info('[nbc-mvpd-login] Google session priming result=%s', 'primed' if google_session_primed else 'not-available')
                 page.on('crash', lambda p: logger.warning('[nbc-mvpd-login] page CRASH event fired (url was %s)', _safe_page_url(p)))
@@ -445,6 +450,7 @@ def run_nbc_browser_login(mso_id: str, _attempt: int = 1, _deadline: float | Non
                 settled = _settle_after_mvpd_navigation(
                     page, set_status=set_status,
                     respect_youtubetv_soft_block=mso_id != 'YouTubeTV',
+                    source_name=_SOURCE_NAME,
                 )
                 landing_url = _safe_page_url(page)
                 logger.info(
@@ -499,6 +505,7 @@ def run_nbc_browser_login(mso_id: str, _attempt: int = 1, _deadline: float | Non
                             stop_key=NBC_BROWSER_LOGIN_STOP_KEY, input_key=NBC_BROWSER_LOGIN_INPUT_KEY,
                             shot_key=NBC_BROWSER_LOGIN_SHOT_KEY, hint_key=NBC_BROWSER_LOGIN_HINT_KEY,
                             navigation_already_settled=True, log_tag='nbc-mvpd-login',
+                            source_name=_SOURCE_NAME,
                         )
                 set_status('running', 'Sign in below, including any captcha if shown.', page.url)
 
@@ -571,6 +578,7 @@ def run_nbc_browser_login(mso_id: str, _attempt: int = 1, _deadline: float | Non
                             page, mso_login_url, mvpd_username, mvpd_password, r=r,
                             stop_key=NBC_BROWSER_LOGIN_STOP_KEY, input_key=NBC_BROWSER_LOGIN_INPUT_KEY,
                             shot_key=NBC_BROWSER_LOGIN_SHOT_KEY, hint_key=NBC_BROWSER_LOGIN_HINT_KEY,
+                            source_name=_SOURCE_NAME,
                         ):
                             f5_retried = True
                             continue
@@ -603,9 +611,9 @@ def run_nbc_browser_login(mso_id: str, _attempt: int = 1, _deadline: float | Non
                             continue  # human hasn't finished the MSO login yet
                         _save_nbc_mvpd_auth(mso_id, client, device_fingerprint)
                         if mso_id == 'Comcast_SSO':
-                            _harvest_and_save_xfinity_cookies(context)
+                            _harvest_and_save_xfinity_cookies(context, source_name=_SOURCE_NAME)
                         elif mso_id == 'YouTubeTV':
-                            _maybe_capture_google_master_token(context, mso_id)
+                            _maybe_capture_google_master_token(context, mso_id, source_name=_SOURCE_NAME)
                         set_status('success', f'Signed in — NBC TVE authorized via {mso_id}.')
                         logger.info('[nbc-mvpd-login] paired mso_id=%s', mso_id)
                         return
@@ -620,7 +628,7 @@ def run_nbc_browser_login(mso_id: str, _attempt: int = 1, _deadline: float | Non
                 logger.info('[nbc-mvpd-login] ignoring cleanup-time exception after terminal status was already set: %s', exc)
                 return
             if isinstance(exc, SpectrumWantsCoxProvider):
-                if _spectrum_retry_as_cox(exc, mso_id, 'NBC TVE', set_status):
+                if _spectrum_retry_as_cox(exc, mso_id, 'NBC TVE', set_status, source_name=_SOURCE_NAME):
                     return run_nbc_browser_login('Cox', _attempt=_attempt, _deadline=deadline)
                 return
             if _is_browser_death(exc) and _grace_poll_pairing(str(exc)[:80]):

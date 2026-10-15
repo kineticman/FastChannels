@@ -5,6 +5,7 @@ logger = logging.getLogger(__name__)
 from flask import Blueprint, jsonify, request
 from ..extensions import db
 from ..models import Source, Channel, Program, Feed
+from ..channel_tags import is_event_channel
 from ..generators.m3u import (
     feed_to_query_filters,
     _selected_channel_stubs,
@@ -108,10 +109,17 @@ def channel_duplicates(channel_id):
 def channel_feed_membership(channel_id):
     """Return each non-default feed's membership status for a channel."""
     from ..generators.m3u import _build_channel_query
+    channel = db.session.get(Channel, channel_id)
+    if channel is None:
+        return jsonify({'error': 'Not found'}), 404
+    is_event = is_event_channel(channel)
     feeds = Feed.query.filter(Feed.is_enabled == True, Feed.slug != 'default').order_by(Feed.name).all()
     result = []
     for feed in feeds:
         filters = feed.filters or {}
+        if (filters.get('event') == '1' and not is_event) or (filters.get('event') == '0' and is_event):
+            result.append({'feed_id': feed.id, 'status': 'absent', 'feed_channel_number': None})
+            continue
         pinned   = channel_id in (filters.get('pinned_channel_ids')   or [])
         excluded = channel_id in (filters.get('excluded_channel_ids') or [])
         if pinned:

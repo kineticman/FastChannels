@@ -11,7 +11,9 @@ from app.config_store import persist_source_config_updates, persist_source_cache
 from ..extensions import db
 from ..models import Channel, Program, AppSettings, Feed
 from ..scrapers import registry
-from ..scrapers.base import StreamDeadError
+from ..scrapers.playlist import is_playlist_source
+from ..scrapers.base import EVENT_CHANNEL_TAG, StreamDeadError
+from ..channel_tags import is_event_channel
 from ..hls import (
     inspect_hls_drm,
     parse_stream_info as _parse_stream_info,
@@ -47,6 +49,10 @@ def _channel_feed_summaries(ch: Channel) -> list[dict]:
 
     for feed in feeds:
         filters = feed.filters or {}
+        if filters.get('event') == '1' and not is_event_channel(ch):
+            continue
+        if filters.get('event') == '0' and is_event_channel(ch):
+            continue
         pinned = channel_id in (filters.get('pinned_channel_ids') or [])
         excluded = channel_id in (filters.get('excluded_channel_ids') or [])
         if excluded and not pinned:
@@ -626,6 +632,17 @@ def _get_playback_info(ch, fast_mode=True):
     if not preview_url:
         preview_url = play_url
 
+    # Playlist channels: the 302 above sends the browser straight to the
+    # playlist's own host, which almost never allows cross-origin requests from
+    # this page (Shaka error 1002 — IPTV clients don't enforce CORS, browsers
+    # do). Preview through the same server-side proxy the custom-channel dialog
+    # uses. It is HTTPS-only and refuses LAN hosts; anything else keeps the
+    # direct URL. play_url is untouched, so real clients still get the redirect.
+    if (ch.source and is_playlist_source(ch.source.name) and stream_type == 'hls'
+            and (ch.stream_url or '').startswith('https://')):
+        from urllib.parse import quote as _quote
+        preview_url = f'/api/custom-channels/preview-manifest?url={_quote(ch.stream_url, safe="")}'
+
     if ch.source and ch.source.name == 'cspan' and ch.source_channel_id:
         from urllib.parse import quote as _quote
         _enc = _quote(ch.source_channel_id, safe='')
@@ -878,7 +895,7 @@ def preview_channel(channel_id):
             'category': ch.category,
             'language': ch.language,
             'country': ch.country,
-            'tags': [t for t in (ch.tags or '').split(',') if t] if ch.tags else [],
+            'tags': [t for t in (ch.tags or '').split(',') if t and t != EVENT_CHANNEL_TAG] if ch.tags else [],
             'logo_url': ch.logo_url,
             'logo_display_url': ch.logo_display_url,
             'disable_reason': ch.disable_reason,

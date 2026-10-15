@@ -108,6 +108,9 @@ def create_app(config_class=Config):
             ),
         }
 
+    from .channel_tags import is_event_channel
+    app.jinja_env.globals['is_event_channel'] = is_event_channel
+
     @app.template_filter('localtime')
     def localtime_filter(dt):
         """Format a UTC datetime in the user-selected timezone."""
@@ -137,24 +140,18 @@ def create_app(config_class=Config):
         # such call takes a DB write lock and can stall concurrent requests.
         import os as _os
         if not _os.environ.get('FC_SCHEMA_READY'):
-            # Ensure the app_settings singleton row exists before any schema
-            # migration below runs. Migrations gate their one-time work on raw-SQL
-            # *_done flags UPDATEd against this row; if the row doesn't exist yet,
-            # the UPDATE affects 0 rows and silently no-ops, so a migration never
-            # actually marks itself done and re-runs destructively on the next
-            # restart. This must be a raw INSERT touching only the guaranteed-safe
-            # `id` column — not AppSettings.get(), which SELECTs every ORM-mapped
-            # column and raises "no such column" on upgrades where
-            # ensure_runtime_schema() hasn't added the newest ones yet.
-            from sqlalchemy import text as _text
-            db.session.execute(_text("INSERT OR IGNORE INTO app_settings (id) VALUES (1)"))
-            db.session.commit()
+            # ensure_runtime_schema() also creates the app_settings singleton row,
+            # which its one-time migrations need in order to record that they ran.
+            # Don't reach for AppSettings.get() before it: that SELECTs every
+            # ORM-mapped column and raises "no such column" on upgrades where the
+            # newest ones haven't been added yet.
             ensure_runtime_schema()
         write_timezone_cache(AppSettings.get().timezone_name)
 
     from .routes.output import output_bp
     from .routes.api_sources import sources_bp
     from .routes.api_custom_channels import custom_channels_bp
+    from .routes.api_playlists import playlists_bp
     from .routes.api_channels import channels_bp
     from .routes.api_playback import playback_bp
     from .routes.api_gracenote import gracenote_bp
@@ -173,6 +170,7 @@ def create_app(config_class=Config):
     # blueprints, all still mounted at /api so routes/endpoints are unchanged.
     app.register_blueprint(sources_bp, url_prefix='/api')
     app.register_blueprint(custom_channels_bp, url_prefix='/api')
+    app.register_blueprint(playlists_bp, url_prefix='/api')
     app.register_blueprint(channels_bp, url_prefix='/api')
     app.register_blueprint(playback_bp, url_prefix='/api')
     app.register_blueprint(gracenote_bp, url_prefix='/api')

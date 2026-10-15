@@ -1,6 +1,6 @@
 # FastChannels
 
-FAST channel aggregator — scrapes Pluto TV, Tubi, Roku, Samsung TV Plus, Sling Freestream, Plex, Xumo, LG Channels, Local Now, STIRR, FreeLiveSports, Bally Sports, Hallmark, TCL TV+, Vidaa Free TV, Vizio WatchFree+, Whale TV+, Adult Swim, Frndly TV, FreeCast, Fubo TV, DirecTV Stream, Philo, PBS, C-SPAN, cable-network channels via TV Everywhere (NBCUniversal, FOX, FOX One, Discovery, AMC Networks, A+E Networks, Warner Bros Discovery), your own HDHomeRun tuner, and more, then outputs M3U playlists and XMLTV EPG guides for use in any IPTV player (Jellyfin, Plex, Channels DVR, TiviMate, etc.). DRM-protected sources play back through a real Widevine bridge (browser-based PrismCast, or FastChannels' own Fire TV / Android TV player app) rather than being dropped.
+FAST channel aggregator — scrapes Pluto TV, Tubi, Roku, Samsung TV Plus, Sling Freestream, Plex, Xumo, LG Channels, Local Now, STIRR, FreeLiveSports, Bally Sports, Hallmark, TCL TV+, Vidaa Free TV, Vizio WatchFree+, Whale TV+, Adult Swim, Frndly TV, FreeCast, Fubo TV, DirecTV Stream, Philo, PBS, C-SPAN, ESPN (linear networks plus ESPN+ events as temporary channels), cable-network channels via TV Everywhere (NBCUniversal, FOX, FOX One, Discovery, AMC Networks, A+E Networks, Warner Bros Discovery), your own HDHomeRun tuner, your own M3U playlists with their XMLTV guides, and more, then outputs M3U playlists and XMLTV EPG guides for use in any IPTV player (Jellyfin, Plex, Channels DVR, TiviMate, etc.). DRM-protected sources play back through a real Widevine bridge (browser-based PrismCast, or FastChannels' own Fire TV / Android TV player app) rather than being dropped.
 
 ## Deploy with Portainer
 
@@ -65,7 +65,7 @@ Go to **Admin → Settings** and set two things:
 **3. Configure Sources.**
 Go to **Admin → Sources**. Enable or disable sources to taste, and expand any source card to enter credentials. Changes take effect on the next scrape.
 
-Most sources ship **disabled by default** because they need credentials, a local device, carry mostly DRM content, or have a diminished channel lineup: Pluto TV, Tubi TV, Sling Freestream, Local Now, Amazon Prime Free, Frndly TV, Fubo TV, FreeCast, Vidaa Free TV, DirecTV Stream, Philo, PBS, C-SPAN, every TV Everywhere source (A+E Networks, AMC Networks, Discovery, FOX, FOX One, NBCUniversal, Warner Bros Discovery), and HDHomeRun. Enable the ones you want and fill in their settings. In particular, **Pluto TV now requires a login** (a free account works), **Tubi TV also requires a free account** (its anonymous channel list stopped working), Frndly/Fubo/FreeCast/DirecTV Stream require account credentials, Philo signs in with a passwordless emailed code, and the TV Everywhere sources authenticate once via **Settings → TV Everywhere** rather than per-source. See [Source Notes](#source-notes) for per-source details.
+Most sources ship **disabled by default** because they need credentials, a local device, carry mostly DRM content, or have a diminished channel lineup: Pluto TV, Tubi TV, Sling Freestream, Local Now, Amazon Prime Free, Frndly TV, Fubo TV, FreeCast, Vidaa Free TV, DirecTV Stream, Philo, PBS, C-SPAN, ESPN, every TV Everywhere source (A+E Networks, AMC Networks, Discovery, FOX, FOX One, NBCUniversal, Warner Bros Discovery), and HDHomeRun. Enable the ones you want and fill in their settings. In particular, **Pluto TV now requires a login** (a free account works), **Tubi TV also requires a free account** (its anonymous channel list stopped working), Frndly/Fubo/FreeCast require account credentials, DirecTV Stream signs in with a code or email/password, Philo signs in with a passwordless emailed code, ESPN signs in with an ESPN account and/or your TV provider, and the TV Everywhere sources authenticate once via **Settings → TV Everywhere** (or per source, if one needs a different provider). See [Source Notes](#source-notes) for per-source details.
 
 **4. Run Stream Audits.**
 Once channels are populated, run a Stream Audit on each source (see [Stream Audit](#stream-audit) below). This identifies dead and DRM-protected channels and disables them automatically — highly recommended before building your feeds.
@@ -81,7 +81,7 @@ Go to **Admin → Feeds** and build filtered channel lists for your players (see
 | URL | Description |
 |-----|-------------|
 | `/admin/` | Dashboard — source status, channel counts, feed links |
-| `/admin/sources` | Enable/disable sources, run scrapes, configure credentials |
+| `/admin/sources` | Enable/disable sources, run scrapes, configure credentials, add your own playlists |
 | `/admin/channels` | Browse, enable/disable, inspect, and resolve duplicate channels |
 | `/admin/feeds` | Create and manage named output feeds |
 | `/admin/guide` | Preview the EPG grid as your players will see it |
@@ -95,13 +95,14 @@ Go to **Admin → Feeds** and build filtered channel lists for your players (see
 
 The Channels page is where you fine-tune your lineup after scraping.
 
-**Filtering** — seven ways to slice the list:
+**Filtering** — ways to slice the list:
 - Free-text search by channel name
 - Filter by source, category, or language
 - Show only Enabled, Disabled, or All
 - Filter by stream health (DRM only, Dead only, or clean only)
 - Filter by Gracenote coverage (has it / missing it)
 - Duplicates only — channels whose name appears in more than one source
+- Events only, or everything but events (see [Event channels](#event-channels))
 
 **Per-channel actions:**
 - **Enable/Disable toggle** — removes a channel from M3U/EPG output without deleting it
@@ -125,6 +126,9 @@ A built-in **Default** feed is created automatically and includes all enabled ch
 /feeds/sports/m3u
 /feeds/sports/epg.xml
 /feeds/sports/m3u/gracenote    # Channels DVR Gracenote variant
+/feeds/sports/m3u/mixed        # both in one playlist (Guide Mode: mixed)
+/feeds/sports/native/m3u       # every channel on the scraped guide, no Gracenote
+/feeds/sports/native/epg.xml
 ```
 
 Feed outputs are cached and served from disk — fast for players polling on a schedule.
@@ -134,6 +138,7 @@ Feed outputs are cached and served from disk — fast for players polling on a s
 - **Categories** — filter by genre (News, Sports, Movies, etc.)
 - **Languages** — filter by language code (e.g. `en`, `es`)
 - **Gracenote** — only channels that have a matched Gracenote ID; great for a clean-EPG feed
+- **Events** — only event channels, or none of them (see [Event channels](#event-channels))
 - **Manual selection** — pick specific channels by hand for full control
 
 As you set filters, the feed modal shows a live count of matching channels.
@@ -148,7 +153,10 @@ As you set filters, the feed modal shows a live count of matching channels.
 
 **Other feed options:**
 - **Channel Number Start** — numbers all channels sequentially from a given value. Fresh installs start the built-in Default feed at channel 5000.
-- **Add to Channels DVR** — registers the feed as a custom M3U source in Channels DVR with one click. Configure the DVR server URL in **Settings** first.
+- **Add to Channels DVR** — registers the feed as a custom M3U source in Channels DVR with one click. Configure the DVR server URL in **Settings** first. Re-adding keeps settings you made in the DVR, such as a stream limit.
+- **Guide Mode** (Beta) — *Separate* (the default) gives a standard playlist and a Gracenote playlist, added to Channels DVR as two sources. *Mixed* puts both in one playlist, so the feed is one source. Mixed needs Channels DVR 2026.08.25 or newer; switching doesn't change channel numbers.
+- **Add Native to Channels DVR** — adds the feed's native output as its own source: every channel in the feed, all using FastChannels' scraped guide instead of Gracenote.
+- **Add whole feed as one source** (Beta, mixed feeds with [ah4c](#fastchannels-player)) — one Channels DVR source carrying the feed's regular channels and its ah4c-bridged DRM channels. Each channel is routed when it's tuned, so it keeps its URL if it starts or stops needing the bridge.
 - **Max Channels** — Channels DVR works best with 750 or fewer channels per source. The feed modal warns you if you're over.
 
 ### Using with Plex (unsupported)
@@ -170,6 +178,11 @@ is also supported for installs that already have that hardware in place. Not eve
 DRM source can ride this bridge. Hardware-and-software
 setup, not a toggle: **[docs/fc-player-setup.md](docs/fc-player-setup.md)** is the
 full walkthrough.
+
+A single capture device plays one channel at a time. To stop a second viewer or a
+recording from retuning it — and to fall back to PrismCast when it's busy — set a stream
+limit on the source in Channels DVR; see
+[Stream limits and PrismCast fallback](docs/fc-player-setup.md#stream-limits-and-prismcast-fallback).
 
 ## Configuration
 
@@ -211,7 +224,7 @@ Validate a saved XMLTV artifact against the upstream XMLTV DTD with `scripts/val
 
 ### Stream Audit
 
-Every scraped source has a **📋 Stream Audit** button on the Sources page that health-checks every channel's stream URL and automatically marks dead or DRM-protected channels inactive. (Only the Custom Channels source, which you populate by hand, has no audit.)
+Every scraped source has a **📋 Stream Audit** button on the Sources page that health-checks every channel's stream URL and automatically marks dead or DRM-protected channels inactive. (Custom Channels and Custom Playlists have no audit: FastChannels never probes streams you supply yourself.)
 
 Running a Stream Audit after your initial scrape is strongly recommended. It shows a live progress bar and a running count of DRM and dead channels found as it works through the list. Depending on channel count it may take several minutes.
 
@@ -234,6 +247,23 @@ The **Resolve Duplicates** helper on the Channels page works on enabled channels
 ### Custom Channels
 
 A built-in **Custom Channels** source lets you add any HLS/M3U8 stream by URL — a webcam, a personal re-stream, or anything else not covered by a scraper. Add channels from the Channels page; FastChannels auto-detects special stream types and handles polling and header quirks automatically. Custom channels are never auto-scraped and aren't part of the Stream Audit.
+
+### Custom Playlists
+
+Add your own M3U playlist, with its XMLTV guide if it has one, from **Sources → Custom Sources → + Add Playlist**. Each playlist becomes its own source: its channels and guide come out of your normal feeds, with channel numbers, categories, review and enable switches working as they do for built-in sources. Channels the guide doesn't cover get placeholder guide blocks, which you can turn off per playlist.
+
+Each group in the playlist can have a rule for channels that drop out of it: **Linear** groups disable a missing channel after a set number of missed imports, and **Event** groups treat their channels as [event channels](#event-channels), hiding one as soon as it's missing and deleting it after a set number of misses.
+
+FastChannels never connects to a playlist's streams itself, so it adds nothing to a provider's stream limit. That also means playlists have no Stream Audit, and streams that need special request headers may not play yet. Full guide: **[docs/custom-playlists.md](docs/custom-playlists.md)**.
+
+### Event channels
+
+Some sources carry one-off events rather than 24/7 channels. FastChannels adds each event as a temporary channel with its own guide entry and removes it automatically when it's over. Two sources produce them today:
+
+- **ESPN** — opt-in ESPN+, ACC Extra and SEC Plus events in the next 48 hours, filtered by sport and league on the ESPN source card. An event channel retires two hours after its scheduled end (leaving room for overtime) and is deleted a day later. Events dropped from ESPN's schedule, or excluded by your filter, leave the output right away.
+- **Custom playlists** — any group set to **Event** (see [Custom Playlists](#custom-playlists)).
+
+Event channels are marked with a calendar icon on the Channels and Guide pages. Channels, Guide and feed filters can show events only or leave them out. A channel you disable yourself stays disabled; FastChannels only brings back events it hid automatically.
 
 ### HDHomeRun
 
@@ -284,9 +314,10 @@ Disabling a source deletes all its channels from the DB. Re-enabling and running
 | Frndly TV | Email/password required | **Default off.** Paid subscription required |
 | Fubo TV | Email/password required | **Default off.** Mostly clear FAST channels; a paid account unlocks ~835 subscription channels, some of which are Widevine DRM and play via the PrismCast/FastChannels Player bridge |
 | FreeCast | Email/password required | **Default off.** Free account at watch.freecast.com required for playback |
-| DirecTV Stream | Email/password required | **Default off.** Paid subscription required; streams are DRM-only, with browser playback via Widevine and M3U playback via PrismCast bridge |
+| DirecTV Stream | Sign-in code or email/password | **Default off.** Paid subscription required. **Sign in with a code** (approve a link in your own browser, no password stored) or with email/password. Streams are DRM-only, with browser playback via Widevine and M3U playback via the DRM bridge |
 | Philo | Email (passwordless code) | **Default off.** Requires a Philo subscription; sign-in sends a one-time code by email/text, no password. Streams are DRM-only, via PrismCast or FastChannels Player |
 | PBS | None (ZIP code optional) | **Default off.** Auto-locates your local station plus a curated set of national/secondary feeds (World, Create, NHK, FNX); add more ZIP codes for additional clear feeds. Stations that require DRM are served through an opt-in bridge feed |
+| ESPN | ESPN account and/or TV provider | **Default off.** ESPN, ESPN2, ESPNU, ESPNews, ESPN Deportes, SEC Network and ACC Network through your TV provider or an ESPN Unlimited plan; NFL Network and MLB Network need an ESPN plan. Plain ESPN+ adds events only. Optional ESPN+ / ACC Extra / SEC Plus [event channels](#event-channels). Playback uses the DRM bridge |
 | C-SPAN | None | **Default off.** Free, unauthenticated congressional/public-affairs event streams (floor sessions, hearings, Washington Journal). The 24/7 C-SPAN 1/2/3 linear networks sit behind a separate TV-provider login and aren't scraped |
 | A+E Networks TVE | TV Everywhere sign-in | **Default off.** A&E, Lifetime, History, and sister networks. See [TV Everywhere](#tv-everywhere-tve-sources) |
 | AMC Networks TVE | TV Everywhere sign-in | **Default off.** AMC, BBC America, IFC, Sundance TV. See [TV Everywhere](#tv-everywhere-tve-sources) |
@@ -294,9 +325,10 @@ Disabling a source deletes all its channels from the DB. Re-enabling and running
 | FOX TVE | TV Everywhere sign-in | **Default off.** FOX broadcast plus FS1/FS2. See [TV Everywhere](#tv-everywhere-tve-sources) |
 | FOX One | TV Everywhere sign-in (optional) | **Default off.** FOX Sports direct-subscription streaming; free content works anonymously, paid FOX Sports channels need a linked TV provider |
 | NBCUniversal TVE | TV Everywhere sign-in | **Default off.** Local NBC/Telemundo affiliate (auto-detected by IP, overridable) plus Bravo, USA, NBC Sports Now, and sister networks. See [TV Everywhere](#tv-everywhere-tve-sources) |
-| Warner Bros Discovery TVE | TV Everywhere sign-in | **Default off.** TBS, TNT, truTV. See [TV Everywhere](#tv-everywhere-tve-sources) |
+| Warner Bros Discovery TVE | TV Everywhere sign-in | **Default off.** TBS, TNT, truTV, TCM. See [TV Everywhere](#tv-everywhere-tve-sources) |
 | HDHomeRun | Device address | **Default off.** Your own LAN tuner; optional hardware transcode (EXTEND models). See [HDHomeRun](#hdhomerun) |
 | Custom Channels | None | User-added HLS/M3U8 streams; never auto-scraped. See [Custom Channels](#custom-channels) |
+| Custom Playlists | None | Your own M3U + XMLTV, one source per playlist. See [Custom Playlists](#custom-playlists) |
 
 - **Roku**: Cloudflare rate-limiting can cause occasional 403 errors during scraping or playback. If this happens, wait a few minutes before retrying — repeated attempts make it worse. Some channels also expose sparse future guide data; short EPG windows are expected on those channels.
 - **Amazon Prime Free**: without a valid cookie header, channel discovery pagination is limited.
@@ -311,7 +343,9 @@ Disabling a source deletes all its channels from the DB. Re-enabling and running
 
 A+E Networks, AMC Networks, Discovery, FOX, FOX One, NBCUniversal, and Warner Bros Discovery all authenticate the same way: through your TV provider (MVPD), not a per-source login. Go to **Settings → TV Everywhere**, pick your provider, and sign in — a real browser session opens in an admin-UI modal for the provider's pairing flow. **Sign in to all** repeats that flow for every TVE-backed network in one pass, with a short pause between each to avoid tripping your provider's rate limiting.
 
-🧪 **Beta**: the sign-in dropdown lists every provider Adobe Pass supports, but it's only been verified working with **Cox**, **Sling TV**, and **Xfinity/Comcast**. Other providers may fail. All of these channels are DRM-only (Widevine CENC) and play back via the PrismCast browser bridge; NBCUniversal TVE and Warner Bros Discovery TVE are additionally eligible for the FastChannels Player bridge, the others currently are not (see [FastChannels Player](#fastchannels-player)).
+If one source should sign in with a different TV provider than the rest, choose **A different sign-in, just for this source** on that source's card. It then signs in each of its networks by a link you open on your phone, independently of the shared login.
+
+The sign-in dropdown lists every provider Adobe Pass supports, but it's only been verified working with **Cox**, **Sling TV**, and **Xfinity/Comcast**. Other providers may fail. All of these channels are DRM-only (Widevine CENC) and play back via the PrismCast browser bridge; NBCUniversal TVE and Warner Bros Discovery TVE are additionally eligible for the FastChannels Player bridge, the others currently are not (see [FastChannels Player](#fastchannels-player)).
 
 ## Advanced
 

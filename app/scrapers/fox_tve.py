@@ -805,11 +805,11 @@ def _fox_sports_recheck_token(session: requests.Session, device_id: str, mso_id:
 
 def _fox_sports_access_token(session: requests.Session, device_id: str) -> str:
     from .. import db
-    from ..models import TVEAccount
+    from ..tve.accounts import tve_account_for
 
-    account = TVEAccount.query.filter_by(provider_id='mvpd').first()
+    account = tve_account_for('fox_tve')
     now = int(datetime.now(timezone.utc).timestamp())
-    if account and account.is_enabled and account.has_credentials():
+    if account and account.is_usable():
         cfg = dict(account.config or {})
         mso_id = (cfg.get('yt_dlp_mso_id') or cfg.get('selected_mso_id') or cfg.get('adobe_mso_id') or 'Cox').strip()
         cached_token = cfg.get('fox_sports_access_token') or ''

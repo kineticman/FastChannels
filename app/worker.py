@@ -37,13 +37,19 @@ from app.models import Source, Channel, Program, Feed, AppSettings, SourceCache
 import time as _time
 from urllib.parse import urljoin as _urljoin
 from app.scrapers import registry
+from app.scrapers.playlist import is_playlist_source, event_group_miss_limit, linear_group_miss_limit
 from app.scrapers.base import (
+    EVENT_CHANNEL_TAG,
     StreamDeadError,
     ScrapeSkipError,
     is_ssl_handshake_failure,
     is_transient_network_error,
 )
 from app.scrapers.category_utils import category_for_channel
+from app.channel_tags import (AUTO_EVENT_REASONS, EVENT_RETIRED_REASON, EVENT_MISSING_REASON,
+                              EVENT_SCHEDULE_MISSING_REASON, EVENT_FILTERED_REASON,
+                              event_channel_clause)
+from app.event_lifecycle import hide_event, restore_event, delete_event
 from app.tve.adobe_pass import TVENotAuthorizedError
 from app.xml_cache import ensure_xml_artifact, get_artifact, invalidate_xml_cache, write_artifact
 from app.routes.images import delete_cached_logo
@@ -474,7 +480,7 @@ def run_scraper(source_name: str, force_full: bool = False):
                     'epg',
                     scraper.fetch_epg,
                     epg_input,
-                    skip_ids=_fresh_epg_sids(source),
+                    skip_ids=_fresh_epg_sids(source, horizon_hours=12.0 if source.name == 'roku' else 2.0),
                     enabled_ids=enabled_ids,
                 )
                 for _attempt in range(3):
@@ -523,6 +529,7 @@ def run_scraper(source_name: str, force_full: bool = False):
                                 allow_suspicious_collapse=getattr(scraper, 'allow_suspicious_channel_collapse', False),
                                 pinned_channel_ids=getattr(scraper, 'pinned_channel_ids', frozenset()),
                                 excluded_channel_ids=getattr(scraper, 'excluded_channel_ids', frozenset()),
+                                hide_missing_event_channels=getattr(scraper, 'hide_missing_event_channels', False),
                             )
                         # Persist scraper config/cache FIRST. persist_*() call
                         # db.session.expire_all(), which DISCARDS unflushed attribute
@@ -531,6 +538,14 @@ def run_scraper(source_name: str, force_full: bool = False):
                         # the other way silently dropped last_channel_fetch_at for every
                         # scraper that queues config/cache updates in the channel phase.
                         _apply_scraper_config_updates(source, scraper)
+                        if (source.config or {}).get('first_import_pending') and channels:
+                            # A playlist added with "enable all now": that choice
+                            # covers this first import only. Anything a later
+                            # refresh turns up goes to the review queue.
+                            _cfg = dict(source.config)
+                            _cfg.pop('first_import_pending', None)
+                            source.config = _cfg
+                            source.new_channel_policy = 'review'
                         if source.scrape_interval != 0:
                             # Stamp last_scraped_at as soon as channels are committed.
                             # The EPG phase below re-stamps on success, but if it
@@ -610,7 +625,7 @@ def run_scraper(source_name: str, force_full: bool = False):
                     'epg',
                     scraper.fetch_epg,
                     channels,
-                    skip_ids=_fresh_epg_sids(source),
+                    skip_ids=_fresh_epg_sids(source, horizon_hours=12.0 if source.name == 'roku' else 2.0),
                     enabled_ids=enabled_ids,
                 )
                 for _attempt in range(3):
@@ -778,9 +793,9 @@ def _active_bridge_label(source_name: str) -> str:
     return active_bridge_label(source_name)
 
 
-def run_stream_audit(source_name: str):
+def run_stream_audit(source_name: str, scope: str = 'linear'):
     """
-    Stream Audit — resolves every channel (active and previously dead/VOD) via
+    Stream Audit — resolves selected channels (active and previously dead/VOD) via
     the scraper, fetches the HLS manifest using the scraper's session (so
     source-specific headers like Origin/Referer are included), drills master →
     variant playlist, and checks for dead streams, VOD-only content, and
@@ -788,6 +803,8 @@ def run_stream_audit(source_name: str):
     they drop out of M3U/EPG output; previously-dead channels that pass are
     re-activated automatically.
     """
+    if scope not in ('linear', 'all'):
+        raise ValueError(f'Invalid stream audit scope: {scope}')
     with flask_app.app_context():
         source = Source.query.filter_by(name=source_name).first()
         if not source:
@@ -852,7 +869,12 @@ def run_stream_audit(source_name: str):
         # channels out of the bridge feed.
         _sync_intrinsic_drm_bridge(source)
 
-        channels = source.channels.filter(
+        channels_query = source.channels
+        if hasattr(Channel, 'retire_at'):
+            channels_query = channels_query.filter(
+                or_(Channel.retire_at.is_(None), Channel.retire_at > datetime.now(timezone.utc))
+            )
+        audit_candidates = channels_query.filter(
             db.or_(
                 Channel.is_active == True,
                 Channel.disable_reason.in_(['Dead', 'VOD', 'NotAuthorized']),
@@ -865,7 +887,12 @@ def run_stream_audit(source_name: str):
                 Channel.disable_reason == 'DRM',
                 Channel.disable_reason.like('DRM:%'),
             )
-        ).all()
+        )
+        skipped_events = 0
+        if scope == 'linear':
+            skipped_events = audit_candidates.filter(event_channel_clause()).count()
+            audit_candidates = audit_candidates.filter(~event_channel_clause())
+        channels = audit_candidates.all()
         total    = len(channels)
         _audit_ids = [ch.id for ch in channels]
         checked  = 0
@@ -904,7 +931,8 @@ def run_stream_audit(source_name: str):
         _audit_ignore_4xx = getattr(scraper_cls, 'audit_ignore_4xx', False)
         _audit_ignore_vod = getattr(scraper_cls, 'audit_ignore_vod', False)
 
-        logger.info('[audit] %s: checking %d channels…', source_name, total)
+        logger.info('[audit] %s: checking %d channels (scope=%s, events skipped=%d)…',
+                    source_name, total, scope, skipped_events)
 
         # Live progress → Redis key audit:progress:{source_name}
         _audit_key = f'audit:progress:{source_name}'
@@ -942,6 +970,7 @@ def run_stream_audit(source_name: str):
                             _cd_reason = getattr(scraper, '_cooldown_reason', None)
                     _redis_audit.setex(_audit_key, 600, _json_audit.dumps({
                         'phase': phase, 'done': done, 'total': total_,
+                        'scope': scope, 'skipped_events': skipped_events,
                         'flagged': flagged_, 'dead': dead_, 'vod': vod_, 'errors': errors_,
                         'skipped_403': skipped_403_,
                         'not_authorized': not_authorized_,
@@ -1124,6 +1153,8 @@ def run_stream_audit(source_name: str):
                     consecutive_errors = 0
                     consecutive_skipped_403 = 0
                     consecutive_transient_errors = 0
+                    if ch.disable_reason == 'NotAuthorized':
+                        ch.is_enabled = True
                     if not ch.is_active:
                         ch.is_active = True
                         ch.disable_reason = None
@@ -1317,6 +1348,8 @@ def run_stream_audit(source_name: str):
                             ch.requires_drm_bridge = True
                             if not ch.is_active:
                                 ch.is_active = True
+                            if ch.disable_reason == 'NotAuthorized':
+                                ch.is_enabled = True
                             # Re-enable a channel a prior (pre-bridge-eligible) pass legacy-
                             # disabled for this same DRM reason — e.g. Roku channels disabled
                             # before 'roku' joined DRM_BRIDGE_TRUSTED_SOURCES. Never touches
@@ -1341,6 +1374,8 @@ def run_stream_audit(source_name: str):
                         # re-activate if it was previously dead.
                         if getattr(ch, 'requires_drm_bridge', False):
                             ch.requires_drm_bridge = False
+                        if ch.disable_reason == 'NotAuthorized':
+                            ch.is_enabled = True
                         if not ch.is_active:
                             ch.is_active = True
                             ch.disable_reason = None
@@ -1410,6 +1445,8 @@ def run_stream_audit(source_name: str):
                         ch.requires_drm_bridge = True
                         if not ch.is_active:
                             ch.is_active = True
+                        if ch.disable_reason == 'NotAuthorized':
+                            ch.is_enabled = True
                         if not ch.is_enabled and (ch.disable_reason or '').startswith('DRM'):
                             ch.is_enabled = True
                         ch.disable_reason = None
@@ -1438,6 +1475,8 @@ def run_stream_audit(source_name: str):
                     if getattr(ch, 'requires_drm_bridge', False):
                         ch.requires_drm_bridge = False
                         logger.info('[audit] DRM-bridge cleared (now clear HLS): %s', ch.name)
+                    if ch.disable_reason == 'NotAuthorized':
+                        ch.is_enabled = True
                     if not ch.is_active:
                         ch.is_active = True
                         ch.disable_reason = None
@@ -1495,6 +1534,7 @@ def run_stream_audit(source_name: str):
                 # channel count — so the UI doesn't claim channels were checked.
                 'total': scanned if aborted_reason else total,
                 'channel_count': total, 'aborted_reason': aborted_reason,
+                'scope': scope, 'skipped_events': skipped_events,
                 'not_in_output': not_in_output,
                 'checked': checked, 'flagged': flagged, 'bridged': bridged,
                 'dead': dead, 'vod': vod, 'not_authorized': not_authorized, 'errors': errors, 'skipped_403': skipped_403,
@@ -1539,7 +1579,11 @@ def run_stream_audit_recheck(source_name: str, channel_ids: list):
         except Exception:
             pass
 
-        channels = Channel.query.filter(Channel.id.in_(channel_ids)).all()
+        previous_scope = (load_source_cache(source.id).get('last_audit_result') or {}).get('scope', 'linear')
+        channels_query = Channel.query.filter(Channel.id.in_(channel_ids), Channel.source_id == source.id)
+        if previous_scope != 'all':
+            channels_query = channels_query.filter(~event_channel_clause())
+        channels = channels_query.all()
         total = len(channels)
         if not total:
             return
@@ -1561,6 +1605,7 @@ def run_stream_audit_recheck(source_name: str, channel_ids: list):
                 else:
                     _redis_rc.setex(_audit_key, 600, _json_rc.dumps({
                         'phase': 'recheck', 'done': done, 'total': total_,
+                        'scope': previous_scope,
                         'ts': _time.time(),
                     }))
             except Exception:
@@ -1636,6 +1681,8 @@ def run_stream_audit_recheck(source_name: str, channel_ids: list):
                     continue
 
                 # Live — re-enable if it was previously flagged
+                if ch.disable_reason == 'NotAuthorized':
+                    ch.is_enabled = True
                 if not ch.is_active:
                     ch.is_active = True
                     ch.disable_reason = None
@@ -1754,7 +1801,7 @@ def _prewarm_logos(source_name: str, logo_urls: list[str], progress_cb=None) -> 
 
 def _refresh_xml_artifacts() -> None:
     """Refresh master/feed XML and M3U artifacts after scrape commits land."""
-    from app.generators.m3u import generate_gracenote_m3u, generate_m3u, generate_native_m3u, generate_mixed_m3u, generate_prismcast_m3u, generate_fc_player_m3u, feed_gracenote_start, feed_namespace_start, feed_to_query_filters, _MASTER_GRACENOTE_START
+    from app.generators.m3u import generate_gracenote_m3u, generate_m3u, generate_native_m3u, generate_mixed_m3u, generate_combined_ah4c_m3u, generate_prismcast_m3u, generate_fc_player_m3u, feed_gracenote_start, feed_namespace_start, feed_to_query_filters, _MASTER_GRACENOTE_START
     from app import fc_player_bridge as _fc_player_bridge
     from app.generators.xmltv import write_xmltv
 
@@ -1900,6 +1947,41 @@ def _refresh_xml_artifacts() -> None:
                         generate_fc_player_m3u(filters, base_url=base_url, ah4c_base_url=ah4c_url, **std_kw)
                     ),
                 ))
+            # Mixed guide mode: one bridge playlist per method instead of a
+            # standard + Gracenote pair (see generate_mixed_m3u).
+            if (feed.guide_mode or 'split') == 'mixed':
+                if prismcast_ready:
+                    m3u_artifacts.append((
+                        f'feed-{feed.slug}-prismcast-mixed-m3u',
+                        lambda fp, filters=filters, std_kw=std_kw: fp.write(
+                            generate_prismcast_m3u(
+                                filters, base_url=base_url, prismcast_url=prismcast_url,
+                                inner_base_url=prismcast_inner, gracenote=None, **std_kw)
+                        ),
+                    ))
+                if fc_player_ready:
+                    m3u_artifacts.append((
+                        f'feed-{feed.slug}-fc-player-mixed-m3u',
+                        lambda fp, filters=filters, std_kw=std_kw: fp.write(
+                            generate_fc_player_m3u(filters, base_url=base_url, gracenote=None, **std_kw)
+                        ),
+                    ))
+                if ah4c_url:
+                    # Whole feed in one playlist — see generate_combined_ah4c_m3u.
+                    m3u_artifacts.append((
+                        f'feed-{feed.slug}-combined-ah4c-m3u',
+                        lambda fp, filters=filters, std_kw=std_kw: fp.write(
+                            generate_combined_ah4c_m3u(filters, base_url=base_url, **std_kw)
+                        ),
+                    ))
+                if ah4c_url:
+                    m3u_artifacts.append((
+                        f'feed-{feed.slug}-fc-player-ah4c-mixed-m3u',
+                        lambda fp, filters=filters, std_kw=std_kw: fp.write(
+                            generate_fc_player_m3u(filters, base_url=base_url, gracenote=None,
+                                                   ah4c_base_url=ah4c_url, **std_kw)
+                        ),
+                    ))
             if feed.chnum_start is not None:
                 gn_kw = {'feed_chnum_start': feed.chnum_start, 'feed_id': feed.id}
             else:
@@ -2113,6 +2195,78 @@ def run_source_channel_purge(source_id: int):
         )
 
 
+def _keeps_channels_when_disabled(source_name: str) -> bool:
+    """Built-in sources are purged on disable (a re-scrape restores them). The
+    user's own channels are not: 'custom' channels exist nowhere else, and a
+    playlist's disable is a pause — Delete is the action that removes it."""
+    return source_name == 'custom' or is_playlist_source(source_name)
+
+
+def run_playlist_delete(source_id: int):
+    """Permanently remove a user-created playlist source and everything hanging
+    off it. Background job for the same reason run_source_disable is one:
+    SQLite's writer lock is database-wide, so doing this inline can stall the
+    request behind an unrelated scrape's commits."""
+    with flask_app.app_context():
+        source = Source.query.get(source_id)
+        if not source:
+            return
+        if not is_playlist_source(source.name):
+            logger.error('[playlist-delete] refusing to delete non-playlist source %s', source.name)
+            return
+        name = source.name
+
+        from app.routes.tasks import cancel_source_jobs
+        cancel_source_jobs(name)
+
+        channel_ids = [row[0] for row in source.channels.with_entities(Channel.id).all()]
+        logo_urls = [row[0] for row in source.channels.with_entities(Channel.logo_url).all() if row[0]]
+
+        from app.models import Feed, FeedChannelNumber, SourceCache
+        # Bulk deletes bypass ORM cascades, so dependents go explicitly.
+        _ID_BATCH = 900
+        for i in range(0, len(channel_ids), _ID_BATCH):
+            FeedChannelNumber.query.filter(
+                FeedChannelNumber.channel_id.in_(channel_ids[i:i + _ID_BATCH])
+            ).delete(synchronize_session=False)
+        deleted_channels, deleted_programs = _purge_source_channels_and_programs(source)
+        SourceCache.query.filter_by(source_id=source.id).delete(synchronize_session=False)
+
+        # Scrub feeds: a leftover source name would re-attach a future playlist
+        # that reuses the slug, and SQLite can reuse a deleted channel's row id.
+        gone = set(channel_ids)
+        for feed in Feed.query.all():
+            filters = dict(feed.filters or {})
+            changed = False
+            if name in (filters.get('sources') or []):
+                filters['sources'] = [s for s in filters['sources'] if s != name]
+                changed = True
+            for key in ('channel_ids', 'excluded_channel_ids', 'pinned_channel_ids'):
+                ids = filters.get(key)
+                if isinstance(ids, list) and gone.intersection(ids):
+                    filters[key] = [cid for cid in ids if cid not in gone]
+                    changed = True
+            if changed:
+                feed.filters = filters
+
+        db.session.delete(source)
+        db.session.commit()
+
+        logger.info('[playlist-delete] removed %s: %d channels, %d programs',
+                    name, deleted_channels, deleted_programs)
+        for url in set(logo_urls):
+            try:
+                delete_cached_logo(url)
+            except Exception:
+                pass
+        # Queue the M3U/EPG rebuild instead of running it here. It takes a
+        # minute or two on a big install, and done inline it held this job
+        # (and any delete queued behind it) open long after the source was
+        # gone. The old artifacts stay served until the rebuild lands.
+        invalidate_xml_cache()
+        _enqueue_xml_refresh_job()
+
+
 def run_source_disable(source_id: int):
     """Background counterpart to update_source's disable path (app/routes/
     api.py) — flips is_enabled off, then runs the same cancel/purge/xml-
@@ -2136,7 +2290,7 @@ def run_source_disable(source_id: int):
 
         from app.routes.tasks import cancel_source_jobs, trigger_source_channel_purge
         cancel_source_jobs(source.name)
-        if source.name != 'custom':
+        if not _keeps_channels_when_disabled(source.name):
             # Mark stale now (cheap — old M3U/EPG stays on disk and keeps
             # being served, see invalidate_xml_cache's docstring) rather than
             # running the full subprocess rebuild here: the queued purge job
@@ -2147,9 +2301,9 @@ def run_source_disable(source_id: int):
             invalidate_xml_cache()
             trigger_source_channel_purge(source.id)
         else:
-            # No purge job follows for 'custom' (its channels aren't
-            # deleted on disable), so this is the only rebuild that will
-            # happen — must be the real one.
+            # No purge job follows for 'custom' or a playlist (their
+            # channels aren't deleted on disable), so this is the only
+            # rebuild that will happen — must be the real one.
             _invalidate_and_refresh_xml()
         logger.info('[source-disable] %s disabled', source.name)
 
@@ -2159,6 +2313,13 @@ def run_bulk_channel_update(filters: dict, enable: bool):
         ids = _channel_ids_for_filters(filters or {})
         updated = 0
         if ids:
+            if not enable:
+                # An explicit bulk disable replaces the automatic retirement
+                # decision, so a later schedule extension must not turn it on.
+                Channel.query.filter(
+                    Channel.id.in_(ids),
+                    Channel.disable_reason.in_(AUTO_EVENT_REASONS),
+                ).update({'disable_reason': None}, synchronize_session=False)
             # Any explicit bulk enable/disable counts as reviewing the channel, so
             # clear the 'pending' marker — it leaves the "Needs review" filter.
             values = {'is_enabled': enable, 'review_state': 'approved'}
@@ -2630,9 +2791,9 @@ def _sync_intrinsic_drm_bridge(source) -> None:
 def _upsert_channels(source, channel_data_list, gracenote_auto_fill: bool = True, active_geos: set | None = None,
                      miss_threshold: int = _CHANNEL_MISS_THRESHOLD, rehome_by_guide_key: bool = False,
                      allow_suspicious_collapse: bool = False, pinned_channel_ids: frozenset = frozenset(),
-                     excluded_channel_ids: frozenset = frozenset()):
+                     excluded_channel_ids: frozenset = frozenset(),
+                     hide_missing_event_channels: bool = False):
     existing = {ch.source_channel_id: ch for ch in source.channels.all()}
-
     # Build a guide_key → channel index so we can re-use an existing DB row
     # when a scraper assigns a new uuid to the same content (e.g. Vidaa rotating
     # a channel slot).  Only channels with a guide_key participate; if two DB rows
@@ -2728,7 +2889,10 @@ def _upsert_channels(source, channel_data_list, gracenote_auto_fill: bool = True
                                    old_gk or None, new_gk or None)
                     ch.identity_changed_at = seen_at
             ch.name          = cd.name
+            ch.playlist_group = getattr(cd, 'playlist_group', None)
             ch.stream_url    = cd.stream_url
+            ch.retire_at     = getattr(cd, 'retire_at', None)
+            ch.delete_at     = getattr(cd, 'delete_at', None)
             ch.stream_type   = cd.stream_type
             ch.provider_number = cd.provider_number
             old_logo_url = ch.logo_url
@@ -2750,6 +2914,14 @@ def _upsert_channels(source, channel_data_list, gracenote_auto_fill: bool = True
                 ch.description = _sanitize_description(cd.description)
             if getattr(cd, 'guide_key', None):
                 ch.guide_key = cd.guide_key
+            # Placeholder-guide fields track the source, including being
+            # removed there. None for every scraper but playlists, whose rows
+            # are NULL anyway — so this never touches a custom channel's
+            # user-set block length (custom channels aren't upserted).
+            ch.guide_title = getattr(cd, 'guide_title', None)
+            ch.guide_art = getattr(cd, 'guide_art', None)
+            if getattr(cd, 'guide_block_minutes', None) is not None or ch.guide_block_minutes is not None:
+                ch.guide_block_minutes = getattr(cd, 'guide_block_minutes', None)
             # Don't resurrect channels the stream audit flagged as Dead, VOD, NotAuthorized, or DRM
             # unless the stream URL changed (source may have fixed the channel).
             _flagged = ch.disable_reason in ('Dead', 'VOD', 'NotAuthorized') or (ch.disable_reason or '').startswith('DRM')
@@ -2760,8 +2932,17 @@ def _upsert_channels(source, channel_data_list, gracenote_auto_fill: bool = True
                 if (ch.missed_scrapes or 0) > 0:
                     ch.returned_at = seen_at
                 ch.is_active = True
+                if ch.disable_reason in (EVENT_MISSING_REASON, EVENT_SCHEDULE_MISSING_REASON,
+                                         EVENT_FILTERED_REASON):
+                    restore_event(ch, ch.disable_reason)
                 if stream_url_changed and _flagged:
                     ch.disable_reason = None  # clear flag; let next audit re-check
+            if ch.retire_at and _utc_aware(ch.retire_at) <= seen_at:
+                hide_event(ch, EVENT_RETIRED_REASON, seen_at)
+            elif ch.disable_reason == EVENT_RETIRED_REASON:
+                # A later scrape moved the event past its old retirement time.
+                # Restore only channels that retirement itself disabled.
+                restore_event(ch, EVENT_RETIRED_REASON)
             ch.last_seen_at = seen_at
             ch.missed_scrapes = 0
             if cd.source_channel_id in pinned_channel_ids and not ch.scrape_pinned:
@@ -2783,7 +2964,7 @@ def _upsert_channels(source, channel_data_list, gracenote_auto_fill: bool = True
                 elif gracenote_id is not None:
                     ch.gracenote_id = gracenote_id
         else:
-            db.session.add(Channel(
+            new_channel = Channel(
                 source_id         = source.id,
                 source_channel_id = cd.source_channel_id,
                 name              = cd.name,
@@ -2795,6 +2976,7 @@ def _upsert_channels(source, channel_data_list, gracenote_auto_fill: bool = True
                 language          = cd.language,
                 country           = cd.country,
                 tags              = ','.join(cd.tags) if getattr(cd, 'tags', None) else None,
+                playlist_group    = getattr(cd, 'playlist_group', None),
                 description       = _sanitize_description(cd.description) if getattr(cd, 'description', None) else None,
                 number            = None,
                 provider_number   = cd.provider_number,
@@ -2802,13 +2984,23 @@ def _upsert_channels(source, channel_data_list, gracenote_auto_fill: bool = True
                 gracenote_locked  = False,
                 gracenote_mode    = (getattr(cd, 'gracenote_mode', None) or 'auto'),
                 guide_key         = getattr(cd, 'guide_key', None),
+                guide_title       = getattr(cd, 'guide_title', None),
+                guide_art         = getattr(cd, 'guide_art', None),
+                guide_block_minutes = getattr(cd, 'guide_block_minutes', None),
                 last_seen_at      = seen_at,
                 first_seen_at     = seen_at,
+                is_active         = True,
                 is_enabled        = not _born_pending,
                 review_state      = 'pending' if _born_pending else 'approved',
                 missed_scrapes    = 0,
                 scrape_pinned     = cd.source_channel_id in pinned_channel_ids,
-            ))
+            )
+            if hasattr(Channel, 'retire_at'):
+                new_channel.retire_at = getattr(cd, 'retire_at', None)
+                new_channel.delete_at = getattr(cd, 'delete_at', None)
+                if new_channel.retire_at and _utc_aware(new_channel.retire_at) <= seen_at:
+                    hide_event(new_channel, EVENT_RETIRED_REASON, seen_at)
+            db.session.add(new_channel)
 
     seen = {cd.source_channel_id for cd in channel_data_list}
     existing_active_ids = {ch_id for ch_id, ch in existing.items() if ch.is_active}
@@ -2818,13 +3010,33 @@ def _upsert_channels(source, channel_data_list, gracenote_auto_fill: bool = True
     filtered_ids = (set(excluded_channel_ids) & set(existing)) - seen
     for ch_id in filtered_ids:
         ch = existing[ch_id]
-        if ch.is_active:
-            ch.went_inactive_at = seen_at
-        ch.is_active = False
+        if hide_missing_event_channels and EVENT_CHANNEL_TAG in (ch.tags or '').split(','):
+            hide_event(ch, EVENT_FILTERED_REASON, seen_at)
+        else:
+            if ch.is_active:
+                ch.went_inactive_at = seen_at
+            ch.is_active = False
         # Keep user settings and refresh last_seen_at while upstream still
         # lists the channel, so orphan cleanup does not erase filtered rows.
         ch.last_seen_at = seen_at
         ch.missed_scrapes = 0
+
+    # Event inventories are short-lived: a successful refresh that no longer
+    # lists an event should remove it from output immediately. Keep its row and
+    # user choices until the normal event deletion deadline.
+    missing_event_ids = {
+        ch_id for ch_id in set(existing) - seen - filtered_ids
+        if hide_missing_event_channels
+        and EVENT_CHANNEL_TAG in (existing[ch_id].tags or '').split(',')
+        and not existing[ch_id].scrape_pinned
+    }
+    for ch_id in missing_event_ids:
+        ch = existing[ch_id]
+        if ch.is_active:
+            ch.missed_scrapes = (ch.missed_scrapes or 0) + 1
+        hide_event(ch, EVENT_SCHEDULE_MISSING_REASON, seen_at)
+    if missing_event_ids:
+        logger.info('[%s] hid %d events absent from refreshed schedule', source.name, len(missing_event_ids))
 
     # Channels from regions the scraper no longer has configured are intentionally
     # absent — exclude them from the collapse ratio so a region removal doesn't
@@ -2836,13 +3048,13 @@ def _upsert_channels(source, channel_data_list, gracenote_auto_fill: bool = True
         }
     else:
         region_removed_ids = set()
-    missing_active_organic = missing_active_ids - region_removed_ids - filtered_ids
+    missing_active_organic = missing_active_ids - region_removed_ids - filtered_ids - missing_event_ids
 
     # Guard against upstream/parser glitches returning a tiny partial lineup.
     # If we previously had a substantial active set and the new fetch would
     # deactivate most of it, keep the old rows active and log loudly instead
     # of collapsing the source to a handful of channels.
-    organic_existing = len(existing_active_ids - region_removed_ids - filtered_ids)
+    organic_existing = len(existing_active_ids - region_removed_ids - filtered_ids - missing_event_ids)
     if organic_existing > 0:
         missing_ratio = len(missing_active_organic) / max(organic_existing, 1)
     else:
@@ -2882,12 +3094,39 @@ def _upsert_channels(source, channel_data_list, gracenote_auto_fill: bool = True
         )
     else:
         for ch_id, ch in existing.items():
-            if ch_id not in seen and ch_id not in region_removed_ids and ch_id not in filtered_ids:
-                if not ch.is_active:
-                    continue  # already inactive — don't touch to avoid bumping updated_at
+            if ch_id not in seen and ch_id not in region_removed_ids and ch_id not in filtered_ids and ch_id not in missing_event_ids:
+                # Event groups are short-lived. Keep their policy in the source
+                # config even when the entire group is absent from this import.
+                group = ch.playlist_group
+                if group is None and is_playlist_source(source.name):
+                    group = (ch.tags or '').split(',', 1)[0]
+                event_limit = event_group_miss_limit(source.config or {}, group) if is_playlist_source(source.name) else 0
+                if event_limit and not ch.scrape_pinned:
+                    next_missed = (ch.missed_scrapes or 0) + 1
+                    ch.missed_scrapes = next_missed
+                    if next_missed >= event_limit:
+                        delete_event(ch)
+                        logger.info('[%s] deleted event after %d missed playlist imports: %s (%s)',
+                                    source.name, next_missed, ch.name, ch.source_channel_id)
+                    else:
+                        hide_event(ch, EVENT_MISSING_REASON, seen_at)
+                        if next_missed == 1:
+                            logger.info('[%s] hid missing event; delete after %d missed imports: %s (%s)',
+                                        source.name, event_limit, ch.name, ch.source_channel_id)
+                    continue
+                disable_after_misses = linear_group_miss_limit(source.config or {}, group) if is_playlist_source(source.name) else 0
+                if not ch.is_active and not (disable_after_misses and ch.is_enabled and not ch.scrape_pinned):
+                    continue  # already inactive and no pending playlist auto-disable
                 next_missed = (ch.missed_scrapes or 0) + 1
                 ch.missed_scrapes = next_missed
-                if next_missed >= miss_threshold:
+                if disable_after_misses and next_missed >= disable_after_misses and ch.is_enabled and not ch.scrape_pinned:
+                    ch.is_enabled = False
+                    ch.disable_reason = 'Missing from playlist'
+                    logger.info(
+                        '[%s] auto-disabled after %d missed playlist imports: %s (%s)',
+                        source.name, next_missed, ch.name, ch.source_channel_id,
+                    )
+                if ch.is_active and next_missed >= miss_threshold:
                     if ch.scrape_pinned:
                         logger.info(
                             '[%s] missed %d scrapes but scrape_pinned — keeping active: %s (%s)',
@@ -2963,6 +3202,36 @@ def _prune_old_programs(batch_size: int = 1000):
 
     if total_deleted:
         logger.info('[worker] pruned %d expired EPG entries', total_deleted)
+
+
+def _retire_expired_event_channels() -> int:
+    """Apply scraper-supplied deadlines to channels tagged as events."""
+    if not hasattr(Channel, 'retire_at'):
+        return 0
+
+    now = datetime.now(timezone.utc)
+    retired = 0
+    deleted = 0
+    due = Channel.query.filter(or_(
+        Channel.retire_at <= now,
+        Channel.delete_at <= now,
+    )).all()
+    for ch in due:
+        if EVENT_CHANNEL_TAG not in (ch.tags or '').split(','):
+            continue
+        # SQLite returns naive datetimes even for timezone-aware columns.
+        delete_at = _utc_aware(ch.delete_at)
+        retire_at = _utc_aware(ch.retire_at)
+        if delete_at and now >= delete_at:
+            delete_event(ch)
+            deleted += 1
+        elif retire_at and now >= retire_at:
+            if hide_event(ch, EVENT_RETIRED_REASON, now):
+                retired += 1
+    if retired or deleted:
+        db.session.commit()
+        logger.info('[worker] retired %d time-limited channel(s), deleted %d', retired, deleted)
+    return retired + deleted
 
 
 # Shared by _prune_bogus_programs and _upsert_programs, which must agree on
@@ -3402,7 +3671,10 @@ def purge_orphaned_sources():
         known = set(registry.get_all().keys())
         now = datetime.now(timezone.utc)
         for source in Source.query.all():
-            if source.name in known:
+            # User-created playlist sources (m3u_*) share one scraper class that
+            # is never in the registry under their own names — they are not
+            # orphans, and must never start the purge clock.
+            if source.name in known or is_playlist_source(source.name):
                 if source.scraper_missing_since is not None:
                     source.scraper_missing_since = None
                     db.session.commit()
@@ -3451,17 +3723,20 @@ def purge_disabled_source_leftovers():
     queue lives in the embedded Redis (no persistence, see docker-compose), so
     that job is gone for good once that happens; nothing else re-triggers it.
 
-    'custom' is exempt, same as run_source_disable — its channels are meant to
-    survive a disable.
+    'custom' and playlist sources are exempt, same as run_source_disable — their
+    channels are meant to survive a disable.
     """
     with flask_app.app_context():
-        leftover_sources = (
-            Source.query
-            .filter(Source.is_enabled == False, Source.name != 'custom')
-            .join(Channel, Channel.source_id == Source.id)
-            .distinct()
-            .all()
-        )
+        leftover_sources = [
+            source for source in (
+                Source.query
+                .filter(Source.is_enabled == False)
+                .join(Channel, Channel.source_id == Source.id)
+                .distinct()
+                .all()
+            )
+            if not _keeps_channels_when_disabled(source.name)
+        ]
         if not leftover_sources:
             return
         any_purged = False
@@ -3481,6 +3756,12 @@ def purge_disabled_source_leftovers():
 def _rq_prune():
     """RQ job target: prune expired EPG entries. Runs inside the RQ worker process."""
     with flask_app.app_context():
+        try:
+            if _retire_expired_event_channels():
+                _invalidate_and_refresh_xml()
+        except Exception:
+            db.session.rollback()
+            logger.exception('[worker] channel retirement failed')
         _prune_old_programs()
 
 
@@ -3908,7 +4189,7 @@ if __name__ == '__main__':
                     if not source:
                         return
                     _cfg = source.config or {}
-                    if not (_cfg.get('username') or '').strip() or not (_cfg.get('password') or '').strip():
+                    if not DirectvScraper.can_reauth(_cfg):
                         return
                     scraper = DirectvScraper(config=_cfg)
                     try:

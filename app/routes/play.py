@@ -24,6 +24,7 @@ from ..hls import inspect_hls_drm, parse_stream_info
 from ..models import Channel, Source
 from ..url import public_base_url
 from ..scrapers import registry
+from ..scrapers.playlist import is_playlist_source
 from .custom_proxy import (
     _absolutize_hls_manifest,
     _custom_proxy_headers,
@@ -71,7 +72,7 @@ _CSPAN_PROXY_SESSION.headers.update(_CSPAN_CDN_HEADERS)
 
 
 from ..scrapers.base import StreamDeadError
-from ..tve.adobe_pass import TVENotAuthorizedError
+from ..tve.adobe_pass import TVEAuthError, TVENotAuthorizedError
 from .tasks import trigger_channel_auto_disable
 
 logger = logging.getLogger(__name__)
@@ -93,6 +94,15 @@ def _gone_response() -> Response:
         status=410,
         mimetype='text/plain',
     )
+
+
+def _channel_is_retired(channel: Channel) -> bool:
+    deadline = getattr(channel, 'retire_at', None)
+    if deadline is None:
+        return False
+    if deadline.tzinfo is None:
+        deadline = deadline.replace(tzinfo=timezone.utc)
+    return datetime.now(timezone.utc) >= deadline
 
 
 def _unavailable_response() -> Response:
@@ -771,7 +781,8 @@ def pluto_variant_proxy():
         r = _requests.get(url, headers=_variant_hdrs, timeout=10)
         r.raise_for_status()
     except Exception as e:
-        logger.warning('[pluto-variant] fetch failed for %s: %s', url[:80], e)
+        # Requests exceptions can include the full URL and its signed JWT.
+        logger.warning('[pluto-variant] fetch failed for host %s: %s', host, type(e).__name__)
         abort(502)
     return Response(
         r.content,
@@ -1547,7 +1558,6 @@ def amazon_dash_proxy(channel_id: str):
     """
     from urllib.parse import unquote as _unquote, urljoin as _urljoin, quote as _quote
     from ..scrapers.amazon_prime_free import AmazonPrimeFreeScraper
-
     raw_id = _unquote(channel_id)
     channel = (
         Channel.query
@@ -1558,7 +1568,10 @@ def amazon_dash_proxy(channel_id: str):
     if not channel:
         abort(404)
 
-    scraper = AmazonPrimeFreeScraper(config=channel.source.config or {})
+    config = dict(channel.source.config or {})
+    if request.args.get('hd') == '1':
+        config['_amazon_max_video_resolution'] = AmazonPrimeFreeScraper._NATIVE_MAX_VIDEO_RESOLUTION
+    scraper = AmazonPrimeFreeScraper(config=config)
     dash_url = scraper.resolve(channel.stream_url)
 
     if scraper._pending_config_updates:
@@ -1588,7 +1601,7 @@ def amazon_dash_proxy(channel_id: str):
         # the rest of the TTL.
         station_id = channel.stream_url[len('primefree://'):] \
             if channel.stream_url.startswith('primefree://') else None
-        if station_id and scraper._stream_url_cache.pop(station_id, None):
+        if station_id and scraper._stream_url_cache.pop(scraper._stream_cache_key(station_id), None):
             fresh_url = scraper.resolve(channel.stream_url)
             if getattr(scraper, '_pending_cache_updates', None):
                 try:
@@ -2414,6 +2427,26 @@ def license_proxy(source_name: str, channel_id: str | None = None):
     # classmethods that read playback envelopes see them — they moved out of config.
     cfg = {**(source.config or {}), **load_source_cache(source.id)}
     channel_id = channel_id or request.args.get('channel_id') or None
+    if source_name == 'amazon_prime_free' and request.args.get('hd') == '1':
+        cfg['_amazon_max_video_resolution'] = scraper_cls._NATIVE_MAX_VIDEO_RESOLUTION
+    amazon_pe_fingerprint = None
+    if source_name == 'amazon_prime_free':
+        if not channel_id:
+            return jsonify({'error': 'Amazon license request is missing channel_id.'}), 400
+        pe = scraper_cls._channel_pe_for(cfg, channel_id)
+        if not pe:
+            logger.warning('[amazon-license] no current playback envelope for %s', channel_id[:40])
+            return jsonify({'error': 'Amazon Free playback is unavailable for this channel.'}), 503
+        # A refreshed envelope must be used by both the SHT request and the
+        # license body in this request, even before the next carousel scrape.
+        pe_entry = (cfg.get('channel_pe') or {}).get(channel_id) or {}
+        known_expiry = float(pe_entry.get('expiry') or 0) / 1000
+        if pe_entry.get('pe') != pe or (known_expiry and known_expiry <= _time.time() + 60):
+            cfg['channel_pe'] = {**(cfg.get('channel_pe') or {}), channel_id: {
+                **pe_entry, 'pe': pe, 'expiry': int((_time.time() + 300) * 1000),
+            }}
+        import hashlib as _hashlib
+        amazon_pe_fingerprint = _hashlib.sha256(pe.encode('utf-8')).hexdigest()[:16]
     license_url = scraper_cls.get_license_url(cfg, channel_id=channel_id)
     if not license_url:
         abort(404)
@@ -2425,7 +2458,8 @@ def license_proxy(source_name: str, channel_id: str | None = None):
     sht = None
     if channel_id and source_name == 'amazon_prime_free':
         rdb = _amazon_sht_redis()
-        _sht_key = f'amz_sht:{channel_id}'
+        cap = cfg.get('_amazon_max_video_resolution') or scraper_cls._MAX_VIDEO_RESOLUTION
+        _sht_key = f'amz_sht:{source_name}:{channel_id}:{cap}:{amazon_pe_fingerprint}'
         if rdb:
             try:
                 sht = rdb.get(_sht_key)
@@ -2710,6 +2744,8 @@ def play(source_name: str, channel_id: str):
     if not channel:
         logger.warning('[play] request ip=%s unknown channel %s/%s', client_ip, source_name, channel_id)
         abort(404)
+    if _channel_is_retired(channel):
+        return _gone_response()
 
     # Custom channels log full detail (incl. cache/resolver) via _log_custom_play_path
     _log_play_req = logger.debug if source_name == 'custom' else logger.info
@@ -2780,6 +2816,15 @@ def play(source_name: str, channel_id: str):
             trigger_channel_auto_disable(channel.id, 'NotAuthorized')
             resolved_url = None
             resolve_dead = True
+        except TVEAuthError as e:
+            # A missing or expired TV-provider sign-in is an expected 503,
+            # not an unhandled scraper failure. The per-network settings row
+            # carries the actionable sign-in message.
+            logger.warning(
+                '[play] TVE authorization unavailable request_id=%s source=%s channel_id=%s: %s',
+                getattr(g, 'request_id', '-'), source_name, channel_id, e,
+            )
+            resolved_url = None
         except Exception as e:
             logger.error(
                 '[play] resolve failed request_id=%s ip=%s source=%s channel_id=%s channel_name=%s: %s',
@@ -2967,7 +3012,14 @@ def play(source_name: str, channel_id: str):
     # and pin a tuner. LAN OTA streams also can't carry DRM, so there's nothing
     # to detect.
     _is_muxed = (channel.stream_type or '').lower() in ('mpegts', 'ts', 'mp4')
-    if channel.is_active and resolved_url and resolved_url.startswith('http') and not _is_muxed:
+    # A user's playlist isn't probed either. Its provider may count every
+    # connection against a stream limit, and this fetch comes from the server
+    # — a second IP alongside the viewer's player. It's also the user's own
+    # list: a VOD or DRM entry in it is theirs to keep or remove, not ours to
+    # auto-disable.
+    _is_playlist = is_playlist_source(source_name)
+    if (channel.is_active and resolved_url and resolved_url.startswith('http')
+            and not _is_muxed and not _is_playlist):
         from flask import current_app
         _app = current_app._get_current_object()
         _channel_id = channel.id
@@ -3088,6 +3140,8 @@ def play_fc_player_bridge(source_name: str, channel_id: str):
     )
     if not channel:
         abort(404)
+    if _channel_is_retired(channel):
+        return _gone_response()
 
     needs_bridge = bool(channel.requires_drm_bridge) and source_name in _DRM_BRIDGE_TRUSTED_SOURCES
     if not needs_bridge:
@@ -3109,9 +3163,16 @@ def play_fc_player_bridge(source_name: str, channel_id: str):
 
     info = _get_playback_info(channel, fast_mode=False)
     manifest_url = info.get('preview_url') or info.get('play_url') or ''
+    if source_name == 'amazon_prime_free':
+        from urllib.parse import quote as _quote
+        encoded_id = _quote(channel.source_channel_id, safe='')
+        manifest_url = f'/play/amazon_prime_free/{encoded_id}/dash.mpd?hd=1'
+        license_url = (f'{request.host_url.rstrip("/")}/play/amazon_prime_free/license'
+                       f'?channel_id={encoded_id}&hd=1')
+    else:
+        license_url = info.get('license_url') or None
     if manifest_url.startswith('/'):
         manifest_url = urljoin(request.host_url, manifest_url.lstrip('/'))
-    license_url = info.get('license_url') or None
 
     if not manifest_url:
         logger.error('[fc-player] no manifest URL resolved for %s/%s', source_name, channel_id)
@@ -3150,6 +3211,53 @@ def play_fc_player_bridge(source_name: str, channel_id: str):
     # confirms playback itself with `adb shell dumpsys media_session`. There's no
     # encoder URL to redirect to, so just acknowledge the trigger.
     return Response('', status=204)
+
+
+@play_bp.route('/play/auto/<source_name>/<channel_id>.m3u8')
+def play_auto(source_name: str, channel_id: str):
+    """
+    One play URL per channel for the single-playlist output
+    (generate_combined_ah4c_m3u), routed when Channels DVR tunes rather than
+    when the playlist is built:
+      - normal channel -> identical to /play/<source>/<id>.m3u8 (resolve + 302 to CDN)
+      - bridge channel -> 302 to ah4c's /play/tuner/<source>:<id>. ah4c picks a
+        free tuner and calls back /play/fc-player/... to start playback, or
+        answers 500 itself when every tuner is busy.
+
+    Deciding here keeps a channel's URL the same when it starts or stops
+    needing the bridge, and keeps ah4c's address out of the playlist. ah4c only
+    for now: the fixed-encoder path has no "device busy" refusal, so it can't
+    share a source with channels that need no stream limit.
+    """
+    channel = (
+        Channel.query
+        .join(Source)
+        .filter(Source.name == source_name, Channel.source_channel_id == channel_id)
+        .first()
+    )
+    if not channel:
+        abort(404)
+    if _channel_is_retired(channel):
+        return _gone_response()
+
+    needs_bridge = bool(channel.requires_drm_bridge) and source_name in _DRM_BRIDGE_TRUSTED_SOURCES
+    if not needs_bridge:
+        return play(source_name, channel_id)
+
+    from .. import fc_player_bridge
+    from ..generators.m3u import _ah4c_play_url
+    from ..models import AppSettings
+
+    settings = AppSettings.get()
+    if not fc_player_bridge.ah4c_bridge_active(settings):
+        logger.error('[play-auto] %s/%s needs the bridge but ah4c Capture is not enabled/configured',
+                     source_name, channel_id)
+        return Response('This channel needs the bridge, and ah4c Capture is not enabled or configured.\n',
+                        status=503, mimetype='text/plain')
+    target = _ah4c_play_url(channel, (settings.effective_fc_player_bridge_ah4c_url() or '').strip().rstrip('/'))
+    logger.info('[play-auto] request_id=%s ip=%s source=%s channel_id=%s channel_name=%s -> ah4c',
+                getattr(g, 'request_id', '-'), _client_ip(), source_name, channel_id, channel.name)
+    return redirect(target, 302)
 
 
 @play_bp.route('/play/fc-player/<source_name>/<channel_id>.m3u')

@@ -33,7 +33,7 @@ from .adobe_pass import TVEAuthError, TVENotAuthorizedError, TVEPendingAuthError
 logger = logging.getLogger(__name__)
 
 STATUS_KEY = 'tve:link-login:status'
-LINK_FAMILIES = ('legacy', 'nbc', 'fox', 'amcn', 'discovery')
+LINK_FAMILIES = ('legacy', 'nbc', 'tcm', 'fox', 'amcn', 'discovery')
 _PER_TARGET_TIMEOUT = 10 * 60
 _POLL_SECONDS = 3.0
 _POLL_MAX_SECONDS = 15.0
@@ -153,6 +153,87 @@ class _Nbc:
     def save(self, ctx, profile):
         from .browser_login.nbc import _save_nbc_mvpd_auth
         _save_nbc_mvpd_auth(self.mso_id, ctx['client'], ctx['fingerprint'])
+        return 'authorized'
+
+
+class _Tcm:
+    """TCM's Adobe v2 sign-in, using the same client identity as playback."""
+    error_key = 'tcm'
+
+    def __init__(self, account, mso_id: str, requestor_id: str | None):
+        self.account, self.mso_id = account, mso_id
+
+    def targets(self):
+        return ['TCM']
+
+    def start(self, label):
+        from ..config_store import persist_source_cache_updates, persist_source_config_updates
+        from ..models import Source
+        from ..scrapers.nbc_tve import AdobePassV2Client
+        from ..scrapers.warner_tve import WarnerTVEScraper, TCM_LIVE_URL
+        from .adobe_pass import load_cached_adobe_client_creds, save_adobe_client_creds
+
+        source = Source.query.filter_by(name='warner_tve').first()
+        if not source or not source.is_enabled:
+            raise TVEAuthError('Enable the Warner TVE source before signing in to TCM.')
+        scraper = WarnerTVEScraper(config=dict(source.config or {}))
+        brand_cfg = scraper._brand_config('tcm')
+        fingerprint = scraper.config.get('tcm_device_fingerprint')
+        if not fingerprint:
+            fingerprint = str(uuid.uuid4())
+            scraper._update_config('tcm_device_fingerprint', fingerprint)
+        persist_source_config_updates(source.id, scraper._pending_config_updates)
+        persist_source_cache_updates(source.id, scraper._pending_cache_updates)
+
+        creds = load_cached_adobe_client_creds(self.account, 'TCM')
+        client = AdobePassV2Client('TCM', brand_cfg['software_statement'], TCM_LIVE_URL,
+                                   fingerprint, client_creds=creds, origin='https://www.tcm.com')
+        client._register_client()
+        if not creds:
+            save_adobe_client_creds(self.account, 'TCM', client.client_id, client.client_secret,
+                                    client.access_token)
+        data = client._post(
+            'https://sp.auth.adobe.com/api/v2/TCM/sessions',
+            data={'mvpd': self.mso_id, 'redirectUrl': TCM_LIVE_URL, 'domainName': 'www.tcm.com'},
+            headers={**client._bearer_headers(), 'Content-Type': 'application/x-www-form-urlencoded'},
+        ).json()
+        ctx = {'client': client, 'fingerprint': fingerprint,
+               'profile_url': f'https://sp.auth.adobe.com/api/v2/TCM/profiles/{self.mso_id}'}
+        if data.get('reasonType') == 'authenticated':
+            return None, ctx
+        if not data.get('url'):
+            raise TVEAuthError('TCM: Adobe did not return a sign-in URL.')
+        return 'https://sp.auth.adobe.com' + data['url'], ctx
+
+    def poll(self, ctx):
+        client = ctx['client']
+        response = client.session.get(ctx['profile_url'], headers=client._bearer_headers(), timeout=20)
+        if response.status_code == 401:
+            client.refresh_access_token()
+            return None
+        if not response.ok:
+            return None
+        return ((response.json() or {}).get('profiles') or {}).get(self.mso_id) or None
+
+    def save(self, ctx, profile):
+        from ..extensions import db
+        from .adobe_pass import save_adobe_client_creds
+
+        client = ctx['client']
+        response = client._post(
+            f'https://sp.auth.adobe.com/api/v2/TCM/decisions/authorize/{self.mso_id}',
+            json={'resources': ['TCM']},
+            headers={**client._bearer_headers(), 'Content-Type': 'application/json'},
+        )
+        decision = next((d for d in (response.json().get('decisions') or [])
+                         if d.get('resource') == 'TCM'), None)
+        if not decision or not decision.get('authorized'):
+            raise TVENotAuthorizedError(f'{self.mso_id} account is not entitled to TCM.')
+        save_adobe_client_creds(self.account, 'TCM', client.client_id, client.client_secret, client.access_token)
+        cfg = dict(self.account.config or {})
+        cfg['tcm_mvpd_auth'] = {'mso_id': self.mso_id, 'captured_at': int(time.time())}
+        self.account.config = cfg
+        db.session.commit()
         return 'authorized'
 
 
@@ -420,11 +501,25 @@ class _Discovery:
         return 'authorized'
 
 
-_ADAPTERS = {'legacy': _Legacy, 'nbc': _Nbc, 'fox': _Fox, 'amcn': _Amcn, 'foxone': _FoxOne,
+_ADAPTERS = {'legacy': _Legacy, 'nbc': _Nbc, 'tcm': _Tcm, 'fox': _Fox, 'amcn': _Amcn, 'foxone': _FoxOne,
              'discovery': _Discovery}
 
 
 # ── job ──────────────────────────────────────────────────────────────────────
+
+def _reenable_after_authorized_signin(network_key: str | None) -> None:
+    """See reenable_not_authorized_channels. Never fails the sign-in."""
+    try:
+        from .accounts import reenable_not_authorized_channels
+        revived = reenable_not_authorized_channels(network_key)
+        if revived:
+            logger.info('[link-login] %s: re-enabled %d channel(s) that had been switched off as not authorized',
+                        network_key, revived)
+            from ..routes.api_shared import _invalidate_and_refresh_xml
+            _invalidate_and_refresh_xml()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning('[link-login] %s: could not re-enable not-authorized channels: %s', network_key, exc)
+
 
 def run_link_login(family: str, requestor_id: str | None, mso_id: str, run_id: str) -> None:
     """RQ job: sign in one network (AMC: its four channels) through links the
@@ -434,7 +529,7 @@ def run_link_login(family: str, requestor_id: str | None, mso_id: str, run_id: s
     import redis
 
     from app.worker import flask_app
-    from ..models import TVEAccount
+    from .accounts import tve_account_for_network
     from .browser_login.common import _record_tve_login_error
 
     with flask_app.app_context():
@@ -459,7 +554,7 @@ def run_link_login(family: str, requestor_id: str | None, mso_id: str, run_id: s
                 r.setex(STATUS_KEY, _PER_TARGET_TIMEOUT + 300, json.dumps(
                     {**base, 'state': state, 'message': message, 'steps': steps, **extra}))
 
-        account = TVEAccount.query.filter_by(provider_id='mvpd').first()
+        account = tve_account_for_network(requestor_id if family == 'legacy' else family)
         # FOX One can sign in with its own separate login, without a shared account.
         if not account and family != 'foxone':
             set_status('error', 'Set up your TV provider under Settings → TV Everywhere first.')
@@ -507,7 +602,7 @@ def run_link_login(family: str, requestor_id: str | None, mso_id: str, run_id: s
                 delay = min(delay * 1.3, _POLL_MAX_SECONDS)
 
             if denied:
-                steps[i].update(state='failed', message='your package doesn\'t include it')
+                steps[i].update(state='failed', message=denied[:160])
                 logger.info('[link-login] %s: not authorized: %s', label, denied)
             elif not result:
                 steps[i].update(state='failed', message='the link expired before the sign-in finished')
@@ -516,6 +611,11 @@ def run_link_login(family: str, requestor_id: str | None, mso_id: str, run_id: s
                     message = adapter.save(ctx, result)
                     steps[i].update(state='done', message=message)
                     logger.info('[link-login] %s: signed in via %s (%s)', label, getattr(adapter, 'mso_id', mso_id), message)
+                    if message == 'authorized':
+                        _reenable_after_authorized_signin(adapter.error_key)
+                except TVENotAuthorizedError as exc:
+                    steps[i].update(state='failed', message=str(exc)[:160])
+                    logger.info('[link-login] %s: not authorized after sign-in: %s', label, exc)
                 except Exception as exc:  # noqa: BLE001
                     logger.exception('[link-login] %s: save failed', label)
                     steps[i].update(state='failed', message=f'save failed: {str(exc)[:120]}')

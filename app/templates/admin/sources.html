@@ -162,6 +162,10 @@
       --cat-color: var(--warning-soft);
       --cat-border: var(--warning-strong);
     }
+    .source-category-header.cat-custom {
+      --cat-color: var(--accent-soft);
+      --cat-border: var(--accent-border);
+    }
     .source-category-header.cat-drm {
       --cat-color: var(--danger-soft);
       --cat-border: var(--danger-border);
@@ -170,6 +174,7 @@
       --cat-color: var(--text-muted);
       --cat-border: var(--border);
     }
+    .cat-header-action { float: right; text-transform: none; letter-spacing: normal; margin: -0.2rem 0; }
     .cat-chevron { display: inline-block; width: 0.9em; margin-right: 0.3em; }
     .cat-count { font-weight: 600; opacity: 0.75; margin-left: 0.3em; letter-spacing: normal; }
 
@@ -484,6 +489,62 @@
       display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap;
     }
     .amazon-status-text { font-size: 0.82rem; color: var(--text-soft); flex: 1; }
+    .espn-auth-options { display: grid; gap: 0.55rem; margin: 0.55rem 0 1rem; }
+    .espn-auth-option {
+      border: 1px solid var(--border); border-radius: 8px;
+      background: var(--surface-2); overflow: hidden;
+    }
+    .espn-auth-option summary {
+      display: flex; align-items: center; gap: 0.8rem; padding: 0.75rem 0.9rem;
+      cursor: pointer; list-style: none;
+    }
+    .espn-auth-option summary::-webkit-details-marker { display: none; }
+    .espn-auth-option summary:hover { background: var(--surface-4); }
+    .espn-auth-option summary:focus-visible { outline: 2px solid var(--focus-accent); outline-offset: -2px; }
+    .espn-auth-option summary::after {
+      content: '▾'; color: var(--text-muted); font-size: 0.8rem; margin-left: auto;
+      transition: transform 0.15s;
+    }
+    .espn-auth-option[open] summary::after { transform: rotate(180deg); }
+    .espn-auth-label { min-width: 0; flex: 1; }
+    .espn-auth-label strong { display: block; font-size: 0.84rem; color: var(--text); }
+    .espn-auth-label small { display: block; margin-top: 0.15rem; font-size: 0.76rem; color: var(--text-muted); }
+    .espn-auth-state { font-size: 0.76rem; color: var(--text-muted); white-space: nowrap; }
+    .espn-auth-state.signed-in { color: var(--success-soft); }
+    .espn-auth-body { border-top: 1px solid var(--border); padding: 0.8rem 0.9rem 0.9rem; }
+    .espn-auth-body .config-note { margin-bottom: 0.6rem; }
+    .espn-auth-body .amazon-autologin-panel { border: 0; padding: 0; background: none; }
+    .espn-events input[type=checkbox], .espn-events input[type=radio] { accent-color: var(--focus-accent); cursor: pointer; }
+    .espn-events-head { display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; flex-wrap: wrap; margin-top: 1rem; }
+    .espn-events-head .config-subtitle { font-weight: 600; margin: 0; }
+    .espn-match { font-size: 0.8rem; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+    .espn-match strong { color: var(--text); }
+    .espn-services { display: flex; gap: 0.5rem 1.25rem; flex-wrap: wrap; margin: 0.6rem 0 0.9rem; }
+    .espn-services label, .espn-mode label, .espn-hide-shows label { display: flex; align-items: center; gap: 0.45rem; font-size: 0.84rem; color: var(--text); cursor: pointer; }
+    .espn-filter { border: 1px solid var(--border); border-radius: 8px; padding: 0.8rem 0.9rem; }
+    .espn-filter.is-off { opacity: 0.55; }
+    .espn-mode { display: flex; gap: 0.4rem 1.25rem; flex-wrap: wrap; align-items: center; }
+    .espn-mode-label { font-size: 0.8rem; font-weight: 600; color: var(--text-soft); margin-right: 0.25rem; }
+    .espn-hide-shows { margin-top: 0.55rem; }
+    .espn-hide-shows label { font-size: 0.8rem; color: var(--text-soft); }
+    .espn-picked { margin-top: 0.7rem; font-size: 0.8rem; color: var(--text-soft); line-height: 1.6; }
+    .espn-picked .espn-chip { display: inline-block; padding: 0.05rem 0.5rem; margin: 0 0.3rem 0.3rem 0; border: 1px solid var(--border); border-radius: 999px; color: var(--text); }
+    .espn-picked .espn-chip small { color: var(--text-muted); font-size: 0.74rem; }
+    .espn-picked.is-empty { color: var(--warning-soft); }
+    .espn-sport-list { margin-top: 0.7rem; max-height: 340px; overflow-y: auto; border-top: 1px solid var(--border); }
+    .espn-sport { border-bottom: 1px solid var(--border); }
+    .espn-sport-row { display: flex; align-items: center; gap: 0.5rem; padding: 0.4rem 0.15rem; }
+    .espn-sport-row label { display: flex; align-items: center; gap: 0.5rem; flex: 1; min-width: 0; font-size: 0.84rem; color: var(--text); cursor: pointer; }
+    .espn-count { color: var(--text-muted); font-size: 0.76rem; font-variant-numeric: tabular-nums; }
+    .espn-league-toggle { background: none; border: 0; padding: 0.15rem 0.35rem; border-radius: 4px; color: var(--text-muted); font-size: 0.76rem; cursor: pointer; white-space: nowrap; }
+    .espn-league-toggle:hover { color: var(--text); background: var(--surface-4); }
+    .espn-league-toggle:focus-visible { outline: 2px solid var(--focus-accent); outline-offset: 1px; }
+    .espn-league-toggle::after { content: ' ▸'; }
+    .espn-sport.is-open .espn-league-toggle::after { content: ' ▾'; }
+    .espn-leagues { display: none; flex-wrap: wrap; gap: 0.35rem 1.1rem; padding: 0 0.15rem 0.55rem 1.9rem; }
+    .espn-sport.is-open .espn-leagues { display: flex; }
+    .espn-leagues label { display: flex; align-items: center; gap: 0.4rem; font-size: 0.78rem; color: var(--text-soft); cursor: pointer; }
+    .espn-list-note { padding: 0.6rem 0.15rem; font-size: 0.8rem; color: var(--text-muted); }
     .amazon-account-details {
       margin-top: 0.9rem; border-top: 1px solid var(--border); padding-top: 0.75rem;
     }
@@ -675,6 +736,11 @@
     .btn-audit-reenable:hover:not(:disabled) { background: var(--accent-bg); }
     .btn-audit-reenable:disabled { opacity: 0.5; cursor: not-allowed; }
     .audit-no-results { color: var(--text-muted); font-size: 0.85rem; text-align: center; padding: 2rem 0; flex-shrink: 0; }
+    .audit-scope { border: 1px solid var(--border); border-radius: 8px; padding: 0.65rem 0.85rem; margin-top: 0.7rem; flex-shrink: 0; }
+    .audit-scope legend { padding: 0 0.3rem; color: var(--text-strong); font-size: 0.8rem; font-weight: 700; }
+    .audit-scope-option { display: flex; align-items: flex-start; gap: 0.5rem; padding: 0.3rem 0; color: var(--text); font-size: 0.82rem; cursor: pointer; }
+    .audit-scope-option input { margin-top: 0.15rem; flex-shrink: 0; }
+    .audit-scope-option small { display: block; color: var(--text-muted); font-size: 0.74rem; line-height: 1.35; margin-top: 0.1rem; }
     .audit-modal-actions {
       display: flex; gap: 0.75rem; justify-content: flex-end;
       margin-top: 0.75rem; padding-top: 0.75rem; border-top: 1px solid var(--surface); flex-shrink: 0;
@@ -757,7 +823,7 @@
         <button class="btn btn-run actions-btn" id="force-refresh-btn" onclick="forceCompleteRefresh()"
                 title="Clears saved scrape times and queues a full channel + guide refresh for every enabled source.">Force Complete Refresh</button>
         <button class="btn btn-run actions-btn" id="audit-all-btn" onclick="auditAll()"
-                title="Tests every active channel across all sources for stream health and DRM. Can take several minutes per source.">Audit All Sources</button>
+                title="Tests linear channels across all sources for stream health and DRM. Scheduled event channels are skipped.">Audit All Sources</button>
         <button class="btn btn-run actions-btn" id="cleanup-inactive-btn" onclick="openCleanupModal()"
                 title="Permanently delete channels that have been missing from scrapes for a configurable number of days.">Clean Up Inactive Channels<span class="inactive-pill" id="cleanup-inactive-pill" hidden></span></button>
       </div>
@@ -773,8 +839,8 @@
     </div>
     {% endif %}
 
-    {% set _CAT_LABELS = {'fast': 'FAST Sources', 'premium': 'Premium Sources', 'tve': 'TVE Sources', 'specialty': 'Specialty Sources', 'drm': 'DRM Sources', 'retired': 'Retired Sources'} %}
-    {% set _CAT_ORDER = ['fast', 'premium', 'tve', 'specialty', 'drm', 'retired'] %}
+    {% set _CAT_LABELS = {'fast': 'FAST Sources', 'premium': 'Premium Sources', 'tve': 'TVE Sources', 'specialty': 'Specialty Sources', 'custom': 'Custom Sources', 'drm': 'DRM Sources', 'retired': 'Retired Sources'} %}
+    {% set _CAT_ORDER = ['fast', 'premium', 'tve', 'specialty', 'custom', 'drm', 'retired'] %}
     <div class="sources-quicknav">
       <input type="text" id="source-filter-input" class="source-filter-input"
              placeholder="Filter sources by name…" oninput="filterSources(this.value)">
@@ -805,20 +871,27 @@
           {% set cfg_status = source_config_status.get(source.id, 'none') %}
           {% set retired = source_retired.get(source.id) %}
           {% set is_custom = source.name == 'custom' %}
-          {% set this_cat = source_categories.get(source.name, 'fast') if not is_custom else 'specialty' %}
+          {% set is_playlist = source.name.startswith('m3u_') %}
+          {% set this_cat = source_categories.get(source.name, 'fast') if not is_custom else 'custom' %}
           {% if this_cat != ns.last_cat %}
             {% set ns.last_cat = this_cat %}
             <tr class="source-category-header cat-{{ this_cat }}" id="cat-header-{{ this_cat }}"
                 data-cat="{{ this_cat }}" onclick="toggleCategoryCollapse('{{ this_cat }}')">
               <td colspan="4">
                 <span class="cat-chevron" id="cat-chevron-{{ this_cat }}">▾</span>{{ _CAT_LABELS.get(this_cat, this_cat | title) }}<span class="cat-count">{{ category_counts.get(this_cat, 0) }}</span>
+                {% if this_cat == 'custom' %}
+                <button type="button" class="btn btn-run btn-sm cat-header-action"
+                        onclick="event.stopPropagation(); openPlaylistModal()"
+                        title="Import your own M3U playlist, with its XMLTV guide if it has one.">+ Add Playlist</button>
+                {% endif %}
               </td>
             </tr>
           {% endif %}
 
           <tr class="dash-row {% if not source.is_enabled %}disabled{% endif %}" id="dash-row-{{ source.id }}"
               data-cat="{{ this_cat }}" data-search="{{ (source.display_name ~ ' ' ~ source.name) | lower }}"
-              {% if is_custom %}data-custom="true"{% endif %}>
+              {% if is_custom %}data-custom="true"{% endif %}
+              {% if is_custom or is_playlist %}data-keeps-channels="true"{% endif %}>
             <td class="col-source">
               <div class="source-name-wrap">
                 <span class="source-name">{{ source.display_name }}</span>
@@ -833,7 +906,9 @@
                   {% if under_development.get(source.name) %}
                     <span class="config-badge development" title="This source is under development and disabled by default">Under development</span>
                   {% endif %}
-                  {% if retired %}
+                  {% if is_playlist %}
+                    <span class="config-badge auto" style="font-style:italic">User-defined</span>
+                  {% elif retired %}
                     <span class="config-badge retired" id="config-badge-{{ source.id }}"
                           title="Upstream shut down; this scraper was removed. Auto-removed from this list in {{ retired.days_left }} day{{ '' if retired.days_left == 1 else 's' }}.">Retired</span>
                   {% elif cfg_status == 'configured' %}
@@ -886,7 +961,7 @@
               <div class="mobile-toggle-wrap">
                 <label class="toggle" id="mobile-toggle-{{ source.id }}">
                   <input type="checkbox" {% if source.is_enabled %}checked{% endif %}
-                         onchange="onSourceToggle({{ source.id }}, '{{ source.display_name }}', this)">
+                         onchange='onSourceToggle({{ source.id }}, {{ source.display_name | tojson }}, this)'>
                   <span class="slider"></span>
                 </label>
                 <span class="toggle-label {% if source.is_enabled %}on{% else %}off{% endif %}"
@@ -900,7 +975,7 @@
               <div class="toggle-wrap">
                 <label class="toggle" id="toggle-{{ source.id }}">
                   <input type="checkbox" {% if source.is_enabled %}checked{% endif %}
-                         onchange="onSourceToggle({{ source.id }}, '{{ source.display_name }}', this)">
+                         onchange='onSourceToggle({{ source.id }}, {{ source.display_name | tojson }}, this)'>
                   <span class="slider"></span>
                 </label>
                 <span class="toggle-label {% if source.is_enabled %}on{% else %}off{% endif %}"
@@ -920,7 +995,7 @@
                 <button class="btn btn-audit btn-sm" data-label="Stream<br>Audit"
                         onclick='openAuditModal({{ source.id }}, {{ source.display_name | tojson }})'
                         {% if not source.is_enabled %}disabled{% endif %}
-                        title="Test each channel's stream URL to check if it's live, DRM-protected, or dead. Flags problem channels automatically.">Stream<br>Audit</button>
+                        title="Check linear stream health and DRM. You can include scheduled events in the audit modal.">Stream<br>Audit</button>
                 {% endif %}
               </div>
               {% endif %}
@@ -1071,6 +1146,17 @@
                   <button class="btn-delete-inactive" type="button" onclick="deleteInactiveChannels({{ source.id }})">Delete Inactive</button>
                   <span class="delete-inactive-status" id="delete-status-{{ source.id }}"></span>
                 </div>
+
+                {% if is_playlist %}
+                <div class="interval-control">
+                  <label>Playlist</label>
+                  <button class="btn btn-cancel btn-sm" type="button" onclick="openPlaylistModal({{ source.id }})">Edit playlist…</button>
+                  <button class="btn-delete-inactive" type="button"
+                          onclick='deletePlaylist({{ source.id }}, {{ source.display_name | tojson }})'>Delete playlist</button>
+                  <span class="save-status" id="playlist-status-{{ source.id }}"></span>
+                  <div class="help">Edit changes the playlist or guide URL, the groups imported, default language and country, and whether channels without guide data get placeholder programmes. Turning the playlist off (the Enabled switch) pauses it and keeps its channels; Delete removes it and its channels for good.</div>
+                </div>
+                {% endif %}
 
                 <div class="source-config hidden" id="source-config-{{ source.id }}"></div>
               </div>
@@ -1518,7 +1604,7 @@
     }
 
     async function auditAll() {
-      if (!confirm('Run a stream audit for all sources? This tests every active channel for stream health and DRM, and can take several minutes per source.')) return;
+      if (!confirm('Run a stream audit for all sources? This checks linear channels and skips scheduled events. It can take several minutes per source.')) return;
       const btn = document.getElementById('audit-all-btn');
       const status = document.getElementById('global-status');
       btn.disabled = true;
@@ -1698,7 +1784,8 @@
     // ── Source enable/disable ─────────────────────────────────────────────
     function onSourceToggle(sourceId, sourceName, checkbox) {
       const row = document.getElementById(`dash-row-${sourceId}`);
-      const isCustom = row && row.dataset.custom === 'true';
+      // Custom Channels and playlists keep their channels when switched off.
+      const isCustom = row && row.dataset.keepsChannels === 'true';
       if (!checkbox.checked && !isCustom) {
         // Normal sources: show destructive confirm before disabling
         checkbox.checked = true;
@@ -1740,6 +1827,8 @@
       const cronSelect      = document.getElementById(`cron-preset-${sourceId}`);
       const cronOffsetInput = document.getElementById(`cron-offset-${sourceId}`);
       const schedSaveBtn    = document.getElementById(`schedule-save-${sourceId}`);
+      const missLimitInput  = document.getElementById(`disable-after-misses-${sourceId}`);
+      const missLimitSave   = document.getElementById(`disable-after-misses-save-${sourceId}`);
 
       if (checkbox) checkbox.checked = enabled;
       if (labelEl) {
@@ -1764,6 +1853,8 @@
       if (cronSelect)      cronSelect.disabled        = !enabled;
       if (cronOffsetInput) cronOffsetInput.disabled   = !enabled;
       if (schedSaveBtn)    schedSaveBtn.disabled      = !enabled;
+      if (missLimitInput)  missLimitInput.disabled    = !enabled;
+      if (missLimitSave)   missLimitSave.disabled     = !enabled;
     }
 
     // Disabling a source while it's mid-scrape can't apply instantly — the
@@ -1826,7 +1917,8 @@
           }
         }
 
-        if (!enabled) document.getElementById(`ch-count-${sourceId}`).textContent = '0';
+        const keepsChannels = document.getElementById(`dash-row-${sourceId}`)?.dataset.keepsChannels === 'true';
+        if (!enabled && !keepsChannels) document.getElementById(`ch-count-${sourceId}`).textContent = '0';
         applySourceEnabledState(sourceId, enabled);
         if (enabled) maybeOfferReviewHold(sourceId);
 
@@ -1869,10 +1961,13 @@
     let _auditModalPollTimer  = null;
     let _auditModalGrace      = 0;
     const _lastRecheckIds     = {};
+    const _auditScopeBySource = {};
+    const _auditEventCount    = {};
 
     function openAuditModal(sourceId, sourceName) {
       _auditModalSourceId   = sourceId;
       _auditModalSourceName = sourceName;
+      _auditScopeBySource[sourceId] = 'linear';
       if (_auditModalPollTimer) { clearTimeout(_auditModalPollTimer); _auditModalPollTimer = null; }
       const modal   = document.getElementById('audit-modal');
       const content = document.getElementById('audit-modal-content');
@@ -1897,6 +1992,7 @@
       try {
         const r = await fetch(`/api/sources/${_auditModalSourceId}/audit-status`);
         const d = await r.json();
+        _auditEventCount[_auditModalSourceId] = d.event_count ?? _auditEventCount[_auditModalSourceId] ?? 0;
         const content = document.getElementById('audit-modal-content');
         if (!content || !_auditModalSourceId) return;
         content.innerHTML = _renderAuditModalContent(_auditModalSourceId, _auditModalSourceName, d);
@@ -1913,8 +2009,13 @@
       const isRunning = data.status === 'running' || data.status === 'queued';
       const result    = data.last_result;
       const report    = data.last_report;
+      const eventCount = data.event_count ?? _auditEventCount[sourceId] ?? 0;
+      const selectedScope = _auditScopeBySource[sourceId] || 'linear';
 
       let html = `<div class="audit-modal-header"><div class="audit-modal-title">Stream Audit — ${escapeHtml(sourceName)}</div></div>`;
+      if (isRunning) {
+        html += `<div class="audit-running-note">Scope: ${data.scope === 'all' ? 'All channels, including events' : 'Linear channels only'}${data.skipped_events ? ` · ${data.skipped_events} event channels skipped` : ''}</div>`;
+      }
 
       if (isRunning) {
         const done  = data.done  || 0;
@@ -1958,6 +2059,8 @@
           const ok  = Math.max(0, (result.checked || 0) - (result.vod || 0) - (result.flagged || 0) - (result.bridged || 0));
           const bits = [
             result.total       ? (result.aborted_reason && result.channel_count ? `${result.total} of ${result.channel_count} scanned` : `${result.total} scanned`) + (result.not_in_output ? ` (${result.not_in_output} not in output)` : '') : null,
+            result.scope ? (result.scope === 'all' ? 'all channels' : 'linear only') : null,
+            result.skipped_events ? `${result.skipped_events} event channels skipped` : null,
             `<span class="aud-ok">${ok} ok</span>`,
             result.dead        ? `<span class="aud-dead">${result.dead} dead</span>`               : null,
             result.vod         ? `<span class="aud-vod">${result.vod} VOD</span>`                  : null,
@@ -2023,10 +2126,21 @@
           html += `</div>`;
           _lastRecheckIds[sourceId] = limited.map(c => c.id).filter(Boolean);
         } else if (!result) {
-          html += `<div class="audit-no-results">No audit has been run yet. Run an audit to check all channels for dead streams, DRM, and VOD-only content.</div>`;
+          html += `<div class="audit-no-results">No audit has been run yet. Choose which channels to check below.</div>`;
+        } else if (result && result.channel_count === 0) {
+          html += `<div class="audit-no-results">No channels matched this audit scope.</div>`;
         } else if (result && result.checked > 0) {
           html += `<div class="audit-no-results" style="color:var(--success-soft)">✓ All ${result.total || result.checked} channels are healthy.</div>`;
         }
+      }
+
+      if (!isRunning && eventCount > 0) {
+        html += `<fieldset class="audit-scope"><legend>Channels to check</legend>
+          <label class="audit-scope-option"><input type="radio" name="audit-scope" value="linear" ${selectedScope === 'linear' ? 'checked' : ''} onchange="_auditScopeBySource[${Number(sourceId)}]='linear'">
+            <span>Linear channels only <small>Recommended · skips ${eventCount} scheduled event channel${eventCount === 1 ? '' : 's'}.</small></span></label>
+          <label class="audit-scope-option"><input type="radio" name="audit-scope" value="all" ${selectedScope === 'all' ? 'checked' : ''} onchange="_auditScopeBySource[${Number(sourceId)}]='all'">
+            <span>All channels, including events <small>${sourceName === 'ESPN' ? 'ESPN checks scheduled events against its lineup; stream playback is checked when you tune.' : 'Upcoming events may have no playable stream yet. An audit can mark them dead.'}</small></span></label>
+        </fieldset>`;
       }
 
       const recheckIds = _lastRecheckIds[sourceId] || [];
@@ -2043,13 +2157,15 @@
     async function runAudit(sourceId) {
       const content = document.getElementById('audit-modal-content');
       if (!content) return;
+      const scope = _auditScopeBySource[sourceId] || 'linear';
       if (_auditModalPollTimer) { clearTimeout(_auditModalPollTimer); _auditModalPollTimer = null; }
       content.innerHTML = _renderAuditModalContent(sourceId, _auditModalSourceName,
-        {status: 'queued', last_result: null, last_report: null});
+        {status: 'queued', scope, last_result: null, last_report: null});
       try {
         const r = await fetch(`/api/sources/${sourceId}/stream-audit`, {
           method: 'POST',
           headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({scope}),
         });
         const d = await r.json();
         if (d.status === 'queued') {
@@ -2258,6 +2374,8 @@
       const bits  = [];
       if (r.total)            bits.push((r.aborted_reason && r.channel_count ? `${r.total} of ${r.channel_count} scanned` : `${r.total} scanned`)
                                 + (r.not_in_output ? ` (${r.not_in_output} not in output)` : ''));
+      if (r.scope)            bits.push(r.scope === 'all' ? 'all channels' : 'linear only');
+      if (r.skipped_events)   bits.push(`${r.skipped_events} events skipped`);
       if (r.checked != null)  bits.push(`<span class="aud-ok">${ok} ok</span>`);
       if (r.dead)             bits.push(`<span class="aud-dead">${r.dead} dead</span>`);
       if (r.vod)              bits.push(`<span class="aud-vod">${r.vod} VOD</span>`);
@@ -2917,9 +3035,8 @@
           return;
         }
 
-        // ESPN's only setting is its activation-code panel — its schema reaches the
-        // UI empty (the one field is hidden) but it still needs renderEspnConfig.
-        if (!schema.length && sourceName !== 'espn') {
+        // ESPN's visible settings are rendered separately from its hidden schema.
+        if (!schema.length && sourceName !== 'espn' && !cfg.tve_signin) {
           if (badge) {
             badge.textContent = 'Auto';
             badge.className = 'config-badge auto';
@@ -3140,8 +3257,9 @@
     let _directvPollTimer = null;
 
     function renderDirectvConfig(sourceId, schema, values, cfg = {}) {
-      const hasSession = cfg.config_complete === true || cfg.config_status === 'configured';
       const hasCreds = !!((values.username || '').trim() && (values.password || '').trim());
+      const codeSignedIn = !!(cfg.directv && cfg.directv.code_signed_in);
+      const webSignedIn = !codeSignedIn && hasCreds && !!cfg.token_captured_at;
       const toggleHtml = (key, fallbackLabel, fallbackHelp) => {
         const field = schema.find(f => f.key === key);
         const checked = ['1', 'true', 'yes', 'on'].includes(
@@ -3163,54 +3281,63 @@
             </div>
           </div>`;
       };
+      const ok = text => `<span style="color:var(--success-soft)">&#10003; ${text}</span>`;
+      const signedInHtml = codeSignedIn ? ok('Signed in with a code')
+        : (webSignedIn ? ok('Signed in with email and password') : 'Not signed in.');
       return `
         <div class="config-title">DirecTV Stream Settings</div>
         <div class="config-note">
           DirecTV Stream channels are DRM-protected and only play through a DRM bridge
-          (Bridge &rarr; PrismCast Capture, HDMI Capture, or ah4c Capture). ${hasSession
-            ? 'FastChannels has an active DirecTV session.'
-            : 'Connect your DirecTV Stream account below, then click Authenticate.'}
+          (Bridge &rarr; PrismCast Capture, HDMI Capture, or ah4c Capture).
         </div>
 
-        <div class="amazon-autologin-panel" id="directv-autologin-${sourceId}">
-          <div class="amazon-autologin-header">
-            <button class="btn btn-run" type="button"
-                    id="directv-login-btn-${sourceId}"
-                    ${hasCreds ? '' : 'disabled'}
-                    onclick="directvStartLogin(${sourceId})">${hasSession ? 'Re-authenticate' : 'Authenticate'}</button>
-            <span class="amazon-status-text" id="directv-status-${sourceId}">
-              ${hasSession ? '<span style="color:var(--success-soft)">&#10003; Session active</span>' : (hasCreds ? 'Account saved. Authenticate to finish setup.' : 'Add your DirecTV account below first.')}
+        <div class="signin-box" style="margin-top:0">
+          <div class="amazon-status-text">${signedInHtml}</div>
+          <div class="signin-box-row">
+            <button class="btn btn-run" type="button" id="directv-code-btn-${sourceId}"
+                    onclick="directvCodeStart(${sourceId})"
+                    title="Get a link to approve in a browser where you're signed in to DirecTV">${codeSignedIn ? 'Sign in again' : 'Sign in with a code'}</button>
+            <span class="amazon-status-text" id="directv-code-status-${sourceId}">
+              ${codeSignedIn ? '' : 'No password stored. Approve a link in your browser and FastChannels stays signed in.'}
             </span>
+            ${codeSignedIn ? `<button class="btn btn-cancel" type="button"
+                    onclick="directvSignOut(${sourceId})">Sign out</button>` : ''}
           </div>
+
+          <details class="amazon-account-details" ${webSignedIn || (hasCreds && !codeSignedIn) ? 'open' : ''}>
+            <summary>${codeSignedIn ? 'Backup: email and password' : 'Or sign in with email and password'}</summary>
+            <div class="fields-grid" style="margin-top:0.75rem;">
+              <div class="field">
+                <label for="cfg-${sourceId}-username">Email</label>
+                <input type="text" id="cfg-${sourceId}-username" data-key="username" data-secret="false"
+                       value="${escapeHtml(String(values.username || ''))}"
+                       placeholder="you@example.com" autocomplete="off">
+              </div>
+              <div class="field">
+                <label for="cfg-${sourceId}-password">Password</label>
+                <input type="password" id="cfg-${sourceId}-password" data-key="password" data-secret="true"
+                       value="${escapeHtml(String(values.password || ''))}" autocomplete="off">
+              </div>
+            </div>
+            <div class="signin-box-row">
+              ${codeSignedIn ? '' : `<button class="btn btn-run" type="button" id="directv-login-btn-${sourceId}"
+                      onclick="directvStartLogin(${sourceId})">${webSignedIn ? 'Sign in again' : 'Sign in'}</button>`}
+              <span class="amazon-status-text" id="directv-status-${sourceId}">
+                ${codeSignedIn ? 'Optional. Click Save Settings and FastChannels uses these only if the code sign-in stops working.' : ''}
+              </span>
+            </div>
+          </details>
         </div>
 
-        <div class="fields-grid">
+        <div class="fields-grid" style="margin-top:0.9rem">
           ${toggleHtml('exclude_fast_channels', 'Exclude FAST channels',
             'On = leave out free, ad-supported channels (DirecTV Stream numbers these 4000-4999).')}
           ${toggleHtml('use_provider_numbers', 'Use DirecTV channel numbers',
             'On = use DirecTV\'s own channel numbers (ESPN 206, CNN 202). Channels that share a number get subchannels, like 213.1.')}
         </div>
 
-        <details class="amazon-account-details" ${hasCreds ? '' : 'open'}>
-          <summary>Account settings</summary>
-          <div class="fields-grid" style="margin-top:0.75rem;">
-            <div class="field">
-              <label for="cfg-${sourceId}-username">Email</label>
-              <input type="text" id="cfg-${sourceId}-username" data-key="username" data-secret="false"
-                     value="${escapeHtml(String(values.username || ''))}"
-                     placeholder="you@example.com" autocomplete="off">
-            </div>
-            <div class="field">
-              <label for="cfg-${sourceId}-password">Password</label>
-              <input type="password" id="cfg-${sourceId}-password" data-key="password" data-secret="true"
-                     value="${escapeHtml(String(values.password || ''))}" autocomplete="off">
-            </div>
-          </div>
-        </details>
-
         <div class="config-actions">
           <span class="config-status" id="config-status-${sourceId}"></span>
-          <button class="btn btn-cancel" type="button" onclick="clearConfigFields(${sourceId})">Clear</button>
           <button class="btn btn-run" type="button" onclick="saveSourceConfig(${sourceId})">Save Settings</button>
         </div>`;
     }
@@ -3221,6 +3348,16 @@
       btn.disabled = true;
       statusEl.innerHTML = '<span style="color:var(--text-muted)">Starting...</span>';
       try {
+        // The login reads the saved email and password, so save just those two first.
+        const creds = {};
+        ['username', 'password'].forEach(key => {
+          creds[key] = document.getElementById(`cfg-${sourceId}-${key}`)?.value ?? '';
+        });
+        await fetch(`/api/sources/${sourceId}/config`, {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify(creds),
+        });
         const r = await fetch(`/api/sources/${sourceId}/directv-auto-login`, {method: 'POST'});
         if (!r.ok) {
           const d = await r.json().catch(() => ({}));
@@ -3255,10 +3392,10 @@
       const { status, detail } = data;
       const statusMap = {
         idle: null,
-        starting: '<span style="color:var(--text-muted)">Starting browser...</span>',
+        starting: '<span style="color:var(--text-muted)">Signing in…</span>',
         running: `<span style="color:var(--text-muted)">${escapeHtml(detail || 'Running...')}</span>`,
-        success: '<span style="color:var(--success-soft)">&#10003; Session captured.</span>',
-        failed: `<span style="color:var(--danger)">${escapeHtml(detail || 'Login failed.')}</span>`,
+        success: '<span style="color:var(--success-soft)">&#10003; Signed in.</span>',
+        failed: `<span style="color:var(--danger)">${escapeHtml(detail || 'Sign-in failed.')}</span>`,
       };
 
       if (status === 'idle' || !statusMap[status]) return;
@@ -3274,6 +3411,76 @@
       }
     }
     // -- end DirecTV auto-login ---------------------------------------------
+
+    // -- DirecTV code sign-in -----------------------------------------------
+    // The server only checks DirecTV when this panel polls, so a closed panel
+    // (no status element) ends the sign-in by itself.
+    const _directvCodeTimers = {};
+
+    async function directvCodeStart(sourceId) {
+      const btn = document.getElementById(`directv-code-btn-${sourceId}`);
+      const statusEl = document.getElementById(`directv-code-status-${sourceId}`);
+      btn.disabled = true;
+      statusEl.innerHTML = '<span style="color:var(--text-muted)">Getting a code…</span>';
+      try {
+        const r = await fetch(`/api/sources/${sourceId}/directv-code-login`, { method: 'POST' });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok) {
+          statusEl.innerHTML = `<span style="color:var(--danger-soft)">${escapeHtml(d.error || 'Could not get a code.')}</span>`;
+          return;
+        }
+        directvCodeShow(statusEl, d.code, d.url, sourceId);
+        directvCodePoll(sourceId);
+      } catch (e) {
+        statusEl.innerHTML = '<span style="color:var(--danger-soft)">Network error getting a code.</span>';
+      } finally {
+        btn.disabled = false;
+      }
+    }
+
+    function directvCodeShow(statusEl, code, url, sourceId) {
+      statusEl.innerHTML = `
+        Open <a href="${escapeHtml(url)}" target="_blank" rel="noopener">this DirecTV sign-in link</a>
+        and approve code <b style="font-size:1.4em;letter-spacing:.15em;font-family:monospace">${escapeHtml(code)}</b>
+        <span style="color:var(--text-muted)">— waiting…</span>
+        <button class="btn btn-cancel btn-sm" type="button" onclick="directvCodeCancel(${sourceId})">Cancel</button>`;
+    }
+
+    function directvCodePoll(sourceId) {
+      clearTimeout(_directvCodeTimers[sourceId]);
+      _directvCodeTimers[sourceId] = setTimeout(async () => {
+        const statusEl = document.getElementById(`directv-code-status-${sourceId}`);
+        if (!statusEl) return;  // panel gone
+        let d = {};
+        try {
+          d = await (await fetch(`/api/sources/${sourceId}/directv-code-state`)).json();
+        } catch (e) {
+          directvCodePoll(sourceId);
+          return;
+        }
+        if (d.state === 'waiting') {
+          directvCodePoll(sourceId);
+        } else if (d.state === 'success') {
+          statusEl.innerHTML = '<span style="color:var(--success-soft)">&#10003; Signed in.</span>';
+          setTimeout(() => loadSourceConfig(sourceId, 'directv'), 600);
+        } else {
+          statusEl.innerHTML = `<span style="color:var(--danger-soft)">${escapeHtml(d.message || 'Sign-in failed.')} Get a new code to try again.</span>`;
+        }
+      }, 3000);
+    }
+
+    async function directvCodeCancel(sourceId) {
+      clearTimeout(_directvCodeTimers[sourceId]);
+      await fetch(`/api/sources/${sourceId}/directv-code-login`, { method: 'DELETE' }).catch(() => {});
+      loadSourceConfig(sourceId, 'directv');
+    }
+
+    async function directvSignOut(sourceId) {
+      if (!confirm('Sign out of DirecTV? DirecTV channels stop playing until you sign in again. A saved email and password will sign back in automatically.')) return;
+      await fetch(`/api/sources/${sourceId}/directv-logout`, { method: 'POST' }).catch(() => {});
+      loadSourceConfig(sourceId, 'directv');
+    }
+    // -- end DirecTV code sign-in -------------------------------------------
 
     // ── Philo passwordless sign-in (email → code) ────────────────────────────
     function renderPhiloConfig(sourceId, schema, values) {
@@ -3403,62 +3610,322 @@
       }
     });
 
+    const _espnEventPolicy = {};
+    const _espnEventPreview = {};
+    const _espnSportNames = {};
+
     function renderEspnConfig(sourceId, schema, values, cfg) {
       const info = (cfg && cfg.espn) || {};
+      _espnEventPolicy[sourceId] = JSON.parse(JSON.stringify(info.event_filter || {sport_mode: 'all', sports: {}}));
       const tveProvider = info.tve_mvpd_name || info.settings_mvpd_name;
       const defaultMvpd = info.tve_mvpd_id || info.settings_mvpd_id;
       const provOpts = ['<option value="">Choose your TV provider…</option>'].concat(
         (info.providers || []).map(p =>
           `<option value="${escapeHtml(p.id)}" ${p.id === defaultMvpd ? 'selected' : ''}>${escapeHtml(p.name)}</option>`)
       ).join('');
+      setTimeout(() => espnEventsInit(sourceId), 0);
       return `
         <div class="config-title">ESPN Settings</div>
-        <div class="config-note">
-          Two ways to sign in; use either or both. Playback goes through the DRM bridge.
+        <div class="config-subtitle" style="font-weight:600">Sign in</div>
+        <div class="config-note">Use an ESPN account, a TV provider, or both. Playback uses the DRM bridge.</div>
+        <div class="espn-auth-options">
+          <details class="espn-auth-option">
+            <summary>
+              <span class="espn-auth-label"><strong>ESPN account</strong><small>ESPN+ events; Unlimited also adds linear channels</small></span>
+              <span class="espn-auth-state ${info.signed_in ? 'signed-in' : ''}">${info.signed_in ? '&#10003; Signed in' : 'Not signed in'}</span>
+            </summary>
+            <div class="espn-auth-body">
+              <div class="config-note">Get a code and enter it at espn.com/activate using your ESPN (MyDisney) account. Plain ESPN+ does not include linear networks.</div>
+              <div class="amazon-autologin-panel" id="espn-login-${sourceId}">
+                <div class="amazon-autologin-header">
+                  <button class="btn btn-run" type="button" id="espn-code-btn-${sourceId}"
+                          onclick="espnStartActivation(${sourceId})">${info.signed_in ? 'Sign in again' : 'Get code'}</button>
+                  ${info.signed_in ? `<button class="btn btn-cancel btn-sm" type="button"
+                          onclick="espnClearAuth(${sourceId})">Sign out</button>` : ''}
+                </div>
+                <span class="amazon-status-text" id="espn-status-${sourceId}"></span>
+              </div>
+            </div>
+          </details>
+          <details class="espn-auth-option">
+            <summary>
+              <span class="espn-auth-label"><strong>TV provider</strong><small>Linear networks included in your TV package</small></span>
+              <span class="espn-auth-state ${info.tve_signed_in ? 'signed-in' : ''}">${info.tve_signed_in ? '&#10003; Signed in' : 'Not signed in'}</span>
+            </summary>
+            <div class="espn-auth-body">
+              <div class="config-note">Choose a provider, then open the sign-in link on your phone or computer. Available channels depend on your TV package; NFL Network and MLB Network need an ESPN plan.</div>
+              <div class="field field-full" style="max-width:360px;margin:0.4rem 0 0.6rem">
+                <label for="espn-tve-provider-${sourceId}">TV provider</label>
+                <select id="espn-tve-provider-${sourceId}">${provOpts}</select>
+              </div>
+              <div class="amazon-autologin-panel" id="espn-tve-${sourceId}">
+                <div class="amazon-autologin-header">
+                  <button class="btn btn-run" type="button" id="espn-tve-btn-${sourceId}"
+                          onclick="espnTveStart(${sourceId})">${info.tve_signed_in ? 'Sign in again' : 'Get sign-in link'}</button>
+                  ${info.tve_signed_in ? `<button class="btn btn-cancel btn-sm" type="button"
+                          onclick="espnTveClear(${sourceId})">Sign out</button>` : ''}
+                </div>
+                <span class="amazon-status-text" id="espn-tve-status-${sourceId}">
+                  ${info.tve_signed_in ? `Signed in with ${escapeHtml(tveProvider || 'your TV provider')}` : ''}
+                </span>
+              </div>
+            </div>
+          </details>
         </div>
-        <div class="config-subtitle" style="margin-top:.75rem;font-weight:600">ESPN account</div>
-        <div class="config-note">
-          For ESPN Unlimited on your ESPN (MyDisney) account, bought directly or included by your TV
-          provider. Get a code here, then enter it at espn.com/activate on any device where you're
-          signed in. Plain ESPN+ doesn't include the linear networks.
-        </div>
-        <div class="amazon-autologin-panel" id="espn-login-${sourceId}">
-          <div class="amazon-autologin-header">
-            <button class="btn btn-run" type="button" id="espn-code-btn-${sourceId}"
-                    onclick="espnStartActivation(${sourceId})">${info.signed_in ? 'Sign in again' : 'Get code'}</button>
-            ${info.signed_in ? `<button class="btn btn-cancel btn-sm" type="button"
-                    onclick="espnClearAuth(${sourceId})">Sign out</button>` : ''}
+        <div class="espn-events" id="espn-events-${sourceId}">
+          <div class="espn-events-head">
+            <div class="config-subtitle">Event channels</div>
+            <span class="espn-match" id="espn-match-${sourceId}" aria-live="polite"></span>
           </div>
-          <span class="amazon-status-text" id="espn-status-${sourceId}">
-            ${info.signed_in ? `<span style="color:var(--success-soft)">&#10003; Signed in</span>` : ''}
-          </span>
-        </div>
-        <div class="config-subtitle" style="margin-top:1rem;font-weight:600">TV provider</div>
-        <div class="config-note">
-          For cable or streaming TV subscribers without ESPN Unlimited: plays whichever of ESPN, ESPN2,
-          ESPNU, ESPNews, ESPN Deportes, SEC Network and ACC Network your TV package includes (the
-          stream audit switches off the rest). NFL Network and MLB Network need an ESPN plan. Pick your
-          TV provider, get a sign-in link here, open it on your phone or computer, and sign in there.
-          ${info.settings_mvpd_id ? '' : `<br>Defaults to the provider from
-            <a href="/admin/settings#settings-card-tve">Settings → TV Everywhere</a> — none is set, so choose one here.`}
-        </div>
-        <div class="field field-full" style="max-width:360px;margin:0.4rem 0 0.6rem">
-          <label for="espn-tve-provider-${sourceId}">TV provider</label>
-          <select id="espn-tve-provider-${sourceId}">${provOpts}</select>
-        </div>
-        <div class="amazon-autologin-panel" id="espn-tve-${sourceId}">
-          <div class="amazon-autologin-header">
-            <button class="btn btn-run" type="button" id="espn-tve-btn-${sourceId}"
-                    onclick="espnTveStart(${sourceId})">${info.tve_signed_in ? 'Sign in again' : 'Get sign-in link'}</button>
-            ${info.tve_signed_in ? `<button class="btn btn-cancel btn-sm" type="button"
-                    onclick="espnTveClear(${sourceId})">Sign out</button>` : ''}
+          <div class="config-note">
+            Adds upcoming events as temporary channels with guide data. Availability depends on your
+            ESPN account. Channels retire two hours after their scheduled end and are deleted a day later.
           </div>
-          <span class="amazon-status-text" id="espn-tve-status-${sourceId}">
-            ${info.tve_signed_in
-              ? `<span style="color:var(--success-soft)">&#10003; Signed in with ${escapeHtml(tveProvider || 'your TV provider')}</span>`
-              : (tveProvider ? `<span style="color:var(--text-muted)">Provider: ${escapeHtml(tveProvider)}</span>` : '')}
-          </span>
+          <div class="espn-services">
+            <label><input type="checkbox" data-key="include_espn_plus_events"
+                   ${String(values.include_espn_plus_events || 'false').toLowerCase() === 'true' ? 'checked' : ''}
+                   onchange="espnEventsRefresh(${sourceId})">ESPN+</label>
+            <label><input type="checkbox" data-key="include_acc_extra_events"
+                   ${String(values.include_acc_extra_events || 'false').toLowerCase() === 'true' ? 'checked' : ''}
+                   onchange="espnEventsRefresh(${sourceId})">ACC Extra</label>
+            <label><input type="checkbox" data-key="include_sec_plus_events"
+                   ${String(values.include_sec_plus_events || 'false').toLowerCase() === 'true' ? 'checked' : ''}
+                   onchange="espnEventsRefresh(${sourceId})">SEC Plus</label>
+          </div>
+          <div class="espn-filter" id="espn-filter-${sourceId}">
+            <div class="espn-mode" role="radiogroup" aria-label="Sports">
+              <span class="espn-mode-label">Sports</span>
+              <label><input type="radio" name="espn-mode-${sourceId}" value="all"
+                     ${_espnEventPolicy[sourceId].sport_mode === 'all' ? 'checked' : ''}
+                     onchange="espnSetSportMode(${sourceId}, this.value)">All, including new ones</label>
+              <label><input type="radio" name="espn-mode-${sourceId}" value="selected"
+                     ${_espnEventPolicy[sourceId].sport_mode === 'selected' ? 'checked' : ''}
+                     onchange="espnSetSportMode(${sourceId}, this.value)">Only the ones I pick</label>
+            </div>
+            <div class="espn-hide-shows">
+              <label><input type="checkbox" ${_espnEventPolicy[sourceId].hide_likely_shows ? 'checked' : ''}
+                     onchange="espnSetHideLikelyShows(${sourceId}, this.checked)">Hide studio shows and uncategorized events</label>
+            </div>
+            <div class="espn-picked" id="espn-picked-${sourceId}"></div>
+            <div class="espn-sport-list" id="espn-sports-${sourceId}" hidden></div>
+          </div>
+        </div>
+        <div class="config-actions">
+          <span class="config-status" id="config-status-${sourceId}"></span>
+          <button class="btn btn-run" type="button" onclick="saveSourceConfig(${sourceId})">Save settings</button>
         </div>`;
+    }
+
+    // ── ESPN event sport/league picker ──────────────────────────────────
+    // The saved policy (_espnEventPolicy) keeps the server's format:
+    //   {sport_mode: 'all'|'selected', hide_likely_shows,
+    //    sports: {name: {league_mode: 'all'|'selected', leagues: [...]}}}
+    // Each sport's checkbox shows it: unchecked = not in sports, checked =
+    // league_mode 'all' (new leagues included), mixed = 'selected'.
+    // Checkbox clicks update rows in place, so the list keeps its scroll
+    // position and focus; only mode/service changes rebuild it.
+    const _espnOpenSports = {};
+
+    function _espnSelectedServices(sourceId) {
+      const keys = {
+        include_espn_plus_events: 'espn_plus',
+        include_acc_extra_events: 'acc_extra',
+        include_sec_plus_events: 'sec_plus',
+      };
+      return Object.entries(keys).filter(([key]) =>
+        document.querySelector(`#source-config-${sourceId} [data-key="${key}"]`)?.checked
+      ).map(([, service]) => service);
+    }
+
+    function _espnRule(policy, sport) {
+      const key = Object.keys(policy.sports).find(name => name.toLocaleLowerCase() === sport.toLocaleLowerCase());
+      return key === undefined ? null : policy.sports[key];
+    }
+
+    function _espnEventIncluded(event, policy) {
+      if (policy.hide_likely_shows && event.likely_show) return false;
+      if (policy.sport_mode === 'all') return true;
+      const rule = _espnRule(policy, event.sport);
+      return !!rule && (rule.league_mode === 'all' || rule.leagues.some(league =>
+        league.toLocaleLowerCase() === event.league.toLocaleLowerCase()));
+    }
+
+    // Events in the selected services, and their sports/leagues with counts.
+    // Saved sports and leagues stay listed at 0 when out of season.
+    function _espnCatalog(sourceId) {
+      const policy = _espnEventPolicy[sourceId];
+      const preview = _espnEventPreview[sourceId];
+      const services = _espnSelectedServices(sourceId);
+      const events = preview ? preview.events.filter(e => e.services.some(s => services.includes(s))) : [];
+      const listed = policy.hide_likely_shows ? events.filter(e => !e.likely_show) : events;
+      const bySport = new Map();
+      const add = (sport, league, n) => {
+        if (!bySport.has(sport)) bySport.set(sport, {count: 0, leagues: new Map()});
+        const entry = bySport.get(sport);
+        entry.count += n;
+        if (league !== null) entry.leagues.set(league, (entry.leagues.get(league) || 0) + n);
+      };
+      for (const e of listed) add(e.sport, e.league, 1);
+      for (const [sport, rule] of Object.entries(policy.sports)) {
+        add(sport, null, 0);
+        for (const league of rule.leagues || []) add(sport, league, 0);
+      }
+      const sports = [...bySport.keys()].sort((a, b) => a.localeCompare(b)).map(name => ({
+        name, count: bySport.get(name).count,
+        leagues: [...bySport.get(name).leagues].sort((a, b) => a[0].localeCompare(b[0])),
+      }));
+      return {events, sports};
+    }
+
+    function espnEventsInit(sourceId) {
+      espnEventsRefresh(sourceId);
+      if (_espnEventPreview[sourceId]) return;
+      fetch(`/api/sources/${sourceId}/espn-event-preview`)
+        .then(r => r.json().then(d => { if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`); return d; }))
+        .then(data => { _espnEventPreview[sourceId] = data; espnEventsRefresh(sourceId); })
+        .catch(err => {
+          _espnEventPreview[sourceId] = null;
+          const match = document.getElementById(`espn-match-${sourceId}`);
+          if (match) match.textContent = 'Event counts unavailable';
+          const list = document.getElementById(`espn-sports-${sourceId}`);
+          if (list) list.innerHTML = `<div class="espn-list-note">${escapeHtml(err.message)}</div>`;
+        });
+    }
+
+    // Rebuild everything that depends on the services, mode or show filter.
+    function espnEventsRefresh(sourceId) {
+      const policy = _espnEventPolicy[sourceId];
+      const box = document.getElementById(`espn-filter-${sourceId}`);
+      if (!policy || !box) return;
+      box.classList.toggle('is-off', !_espnSelectedServices(sourceId).length);
+      const list = document.getElementById(`espn-sports-${sourceId}`);
+      list.hidden = policy.sport_mode !== 'selected';
+      if (!list.hidden) {
+        const loaded = _espnEventPreview[sourceId];
+        if (loaded === undefined) {
+          list.innerHTML = '<div class="espn-list-note">Loading this week\'s sports…</div>';
+        } else if (loaded) {
+          const scroll = list.scrollTop;
+          const {sports} = _espnCatalog(sourceId);
+          _espnSportNames[sourceId] = sports;
+          list.innerHTML = sports.length ? sports.map((sport, i) => {
+            const open = _espnOpenSports[sourceId]?.has(sport.name);
+            const leagues = sport.leagues.map(([league, n], j) => `
+              <label><input type="checkbox" data-league="${j}"
+                     onchange="espnToggleLeague(${sourceId}, ${i}, ${j}, this.checked)">${escapeHtml(league)}
+                <span class="espn-count">${n}</span></label>`).join('');
+            return `<div class="espn-sport${open ? ' is-open' : ''}" data-sport="${i}">
+              <div class="espn-sport-row">
+                <label><input type="checkbox" onchange="espnToggleSport(${sourceId}, ${i}, this.checked)">
+                  ${escapeHtml(sport.name)} <span class="espn-count">${sport.count}</span></label>
+                ${sport.leagues.length > 1 ? `<button type="button" class="espn-league-toggle"
+                    aria-expanded="${open ? 'true' : 'false'}" onclick="espnToggleLeagues(${sourceId}, ${i})"></button>` : ''}
+              </div>
+              ${sport.leagues.length > 1 ? `<div class="espn-leagues">${leagues}</div>` : ''}
+            </div>`;
+          }).join('') : '<div class="espn-list-note">No events in the selected services right now.</div>';
+          sports.forEach((_, i) => _espnSyncSport(sourceId, i));
+          list.scrollTop = scroll;
+        }
+      }
+      _espnSyncSummary(sourceId);
+    }
+
+    // Reflect one sport's rule in its checkboxes and league-toggle label.
+    function _espnSyncSport(sourceId, index) {
+      const sport = _espnSportNames[sourceId][index];
+      const row = document.querySelector(`#espn-sports-${sourceId} .espn-sport[data-sport="${index}"]`);
+      if (!sport || !row) return;
+      const rule = _espnRule(_espnEventPolicy[sourceId], sport.name);
+      const box = row.querySelector('.espn-sport-row input');
+      box.checked = !!rule && rule.league_mode === 'all';
+      box.indeterminate = !!rule && rule.league_mode === 'selected';
+      const picked = new Set((rule?.leagues || []).map(l => l.toLocaleLowerCase()));
+      row.querySelectorAll('[data-league]').forEach(input => {
+        const league = sport.leagues[Number(input.dataset.league)][0];
+        input.checked = !!rule && (rule.league_mode === 'all' || picked.has(league.toLocaleLowerCase()));
+      });
+      const toggle = row.querySelector('.espn-league-toggle');
+      if (toggle) {
+        toggle.textContent = !rule ? `${sport.leagues.length} leagues`
+          : rule.league_mode === 'all' ? 'All leagues, incl. new'
+          : `${sport.leagues.filter(([l]) => picked.has(l.toLocaleLowerCase())).length} of ${sport.leagues.length} leagues`;
+      }
+    }
+
+    function _espnSyncSummary(sourceId) {
+      const policy = _espnEventPolicy[sourceId];
+      const picked = document.getElementById(`espn-picked-${sourceId}`);
+      const match = document.getElementById(`espn-match-${sourceId}`);
+      if (!picked) return;
+      const sports = Object.entries(policy.sports).sort((a, b) => a[0].localeCompare(b[0]));
+      picked.classList.toggle('is-empty', policy.sport_mode === 'selected' && !sports.length);
+      picked.innerHTML = policy.sport_mode === 'all'
+        ? 'Every sport and league, including ones ESPN adds later.'
+        : sports.length
+          ? sports.map(([name, rule]) => `<span class="espn-chip">${escapeHtml(name)}${rule.league_mode === 'selected'
+              ? ` <small>· ${escapeHtml(rule.leagues.join(', '))}</small>` : ''}</span>`).join('')
+          : 'No sports picked — no event channels will be added.';
+      const preview = _espnEventPreview[sourceId];
+      if (!match || !preview) {
+        if (match && preview === undefined) match.textContent = 'Counting events…';
+        return;
+      }
+      const {events} = _espnCatalog(sourceId);
+      const included = events.filter(e => _espnEventIncluded(e, policy)).length;
+      match.innerHTML = `<strong>${included}</strong> of ${events.length} events in the next ${preview.window_hours}h`;
+    }
+
+    function espnSetSportMode(sourceId, mode) {
+      _espnEventPolicy[sourceId].sport_mode = mode;
+      espnEventsRefresh(sourceId);
+    }
+
+    function espnSetHideLikelyShows(sourceId, checked) {
+      _espnEventPolicy[sourceId].hide_likely_shows = checked;
+      espnEventsRefresh(sourceId);
+    }
+
+    function espnToggleLeagues(sourceId, index) {
+      const sport = _espnSportNames[sourceId][index];
+      const row = document.querySelector(`#espn-sports-${sourceId} .espn-sport[data-sport="${index}"]`);
+      const open = !row.classList.contains('is-open');
+      row.classList.toggle('is-open', open);
+      row.querySelector('.espn-league-toggle').setAttribute('aria-expanded', String(open));
+      (_espnOpenSports[sourceId] ||= new Set())[open ? 'add' : 'delete'](sport.name);
+    }
+
+    function espnToggleSport(sourceId, index, checked) {
+      const policy = _espnEventPolicy[sourceId];
+      const sport = _espnSportNames[sourceId][index];
+      for (const name of Object.keys(policy.sports)) {
+        if (name.toLocaleLowerCase() === sport.name.toLocaleLowerCase()) delete policy.sports[name];
+      }
+      if (checked) policy.sports[sport.name] = {league_mode: 'all', leagues: []};
+      _espnSyncSport(sourceId, index);
+      _espnSyncSummary(sourceId);
+    }
+
+    function espnToggleLeague(sourceId, sportIndex, leagueIndex, checked) {
+      const policy = _espnEventPolicy[sourceId];
+      const sport = _espnSportNames[sourceId][sportIndex];
+      const league = sport.leagues[leagueIndex][0];
+      let rule = _espnRule(policy, sport.name);
+      if (!rule) rule = policy.sports[sport.name] = {league_mode: 'selected', leagues: []};
+      if (rule.league_mode === 'all') {
+        // Unticking one league of an all-leagues sport keeps the rest.
+        rule.league_mode = 'selected';
+        rule.leagues = sport.leagues.map(([name]) => name);
+      }
+      const others = rule.leagues.filter(name => name.toLocaleLowerCase() !== league.toLocaleLowerCase());
+      rule.leagues = checked ? [...others, league] : others;
+      if (!rule.leagues.length) {
+        for (const name of Object.keys(policy.sports)) {
+          if (name.toLocaleLowerCase() === sport.name.toLocaleLowerCase()) delete policy.sports[name];
+        }
+      }
+      _espnSyncSport(sourceId, sportIndex);
+      _espnSyncSummary(sourceId);
     }
 
     async function espnTveStart(sourceId) {
@@ -4438,7 +4905,291 @@
       _slingLoginSendInput({ type: 'key', key: event.key });
     }
 
+    // ── TVE source: shared or separate TV provider sign-in ──────────────────
+    // cfg.tve_signin is only sent for sources that can sign in with their own
+    // TV provider login instead of the one under Settings → TV Everywhere. A
+    // separate login is signed in right here, by a link opened on a phone —
+    // one link per network the source carries (info.networks).
+    function _tveSigninAgo(epoch) {
+      const mins = Math.max(0, Math.round((Date.now() / 1000 - epoch) / 60));
+      if (mins < 1) return 'just now';
+      if (mins < 60) return `${mins} min ago`;
+      if (mins < 48 * 60) return `${Math.round(mins / 60)} h ago`;
+      return `${Math.round(mins / 1440)} days ago`;
+    }
+
+    // 'TNT (Warner TVE)' -> 'TNT': on the source's own card the suffix is noise.
+    function _tveSigninShortLabel(label) {
+      return String(label || '').replace(/ \([^)]*\)$/, '');
+    }
+
+    function _tveSigninStatusHtml(info) {
+      const networks = info.networks || [];
+      const line = n => {
+        if (n.unsupported) return escapeHtml(n.unsupported);
+        if (n.needs_signin) {
+          return `<span style="color:var(--warning-soft,#b8860b)">Sign in again — ${escapeHtml(n.last_error_message || 'the saved sign-in stopped working.')}</span>`;
+        }
+        const signedIn = n.last_signed_in_at ? `Signed in ${_tveSigninAgo(n.last_signed_in_at)}.` : 'Not signed in yet.';
+        const failed = n.last_error_message
+          ? ` <span style="color:var(--danger)">Last attempt failed ${_tveSigninAgo(n.last_error_at)}: ${escapeHtml(n.last_error_message)}</span>`
+          : '';
+        return signedIn + failed;
+      };
+      if (networks.length === 1) return line(networks[0]);
+      return networks.map(n => `<div>${escapeHtml(_tveSigninShortLabel(n.label))}: ${line(n)}</div>`).join('');
+    }
+
+    // Wrapped so a save can redraw just this section (a source's own settings
+    // may sit above it in the same card).
+    function renderTveSigninSection(sourceId, info) {
+      return `<div id="tve-signin-${sourceId}">${renderTveSigninConfig(sourceId, info)}</div>`;
+    }
+
+    function renderTveSigninConfig(sourceId, info) {
+      const separate = info.mode === 'separate';
+      const several = (info.networks || []).length > 1;
+      const providerOpts = ['<option value="">Choose a TV provider…</option>'].concat(
+        (info.providers || []).map(p => {
+          const label = p.id !== p.name ? `${p.name} (${p.id})` : p.name;
+          return `<option value="${escapeHtml(p.id)}" ${p.id === info.provider_id ? 'selected' : ''}>${escapeHtml(label)}</option>`;
+        })).join('');
+      const settingsLink = '<a href="/admin/settings#settings-card-tve">Settings → TV Everywhere</a>';
+      const sharedNote = info.shared_provider
+        ? `Uses the TV provider saved under ${settingsLink} (${escapeHtml(info.shared_provider)}), and signs in there.`
+        : `No TV provider is saved under ${settingsLink} yet. Add one there, or use a different sign-in here.`;
+      return `
+        <div class="config-title">TV Provider Sign-In</div>
+        <div class="config-note">Choose which TV provider login this source signs in with.</div>
+        <div class="fields-grid">
+          <div class="field field-full">
+            <label for="tve-signin-${sourceId}-mode">Sign in with</label>
+            <select id="tve-signin-${sourceId}-mode" onchange="tveSigninModeChanged(${sourceId}, this.value)">
+              <option value="shared" ${separate ? '' : 'selected'}>Shared TV provider (Settings → TV Everywhere)</option>
+              <option value="separate" ${separate ? 'selected' : ''}>A different sign-in, just for this source</option>
+            </select>
+            <div class="help" id="tve-signin-${sourceId}-shared-note" ${separate ? 'style="display:none"' : ''}>${sharedNote}</div>
+          </div>
+        </div>
+        <div class="subfields" id="tve-signin-${sourceId}-separate" ${separate ? '' : 'style="display:none"'}>
+          <div class="fields-grid">
+            <div class="field field-full">
+              <label for="tve-signin-${sourceId}-provider">TV provider</label>
+              <input type="text" placeholder="Search TV providers" autocomplete="off" style="margin-bottom:0.35rem"
+                     oninput="tveSigninFilterProviders(${sourceId}, this.value)">
+              <select id="tve-signin-${sourceId}-provider">${providerOpts}</select>
+              <div class="help">You sign in on your phone or computer with a link — no username or password is stored here.${several ? ' This source has several networks; each gets its own link, one after another.' : ''}</div>
+            </div>
+          </div>
+          <div class="help" id="tve-signin-${sourceId}-state" style="margin-top:0.5rem">${separate ? _tveSigninStatusHtml(info) : ''}</div>
+          <div style="margin-top:0.5rem">
+            <button class="btn btn-run" type="button" id="tve-signin-${sourceId}-start" onclick="tveSigninByPhone(${sourceId})"
+                    title="Get a link and QR code to sign in on your own phone or computer">Sign in on my phone</button>
+          </div>
+          <div id="tve-signin-${sourceId}-link" style="display:none;margin-top:0.75rem;padding:0.8rem 0.9rem;border:1px solid var(--border);border-radius:6px">
+            <div id="tve-signin-${sourceId}-link-status" style="margin-bottom:0.5rem">Getting a sign-in link…</div>
+            <div id="tve-signin-${sourceId}-link-body" style="display:none">
+              <div id="tve-signin-${sourceId}-link-code-row" style="display:none;margin:0 0 0.55rem">
+                Enter this code on the page below: <b id="tve-signin-${sourceId}-link-code" style="font-size:1.6em;letter-spacing:0.15em;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace"></b>
+              </div>
+              <div style="display:flex;flex-wrap:wrap;gap:0.9rem;align-items:center;margin-bottom:0.45rem">
+                <div id="tve-signin-${sourceId}-link-qr" style="width:200px;height:200px;flex:none;background:#fff;border-radius:6px;padding:6px;box-sizing:border-box"></div>
+                <div class="help" style="flex:1;min-width:220px">Scan the QR code with your phone's camera, or open the link below on any phone or computer, and sign in to this TV provider there. Use a private/incognito tab if that browser is already signed in to a different TV provider account. Each link works for about 10 minutes.</div>
+              </div>
+              <a id="tve-signin-${sourceId}-link-url" href="#" target="_blank" rel="noopener" style="font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:0.8rem;word-break:break-all"></a>
+            </div>
+            <div style="margin-top:0.6rem;display:flex;gap:0.5rem">
+              <button class="btn btn-cancel" type="button" id="tve-signin-${sourceId}-link-skip" style="display:none"
+                      onclick="tveSigninSkip(${sourceId})" title="Stop waiting for this network and move on to the next">Skip this one</button>
+              <button class="btn btn-cancel" type="button" id="tve-signin-${sourceId}-link-close" onclick="tveSigninCloseLink(${sourceId})">Cancel</button>
+            </div>
+          </div>
+        </div>
+        <div class="config-actions">
+          <span class="config-status" id="tve-signin-${sourceId}-status"></span>
+          <button class="btn btn-run" type="button" onclick="saveTveSignin(${sourceId})">Save</button>
+        </div>`;
+    }
+
+    // The provider list is several hundred long.
+    function tveSigninFilterProviders(sourceId, query) {
+      const q = query.trim().toLowerCase();
+      const select = document.getElementById(`tve-signin-${sourceId}-provider`);
+      let firstMatch = null;
+      [...select.options].forEach(o => {
+        if (!o.value) return;
+        o.hidden = !!q && !o.textContent.toLowerCase().includes(q);
+        if (!o.hidden && !firstMatch) firstMatch = o;
+      });
+      // Nothing chosen yet, or the choice just got filtered out: take the top match.
+      const current = select.selectedOptions[0];
+      if (q && firstMatch && (!current || !current.value || current.hidden)) select.value = firstMatch.value;
+    }
+
+    function tveSigninModeChanged(sourceId, mode) {
+      document.getElementById(`tve-signin-${sourceId}-separate`).style.display = mode === 'separate' ? '' : 'none';
+      document.getElementById(`tve-signin-${sourceId}-shared-note`).style.display = mode === 'separate' ? 'none' : '';
+    }
+
+    // Saves the choice and redraws the section. Returns the saved info, or
+    // null after showing the error.
+    async function saveTveSignin(sourceId) {
+      const status = document.getElementById(`tve-signin-${sourceId}-status`);
+      const field = name => document.getElementById(`tve-signin-${sourceId}-${name}`).value;
+      _tveSigninStop(sourceId);
+      status.textContent = 'Saving…';
+      status.className = 'config-status';
+      try {
+        const r = await fetch(`/api/sources/${sourceId}/tve-signin`, {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({ mode: field('mode'), provider_id: field('provider') }),
+        });
+        const data = await r.json();
+        if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
+        document.getElementById(`tve-signin-${sourceId}`).innerHTML = renderTveSigninConfig(sourceId, data);
+        const after = document.getElementById(`tve-signin-${sourceId}-status`);
+        after.textContent = !data.signin_changed ? '✓ Saved'
+          : (data.mode === 'separate' ? '✓ Saved — now sign in on your phone'
+            : '✓ Saved — now using the shared TV provider; sign in again under Settings → TV Everywhere if it doesn\'t play');
+        after.className = 'config-status ok';
+        return data;
+      } catch (e) {
+        status.textContent = e.message;
+        status.className = 'config-status error';
+        return null;
+      }
+    }
+
+    // One phone-link sign-in at a time (the server keeps a single one too).
+    // {sourceId, timer, done, skip}; replaced or nulled to cancel a run.
+    let _tveSigninRun = null;
+
+    function _tveSigninStop(sourceId) {
+      const run = _tveSigninRun;
+      if (!run || run.sourceId !== sourceId) return;
+      if (run.timer) clearTimeout(run.timer);
+      _tveSigninRun = null;
+      if (!run.done) fetch('/api/settings/tve/link-login/stop', { method: 'POST' }).catch(() => {});
+    }
+
+    function tveSigninCloseLink(sourceId) {
+      _tveSigninStop(sourceId);
+      const panel = document.getElementById(`tve-signin-${sourceId}-link`);
+      if (panel) panel.style.display = 'none';
+      const start = document.getElementById(`tve-signin-${sourceId}-start`);
+      if (start) start.disabled = false;
+    }
+
+    function tveSigninSkip(sourceId) {
+      if (_tveSigninRun && _tveSigninRun.sourceId === sourceId) _tveSigninRun.skip = true;
+    }
+
+    // Signs in one network by link. Resolves {ok, message}, or null if the
+    // run was cancelled meanwhile.
+    async function _tveSigninOne(run, network, prefix, el) {
+      const status = el('link-status');
+      const cancelled = () => _tveSigninRun !== run;
+      status.style.color = '';
+      status.textContent = `${prefix}Getting a sign-in link…`;
+      el('link-body').style.display = 'none';
+      el('link-url').removeAttribute('href');
+      run.skip = false;
+      let runId;
+      try {
+        const r = await fetch('/api/settings/tve/link-login/start', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({ family: network.family, requestor_id: network.requestor_id || undefined }),
+        });
+        const d = await r.json();
+        if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
+        runId = d.run_id;
+      } catch (e) {
+        return cancelled() ? null : { ok: false, message: e.message };
+      }
+      for (;;) {
+        if (cancelled()) return null;
+        if (run.skip) {
+          await fetch('/api/settings/tve/link-login/stop', { method: 'POST' }).catch(() => {});
+          return { ok: false, message: 'skipped' };
+        }
+        try {
+          const d = await (await fetch('/api/settings/tve/link-login/state')).json();
+          if (cancelled()) return null;
+          if (d.run_id !== runId) {
+            return { ok: false, message: d.state === 'idle' ? 'the sign-in was stopped' : 'another sign-in was started' };
+          }
+          if (d.state === 'waiting' && d.url) {
+            // A source's own networks (AMC's four) arrive as one run, link after link.
+            const which = d.label && d.label !== network.label && !prefix.includes(d.label) ? `${d.label}: ` : '';
+            status.textContent = `${prefix}${which}waiting for you to sign in…`;
+            const a = el('link-url');
+            if (a.getAttribute('href') !== d.url) {
+              a.href = d.url;
+              a.textContent = d.url;
+              renderQrCode(el('link-qr'), d.url);
+            }
+            el('link-code-row').style.display = d.code ? '' : 'none';
+            el('link-code').textContent = d.code || '';
+            el('link-body').style.display = '';
+          } else if (d.state === 'success' || d.state === 'error') {
+            return { ok: d.state === 'success', message: d.message || (d.state === 'success' ? 'Signed in.' : 'Sign-in failed.') };
+          }
+        } catch (e) { /* transient; keep polling */ }
+        await new Promise(resolve => { run.timer = setTimeout(resolve, 2000); });
+      }
+    }
+
+    async function tveSigninByPhone(sourceId) {
+      const saved = await saveTveSignin(sourceId);  // the links are for the provider chosen above
+      if (!saved || saved.mode !== 'separate') return;
+      const el = name => document.getElementById(`tve-signin-${sourceId}-${name}`);
+      const networks = (saved.networks || []).filter(n => n.family && !n.unsupported);
+      if (!networks.length) return;
+      const run = { sourceId, timer: null, done: false, skip: false };
+      _tveSigninRun = run;
+      el('link').style.display = '';
+      el('start').disabled = true;
+      el('status').textContent = '';
+      el('link-skip').style.display = networks.length > 1 ? '' : 'none';
+
+      const results = [];
+      for (let i = 0; i < networks.length; i++) {
+        const label = _tveSigninShortLabel(networks[i].label);
+        const prefix = networks.length > 1 ? `${label} (${i + 1} of ${networks.length}) — ` : '';
+        const res = await _tveSigninOne(run, networks[i], prefix, el);
+        if (res === null) return;  // cancelled; the panel is already closed or redrawn
+        results.push({ label, ...res });
+      }
+      run.done = true;
+
+      const failed = results.filter(r => !r.ok);
+      const status = el('link-status');
+      el('link-body').style.display = 'none';
+      el('link-skip').style.display = 'none';
+      el('link-close').textContent = 'Close';
+      el('start').disabled = false;
+      status.style.color = failed.length ? 'var(--danger)' : 'var(--success-soft)';
+      if (networks.length === 1) {
+        status.textContent = (failed.length ? '✗ ' : '✓ ') + results[0].message;
+      } else {
+        const ok = results.length - failed.length;
+        status.textContent = (failed.length ? '✗ ' : '✓ ') + `Signed in to ${ok} of ${results.length}.`
+          + (failed.length ? ' Not signed in: ' + failed.map(r => `${r.label} (${r.message})`).join('; ') + '.' : '');
+      }
+      try {
+        const info = await (await fetch(`/api/sources/${sourceId}/tve-signin`)).json();
+        const state = el('state');
+        if (state) state.innerHTML = _tveSigninStatusHtml(info);
+      } catch (e) { /* the status lines just stay as they were */ }
+    }
+
     function renderConfigFields(sourceId, sourceName, schema, values, cfg) {
+      // TVE sources: the sign-in choice is the whole section, or follows the
+      // source's own settings when it has any (NBC).
+      const tveSignin = cfg && cfg.tve_signin ? renderTveSigninSection(sourceId, cfg.tve_signin) : '';
+      if (tveSignin && !schema.length) return tveSignin;
       let primarySchema = schema;
       let advancedSchema = [];
       let advancedTitle = '';
@@ -4541,7 +5292,8 @@
           <span class="config-status" id="config-status-${sourceId}"></span>
           <button class="btn btn-cancel" type="button" onclick="clearConfigFields(${sourceId})">Clear</button>
           <button class="btn btn-run" type="button" onclick="saveSourceConfig(${sourceId})">Save Settings</button>
-        </div>`;
+        </div>
+        ${tveSignin ? `<div style="margin-top:1.25rem">${tveSignin}</div>` : ''}`;
     }
 
     async function deleteInactiveChannels(sourceId, days = 7) {
@@ -4596,6 +5348,9 @@
         }
         payload[key] = keyFields[0].value;
       });
+      if (getSourceName(sourceId) === 'espn' && _espnEventPolicy[sourceId]) {
+        payload.event_filter = _espnEventPolicy[sourceId];
+      }
 
       status.textContent = 'Saving…';
       status.className = 'config-status';
@@ -5538,5 +6293,6 @@
 <script src="{{ url_for('static', filename='js/admin_theme.js') }}"></script>
 <script src="{{ url_for('static', filename='js/vendor/qrcode-generator-1.4.4.js') }}"></script>
   {% include 'admin/_update_modal.html' %}
+  {% include 'admin/_playlist_modal.html' %}
 </body>
 </html>

@@ -155,7 +155,7 @@
         <h2>Inspect &amp; Stream Audit</h2>
         <ul>
           <li><code>Inspect</code> tests a single channel's full resolve path — identifies dead manifests, VOD-only streams, DRM, and resolver failures. Also shows stream variant stats (resolution, bitrate, codecs).</li>
-          <li><code>Stream Audit</code> health-checks every channel for a source in bulk and marks dead/DRM channels inactive automatically.</li>
+          <li><code>Stream Audit</code> checks linear channels by default. You can include scheduled events per run; future events may not have playable streams yet. The audit marks confirmed dead or unplayable channels inactive automatically.</li>
         </ul>
       </section>
 

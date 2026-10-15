@@ -8,7 +8,8 @@ from datetime import datetime, timezone
 from flask import Blueprint, jsonify, request
 from sqlalchemy.exc import OperationalError
 from ..extensions import db
-from ..models import Source, Channel
+from ..models import Source, Channel, Feed
+from ..channel_tags import AUTO_EVENT_REASONS, is_event_channel
 from ..drm_bridge import drm_bridge_mode_for
 from .tasks import (
     trigger_bulk_channel_update,
@@ -47,7 +48,8 @@ def list_channels():
     if request.args.get('slim') in ('1', 'true'):
         items = [{'id': ch.id, 'name': ch.name, 'source_name': ch.source.name,
                   'category': ch.category, 'language': ch.language,
-                  'country': ch.country, 'gracenote_id': ch.gracenote_id}
+                  'country': ch.country, 'gracenote_id': ch.gracenote_id,
+                  'is_event': is_event_channel(ch)}
                  for ch in pag.items]
     else:
         items = [ch.to_dict() for ch in pag.items]
@@ -138,6 +140,53 @@ def update_channel(channel_id):
         pinned_chno = str(data['pinned_chno']).strip()
         if not _DECIMAL_CHNO_RE.fullmatch(pinned_chno):
             return jsonify({'error': 'Decimal channel number must look like 700.1'}), 422
+
+    # Locks started from a feed's number editor must not silently replace that
+    # channel's different number in another feed. The Channels page remains the
+    # place for deliberate channel-wide overrides.
+    if 'lock_from_feed_id' in data:
+        feed_id = data['lock_from_feed_id']
+        if isinstance(feed_id, bool) or not isinstance(feed_id, int):
+            return jsonify({'error': 'lock_from_feed_id must be a feed ID'}), 400
+        origin = db.session.get(Feed, feed_id)
+        if origin is None:
+            return jsonify({'error': 'Feed not found'}), 404
+        requested = pinned_chno if pinned_chno is not None else data.get('number')
+        if requested is None or data.get('number_pinned') is False:
+            return jsonify({'error': 'A channel number lock is required'}), 400
+        from .feeds_api import _displayed_feed_chnum_map
+        origin_map = _displayed_feed_chnum_map(origin)
+        origin_number = origin_map.get(ch.id)
+        if origin_number is None:
+            return jsonify({'error': 'This channel is not in the selected feed. Save the feed first.'}), 409
+        conflicts = {}
+        occupied = []
+        for feed in [origin, *Feed.query.filter(Feed.id != origin.id).all()]:
+            number_map = origin_map if feed.id == origin.id else _displayed_feed_chnum_map(feed)
+            other_number = number_map.get(ch.id)
+            if other_number is not None and str(other_number) != str(requested):
+                if feed.id != origin.id:
+                    conflicts[feed.name] = str(other_number)
+            if other_number is not None and any(
+                channel_id != ch.id and str(number) == str(requested)
+                for channel_id, number in number_map.items()
+            ):
+                occupied.append(feed.name)
+        if occupied:
+            return jsonify({
+                'error': f'Cannot lock {requested} globally: that number belongs to another channel in '
+                         f'{", ".join(occupied[:3])}. No numbers were changed.',
+            }), 409
+        if conflicts:
+            summary = ', '.join(f'{name} ({number})' for name, number in list(conflicts.items())[:3])
+            if len(conflicts) > 3:
+                summary += f', and {len(conflicts) - 3} more'
+            return jsonify({
+                'error': f'Cannot lock {requested} globally: this channel has a different number in '
+                         f'{summary}. No numbers were changed. Use the Channels page for an intentional '
+                         'global override.',
+                'conflicts': conflicts,
+            }), 409
 
     def _apply_changes():
         """Apply all field mutations to ch. Re-runnable after a rollback."""
@@ -231,6 +280,8 @@ def update_channel(channel_id):
         # 'pending' marker so it leaves the "Needs review" filter.
         if 'is_enabled' in data:
             ch.review_state = 'approved'
+            if data['is_enabled'] is False and ch.disable_reason in AUTO_EVENT_REASONS:
+                ch.disable_reason = None
         if data.get('review_action') == 'keep_disabled':
             ch.review_state = 'approved'
         if data.get('is_enabled') is True and 'is_active' not in data:
@@ -253,7 +304,7 @@ def update_channel(channel_id):
                         'automatically — no need to toggle it manually.'
                     )
             ch.is_active = True
-            if ch.disable_reason in ('Dead', 'VOD', 'NotAuthorized') or was_drm_disabled:
+            if ch.disable_reason in ('Dead', 'VOD', 'NotAuthorized', 'Missing from playlist', *AUTO_EVENT_REASONS) or was_drm_disabled:
                 ch.disable_reason = None
             ch.last_seen_at = datetime.now(timezone.utc)
             ch.missed_scrapes = 0
@@ -273,6 +324,14 @@ def update_channel(channel_id):
             db.session.rollback()
             return jsonify({'error': str(exc)}), 422
         try:
+            # A lock change can displace another channel's sticky number. Settle
+            # the feed number pools now rather than at the next scrape: until
+            # then a feed's standard and Gracenote playlists are numbered
+            # independently and can both hand out the displaced number.
+            if any(k in data for k in ('number', 'number_pinned', 'pinned_chno')):
+                from ..worker import _refresh_auto_channel_numbers
+                db.session.flush()
+                _refresh_auto_channel_numbers()
             db.session.commit()
             break
         except OperationalError as _oe:

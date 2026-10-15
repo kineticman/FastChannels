@@ -8,7 +8,7 @@ from flask import Blueprint, current_app, jsonify, render_template, request
 from sqlalchemy import select, case
 from sqlalchemy.orm import load_only, defer
 from ..extensions import db
-from ..models import Source, Channel, Feed, FeedChannelNumber, AppSettings, Program, TVEAccount
+from ..models import Source, Channel, Feed, FeedChannelNumber, AppSettings, Program
 from ..generators.m3u import (
     _build_channel_query,
     _build_feed_chnum_map,
@@ -22,6 +22,7 @@ from ..generators.m3u import (
     feed_to_query_filters,
 )
 from ..scrapers import registry as _scraper_registry
+from ..channel_tags import event_filter_clause
 from ..drm_bridge import DRM_BRIDGE_TRUSTED_SOURCES
 from .. import fc_player_bridge as _fc_player_bridge
 from ..source_config import (
@@ -32,6 +33,7 @@ from ..source_config import (
 )
 from ..timezone_utils import timezone_choices, timezone_health
 from ..url import public_base_url, detected_base_url
+from ..tve.accounts import shared_tve_account
 from ..tve.providers import ytdlp_adobe_mso_providers
 
 admin_bp = Blueprint('admin', __name__, template_folder='../templates')
@@ -323,6 +325,8 @@ def _category_clause(values):
 def _apply_admin_feed_membership_filters(query, feed: Feed):
     """Apply a feed's membership rules without forcing enabled/active output constraints."""
     filters = feed_to_query_filters(feed.filters or {})
+    if (event_clause := event_filter_clause(filters.get('event'))) is not None:
+        query = query.filter(event_clause)
     if channel_ids := filters.get('channel_ids'):
         # A channel pinned into the feed but absent from its explicit whitelist should
         # still count as a member here — same gap as the M3U/EPG generators had (see
@@ -473,7 +477,7 @@ def dashboard():
     base_url       = public_base_url()
     feeds          = Feed.query.filter_by(is_enabled=True).order_by(Feed.name).all()
     app_settings   = AppSettings.get()
-    all_scrapers   = _scraper_registry.get_all()
+    all_scrapers   = _scraper_registry.get_all_including(s.name for s in sources)
     under_development = {
         name: getattr(cls, 'under_development', False)
         for name, cls in all_scrapers.items()
@@ -592,7 +596,9 @@ def dashboard():
 
 @admin_bp.route('/sources')
 def sources():
-    all_scrapers   = _scraper_registry.get_all()
+    all_scrapers   = _scraper_registry.get_all_including(
+        name for (name,) in db.session.query(Source.name).all()
+    )
     audit_enabled  = {
         name: getattr(cls, 'stream_audit_enabled', False)
         for name, cls in all_scrapers.items()
@@ -688,10 +694,10 @@ def sources():
         if source_config_status.get(s.id) == 'required' and s.is_enabled
     ]
 
-    _CAT_ORDER = {'fast': 0, 'premium': 1, 'tve': 2, 'specialty': 3, 'drm': 4, 'retired': 5}
+    _CAT_ORDER = {'fast': 0, 'premium': 1, 'tve': 2, 'specialty': 3, 'custom': 4, 'drm': 5, 'retired': 6}
 
     def _cat_for(s):
-        return source_categories.get(s.name, 'fast') if s.name != 'custom' else 'specialty'
+        return source_categories.get(s.name, 'fast') if s.name != 'custom' else 'custom'
 
     sources_list.sort(key=lambda s: (_CAT_ORDER.get(_cat_for(s), 99), s.display_name))
 
@@ -741,6 +747,7 @@ def channels():
     epg_filter       = request.args.get('epg', '')
     resolution_filter = request.args.get('resolution', '')
     featured_filter  = request.args.get('featured', '')
+    event_filter     = request.args.get('event', '')
     sort_by          = request.args.get('sort', 'name')
     sort_dir         = request.args.get('dir', 'asc')
 
@@ -847,6 +854,8 @@ def channels():
             Channel.tags.ilike('%featured%'),
             Channel.content_swap_count > 0,
         ))
+    if (event_clause := event_filter_clause(event_filter)) is not None:
+        q = q.filter(event_clause)
 
     if duplicates_filter == '1':
         q = q.filter(db.or_(
@@ -1025,6 +1034,7 @@ def channels():
         'epg': epg_filter,
         'resolution': resolution_filter,
         'featured': featured_filter,
+        'event': event_filter,
         'sort': sort_by, 'dir': sort_dir,
     }.items() if v}, doseq=True)
 
@@ -1048,6 +1058,7 @@ def channels():
                            epg_filter=epg_filter,
                            resolution_filter=resolution_filter,
                            featured_filter=featured_filter,
+                           event_filter=event_filter,
                            duplicate_names=duplicate_names,
                            possible_duplicate_names=possible_duplicate_names,
                            gn_duplicate_ids=gn_duplicate_page_ids,
@@ -1103,6 +1114,9 @@ def guide():
 
     source_id = request.args.get('source_id', type=int)
     feed_id   = request.args.get('feed_id',   type=int)
+    event_filter = request.args.get('event', '')
+    if event_filter not in ('0', '1'):
+        event_filter = ''
     category  = [c.strip() for c in request.args.getlist('category') if c.strip()]
     search    = request.args.get('search',    type=str, default='').strip()
     # Channel-state filter (mirrors the Channels tab). Default 'enabled'
@@ -1126,6 +1140,8 @@ def guide():
         cat_count_q = cat_count_q.filter(Channel.is_enabled == True)
     elif state == 'disabled':
         cat_count_q = cat_count_q.filter(Channel.is_enabled == False)
+    if (event_clause := event_filter_clause(event_filter)) is not None:
+        cat_count_q = cat_count_q.filter(event_clause)
     categories = cat_count_q.group_by(Channel.category).order_by(Channel.category).all()
 
     q = Channel.query.options(load_only(
@@ -1143,6 +1159,8 @@ def guide():
         if selected_feed:
             q = q.join(Source, Channel.source_id == Source.id)
             q = _apply_admin_feed_membership_filters(q, selected_feed)
+    if (event_clause := event_filter_clause(event_filter)) is not None:
+        q = q.filter(event_clause)
     if (cat_clause := _category_clause(category)) is not None:
         q = q.filter(cat_clause)
     if search:
@@ -1222,6 +1240,7 @@ def guide():
         categories=categories,
         source_id=source_id,
         feed_id=feed_id,
+        event_filter=event_filter,
         category=category,
         search=search,
         state=state,
@@ -1606,7 +1625,7 @@ def settings():
             'anchor': 'settings-card-timezone',
         })
     tz_health = timezone_health(app_settings.timezone_name)
-    tve_account = TVEAccount.query.filter_by(provider_id='mvpd').first()
+    tve_account = shared_tve_account()
     tve_provider_choices = ytdlp_adobe_mso_providers()
     _url_from_env = _url_source in {'FASTCHANNELS_SERVER_URL', 'PUBLIC_BASE_URL'}
     _no_port_warning = False

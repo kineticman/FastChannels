@@ -639,6 +639,7 @@ def run_spectrum_signin():
                             stop_key=SPECTRUM_SIGNIN_STOP_KEY, input_key=SPECTRUM_SIGNIN_INPUT_KEY,
                             shot_key=SPECTRUM_SIGNIN_SHOT_KEY, hint_key=SPECTRUM_SIGNIN_HINT_KEY,
                             log_tag='spectrum-signin',
+                            source_name=None,
                         )
                         set_status('running', 'Sign in below, including any captcha if shown.', page.url)
 

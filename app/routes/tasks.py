@@ -227,20 +227,20 @@ def trigger_scrape(source_name: str, *, force_full: bool = False):
         threading.Thread(target=run_scraper, args=(source_name, force_full), daemon=True).start()
 
 
-def trigger_stream_audit(source_name: str):
+def trigger_stream_audit(source_name: str, scope: str = 'linear'):
     try:
         q = get_queue()
         job_id = f'audit-{source_name}'
         if _job_already_active(q, job_id):
             logger.info('Stream audit already queued/running for %s', source_name)
             return
-        q.enqueue('app.worker.run_stream_audit', source_name, job_timeout=1800, job_id=job_id)
+        q.enqueue('app.worker.run_stream_audit', source_name, scope, job_timeout=1800, job_id=job_id)
         logger.info(f'Enqueued stream audit for {source_name}')
     except Exception as e:
         logger.warning(f'RQ unavailable ({e}), falling back to thread for {source_name}')
         import threading
         from app.worker import run_stream_audit
-        threading.Thread(target=run_stream_audit, args=(source_name,), daemon=True).start()
+        threading.Thread(target=run_stream_audit, args=(source_name, scope), daemon=True).start()
 
 
 def trigger_stream_audit_recheck(source_name: str, channel_ids: list):
@@ -394,6 +394,26 @@ def trigger_source_channel_purge(source_id: int):
         import threading
         from app.worker import run_source_channel_purge
         threading.Thread(target=run_source_channel_purge, args=(source_id,), daemon=True).start()
+
+
+def trigger_playlist_delete(source_id: int) -> bool:
+    """Returns True if a delete job was enqueued, False if one is already
+    queued/running for this playlist source."""
+    try:
+        q = get_maintenance_queue()
+        job_id = f'playlist-delete-{source_id}'
+        if _job_already_active(q, job_id):
+            logger.info('Playlist delete already queued/running for source_id=%s', source_id)
+            return False
+        q.enqueue('app.worker.run_playlist_delete', source_id, job_timeout=1800, job_id=job_id)
+        logger.info('Enqueued playlist delete for source_id=%s', source_id)
+        return True
+    except Exception as e:
+        logger.warning(f'RQ unavailable ({e}), falling back to thread for playlist delete {source_id}')
+        import threading
+        from app.worker import run_playlist_delete
+        threading.Thread(target=run_playlist_delete, args=(source_id,), daemon=True).start()
+        return True
 
 
 def trigger_bulk_channel_update(filters: dict, enable: bool):

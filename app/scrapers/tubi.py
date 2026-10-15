@@ -36,7 +36,7 @@ from urllib.parse import unquote
 
 import requests
 
-from .base import BaseScraper, ChannelData, ConfigField, ProgramData, ScrapeSkipError, infer_language_from_metadata, null_placeholder_season_episode
+from .base import BaseScraper, ChannelData, ConfigField, ProgramData, ScrapeSkipError, infer_language_from_metadata, mask_username, null_placeholder_season_episode
 from ..gracenote_map import resolve_gracenote
 
 logger = logging.getLogger(__name__)
@@ -51,6 +51,7 @@ _EPG_ANON_URL    = 'https://tubitv.com/oz/epg/programming'
 _EPG_AUTH_URL    = 'https://epg-cdn.production-public.tubi.io/content/epg/programming'
 _CHANNELS_URL    = 'https://tensor-cdn.production-public.tubi.io/api/v2/epg'
 _LOGIN_URL       = 'https://account.production-public.tubi.io/user/login'
+_TOKEN_EXPIRY_MARGIN = 3600   # log in again this many seconds before the saved token expires
 
 # Container slugs to exclude (personalisation / recommendation buckets)
 _SKIP_SLUGS = frozenset({
@@ -112,10 +113,18 @@ class TubiScraper(BaseScraper):
         self._username: Optional[str] = self.config.get('username') or None
         self._password: Optional[str] = self.config.get('password') or None
 
-        # Bearer token cache
+        # Bearer token cache. Persisted in config (access_token /
+        # token_expires_at / token_user) because a fresh scraper instance is
+        # built for every job — holding it only in memory meant a full
+        # password login on every scrape despite Tubi's 14-day token.
         self._token: Optional[str]     = None
-        self._token_at: float          = 0.0
-        self._token_ttl: float         = 0.0
+        self._token_expires_at: float  = 0.0
+        if self._username and self.config.get('token_user') == self._username:
+            self._token = self.config.get('access_token') or None
+            try:
+                self._token_expires_at = float(self.config.get('token_expires_at') or 0)
+            except (TypeError, ValueError):
+                self._token_expires_at = 0.0
 
         # stream URL cache: channel_id → real HLS URL
         # populated by fetch_channels(), consumed by resolve()
@@ -382,16 +391,13 @@ class TubiScraper(BaseScraper):
         if not bearer:
             return []
 
-        headers = {**self.session.headers,
-                   'authorization':   f'Bearer {bearer}',
-                   'x-tubi-mode':     'all',
+        headers = {'x-tubi-mode':     'all',
                    'x-tubi-platform': 'web',
                    'content-type':    'application/json'}
         params  = {'mode': 'tubitv_us_linear', 'platform': 'web', 'device_id': self._ensure_device_id()}
 
         try:
-            r = self.session.get(_CHANNELS_URL, params=params, headers=headers, timeout=30)
-            r.raise_for_status()
+            r = self._auth_get(_CHANNELS_URL, params=params, headers=headers, timeout=30)
             resp = r.json()
         except Exception as e:
             logger.error('[tubi] auth channels API failed: %s', e)
@@ -455,9 +461,7 @@ class TubiScraper(BaseScraper):
         if not bearer:
             return []
 
-        headers = {**self.session.headers,
-                   'authorization':   f'Bearer {bearer}',
-                   'x-tubi-mode':     'all',
+        headers = {'x-tubi-mode':     'all',
                    'x-tubi-platform': 'web'}
         params  = {'platform': 'web', 'device_id': self._ensure_device_id(), 'lookahead': 1}
 
@@ -467,8 +471,7 @@ class TubiScraper(BaseScraper):
             batch = channel_ids[i:i + _BATCH]
             params['content_id'] = ','.join(batch)
             try:
-                r = self.session.get(_EPG_AUTH_URL, params=params, headers=headers, timeout=30)
-                r.raise_for_status()
+                r = self._auth_get(_EPG_AUTH_URL, params=params, headers=headers, timeout=30)
                 rows.extend(r.json().get('rows', []))
             except Exception as e:
                 logger.warning('[tubi] auth EPG batch %d failed: %s', i, e)
@@ -537,7 +540,7 @@ class TubiScraper(BaseScraper):
 
     def _get_token(self) -> Optional[str]:
         now = time.time()
-        if self._token and (now - self._token_at) < (self._token_ttl - 60):
+        if self._token and now < (self._token_expires_at - _TOKEN_EXPIRY_MARGIN):
             return self._token
 
         payload = {
@@ -569,8 +572,35 @@ class TubiScraper(BaseScraper):
             raise ScrapeSkipError(f'Tubi TV login failed ({err}) — check username/password in source config')
 
         resp = r.json()
-        self._token    = resp.get('access_token')
-        self._token_at = now
-        self._token_ttl = float(resp.get('expires_in', 3600))
-        logger.info('[tubi] logged in as %s (token ttl=%.0fs)', self._username, self._token_ttl)
+        ttl = float(resp.get('expires_in', 3600))
+        self._token = resp.get('access_token')
+        self._token_expires_at = now + ttl
+        if self._token:
+            self._update_config('access_token', self._token)
+            self._update_config('token_expires_at', self._token_expires_at)
+            self._update_config('token_user', self._username)
+        logger.info('[tubi] logged in as %s (token ttl=%.0fs)', mask_username(self._username), ttl)
         return self._token
+
+    def _drop_token(self) -> None:
+        self._token = None
+        self._token_expires_at = 0.0
+        self._update_config('access_token', '')
+        self._update_config('token_expires_at', 0)
+
+    def _auth_get(self, url: str, *, params: dict, headers: dict, timeout: int) -> requests.Response:
+        """GET with the Bearer token. A saved token can be revoked before its
+        expiry (password change, sign-out-everywhere), so a 401 (Tubi's
+        INVALID_TOKEN) drops it and retries once with a fresh login."""
+        for attempt in range(2):
+            bearer = self._get_token()
+            r = self.session.get(url, params=params, timeout=timeout,
+                                 headers={**self.session.headers, **headers,
+                                          'authorization': f'Bearer {bearer}'})
+            if r.status_code == 401 and attempt == 0:
+                logger.info('[tubi] saved token rejected, logging in again')
+                self._drop_token()
+                continue
+            break
+        r.raise_for_status()
+        return r

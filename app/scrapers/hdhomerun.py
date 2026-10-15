@@ -24,15 +24,13 @@ from __future__ import annotations
 import logging
 import re
 import xml.etree.ElementTree as ET
-from datetime import datetime
 from urllib.parse import urlencode, urlsplit
 
 from .base import BaseScraper, ChannelData, ConfigField, ProgramData
 from ..gracenote_map import normalize_gracenote_id
+from .xmltv_import import program_from_xmltv
 
 logger = logging.getLogger(__name__)
-
-_EPISODE_RE = re.compile(r'S(\d+)E(\d+)', re.IGNORECASE)
 
 # Gracenote station ID from the XMLTV channel id, e.g. "US32639.hdhomerun.com" → "32639".
 _XMLTV_CHANNEL_ID_RE = re.compile(r'^[A-Z]{2}(\d+)\.', re.IGNORECASE)
@@ -84,9 +82,6 @@ _NAME_CATEGORY_RULES: tuple[tuple[str, str], ...] = (
 )
 
 _DEFAULT_OTA_CATEGORY = 'Broadcast'
-
-# XMLTV <category> values that are too generic to use as programme category.
-_XMLTV_SKIP_CATEGORIES = frozenset({'Series', 'Movie'})
 
 # Regex for pure channel-number strings like "4.1" or "10" — not a real affiliate.
 _LCN_RE = re.compile(r'^\d+(\.\d+)?$')
@@ -354,91 +349,13 @@ class HDHomeRunScraper(BaseScraper):
             ch = xmltv_channels.get(ch_id)
             if not ch:
                 continue
-            pd = self._program_from_xmltv(ch["lcn"], prog_el)
+            pd = program_from_xmltv(ch["lcn"], prog_el, live_flag=False, movie_from_program_id=False)
             if pd:
                 programs.append(pd)
 
         logger.info("[hdhomerun] XMLTV: %d channels, %d programs", len(channel_meta), len(programs))
         self._xmltv_cache = (channel_meta, programs)
         return self._xmltv_cache
-
-    def _program_from_xmltv(self, guide_number: str, prog: ET.Element) -> ProgramData | None:
-        title = prog.findtext("title")
-        start_str = prog.get("start") or ""
-        stop_str = prog.get("stop") or ""
-        if not title or not start_str or not stop_str:
-            return None
-
-        try:
-            start = datetime.strptime(start_str, "%Y%m%d%H%M%S %z")
-            end = datetime.strptime(stop_str, "%Y%m%d%H%M%S %z")
-        except ValueError:
-            return None
-
-        # Season/episode from <episode-num system="onscreen"> (e.g. "S01E06").
-        season = episode = None
-        for ep_el in prog.findall("episode-num"):
-            if ep_el.get("system") == "onscreen":
-                m = _EPISODE_RE.search(ep_el.text or "")
-                if m:
-                    season, episode = int(m.group(1)), int(m.group(2))
-                break
-
-        # Series ID from <series-id system="cseries">.
-        series_id = None
-        for sid_el in prog.findall("series-id"):
-            if sid_el.get("system") == "cseries":
-                series_id = (sid_el.text or "").strip() or None
-                break
-
-        # Per-episode ID from <episode-num system="dd_progid"> (TMS program ID).
-        episode_id = None
-        for ep_el in prog.findall("episode-num"):
-            if ep_el.get("system") == "dd_progid":
-                episode_id = (ep_el.text or "").strip() or None
-                break
-
-        if series_id and series_id.startswith("MV"):
-            program_type = "movie"
-        elif season is not None or episode is not None:
-            program_type = "episode"
-        else:
-            program_type = None
-
-        # First specific category (skip generic "Series"/"Movie" labels).
-        categories = [el.text.strip() for el in prog.findall("category") if el.text]
-        category = next(
-            (c for c in categories if c not in _XMLTV_SKIP_CATEGORIES),
-            categories[0] if categories else None,
-        )
-
-        date_str = (prog.findtext("date") or "").strip()
-        original_air_date = None
-        if date_str:
-            try:
-                original_air_date = datetime.strptime(date_str[:8], "%Y%m%d").date()
-            except ValueError:
-                pass
-
-        icon_el = prog.find("icon")
-        poster_url = icon_el.get("src") if icon_el is not None else None
-
-        return ProgramData(
-            source_channel_id=guide_number,
-            title=title,
-            start_time=start,
-            end_time=end,
-            description=prog.findtext("desc"),
-            poster_url=poster_url,
-            category=category,
-            episode_title=prog.findtext("sub-title") or None,
-            season=season,
-            episode=episode,
-            original_air_date=original_air_date,
-            program_type=program_type,
-            series_id=series_id,
-            episode_id=episode_id,
-        )
 
     # ── resolve ──────────────────────────────────────────────
 

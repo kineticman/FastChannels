@@ -8,7 +8,7 @@ import redis
 
 from app.worker import flask_app
 from app.extensions import db
-from app.models import TVEAccount
+from app.tve.accounts import source_for_network_key, tve_account_for_network
 from app.tve.adobe_pass import AdobePassCoxClient, TVEAuthError, TVENotAuthorizedError, TVEPendingAuthError, is_retired_fyi_callback
 from app.tve.browser_login.common import (
     _watch_spectrum_auth_results,
@@ -87,7 +87,7 @@ def _save_mvpd_authn_token(requestor_id: str, authn_token: str) -> None:
     May be called mid-browser-session, after the caller has already popped
     its outer one before launching Camoufox."""
     with flask_app.app_context():
-        account = TVEAccount.query.filter_by(provider_id='mvpd').first()
+        account = tve_account_for_network(requestor_id)
         if not account:
             return
         cfg = dict(account.config or {})
@@ -139,6 +139,9 @@ def run_mvpd_browser_login(requestor_id: str, resource: str, software_statement:
     # Popped right before Camoufox launches and never re-pushed (every exit
     # path from there on is a `return`); DB-touching helpers called during
     # the browser session push their own short-lived context instead.
+    # Which source this network belongs to — picks the TV-provider account
+    # the helpers below read and save to (see app/tve/accounts.py).
+    source_name = source_for_network_key(requestor_id)
     _ctx = flask_app.app_context()
     _ctx.push()
     _ctx_popped = {'v': False}
@@ -197,7 +200,7 @@ def run_mvpd_browser_login(requestor_id: str, resource: str, software_statement:
         # must never reset the clock).
         deadline = _deadline if _deadline is not None else time.monotonic() + _MVPD_BROWSER_LOGIN_TIMEOUT_SECONDS
 
-        account_row = TVEAccount.query.filter_by(provider_id='mvpd').first()
+        account_row = tve_account_for_network(requestor_id)
         mvpd_username = (account_row.username if account_row else '') or ''
         mvpd_password = (account_row.password if account_row else '') or ''
 
@@ -291,9 +294,9 @@ def run_mvpd_browser_login(requestor_id: str, resource: str, software_statement:
                     return True  # definitive answer — nothing to relaunch for
                 _save_mvpd_authn_token(requestor_id, client.ctx.authn_token)
                 if mso_id == 'Comcast_SSO':
-                    _harvest_and_save_xfinity_cookies(context)
+                    _harvest_and_save_xfinity_cookies(context, source_name=source_name)
                 elif mso_id == 'YouTubeTV':
-                    _maybe_capture_google_master_token(context, mso_id)
+                    _maybe_capture_google_master_token(context, mso_id, source_name=source_name)
                 results: dict[str, tuple[bool, str]] = {}
                 try:
                     client.authorize()
@@ -358,7 +361,7 @@ def run_mvpd_browser_login(requestor_id: str, resource: str, software_statement:
             with Camoufox(**camoufox_options) as context:
                 page = context.pages[0] if context.pages else context.new_page()
                 _watch_spectrum_auth_results(page, 'mvpd-login')
-                _prime_google_session(context, mso_id)
+                _prime_google_session(context, mso_id, source_name=source_name)
                 page.on('crash', lambda p: logger.warning('[mvpd-login] page CRASH event fired (url was %s)', _safe_page_url(p)))
                 page.on('close', lambda p: logger.warning('[mvpd-login] page CLOSE event fired'))
                 page.on('pageerror', lambda exc: logger.warning('[mvpd-login] page JS error: %s', str(exc)[:500]))
@@ -496,6 +499,7 @@ def run_mvpd_browser_login(requestor_id: str, resource: str, software_statement:
                 settled = _settle_after_mvpd_navigation(
                     page, set_status=set_status,
                     respect_youtubetv_soft_block=mso_id != 'YouTubeTV',
+                    source_name=source_name,
                 )
                 landing_url = _safe_page_url(page)
                 if not settled:
@@ -567,7 +571,7 @@ def run_mvpd_browser_login(requestor_id: str, resource: str, software_statement:
                     if mso_id == 'Comcast_SSO':
                         _autofill_xfinity_credentials(page, mvpd_username, mvpd_password, r=r)
                     else:
-                        _try_autofill_credentials(page, mvpd_username, mvpd_password, r=r, navigation_already_settled=True)
+                        _try_autofill_credentials(page, mvpd_username, mvpd_password, r=r, navigation_already_settled=True, source_name=source_name)
                 set_status('running', 'Sign in below, including any captcha if shown.', page.url)
 
                 last_shot = 0.0
@@ -662,7 +666,7 @@ def run_mvpd_browser_login(requestor_id: str, resource: str, software_statement:
 
                     if now - last_poll > session_poll_interval:
                         last_poll = now
-                        if not f5_retried and _sling_f5_recover(page, auth_url, mvpd_username, mvpd_password, r=r):
+                        if not f5_retried and _sling_f5_recover(page, auth_url, mvpd_username, mvpd_password, r=r, source_name=source_name):
                             f5_retried = True
                             continue
                         try:
@@ -674,9 +678,9 @@ def run_mvpd_browser_login(requestor_id: str, resource: str, software_statement:
                             # in app/tve/adobe_pass.py).
                             _save_mvpd_authn_token(requestor_id, client.ctx.authn_token)
                             if mso_id == 'Comcast_SSO':
-                                _harvest_and_save_xfinity_cookies(context)
+                                _harvest_and_save_xfinity_cookies(context, source_name=source_name)
                             elif mso_id == 'YouTubeTV':
-                                _maybe_capture_google_master_token(context, mso_id)
+                                _maybe_capture_google_master_token(context, mso_id, source_name=source_name)
                         except TVEPendingAuthError:
                             session_poll_interval = min(
                                 session_poll_interval * _MVPD_SESSION_POLL_BACKOFF,
@@ -729,7 +733,7 @@ def run_mvpd_browser_login(requestor_id: str, resource: str, software_statement:
                 logger.info('[mvpd-login] ignoring cleanup-time exception after terminal status was already set: %s', exc)
                 return
             if isinstance(exc, SpectrumWantsCoxProvider):
-                if _spectrum_retry_as_cox(exc, mso_id, requestor_id, set_status):
+                if _spectrum_retry_as_cox(exc, mso_id, requestor_id, set_status, source_name=source_name):
                     return run_mvpd_browser_login(requestor_id, resource, software_statement, redirect_url, 'Cox', _attempt=_attempt, _deadline=deadline)
                 _step(requestor_id, 'failed', 'Spectrum rejected sign-in')
                 return

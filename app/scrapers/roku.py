@@ -5,7 +5,7 @@
 # Auth flow (fully headless, no browser):
 #   1. GET /                     → session cookies
 #   2. GET /api/v1/csrf          → csrf token
-#   3. GET content proxy         → playId + linearSchedule (now/next EPG)
+#   3. GET dated EPG              → 24h of program listings per station
 #   4. POST /api/v3/playback     → JWT-signed osm.sr.roku.com stream URL
 #
 # stream_url stored as: roku://{station_id}
@@ -17,6 +17,7 @@ from __future__ import annotations
 import logging
 import re
 import base64
+import hashlib
 import json
 import time
 import uuid
@@ -67,6 +68,11 @@ _UA = (
 )
 
 _EPG_URL = f"{_BASE}/api/v2/epg"
+_EPG_SCHEDULE_TPL = f"{_BASE}/api/v4/epg/{{sid}}"
+_EPG_SCHEDULE_INCLUDE = (
+    "seasonNumber,episodeNumber,description,descriptions,title,"
+    "imageMap.gridEpg,series.title,parentalRatings,contentRatingClass"
+)
 
 # Tags in the EPG station object → human-readable category (checked in order)
 _TAG_CATEGORY_PRIORITY = [
@@ -103,10 +109,18 @@ _SELECTOR_UUID_RE = re.compile(r"/v1/([0-9a-f-]{36})$")
 _LIVE_TV_403_RETRIES = 3
 _CACHE_WARM_RETRY_WORKERS = 3
 _EPG_WORKERS = 3
+_EPG_REFRESH_SLOTS = 12  # one refresh per channel every 12h, spread across hourly runs
+_EPG_MAX_REQUESTS_PER_RUN = 200  # stage the first 24h fill to avoid a 571-request burst
 _DESC_WORKERS = 3
 _ROKU_403_COOLDOWN = 5 * 60
 _PREWARM_SEED_MAX_ATTEMPTS = 5  # best-effort osm seed: try a few channels, then give up
 _DESC_CACHE_TTL = 14 * 24 * 60 * 60  # keep descriptions for 14 days; content doesn't change
+
+
+class _RokuEPGRateLimited(ScrapeSkipError):
+    def __init__(self, status_code: int):
+        self.status_code = status_code
+        super().__init__(f"[roku] dated EPG returned HTTP {status_code}; keeping previous EPG data")
 
 
 
@@ -162,8 +176,8 @@ class RokuScraper(BaseScraper):
     # /play/roku/license proxy. The real per-session license URL (with token) is
     # captured in resolve_dash() and returned by get_license_url() keyed by station.
     license_url           = _WV_LICENSE_BASE
-    # description_cache is large (~1.5MB) and only used on the EPG path, so keep it off
-    # the play/resolve hot path — loaded lazily in fetch_epg, not on every tune.
+    # Legacy description cache remains lazy so old cached data is not loaded on
+    # play/resolve paths. The dated EPG response supplies descriptions directly.
     LAZY_CACHE_KEYS       = frozenset({"description_cache"})
     phase_timeouts        = {
         'init': 30,
@@ -1164,11 +1178,6 @@ class RokuScraper(BaseScraper):
 
         enabled_ids = kwargs.get("enabled_ids")
 
-        # Load the large description_cache now (deferred from __init__ so the play/resolve
-        # hot path never pays for it); the EPG fanout below reuses cached descriptions.
-        if not self._description_cache:
-            self._load_description_cache()
-
         if self._cooldown_active():
             remaining = self._cooldown_remaining()
             mins = max(1, (remaining + 59) // 60)
@@ -1183,8 +1192,8 @@ class RokuScraper(BaseScraper):
         # session can yield a misleading "0 programs" success on EPG-only runs.
         # Skip probe if fetch_channels() already confirmed the session within 60s.
         # When the probe succeeds, mine its response to batch-warm play_id/selector
-        # caches and identify channels that don't carry schedule data.
-        no_schedule_ids: set[str] = set()
+        # caches. The station's shouldRequestSchedule flag applies to the short
+        # content schedule, not the dated guide endpoint.
         if (time.time() - self._last_epg_ok) > 60:
             epg_probe = self._api_get(_EPG_URL, timeout=20, label="epg")
             if not epg_probe or epg_probe.status_code != 200:
@@ -1201,8 +1210,6 @@ class RokuScraper(BaseScraper):
                 sid = (station.get("meta") or {}).get("id")
                 if not sid:
                     continue
-                if not station.get("shouldRequestSchedule", True):
-                    no_schedule_ids.add(sid)
                 view_opts = station.get("viewOptions") or []
                 if view_opts and not self._cached_play_id(sid):
                     play_id = view_opts[0].get("playId") if view_opts else None
@@ -1216,9 +1223,6 @@ class RokuScraper(BaseScraper):
                 self._persist_play_id_cache()
                 self._persist_selector_url_cache()
                 logger.debug("[roku] warmed %d play_id/selector entries from EPG probe", warmed_from_epg)
-            if no_schedule_ids:
-                logger.debug("[roku] %d stations have shouldRequestSchedule=False, skipping content proxy for those", len(no_schedule_ids))
-
         # Disabled channels are never served in M3U/EPG output and never tuned,
         # so they need no EPG fetch and no metadata warm — skip them entirely.
         # (enabled_ids is None only when fetch_epg is called without the worker's
@@ -1228,12 +1232,26 @@ class RokuScraper(BaseScraper):
                              if ch.source_channel_id not in enabled_ids}
         else:
             disabled_skip = set()
-        effective_skip = (skip_ids or set()) | no_schedule_ids | disabled_skip
+        # A station with less than 12h of guide data is due immediately. Once
+        # it has been filled, give it a stable hourly slot so subsequent 12h
+        # refreshes are spread across scrapes instead of arriving in one burst.
+        refresh_slot = int(time.time() // 3600) % _EPG_REFRESH_SLOTS
         channel_ids = {ch.source_channel_id for ch in channels}
+        eligible = [ch.source_channel_id for ch in channels
+                    if ch.source_channel_id not in disabled_skip]
+        fresh_ids = skip_ids or set()
+        urgent = [sid for sid in eligible if sid not in fresh_ids]
+        scheduled = [
+            sid for sid in eligible if sid in fresh_ids
+            and int.from_bytes(hashlib.md5(sid.encode()).digest()[:2], 'big')
+            % _EPG_REFRESH_SLOTS == refresh_slot
+        ]
+        targets = set((urgent + scheduled)[:_EPG_MAX_REQUESTS_PER_RUN])
+        effective_skip = channel_ids - targets
         skipped = len(effective_skip & channel_ids) if effective_skip else 0
         total = len(channels) - skipped  # only count channels that will hit the network
         if skipped:
-            logger.info("[roku] EPG skip: %d/%d channels (fresh, no-schedule, or disabled), skipping content proxy", skipped, len(channels))
+            logger.info("[roku] EPG skip: %d/%d channels (fresh, staged, or disabled), skipping dated guide request", skipped, len(channels))
         if self._progress_cb:
             self._progress_cb('epg', 0, total)
         # Snapshot merged headers (session defaults + API-specific) and cookies
@@ -1243,78 +1261,98 @@ class RokuScraper(BaseScraper):
         cookies_snapshot  = self.session.cookies.get_dict()
 
         programs: list[ProgramData] = []
-        # Map content_id → programs within 48h that need a description backfill
-        cid_to_progs: dict[str, list[ProgramData]] = {}
         lock = threading.Lock()
         thread_local = threading.local()
+        stop_requests = threading.Event()
         done = [0]
+        successful_responses = 0
 
-        cutoff_48h = datetime.now(timezone.utc) + timedelta(hours=48)
-
-        def fetch_one(ch: ChannelData) -> tuple[list[ProgramData], dict, str | None, str | None]:
+        def fetch_one(ch: ChannelData) -> tuple[list[ProgramData], bool]:
+            sid = ch.source_channel_id
+            if sid in effective_skip or stop_requests.is_set():
+                return [], False
             sess = getattr(thread_local, "session", None)
             if sess is None:
                 sess = self.new_session(headers=headers_snapshot, cookies=cookies_snapshot)
                 thread_local.session = sess
             sess.cookies.update(cookies_snapshot)
-            sid = ch.source_channel_id
-            if sid in effective_skip:
-                return [], {}, self._cached_play_id(sid), self._cached_selector_url(sid)
             try:
-                qs = "?featureInclude=linearSchedule"
-                content_url = _CONTENT_TPL.format(sid=sid) + qs
-                proxy_url   = _PROXY_BASE + quote(content_url, safe="")
-                r = sess.get(proxy_url, timeout=10)
+                now = datetime.now(timezone.utc)
+                r = sess.get(
+                    _EPG_SCHEDULE_TPL.format(sid=sid),
+                    params={
+                        'tpl_date': now.strftime('%Y-%m-%d'),
+                        'tpl_hour': now.hour,
+                        'include': _EPG_SCHEDULE_INCLUDE,
+                        'expand': 'series',
+                    },
+                    timeout=10,
+                )
+                if r.status_code in (403, 429):
+                    stop_requests.set()
+                    raise _RokuEPGRateLimited(r.status_code)
                 if r.status_code != 200:
-                    logger.debug("[roku] content proxy returned %d for %s", r.status_code, sid)
-                    return [], {}, None, None
-                data = r.json()
-                view_opts = data.get("viewOptions") or [{}]
-                play_id = view_opts[0].get("playId") if view_opts else None
-                selector_url = self._extract_selector_url(view_opts)
-                schedule = data.get("features", {}).get("linearSchedule", [])
+                    logger.warning("[roku] dated EPG returned %d for %s", r.status_code, sid)
+                    return [], False
+                schedule = r.json().get('view') or []
                 result = []
-                local_cid_map: dict[str, list[ProgramData]] = {}
                 for entry in schedule:
-                    prog = self._parse_program(sid, entry)
+                    window = (entry.get('features') or {}).get('otaOptions') or {}
+                    try:
+                        start = int(window['start'])
+                        end = int(window['end'])
+                        if end <= start:
+                            continue
+                        normalized = {
+                            'date': datetime.fromtimestamp(start, timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
+                            'duration': end - start,
+                            'content': entry.get('content') or {},
+                        }
+                    except (KeyError, TypeError, ValueError, OverflowError, OSError):
+                        continue
+                    prog = self._parse_program(sid, normalized)
                     if not prog:
                         continue
                     result.append(prog)
-                    # Track content_id for programs in the 48h window so we
-                    # can backfill descriptions in a second pass.
-                    if prog.start_time <= cutoff_48h:
-                        cid = (entry.get("content") or {}).get("meta", {}).get("id")
-                        if cid:
-                            local_cid_map.setdefault(cid, []).append(prog)
-                return result, local_cid_map, play_id, selector_url
+                return result, True
+            except _RokuEPGRateLimited:
+                raise
             except Exception as exc:
                 if is_transient_network_error(exc):
                     raise
                 logger.warning("[roku] EPG error for %s (%s): %s", ch.name, sid, exc)
-                return [], {}, None, None
+                return [], False
 
         with ThreadPoolExecutor(max_workers=_EPG_WORKERS) as executor:
             futures = {executor.submit(fetch_one, ch): ch for ch in channels}
             for future in as_completed(futures):
                 exc = future.exception()
+                if isinstance(exc, _RokuEPGRateLimited):
+                    executor.shutdown(wait=False, cancel_futures=True)
+                    if exc.status_code == 403:
+                        self._set_403_cooldown('dated EPG')
+                    raise exc
                 if exc and type(exc).__name__ == 'JobTimeoutException':
                     executor.shutdown(wait=False, cancel_futures=True)
                     raise exc
                 if exc and is_transient_network_error(exc):
                     executor.shutdown(wait=False, cancel_futures=True)
                     raise exc
-                result, local_cid_map, play_id, selector_url = future.result() if not exc else ([], {}, None, None)
+                result, response_ok = future.result() if not exc else ([], False)
                 sid = futures[future].source_channel_id
                 with lock:
                     programs.extend(result)
-                    for cid, progs in local_cid_map.items():
-                        cid_to_progs.setdefault(cid, []).extend(progs)
-                    self._cache_play_id(sid, play_id)
-                    self._cache_selector_url(sid, selector_url)
+                    successful_responses += response_ok
                     if sid not in effective_skip:
                         done[0] += 1
                         if self._progress_cb:
                             self._progress_cb('epg', done[0], total)
+
+        if total and successful_responses < max(1, (total + 1) // 2):
+            raise ScrapeSkipError(
+                f"[roku] dated EPG succeeded for only {successful_responses}/{total} channels; "
+                "keeping previous EPG data"
+            )
 
         missing_channels = [
             ch for ch in channels
@@ -1328,29 +1366,6 @@ class RokuScraper(BaseScraper):
                 missing_channels,
                 headers_snapshot,
                 cookies_snapshot,
-            )
-
-        # ── Description backfill for 48h window ───────────────────────────────
-        if cid_to_progs:
-            uncached_cids = [cid for cid in cid_to_progs if cid not in self._description_cache]
-            if uncached_cids:
-                new_descs = self._fetch_descriptions(uncached_cids, headers_snapshot, cookies_snapshot,
-                                                     progress_cb=self._progress_cb)
-                self._cache_descriptions(new_descs)
-            filled = 0
-            for cid, progs in cid_to_progs.items():
-                desc = self._description_cache.get(cid)
-                if desc:
-                    for prog in progs:
-                        if not prog.description:
-                            prog.description = desc
-                            filled += 1
-            logger.debug(
-                "[roku] description backfill: %d unique IDs (%d cached, %d fetched) → %d programs filled",
-                len(cid_to_progs),
-                len(cid_to_progs) - len(uncached_cids),
-                len(uncached_cids),
-                filled,
             )
 
         programs.sort(key=lambda p: (p.source_channel_id, p.start_time))
@@ -1448,11 +1463,20 @@ class RokuScraper(BaseScraper):
         series_title = series.get("title", "")
         title   = series_title or ep_title or "Unknown"
 
-        # Description
+        # The dated guide wraps descriptions as {"text": ...}; the short
+        # content schedule sometimes supplies plain strings instead.
         descs = c.get("descriptions") or {}
-        description = (
-            descs.get("250") or descs.get("60") or descs.get("40") or c.get("description")
-        )
+        description = None
+        for size in ("250", "100", "60", "40"):
+            value = descs.get(size)
+            if isinstance(value, dict):
+                value = value.get("text")
+            if isinstance(value, str) and value:
+                description = value
+                break
+        if not description:
+            value = c.get("description")
+            description = value if isinstance(value, str) else None
 
         # Artwork — prefer gridEpg, fall back to grid
         image_map = c.get("imageMap") or {}

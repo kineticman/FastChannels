@@ -4,8 +4,9 @@ import time
 import redis
 
 from app.worker import flask_app
-from app.models import TVEAccount
+from app.tve.accounts import shared_tve_account
 from app.tve.browser_login.common import (
+    _mask_username,
     _safe_page_url,
     _GOOGLE_SETUP_URL,
     _exchange_and_save_google_master_token,
@@ -87,13 +88,13 @@ def run_google_signin():
         set_status('starting', 'Launching browser…')
 
         from app.tve import adobe_pass
-        account_row = TVEAccount.query.filter_by(provider_id='mvpd').first()
+        account_row = shared_tve_account()
         if account_row is None:
             set_status('error', 'TVE account not found — save TVE settings first.')
             return
         already = adobe_pass.load_google_master_token(account_row)
         if already:
-            set_status('success', f"Already signed in as {already.get('email', '?')}. Sign in again only if this stops working.")
+            set_status('success', f"Already signed in as {_mask_username(already['email']) if already.get('email') else '?'}. Sign in again only if this stops working.")
             return
 
         try:
@@ -168,11 +169,11 @@ def run_google_signin():
             return
 
         set_status('running', 'Verifying with Google…')
-        data = _exchange_and_save_google_master_token(oauth_token)
+        data = _exchange_and_save_google_master_token(oauth_token, source_name=None)
         if not data:
             set_status('error', 'Google accepted the sign-in but the token exchange failed — see server logs.')
             return
-        set_status('success', f"Signed in as {data.get('email', '?')}. Every YouTubeTV network can now sign in silently.")
+        set_status('success', f"Signed in as {_mask_username(data['email']) if data.get('email') else '?'}. Every YouTubeTV network can now sign in silently.")
     finally:
         uninstall_browser_login_activity_log(_activity_handler)
         if not _ctx_popped['v']:

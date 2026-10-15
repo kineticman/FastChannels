@@ -8,7 +8,7 @@ import redis
 
 from app.worker import flask_app
 from app.extensions import db
-from app.models import TVEAccount
+from app.tve.accounts import tve_account_for
 from app.tve.browser_login.common import (
     _watch_spectrum_auth_results,
     _safe_page_url,
@@ -42,6 +42,10 @@ from app.tve.browser_login.common import (
 )
 
 logger = logging.getLogger(__name__)
+
+# The source this sign-in is for — picks which TV-provider account it uses
+# (see app/tve/accounts.py).
+_SOURCE_NAME = 'fox_tve'
 
 
 FOX_BROWSER_LOGIN_STATUS_KEY = 'fox-mvpd:browser-login:status'
@@ -123,7 +127,7 @@ def run_fox_browser_login(mso_id: str, _attempt: int = 1, _deadline: float | Non
             # run_nbc_browser_login's identical block for the full
             # reasoning. Falls through to the browser-assisted flow below
             # only when there's no jar yet or the saved one has gone stale.
-            cookie_jar_account = TVEAccount.query.filter_by(provider_id='mvpd').first()
+            cookie_jar_account = tve_account_for(_SOURCE_NAME)
             cookie_jar = (cookie_jar_account.config or {}).get('xfinity_cookie_jar') if cookie_jar_account else None
             if cookie_jar and cookie_jar_account and cookie_jar_account.is_enabled and cookie_jar_account.has_credentials():
                 set_status('running', 'Trying saved sign-in (no browser needed)…')
@@ -164,7 +168,7 @@ def run_fox_browser_login(mso_id: str, _attempt: int = 1, _deadline: float | Non
         # never reset the clock).
         deadline = _deadline if _deadline is not None else time.monotonic() + _FOX_BROWSER_LOGIN_TIMEOUT_SECONDS
 
-        account_row = TVEAccount.query.filter_by(provider_id='mvpd').first()
+        account_row = tve_account_for(_SOURCE_NAME)
         mvpd_username = (account_row.username if account_row else '') or ''
         mvpd_password = (account_row.password if account_row else '') or ''
 
@@ -237,7 +241,7 @@ def run_fox_browser_login(mso_id: str, _attempt: int = 1, _deadline: float | Non
                 if token:
                     exp = _jwt_exp(token) or int(time.time()) + 3600
                     with flask_app.app_context():
-                        account = TVEAccount.query.filter_by(provider_id='mvpd').first()
+                        account = tve_account_for(_SOURCE_NAME)
                         if account:
                             acct_cfg = dict(account.config or {})
                             acct_cfg['fox_sports_access_token'] = token
@@ -251,9 +255,9 @@ def run_fox_browser_login(mso_id: str, _attempt: int = 1, _deadline: float | Non
                             account.last_auth_at = datetime.now(timezone.utc)
                             db.session.commit()
                     if mso_id == 'Comcast_SSO':
-                        _harvest_and_save_xfinity_cookies(context)
+                        _harvest_and_save_xfinity_cookies(context, source_name=_SOURCE_NAME)
                     elif mso_id == 'YouTubeTV':
-                        _maybe_capture_google_master_token(context, mso_id)
+                        _maybe_capture_google_master_token(context, mso_id, source_name=_SOURCE_NAME)
                     set_status('success', f'Signed in — FOX Sports authorized via {mso_id}.')
                     logger.info('[fox-mvpd-login] paired mso_id=%s (completed after the page closed itself)', mso_id)
                     return True
@@ -297,7 +301,7 @@ def run_fox_browser_login(mso_id: str, _attempt: int = 1, _deadline: float | Non
             with Camoufox(**camoufox_options) as context:
                 page = context.pages[0] if context.pages else context.new_page()
                 _watch_spectrum_auth_results(page, 'fox-mvpd-login')
-                _prime_google_session(context, mso_id)
+                _prime_google_session(context, mso_id, source_name=_SOURCE_NAME)
                 page.on('crash', lambda p: logger.warning('[fox-mvpd-login] page CRASH event fired (url was %s)', _safe_page_url(p)))
                 page.on('close', lambda p: logger.warning('[fox-mvpd-login] page CLOSE event fired'))
                 page.on('pageerror', lambda exc: logger.warning('[fox-mvpd-login] page JS error: %s', str(exc)[:500]))
@@ -379,6 +383,7 @@ def run_fox_browser_login(mso_id: str, _attempt: int = 1, _deadline: float | Non
                 settled = _settle_after_mvpd_navigation(
                     page, set_status=set_status,
                     respect_youtubetv_soft_block=mso_id != 'YouTubeTV',
+                    source_name=_SOURCE_NAME,
                 )
                 landing_url = _safe_page_url(page)
                 if not settled:
@@ -427,6 +432,7 @@ def run_fox_browser_login(mso_id: str, _attempt: int = 1, _deadline: float | Non
                             stop_key=FOX_BROWSER_LOGIN_STOP_KEY, input_key=FOX_BROWSER_LOGIN_INPUT_KEY,
                             shot_key=FOX_BROWSER_LOGIN_SHOT_KEY, hint_key=FOX_BROWSER_LOGIN_HINT_KEY,
                             navigation_already_settled=True, log_tag='fox-mvpd-login',
+                            source_name=_SOURCE_NAME,
                         )
                 set_status('running', 'Sign in below, including any captcha if shown.', page.url)
 
@@ -500,6 +506,7 @@ def run_fox_browser_login(mso_id: str, _attempt: int = 1, _deadline: float | Non
                             page, mso_login_url, mvpd_username, mvpd_password, r=r,
                             stop_key=FOX_BROWSER_LOGIN_STOP_KEY, input_key=FOX_BROWSER_LOGIN_INPUT_KEY,
                             shot_key=FOX_BROWSER_LOGIN_SHOT_KEY, hint_key=FOX_BROWSER_LOGIN_HINT_KEY,
+                            source_name=_SOURCE_NAME,
                         ):
                             f5_retried = True
                             continue
@@ -556,7 +563,7 @@ def run_fox_browser_login(mso_id: str, _attempt: int = 1, _deadline: float | Non
                             continue
                         exp = _jwt_exp(token) or int(time.time()) + 3600
                         with flask_app.app_context():
-                            account = TVEAccount.query.filter_by(provider_id='mvpd').first()
+                            account = tve_account_for(_SOURCE_NAME)
                             if account:
                                 acct_cfg = dict(account.config or {})
                                 acct_cfg['fox_sports_access_token'] = token
@@ -570,9 +577,9 @@ def run_fox_browser_login(mso_id: str, _attempt: int = 1, _deadline: float | Non
                                 account.last_auth_at = datetime.now(timezone.utc)
                                 db.session.commit()
                         if mso_id == 'Comcast_SSO':
-                            _harvest_and_save_xfinity_cookies(context)
+                            _harvest_and_save_xfinity_cookies(context, source_name=_SOURCE_NAME)
                         elif mso_id == 'YouTubeTV':
-                            _maybe_capture_google_master_token(context, mso_id)
+                            _maybe_capture_google_master_token(context, mso_id, source_name=_SOURCE_NAME)
                         set_status('success', f'Signed in — FOX Sports authorized via {mso_id}.')
                         logger.info('[fox-mvpd-login] paired mso_id=%s', mso_id)
                         return
@@ -587,7 +594,7 @@ def run_fox_browser_login(mso_id: str, _attempt: int = 1, _deadline: float | Non
                 logger.info('[fox-mvpd-login] ignoring cleanup-time exception after terminal status was already set: %s', exc)
                 return
             if isinstance(exc, SpectrumWantsCoxProvider):
-                if _spectrum_retry_as_cox(exc, mso_id, 'FOX TVE', set_status):
+                if _spectrum_retry_as_cox(exc, mso_id, 'FOX TVE', set_status, source_name=_SOURCE_NAME):
                     return run_fox_browser_login('Cox', _attempt=_attempt, _deadline=deadline)
                 return
             if _is_browser_death(exc) and _grace_poll_pairing(str(exc)[:80]):

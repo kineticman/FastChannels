@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import html as _html
+import hashlib
 import json
 import logging
 import re
@@ -147,6 +148,11 @@ class AmazonPrimeFreeScraper(BaseScraper):
     # Direct HTTP stream URL resolution (no browser required)
     _PRS_URL = "https://atv-ps.amazon.com/cdp/catalog/GetPlaybackResources"
     _STREAM_URL_TTL = 5400   # 1.5 hours — well under Amazon's 2-hour TTL
+    _MAX_VIDEO_RESOLUTION = '480p'
+    _NATIVE_MAX_VIDEO_RESOLUTION = '1080p'
+    # A channel without a current free playback envelope cannot obtain a
+    # license, so do not leave it visible through the default three misses.
+    channel_miss_threshold = 1
     _PRS_WORKERS = 20        # parallel HTTP workers for bulk resolution
     _PRS_TIMEOUT = 10        # per-request timeout (seconds)
 
@@ -246,11 +252,12 @@ class AmazonPrimeFreeScraper(BaseScraper):
         import time as _time
         entry = (config.get('channel_pe') or {}).get(title_id) or {}
         pe = entry.get('pe')
-        # expiry is epoch-ms; refresh a minute early to avoid races
-        if pe and float(entry.get('expiry', 0)) / 1000.0 > _time.time() + 60:
+        # expiry is epoch-ms when Amazon supplies it; 0 means unspecified.
+        # Freshly harvested carousel envelopes often have no expiry field.
+        expiry = float(entry.get('expiry') or 0) / 1000.0
+        if pe and (not expiry or expiry > _time.time() + 60):
             return pe
-        fresh = cls._enrich_pe(config, entry.get('asin'))
-        return fresh or pe or None
+        return cls._enrich_pe(config, entry.get('asin'))
 
     @classmethod
     def _enrich_pe(cls, config: dict, asin: str | None) -> str | None:
@@ -320,16 +327,17 @@ class AmazonPrimeFreeScraper(BaseScraper):
             },
             'widevineServiceCertificateRequest': {},
             'playbackDataRequest': {},
-            # maxVideoResolution '480p' makes Amazon issue an SD-policy key (single KID, policy
-            # marker "SD", reps up to 576p), which releases to L3 software CDMs (desktop
-            # Chrome/Shaka, Linux Kodi). A higher cap yields an HD-policy key that L3 cannot
-            # license — Amazon then returns 403 {"code":"Downgrade.Sd"}. Real TV clients with L1
-            # hardware are unaffected by the cap beyond the 576p ceiling.
+            # The default 480p request receives SD-policy keys and representations up to
+            # 576p, which desktop L3 CDMs can license. Native FC Player requests 1080p
+            # through its own manifest and license URLs; its L1 CDM can use the HD-policy
+            # keys. Keep the two sessions separate because Amazon rejects HD keys on L3.
             'livePlaybackUrlsRequest': {
                 'device': {
                     'firmwareVersion': 'UNKNOWN', 'hdcpLevel': '1.4',
                     'liveManifestTypes': ['Accumulating', 'Live'],
-                    'maxVideoResolution': '480p', 'operatingSystem': 'Windows',
+                    'maxVideoResolution': (config.get('_amazon_max_video_resolution')
+                                           or cls._MAX_VIDEO_RESOLUTION),
+                    'operatingSystem': 'Windows',
                     'supportedStreamingTechnologies': ['DASH'],
                     'streamingTechnologies': {'DASH': {
                         'bitrateAdaptations': ['CBR', 'CVBR'], 'codecs': ['H264'],
@@ -373,7 +381,9 @@ class AmazonPrimeFreeScraper(BaseScraper):
         if not pe:
             return None
         shtc = config.get('sht_cache') or {}
-        cached = shtc.get(channel_id) if channel_id else None
+        cap = config.get('_amazon_max_video_resolution') or cls._MAX_VIDEO_RESOLUTION
+        cache_key = channel_id if cap == cls._MAX_VIDEO_RESOLUTION else f'{channel_id}@{cap}'
+        cached = shtc.get(cache_key) if channel_id else None
         if cached and isinstance(cached, dict):
             age = _time.time() - float(cached.get('ts', 0))
             if age < 240 and cached.get('token'):
@@ -545,8 +555,29 @@ class AmazonPrimeFreeScraper(BaseScraper):
             return raw_url
 
         station_id = raw_url[len("primefree://"):]
-        cached = self._stream_url_cache.get(station_id)
-        if cached and cached.get("expires_at", 0) > time.time():
+        # The scrape may drop a channel's free playback envelope while the
+        # channel row and a previously resolved manifest are still cached.
+        # That manifest cannot be licensed without the matching envelope.
+        pe = self._channel_pe_for({**self.config, **self.cache}, station_id)
+        if not pe:
+            logger.warning("[%s] no current playback envelope for %s",
+                           self.source_name, station_id[:40])
+            return None
+        pe_entry = self._channel_pe.get(station_id) or {}
+        known_expiry = float(pe_entry.get('expiry') or 0) / 1000
+        if pe_entry and (pe_entry.get('pe') != pe
+                         or (known_expiry and known_expiry <= time.time() + 60)):
+            # enrichItemMetadata returned a fresh envelope. Reuse it for the
+            # following manifest polls and the license proxy's SHT request.
+            refreshed = {**pe_entry, 'pe': pe, 'expiry': int((time.time() + 300) * 1000)}
+            self._channel_pe[station_id] = refreshed
+            self._update_cache('channel_pe', {**(self.cache.get('channel_pe') or {}),
+                                              station_id: refreshed})
+        pe_fingerprint = hashlib.sha256(pe.encode('utf-8')).hexdigest()[:16]
+        cache_key = self._stream_cache_key(station_id)
+        cached = self._stream_url_cache.get(cache_key)
+        if (cached and cached.get("expires_at", 0) > time.time()
+                and cached.get("pe_fingerprint") == pe_fingerprint):
             logger.debug("[%s] resolve cache hit for %s", self.source_name, station_id[:40])
             return cached["url"]
 
@@ -554,14 +585,6 @@ class AmazonPrimeFreeScraper(BaseScraper):
             logger.warning("[%s] no cookie_header — cannot resolve stream URL for %s",
                            self.source_name, station_id[:40])
             return raw_url
-        # _channel_pe_for reads channel_pe (now in self.cache) plus config creds (cookie_header);
-        # pass a merged view so the classmethod sees both.
-        pe = self._channel_pe_for({**self.config, **self.cache}, station_id)
-        if not pe:
-            logger.warning("[%s] no playback envelope for %s — cannot resolve entitled stream "
-                           "(re-scrape to refresh)", self.source_name, station_id[:40])
-            return None
-
         logger.debug("[%s] resolving live stream for %s", self.source_name, station_id[:40])
         url = self._resolve_live(station_id, pe)
         if not url:
@@ -570,17 +593,22 @@ class AmazonPrimeFreeScraper(BaseScraper):
             self._requested_rescrape = True
 
         if url:
-            self._stream_url_cache[station_id] = {
+            self._stream_url_cache[cache_key] = {
                 "url": url,
                 "expires_at": time.time() + self._STREAM_URL_TTL,
+                "pe_fingerprint": pe_fingerprint,
             }
             updated = dict(self.cache.get("stream_url_cache") or {})
-            updated[station_id] = self._stream_url_cache[station_id]
+            updated[cache_key] = self._stream_url_cache[cache_key]
             self._update_cache("stream_url_cache", updated)
             return url
 
         logger.warning("[%s] could not resolve live stream for %s", self.source_name, station_id[:40])
         return None
+
+    def _stream_cache_key(self, station_id: str) -> str:
+        cap = self.config.get('_amazon_max_video_resolution') or self._MAX_VIDEO_RESOLUTION
+        return station_id if cap == self._MAX_VIDEO_RESOLUTION else f'{station_id}@{cap}'
 
     def audit_resolve(self, raw_url: str) -> str:
         """Liveness-only resolution for the stream audit. Uses the catalog endpoint
@@ -820,7 +848,10 @@ class AmazonPrimeFreeScraper(BaseScraper):
             if not cids:
                 continue
             gti = cids[-1]
-            if gti in self._channel_pe:
+            # Cached envelopes are from prior scrapes and must be refreshed and
+            # marked as harvested on this scrape. Only skip duplicate envelopes
+            # found earlier in the current HTML response.
+            if gti in self._harvested_channel_pe_ids:
                 continue
             exp = re.search(r'"expiryTime":(\d+)', html[m.start():m.start() + 400])
             fb = re.findall(r'"fallbackUrl":"([^"]+)"', back)

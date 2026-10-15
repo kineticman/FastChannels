@@ -168,6 +168,16 @@ class TVEAccount(db.Model):
     def has_credentials(self) -> bool:
         return bool((self.username or '').strip() and (self.password or '').strip())
 
+    def is_separate(self) -> bool:
+        """A single source's own login (see app/tve/accounts.py), signed in
+        by phone link — it has no username/password."""
+        return (self.provider_id or '').startswith('mvpd:')
+
+    def is_usable(self) -> bool:
+        """Turned on and set up enough for its sources to play: the shared
+        account needs its username/password, a separate login doesn't."""
+        return bool(self.is_enabled and (self.has_credentials() or self.is_separate()))
+
     def to_safe_dict(self):
         cfg = self.config or {}
         auth_backend = (cfg.get('auth_backend') or 'native').strip()
@@ -215,6 +225,7 @@ class Channel(db.Model):
     language_override = db.Column(db.String(16), nullable=True)   # set by user; beats scraper value
     country           = db.Column(db.String(8), default='US')
     tags              = db.Column(db.Text, nullable=True)          # comma-separated raw tags/groups from source
+    playlist_group    = db.Column(db.Text, nullable=True)          # exact M3U group-title, even when the group disappears upstream
     number            = db.Column(db.Integer)
     number_pinned     = db.Column(db.Boolean, default=False, nullable=False, server_default=db.text('0'))  # True when user has manually set/locked this channel number
     provider_number   = db.Column(db.String(16), nullable=True)   # upstream's own channel number as text (may be a sub-channel, e.g. "305.2"); refreshed every scrape, never used by the integer allocator
@@ -231,6 +242,8 @@ class Channel(db.Model):
     proxy_segments    = db.Column(db.Boolean, default=False, nullable=False, server_default=db.text('0'))  # route segments through FC proxy
     page_url          = db.Column(db.Text, nullable=True)                     # original page URL for re-detection
     redetect_on_play  = db.Column(db.Boolean, default=False, nullable=False, server_default=db.text('0'))  # re-scrape page_url at play time (TTL 5 min)
+    guide_title       = db.Column(db.Text, nullable=True)                     # placeholder-guide programme title, when it differs from the channel name (playlist tvc-guide-title)
+    guide_art         = db.Column(db.Text, nullable=True)                     # placeholder-guide programme image (playlist tvc-guide-art)
     guide_block_minutes = db.Column(db.Integer, nullable=True)               # EPG placeholder block size for custom channels (None = 60)
     is_duplicate      = db.Column(db.Boolean, default=False, nullable=False, server_default=db.text('0'))  # set by user — manual duplicate label (does not disable)
     is_active         = db.Column(db.Boolean, default=True, nullable=False, server_default=db.text('1'))   # set by scraper — channel exists upstream
@@ -241,6 +254,8 @@ class Channel(db.Model):
     last_seen_at      = db.Column(db.DateTime(timezone=True), nullable=True)
     first_seen_at     = db.Column(db.DateTime(timezone=True), nullable=True)  # set once on true insert; survives guide_key row-rebind
     went_inactive_at  = db.Column(db.DateTime(timezone=True), nullable=True)
+    retire_at         = db.Column(db.DateTime(timezone=True), nullable=True)
+    delete_at         = db.Column(db.DateTime(timezone=True), nullable=True)
     returned_at       = db.Column(db.DateTime(timezone=True), nullable=True)
     identity_changed_at = db.Column(db.DateTime(timezone=True), nullable=True)  # set by scraper when an enabled slot's content changed upstream (guide_key/name swap) — needs Gracenote review
     previous_name       = db.Column(db.String(256), nullable=True)  # the occupant's name before the last content swap (paired with identity_changed_at)
@@ -294,6 +309,7 @@ class Channel(db.Model):
             'gracenote_locked': self.gracenote_locked,
             'gracenote_mode':   self.gracenote_mode or 'auto',
             'guide_key':        self.guide_key,
+            'playlist_group':   self.playlist_group,
             'description':      self.description,
             'user_note':        self.user_note,
             'is_active':        self.is_active,
@@ -310,6 +326,8 @@ class Channel(db.Model):
             'redetect_on_play':  bool(self.redetect_on_play),
             'guide_block_minutes': self.guide_block_minutes,
             'last_seen_at':     self.last_seen_at.isoformat() if self.last_seen_at else None,
+            'retire_at':       self.retire_at.isoformat() if self.retire_at else None,
+            'delete_at':       self.delete_at.isoformat() if self.delete_at else None,
             'identity_changed_at': self.identity_changed_at.isoformat() if self.identity_changed_at else None,
             'previous_name':    self.previous_name,
             'previous_gracenote_id': self.previous_gracenote_id,
@@ -370,6 +388,7 @@ class Feed(db.Model):
     description = db.Column(db.Text, default='')
     filters     = db.Column(db.JSON, default=dict)
     chnum_start = db.Column(db.Integer, nullable=True)   # starting tvg-chno for this feed's M3U output
+    guide_mode  = db.Column(db.String(16), nullable=False, default='split', server_default='split')  # 'split' = separate XMLTV + Gracenote playlists; 'mixed' = one playlist (Channels DVR 2026.08.25+)
     is_enabled  = db.Column(db.Boolean, default=True)
     created_at  = db.Column(db.DateTime(timezone=True),
                             default=lambda: datetime.now(timezone.utc))
@@ -393,6 +412,7 @@ class Feed(db.Model):
             'description': self.description,
             'filters':     self.filters or {},
             'chnum_start': self.chnum_start,
+            'guide_mode':  self.guide_mode or 'split',
             'is_enabled':  self.is_enabled,
             'created_at':  self.created_at.isoformat() if self.created_at else None,
             'updated_at':  self.updated_at.isoformat() if self.updated_at else None,
@@ -400,6 +420,7 @@ class Feed(db.Model):
             'm3u_url':        f'{base_url}/feeds/{self.slug}/m3u',
             'epg_url':        f'{base_url}/feeds/{self.slug}/epg.xml',
             'gracenote_url':  f'{base_url}/feeds/{self.slug}/m3u/gracenote',
+            'mixed_url':      f'{base_url}/feeds/{self.slug}/m3u/mixed',
             'native_m3u_url': f'{base_url}/feeds/{self.slug}/native/m3u',
             'native_epg_url': f'{base_url}/feeds/{self.slug}/native/epg.xml',
         }
@@ -425,10 +446,10 @@ class AppSettings(db.Model):
     channels_dvr_url     = db.Column(db.Text, nullable=True)     # e.g. http://192.168.1.x:8089
     public_base_url      = db.Column(db.Text, nullable=True)     # e.g. http://192.168.1.x:5523
     timezone_name        = db.Column(db.String(64), nullable=True)  # IANA timezone, e.g. America/New_York
-    auto_allow_new_channels = db.Column(db.Boolean, nullable=False, default=True)  # newly-scraped channels enter feeds enabled (vs. held for review)
-    gracenote_auto_fill  = db.Column(db.Boolean, nullable=False, default=True)  # scrapers auto-assign Gracenote IDs
-    dvr_epg_auto_refresh = db.Column(db.Boolean, nullable=False, default=True)  # hourly PUT to Channels DVR lineups
-    image_proxy_enabled  = db.Column(db.Boolean, nullable=False, default=True)  # proxy/cache logos and posters in output
+    auto_allow_new_channels = db.Column(db.Boolean, nullable=False, default=True, server_default=db.text('1'))  # newly-scraped channels enter feeds enabled (vs. held for review)
+    gracenote_auto_fill  = db.Column(db.Boolean, nullable=False, default=True, server_default=db.text('1'))  # scrapers auto-assign Gracenote IDs
+    dvr_epg_auto_refresh = db.Column(db.Boolean, nullable=False, default=True, server_default=db.text('1'))  # hourly PUT to Channels DVR lineups
+    image_proxy_enabled  = db.Column(db.Boolean, nullable=False, default=True, server_default=db.text('1'))  # proxy/cache logos and posters in output
     m3u_rewrite_timestamps = db.Column(db.Boolean, nullable=False, default=False, server_default=db.text('0'))  # experimental: add Channels DVR timestamp-rewrite directive to M3U entries
     gracenote_map_url          = db.Column(db.Text, nullable=True)      # remote community CSV URL (defaults to built-in Gist)
     gracenote_exclusions_url   = db.Column(db.Text, nullable=True)      # remote known-bad-ID CSV URL (defaults to built-in Gist)

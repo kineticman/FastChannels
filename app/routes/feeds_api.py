@@ -8,6 +8,7 @@ from sqlalchemy.exc import OperationalError
 from ..extensions import db
 from ..generators.m3u import get_global_chnum_overlaps, _selected_channel_stubs, feed_to_query_filters
 from ..models import Channel, Feed, FeedChannelNumber, Source
+from ..channel_tags import event_filter_clause
 from ..url import public_base_url
 from ..xml_cache import delete_xml_artifact, invalidate_xml_cache
 from .tasks import trigger_xml_refresh, trigger_xml_refresh_catchup
@@ -45,6 +46,41 @@ def _safe_flush():
         raise
 
 
+GUIDE_MODES = ('split', 'mixed')
+
+
+def _promote_to_unified_pool(feed: Feed) -> None:
+    """Give a feed without a chnum_start one, keeping the numbers it has now.
+
+    A mixed-guide feed is one playlist, so it needs one sticky number pool
+    (FeedChannelNumber). Without a chnum_start the standard and Gracenote
+    playlists are numbered by position in two separate blocks; snapshot those
+    numbers into the pool and start the feed at the lowest of them, so going
+    mixed renumbers nothing and later channel changes stop shifting everything
+    after them.
+    """
+    from ..generators.m3u import (
+        _selected_channels, _resolve_app_chnum_map,
+        feed_namespace_start, feed_gracenote_start,
+    )
+    q_filters = feed_to_query_filters(feed.filters or {})
+    std_start = feed_namespace_start(feed, gracenote=False)
+    numbers: dict[int, int] = {}
+    for gracenote, start in ((False, std_start), (True, feed_gracenote_start(feed))):
+        channels = _selected_channels(q_filters, gracenote=gracenote)
+        num_map, _ = _resolve_app_chnum_map(channels, namespace_start=start)
+        pinned = {ch.id for ch in channels if ch.number_pinned and ch.number is not None}
+        numbers.update({cid: num for cid, num in num_map.items() if cid not in pinned})
+
+    feed.chnum_start = min([std_start, *numbers.values()])
+    existing = {r.channel_id: r for r in FeedChannelNumber.query.filter_by(feed_id=feed.id).all()}
+    for cid, num in numbers.items():
+        if cid in existing:
+            existing[cid].number = num
+        else:
+            db.session.add(FeedChannelNumber(feed_id=feed.id, channel_id=cid, number=num))
+
+
 def _slugify(text: str) -> str:
     s = text.lower().strip()
     s = re.sub(r'[^a-z0-9]+', '-', s)
@@ -69,6 +105,10 @@ def channel_membership():
         f_filters = feed.filters or {}
         pinned = set(int(i) for i in (f_filters.get('pinned_channel_ids') or []))
         q_filters = feed_to_query_filters(f_filters)
+        if pinned and (event_clause := event_filter_clause(q_filters.get('event'))) is not None:
+            pinned = set(r[0] for r in db.session.query(Channel.id).filter(
+                Channel.id.in_(pinned), event_clause,
+            ).all())
         matched_ids = set(
             r[0] for r in _build_channel_query(q_filters)
             .with_entities(Channel.id)
@@ -154,7 +194,8 @@ def preview_order():
 
     feed = Feed.query.get(data['feed_id']) if data.get('feed_id') else None
 
-    start = _parse_chnum_start(data.get('chnum_start'))
+    explicit_start = _parse_chnum_start(data.get('chnum_start'))
+    start = explicit_start
     if start is None and feed is not None:
         start = feed.chnum_start or feed_namespace_start(feed, gracenote=False)
     if start is None:
@@ -169,6 +210,8 @@ def preview_order():
         except (TypeError, ValueError):
             return jsonify({'error': 'order must contain integer channel ids'}), 400
         num_map = build_manual_order_map(stubs, order_ids, start)
+        # Members the overlaid order doesn't cover get appended after it.
+        placed_ids = set(order_ids)
     else:
         stored = {}
         if feed is not None:
@@ -176,7 +219,22 @@ def preview_order():
                 r.channel_id: r.number
                 for r in FeedChannelNumber.query.filter_by(feed_id=feed.id).all()
             }
-        num_map = _build_feed_chnum_map(stubs, start, stored_numbers=stored)
+        if feed is not None and explicit_start is None and feed.chnum_start is None:
+            # An implicit-start feed displays separate standard and Gracenote
+            # number blocks. Preview those same blocks instead of numbering
+            # both partitions from the standard block's start.
+            std = [ch for ch in stubs if ch.id not in gn_ids]
+            gn = [ch for ch in stubs if ch.id in gn_ids]
+            num_map = {
+                **_build_feed_chnum_map(std, start),
+                **_build_feed_chnum_map(gn, feed_namespace_start(feed, gracenote=True)),
+            }
+        else:
+            num_map = _build_feed_chnum_map(stubs, start, stored_numbers=stored)
+        # With a saved number pool, members that have no stored number are
+        # slotted into whatever numbers are free (gaps first, then the end).
+        # No pool means everything is numbered fresh, so nothing is "new".
+        placed_ids = set(stored) if stored else None
     app_map = num_map
     num_map = apply_provider_numbers(stubs, num_map)
     # Rows whose number is fixed outside this feed's ordering (a provider number
@@ -198,6 +256,11 @@ def preview_order():
                             or getattr(ch, 'pinned_chno', None)),
         'feed_pinned': ch.id in feed_pinned_ids,
         'gracenote':   ch.id in gn_ids,
+        # Newly matched since the order was saved -- sits outside the sorted
+        # order until the user re-sorts. Fixed-number rows never move, so skip.
+        'new':         bool(placed_ids is not None and ch.id not in placed_ids
+                            and ch.id not in fixed_ids
+                            and not (getattr(ch, 'number_pinned', False) and ch.number is not None)),
     } for ch in stubs]
     rows.sort(key=lambda r: chnum_sort_key(r['number']) + (r['name'].lower(),))
     return jsonify({'start': start, 'channels': rows})
@@ -266,6 +329,37 @@ def set_channel_order(feed_id):
     return jsonify(feed.to_dict(public_base_url()))
 
 
+def _displayed_feed_chnum_map(feed: Feed) -> dict[int, int]:
+    """Return the app numbers currently shown in a feed's playlists."""
+    from ..generators.m3u import _build_feed_chnum_map, feed_namespace_start
+
+    if feed.slug == 'default':
+        from .admin import _default_feed_chnum_map_full
+        return _default_feed_chnum_map_full()
+
+    q_filters = feed_to_query_filters(feed.filters or {})
+    stored = (
+        {row.channel_id: row.number
+         for row in FeedChannelNumber.query.filter_by(feed_id=feed.id).all()}
+        if feed.chnum_start is not None else None
+    )
+    # Match the standard and Gracenote output paths. With an explicit start,
+    # both partitions use the same stored pool; otherwise each has its own
+    # namespace and no stored assignments.
+    std = _selected_channel_stubs(q_filters, gracenote=False)
+    gn = _selected_channel_stubs(q_filters, gracenote=True)
+    return {
+        **_build_feed_chnum_map(
+            std, feed.chnum_start or feed_namespace_start(feed, gracenote=False),
+            stored_numbers=stored,
+        ),
+        **_build_feed_chnum_map(
+            gn, feed.chnum_start or feed_namespace_start(feed, gracenote=True),
+            stored_numbers=stored,
+        ),
+    }
+
+
 @feeds_api_bp.route('/<int:feed_id>/chnum-lock-all', methods=['POST'])
 def chnum_lock_all(feed_id):
     """Pin every member channel to its currently-displayed number in this feed.
@@ -277,27 +371,8 @@ def chnum_lock_all(feed_id):
     to one feed, so it also fixes that number in every other feed the
     channel happens to belong to.
     """
-    from ..generators.m3u import _build_feed_chnum_map, feed_namespace_start
     feed = Feed.query.get_or_404(feed_id)
-
-    if feed.slug == 'default':
-        # The default feed's "no explicit chnum_start" numbering is the
-        # source-chnum scheme, not the namespace-block scheme every other
-        # feed falls back to — reuse the admin page's already-correct
-        # resolver instead of re-deriving that special case here.
-        from .admin import _default_feed_chnum_map_full
-        num_map = _default_feed_chnum_map_full()
-    else:
-        q_filters = feed_to_query_filters(feed.filters or {})
-        stubs, _ = _feed_member_stubs(q_filters)
-        if not stubs:
-            return jsonify({'locked': 0})
-        start = feed.chnum_start or feed_namespace_start(feed, gracenote=False)
-        stored = {
-            r.channel_id: r.number
-            for r in FeedChannelNumber.query.filter_by(feed_id=feed.id).all()
-        }
-        num_map = _build_feed_chnum_map(stubs, start, stored_numbers=stored)
+    num_map = _displayed_feed_chnum_map(feed)
 
     if not num_map:
         return jsonify({'locked': 0})
@@ -317,6 +392,31 @@ def chnum_lock_all(feed_id):
             ch for ch in unpinned
             if not (ch.provider_number and ch.source and ch.source.name in provider_sources)
         ]
+
+    # A channel-wide lock overrides its assignment in every other feed. Stop
+    # before changing anything if even one of those feeds displays a different
+    # number; their stored assignments can be overwritten on the next refresh.
+    target_ids = {ch.id for ch in unpinned}
+    conflicts: dict[str, int] = {}
+    if target_ids:
+        for other in Feed.query.filter(Feed.id != feed.id).all():
+            other_map = _displayed_feed_chnum_map(other)
+            different = sum(
+                1 for channel_id in target_ids & other_map.keys()
+                if other_map[channel_id] != num_map[channel_id]
+            )
+            if different:
+                conflicts[other.name] = different
+    if conflicts:
+        summary = ', '.join(f'{name} ({count})' for name, count in list(conflicts.items())[:3])
+        if len(conflicts) > 3:
+            summary += f', and {len(conflicts) - 3} more'
+        return jsonify({
+            'error': 'Lock All stopped: these feeds show different numbers for shared channels: '
+                     f'{summary}. No locks were changed.',
+            'conflicts': conflicts,
+        }), 409
+
     for ch in unpinned:
         ch.number = num_map[ch.id]
         ch.number_pinned = True
@@ -344,6 +444,9 @@ def create_feed():
     slug = data.get('slug') or _slugify(name)
     if Feed.query.filter_by(slug=slug).first():
         return jsonify({'error': f'slug "{slug}" already exists'}), 409
+    guide_mode = data.get('guide_mode') or 'split'
+    if guide_mode not in GUIDE_MODES:
+        return jsonify({'error': 'guide_mode must be "split" or "mixed"'}), 400
 
     # Capture baseline overlaps among existing feeds BEFORE adding the new feed,
     # so we can block only on overlaps that the new feed itself introduces.
@@ -355,12 +458,18 @@ def create_feed():
         description = data.get('description', ''),
         filters     = _clean_filters(data.get('filters', {})),
         chnum_start = _parse_chnum_start(data.get('chnum_start')),
+        guide_mode  = guide_mode,
         is_enabled  = data.get('is_enabled', True),
     )
     db.session.add(feed)
     err = _safe_flush()  # make new feed visible to overlap check
     if err:
         return err
+    if feed.chnum_start is None:
+        # Save the first available block so later feeds cannot shift this one.
+        # Both guide partitions draw from the same sticky number pool.
+        from ..generators.m3u import available_feed_start
+        feed.chnum_start = available_feed_start(feed)
     # A new chnum_start feed needs its FeedChannelNumber store populated before
     # the overlap check / XML refresh, so its std and gracenote M3Us draw from one
     # unified pool instead of both numbering from chnum_start and colliding.
@@ -400,9 +509,12 @@ def update_feed(feed_id):
     # overlaps that this edit introduces, not pre-existing ones.
     baseline_warnings = set(get_global_chnum_overlaps())
 
+    if 'guide_mode' in data and data['guide_mode'] not in GUIDE_MODES:
+        return jsonify({'error': 'guide_mode must be "split" or "mixed"'}), 400
+
     if feed.slug in SYSTEM_FEED_SLUGS:
-        # System feeds only allow chnum_start to be changed.
-        disallowed = set(data.keys()) - {'chnum_start'}
+        # System feeds only allow chnum_start and guide_mode to be changed.
+        disallowed = set(data.keys()) - {'chnum_start', 'guide_mode'}
         if disallowed:
             return jsonify({'error': 'Built-in feeds cannot be edited.'}), 403
     else:
@@ -415,8 +527,23 @@ def update_feed(feed_id):
         if 'is_enabled' in data:
             feed.is_enabled = bool(data['is_enabled'])
 
+    # A mixed feed is numbered from one sticky pool, which needs a start.
+    # Clearing it would mean re-deriving every number from scratch.
+    if ('chnum_start' in data and _parse_chnum_start(data['chnum_start']) is None
+            and feed.chnum_start is not None
+            and data.get('guide_mode', feed.guide_mode) == 'mixed'):
+        db.session.rollback()
+        return jsonify({'error': 'A feed in mixed guide mode needs a Channel Number Start. '
+                                 'Change it to another number, or switch the feed back to '
+                                 'separate playlists first.'}), 400
+
     if 'chnum_start' in data:
         feed.chnum_start = _parse_chnum_start(data['chnum_start'])
+    if 'guide_mode' in data:
+        feed.guide_mode = data['guide_mode']
+    # A mixed feed always numbers from one sticky pool (see _promote_to_unified_pool).
+    if feed.guide_mode == 'mixed' and feed.chnum_start is None:
+        _promote_to_unified_pool(feed)
 
     err = _safe_flush()  # make changes visible to overlap check
     if err:
@@ -427,14 +554,17 @@ def update_feed(feed_id):
     # other, so the store must be rebuilt BEFORE we regenerate XML or check for
     # overlaps — otherwise both partitions number sequentially from chnum_start
     # and every gracenote channel collides with a standard one.
-    if any(k in data for k in ('chnum_start', 'filters', 'is_enabled')):
+    if any(k in data for k in ('chnum_start', 'filters', 'is_enabled', 'guide_mode')):
         from ..worker import _refresh_auto_channel_numbers
         _refresh_auto_channel_numbers()
         err = _safe_flush()
         if err:
             return err
     new_warnings = [w for w in get_global_chnum_overlaps() if w not in baseline_warnings]
-    if new_warnings:
+    # Switching guide mode alone moves no numbers; it only widens what the
+    # mixed playlist is compared against. Report that on the Feeds page rather
+    # than refusing the switch.
+    if new_warnings and set(data) != {'guide_mode'}:
         db.session.rollback()
         return jsonify({'error': 'Channel number overlaps detected', 'warnings': new_warnings}), 409
     err = _safe_commit()
@@ -628,6 +758,8 @@ def _clean_filters(raw: dict) -> dict:
     builder treats them as 'no filter on this dimension'.
     """
     out = {}
+    if raw.get('event') in ('0', '1'):
+        out['event'] = raw['event']
     if channel_ids := raw.get('channel_ids'):
         out['channel_ids'] = [int(i) for i in channel_ids if str(i).isdigit() or isinstance(i, int)]
         if max_ch := raw.get('max_channels'):
@@ -635,7 +767,7 @@ def _clean_filters(raw: dict) -> dict:
                 out['max_channels'] = max(1, int(max_ch))
             except (ValueError, TypeError):
                 pass
-        return out  # channel_ids overrides all other filters
+        return out  # channel_ids overrides other filters; event remains a hard limit
     if sources := raw.get('sources'):
         out['sources'] = [str(s) for s in sources if s]
     if categories := raw.get('categories'):

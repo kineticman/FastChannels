@@ -778,7 +778,10 @@
     tr.pending-review td:not(.toggle-col) { opacity: 0.72; }
     tr:hover td { background: var(--accent-row-hover); }
 
-    .ch-name-wrap { max-width: 264px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: flex; align-items: center; gap: 0.35rem; }
+    .ch-name-wrap { max-width: 264px; overflow: hidden; white-space: nowrap; display: flex; align-items: center; gap: 0.35rem; }
+    .ch-name-wrap strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .event-icon { display: inline-flex; flex: none; width: 14px; height: 14px; color: var(--accent-strong); vertical-align: middle; }
+    .event-icon svg { display: block; width: 100%; height: 100%; }
     .review-badge {
       display: inline-block; flex-shrink: 0; font-size: 0.58rem; font-weight: 700;
       line-height: 1; padding: 0.14rem 0.28rem; border-radius: 4px;
@@ -1237,6 +1240,7 @@
       font-size: 0.76rem; color: var(--text-muted); margin-top: 0.15rem;
       white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
     }
+    .mcard-event { color: var(--accent-strong); font-weight: 700; }
     .mcard-badges {
       display: flex; gap: 0.3rem; flex-wrap: wrap;
       margin-top: 0.28rem; align-items: center;
@@ -1380,6 +1384,7 @@
       new:            {{ new_filter            | tojson }},
       epg:            {{ epg_filter            | tojson }},
       featured:       {{ featured_filter       | tojson }},
+      event:          {{ event_filter          | tojson }},
       resolution:     {{ resolution_filter     | tojson }},
       duplicates: {{ duplicates_filter| tojson }},
     };
@@ -1412,8 +1417,8 @@
           <button type="button" class="btn-resolve-dupes" onclick="openResolveDupesModal()">⚡ Resolve Dupes</button>
         </div>
       </div>
-      {% set _adv_count = (1 if feed_filter else 0) + (1 if category_filter else 0) + (1 if enabled_filter else 0) + (1 if presence_filter else 0) + (1 if drm_filter else 0) + (1 if language_filter else 0) + (1 if country_filter else 0) + (1 if gracenote_filter else 0) + (1 if gracenote_mode_filter else 0) + (1 if duplicates_filter else 0) + (1 if new_filter else 0) + (1 if epg_filter else 0) + (1 if resolution_filter else 0) + (1 if featured_filter else 0) %}
-      <details class="toolbar-advanced" id="toolbar-advanced" {% if feed_filter or category_filter or enabled_filter or presence_filter or drm_filter or language_filter or country_filter or gracenote_filter or gracenote_mode_filter or duplicates_filter or new_filter or epg_filter or resolution_filter or featured_filter %}open{% endif %}>
+      {% set _adv_count = (1 if feed_filter else 0) + (1 if category_filter else 0) + (1 if enabled_filter else 0) + (1 if presence_filter else 0) + (1 if drm_filter else 0) + (1 if language_filter else 0) + (1 if country_filter else 0) + (1 if gracenote_filter else 0) + (1 if gracenote_mode_filter else 0) + (1 if duplicates_filter else 0) + (1 if new_filter else 0) + (1 if epg_filter else 0) + (1 if resolution_filter else 0) + (1 if featured_filter else 0) + (1 if event_filter in ('0', '1') else 0) %}
+      <details class="toolbar-advanced" id="toolbar-advanced" {% if feed_filter or category_filter or enabled_filter or presence_filter or drm_filter or language_filter or country_filter or gracenote_filter or gracenote_mode_filter or duplicates_filter or new_filter or epg_filter or resolution_filter or featured_filter or event_filter in ('0', '1') %}open{% endif %}>
         <summary>More filters{% if _adv_count %} <span class="filter-adv-badge">{{ _adv_count }}</span>{% endif %}</summary>
         <div class="toolbar-secondary">
           <div class="filter-group">
@@ -1574,6 +1579,14 @@
               <option value="1" {% if featured_filter == '1' %}selected{% endif %}>♻️ Rotating / featured only</option>
             </select>
           </div>
+          <div class="filter-group">
+            <label class="filter-label" for="event-filter">Events</label>
+            <select id="event-filter" name="event">
+              <option value="" {% if event_filter not in ('0', '1') %}selected{% endif %}>All channels</option>
+              <option value="1" {% if event_filter == '1' %}selected{% endif %}>Events only</option>
+              <option value="0" {% if event_filter == '0' %}selected{% endif %}>Non-event channels</option>
+            </select>
+          </div>
         </div>
       </details>
       <input type="hidden" name="sort" value="{{ sort_by }}">
@@ -1640,7 +1653,10 @@
       {% if featured_filter == '1' %}
       <span class="filter-chip"><strong>Channel Type</strong>♻️ Rotating / featured only</span>
       {% endif %}
-      {% if not (search or source_filter or feed_filter or category_filter or enabled_filter or review_filter or presence_filter or drm_filter or language_filter or country_filter or gracenote_filter or gracenote_mode_filter or duplicates_filter in ('1', 'unique') or new_filter in ('1','3','7','14') or epg_filter or featured_filter) %}
+      {% if event_filter in ('0', '1') %}
+      <span class="filter-chip"><strong>Events</strong>{{ 'Events only' if event_filter == '1' else 'Non-event channels' }}</span>
+      {% endif %}
+      {% if not (search or source_filter or feed_filter or category_filter or enabled_filter or review_filter or presence_filter or drm_filter or language_filter or country_filter or gracenote_filter or gracenote_mode_filter or duplicates_filter in ('1', 'unique') or new_filter in ('1','3','7','14') or epg_filter or featured_filter or event_filter in ('0', '1')) %}
       <span class="filter-chip"><strong>View</strong>All channels</span>
       {% endif %}
       <button type="button" class="btn-hide-disabled{% if enabled_filter == '1' %} active{% endif %}" onclick="toggleHideDisabled()">{% if enabled_filter == '1' %}◉ Hiding disabled{% else %}○ Hide disabled{% endif %}</button>
@@ -1793,7 +1809,7 @@
             <td class="ch-name-td"
                 title="Click to preview stream{% if hover_parts %} · {{ hover_parts|join(' · ') }}{% endif %}"
                 onclick="openPreview({{ ch.id }})">
-              <div class="ch-name-wrap"><strong>{{ ch.name }}</strong>{% if ch.review_state == 'pending' %}<span class="review-badge" title="New channel pending review{% if ch.first_seen_at %} · First added {{ ch.first_seen_at|localtime }}{% endif %}">NEW</span>{% endif %}</div>
+              <div class="ch-name-wrap">{% if is_event_channel(ch) %}<span class="event-icon" role="img" aria-label="Event channel" title="Event channel"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="3.5" width="12" height="10.5" rx="1.5"/><path d="M5 2v3M11 2v3M2 7h12M5 10h2"/></svg></span>{% endif %}<strong>{{ ch.name }}</strong>{% if ch.review_state == 'pending' %}<span class="review-badge" title="New channel pending review{% if ch.first_seen_at %} · First added {{ ch.first_seen_at|localtime }}{% endif %}">NEW</span>{% endif %}</div>
             </td>
             <td style="white-space:nowrap;padding-left:0.25rem;padding-right:0.25rem">{% if ch.name in duplicate_names %}<span class="dup-badge badge-dup-clickable" data-channel-id="{{ ch.id }}" style="cursor:pointer" title="Duplicate match found — click to see matches">DUP</span>{% elif ch.name in possible_duplicate_names %}<span class="dup-badge badge-dup-clickable" data-channel-id="{{ ch.id }}" style="cursor:pointer" title="Possible duplicate — click to see matches">DUP?</span>{% elif ch.id in gn_duplicate_ids %}<span class="dup-badge badge-dup-clickable" data-channel-id="{{ ch.id }}" style="cursor:pointer" title="Same Gracenote ID found on another source — click to see matches">GN DUP</span>{% endif %}{% if ch.is_duplicate %}<span class="badge-manual-dup badge-dup-clickable" data-channel-id="{{ ch.id }}" title="Click to see potential duplicates" style="cursor:pointer">DUPL</span>{% endif %}</td>
             <td style="color:var(--text-muted)">{{ ch.source.display_name }}{% if ch.source.epg_only %} <span class="badge-epg-only" title="Source is EPG-only — excluded from M3U output">EPG</span>{% endif %}</td>
@@ -1860,6 +1876,14 @@
                   <span class="flag-icon flag-clickable" onclick="openReenableModal({{ ch.id }}, 'Dead', {{ ch.missed_scrapes or 0 }})" title="Dead — stream audit found this channel not currently playable. Click to re-enable or delete.">💀</span>
                   {% elif ch.disable_reason == 'VOD' %}
                   <span class="flag-icon flag-clickable" onclick="openReenableModal({{ ch.id }}, 'VOD')" title="VOD — this channel serves on-demand content, not a live stream. Click to re-enable.">📼</span>
+                  {% elif ch.disable_reason == 'Missing from playlist' %}
+                  <span class="flag-icon" title="Automatically disabled after missing from its playlist. Enable it to include it in feeds when present.">📋</span>
+                  {% elif ch.disable_reason == 'Event missing from playlist' %}
+                  <span class="flag-icon" title="Event is absent from its playlist. It will return automatically if listed again before its deletion limit.">📅</span>
+                  {% elif ch.disable_reason == 'Event missing from schedule' %}
+                  <span class="flag-icon" title="Event is absent from ESPN's schedule. It will return automatically if ESPN lists it again before deletion.">📅</span>
+                  {% elif ch.disable_reason == 'Event excluded by filter' %}
+                  <span class="flag-icon" title="Event is excluded by its source's event filter. It will return automatically if the filter includes it again.">📅</span>
                   {% endif %}
                   {% if ch.identity_changed_at %}
                   <span class="flag-icon flag-clickable" onclick="openGracenoteSuggestModal({{ ch.id }}, {onApplied: channelsGnOnApplied})" title="Content changed upstream — this slot now carries a different channel. Review/confirm its Gracenote ID so the guide matches the new content.">🔁</span>
@@ -1916,7 +1940,7 @@
           {% endif %}
           <div class="mcard-body">
             <div class="mcard-name">{{ ch.name }}{% if ch.review_state == 'pending' %} <span class="review-badge" title="New channel pending review{% if ch.first_seen_at %} · First added {{ ch.first_seen_at|localtime }}{% endif %}">NEW</span>{% endif %}</div>
-            <div class="mcard-meta">{{ ch.source.display_name }}{% if ch.category %} · {{ ch.category }}{% endif %}{% if ch.language_override or ch.language %} · {{ ch.language_override or ch.language }}{% endif %}</div>
+            <div class="mcard-meta">{% if is_event_channel(ch) %}<span class="mcard-event">Event</span> · {% endif %}{{ ch.source.display_name }}{% if ch.category %} · {{ ch.category }}{% endif %}{% if ch.language_override or ch.language %} · {{ ch.language_override or ch.language }}{% endif %}</div>
             {% set _is_rotator = (ch.tags and 'featured' in ch.tags.split(',')) or (ch.content_swap_count or 0) > 0 %}
             {% set _has_b = ch.disable_reason or ch.requires_drm_bridge or ch.identity_changed_at or _is_rotator or (ch.stream_info and (ch.stream_info.has_4k or ch.stream_info.has_hd or ch.stream_info.video_codec == 'hevc')) or ch.name in duplicate_names or ch.name in possible_duplicate_names or ch.id in gn_duplicate_ids or (ch.is_enabled and not ch.is_active) %}
             {% if _has_b %}

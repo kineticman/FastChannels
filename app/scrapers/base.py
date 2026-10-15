@@ -254,6 +254,20 @@ def is_transient_network_error(exc: Exception) -> bool:
     return False
 
 
+def mask_username(username: str | None) -> str:
+    """Log-safe form of an account username/email: logs and the browser-login
+    activity log get pasted into public forum threads (confirmed 2026-09-24,
+    post #3223 — a full Spectrum username ended up public that way). Keeps
+    just enough to recognize which account was used."""
+    name = (username or '').strip()
+    local, sep, domain = name.partition('@')
+    if len(local) <= 4:
+        masked = local[:1] + '***'
+    else:
+        masked = f'{local[:2]}***{local[-2:]}'
+    return masked + (sep + domain if sep else '')
+
+
 def merge_config_updates(existing: dict | None, updates: dict | None) -> dict:
     """Recursively merge scraper config updates into existing config JSON."""
     merged = copy.deepcopy(existing or {})
@@ -332,12 +346,20 @@ class ConfigField:
         return d
 
 
+# Marks a temporary event channel in Channel.tags. Reserved: tags otherwise hold
+# raw upstream strings, so a plain word like 'event' (a playlist group-title, a
+# tvc-guide-tags value) would turn an ordinary channel into an event.
+EVENT_CHANNEL_TAG = 'fc:event'
+
+
 class ChannelData:
     def __init__(self, source_channel_id, name, stream_url, logo_url=None,
                  slug=None, category=None, language='en', country='US',
                  stream_type='hls', number=None, gracenote_id=None,
                  guide_key=None, tags=None, description=None,
-                 gracenote_mode=None, provider_number=None):
+                 gracenote_mode=None, provider_number=None,
+                 guide_title=None, guide_art=None, guide_block_minutes=None,
+                 retire_at=None, delete_at=None, playlist_group=None):
         self.source_channel_id = source_channel_id
         self.name        = name
         self.stream_url  = stream_url
@@ -362,7 +384,19 @@ class ChannelData:
         self.gracenote_mode = gracenote_mode
         self.guide_key   = guide_key
         self.tags        = tags or []  # list of raw tag/group strings from source
+        self.playlist_group = playlist_group
+        if (retire_at or delete_at) and EVENT_CHANNEL_TAG not in self.tags:
+            raise ValueError('Channels with retirement or deletion deadlines must have the event tag')
         self.description = description  # optional long-form channel description
+        # Placeholder guide (the synthetic blocks emitted for a channel with no
+        # programmes): its title when that isn't the channel name, its image,
+        # and its block length. Only playlist channels set these.
+        self.guide_title = guide_title
+        self.guide_art = guide_art
+        self.guide_block_minutes = guide_block_minutes
+        # Optional lifecycle for event channels; permanent channels leave both unset.
+        self.retire_at = retire_at
+        self.delete_at = delete_at
 
 
 class ProgramData:

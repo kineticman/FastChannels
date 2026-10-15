@@ -224,6 +224,12 @@ class StirrScraper(BaseScraper):
 
             # 2. Fallback to STIRR EPG endpoint (use session directly — 400s are
             #    expected for unsupported video IDs and shouldn't log as ERROR)
+            # Diagnosed 2026-10-13: STIRR and several provider EPG URLs served
+            # genuinely stale schedules (some months old). About 1.4k parsed
+            # rows then triggered the worker's "out-of-range start/end" warning.
+            # The fallback's bogus year-8387/8390 strings are recovered from
+            # start_time/end_time by _entry_time(), but those recovered dates can
+            # still be stale. Check raw feed dates before changing time parsing.
             if not result:
                 try:
                     fallback_url = f"{self.EPG_FALLBACK_URL}?channel_id={ch.source_channel_id}&tz=UTC"
