@@ -110,6 +110,7 @@
     let _plEnterTouched = false;
     let _plGroupLifecycle = {};
     let _plSavedGroups = [];
+    let _plStoredGroups = [];
 
     function _plEl(id) { return document.getElementById(id); }
 
@@ -132,6 +133,7 @@
       _plEnterTouched = false;
       _plGroupLifecycle = {};
       _plSavedGroups = [];
+      _plStoredGroups = [];
       _plEl('pl-name').value = '';
       _plEl('pl-m3u').value = '';
       _plEl('pl-epg').value = '';
@@ -163,6 +165,7 @@
         _plEl('pl-country').value = d.default_country || 'US';
         _plGroupLifecycle = d.group_lifecycle || {};
         _plSavedGroups = d.groups_include || [];
+        _plStoredGroups = d.stored_groups || [];
         checkPlaylist(d.groups_include || []);
       } catch (e) {
         _plSetStatus('Could not load this playlist: ' + e.message, true);
@@ -261,10 +264,18 @@
       if (d.with_drm) facts.push(`<span class="pl-warn">${d.with_drm} declare a DRM license. DRM streams from playlists are not supported.</span>`);
       _plEl('pl-facts').innerHTML = facts.join('<br>');
 
-      const present = new Set(d.groups.map(g => g.name.toLocaleLowerCase()));
-      const absent = [...new Set([...Object.keys(_plGroupLifecycle), ..._plSavedGroups])]
-        .filter(name => !present.has(name.toLocaleLowerCase()));
-      const rows = [...d.groups, ...absent.map(name => ({name, count: 0, absent: true}))];
+      // Groups gone from the playlist stay listed while they still have a rule,
+      // a saved selection, or channels in FastChannels, so a rule can be set.
+      const seen = new Set(d.groups.map(g => g.name.toLocaleLowerCase()));
+      const stored = new Map(_plStoredGroups.map(g => [g.name.toLocaleLowerCase(), g.count]));
+      const absent = [];
+      for (const name of [...Object.keys(_plGroupLifecycle), ..._plSavedGroups, ..._plStoredGroups.map(g => g.name)]) {
+        const key = name.toLocaleLowerCase();
+        if (seen.has(key)) continue;
+        seen.add(key);
+        absent.push({name, count: 0, absent: true, stored: stored.get(key) || 0});
+      }
+      const rows = [...d.groups, ...absent];
       const want = preselect && preselect.length ? new Set(preselect.map(name => name.toLocaleLowerCase())) : null;
       _plEl('pl-groups').innerHTML = rows.map((g, i) => {
         const policyKey = Object.keys(_plGroupLifecycle).find(name => name.toLocaleLowerCase() === g.name.toLocaleLowerCase());
@@ -274,7 +285,7 @@
         const linearLimit = Number(policy.disable_after_misses) || 0;
         return `<div class="pl-group-row">
           <label><input type="checkbox" data-idx="${i}" ${(!want || want.has(g.name.toLocaleLowerCase())) ? 'checked' : ''} onchange="_plOnGroupsChanged()">
-            <span>${g.name ? escapeHtml(g.name) : '<em>(no group)</em>'}${g.absent ? ' <span class="pl-warn">(absent now)</span>' : ''}</span>
+            <span>${g.name ? escapeHtml(g.name) : '<em>(no group)</em>'}${g.absent ? ` <span class="pl-warn">(absent now${g.stored ? `, ${g.stored} still in FastChannels` : ''})</span>` : ''}</span>
             <span class="pl-count">${g.count}</span></label>
           <select class="pl-group-type" aria-label="Channel type" onchange="_plOnGroupTypeChanged(this)">
             <option value="linear" ${isEvent ? '' : 'selected'}>Linear</option>

@@ -226,7 +226,23 @@ def _apply_dialog_fields(config: dict, data: dict) -> dict:
     return config
 
 
-def _playlist_dict(source: Source) -> dict:
+def _stored_groups(source: Source) -> list[dict]:
+    """Groups this playlist's stored channels belong to, with channel counts.
+
+    The dialog lists groups from a live check of the playlist, so a group that
+    has dropped out upstream would vanish from it while its channels are still
+    here. These let the dialog keep showing it, so a rule can still be set."""
+    counts: Counter = Counter()
+    rows = (db.session.query(Channel.playlist_group, Channel.tags)
+            .filter(Channel.source_id == source.id).all())
+    for group, tags in rows:
+        if group is None:
+            group = (tags or '').split(',', 1)[0]
+        counts[group] += 1
+    return [{'name': name, 'count': n} for name, n in sorted(counts.items())]
+
+
+def _playlist_dict(source: Source, include_stored_groups: bool = False) -> dict:
     cfg = source.config or {}
     d = source.to_dict()
     d.update({
@@ -238,6 +254,8 @@ def _playlist_dict(source: Source) -> dict:
         'default_language': cfg.get('default_language') or 'en',
         'default_country':  cfg.get('default_country') or 'US',
     })
+    if include_stored_groups:
+        d['stored_groups'] = _stored_groups(source)
     return d
 
 
@@ -292,7 +310,7 @@ def create_playlist():
 
 @playlists_bp.route('/playlists/<int:source_id>', methods=['GET'])
 def get_playlist(source_id):
-    return jsonify(_playlist_dict(_playlist_source_or_404(source_id)))
+    return jsonify(_playlist_dict(_playlist_source_or_404(source_id), include_stored_groups=True))
 
 
 @playlists_bp.route('/playlists/<int:source_id>', methods=['PUT'])
