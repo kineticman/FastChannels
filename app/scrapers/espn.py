@@ -725,18 +725,25 @@ class ESPNScraper(BaseScraper):
                 if str(self.config.get(key, 'false')).strip().lower() in ('1', 'true', 'yes', 'on')}
 
     def _candidate_event_airings(self) -> list[dict]:
-        """All supported event services in the 48-hour window, before user filters."""
+        """All supported event services in the 48-hour window, before user filters.
+
+        Days are UTC: an evening US game that started before 00:00 UTC is listed
+        under yesterday, so that day is fetched too. An airing stays listed
+        until its retirement grace has passed, so overruns aren't hidden as
+        missing from the schedule before retire_at.
+        """
         now = datetime.now(timezone.utc)
         horizon = now + timedelta(hours=_EVENT_LOOKAHEAD_HOURS)
+        grace = timedelta(seconds=EVENT_END_GRACE_SECONDS)
         found: dict[str, dict] = {}
-        for offset in range(_EPG_DAYS):
+        for offset in range(-1, _EPG_DAYS):
             day = (now.date() + timedelta(days=offset)).isoformat()
             for airing in self._airings(day):
                 airing_id = airing.get('id')
                 start = _parse_time(airing.get('startDateTime'))
                 end = _parse_time(airing.get('endDateTime'))
-                if (not airing_id or not start or not end or end <= start or end <= now or start >= horizon
-                        or not event_services(airing)):
+                if (not airing_id or not start or not end or end <= start or end + grace <= now
+                        or start >= horizon or not event_services(airing)):
                     continue
                 found[airing_id] = airing
         return sorted(found.values(), key=lambda a: (a.get('startDateTime') or '', a['id']))
