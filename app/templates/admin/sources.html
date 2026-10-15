@@ -514,6 +514,37 @@
     .espn-auth-body { border-top: 1px solid var(--border); padding: 0.8rem 0.9rem 0.9rem; }
     .espn-auth-body .config-note { margin-bottom: 0.6rem; }
     .espn-auth-body .amazon-autologin-panel { border: 0; padding: 0; background: none; }
+    .espn-events input[type=checkbox], .espn-events input[type=radio] { accent-color: var(--focus-accent); cursor: pointer; }
+    .espn-events-head { display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; flex-wrap: wrap; margin-top: 1rem; }
+    .espn-events-head .config-subtitle { font-weight: 600; margin: 0; }
+    .espn-match { font-size: 0.8rem; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+    .espn-match strong { color: var(--text); }
+    .espn-services { display: flex; gap: 0.5rem 1.25rem; flex-wrap: wrap; margin: 0.6rem 0 0.9rem; }
+    .espn-services label, .espn-mode label, .espn-hide-shows label { display: flex; align-items: center; gap: 0.45rem; font-size: 0.84rem; color: var(--text); cursor: pointer; }
+    .espn-filter { border: 1px solid var(--border); border-radius: 8px; padding: 0.8rem 0.9rem; }
+    .espn-filter.is-off { opacity: 0.55; }
+    .espn-mode { display: flex; gap: 0.4rem 1.25rem; flex-wrap: wrap; align-items: center; }
+    .espn-mode-label { font-size: 0.8rem; font-weight: 600; color: var(--text-soft); margin-right: 0.25rem; }
+    .espn-hide-shows { margin-top: 0.55rem; }
+    .espn-hide-shows label { font-size: 0.8rem; color: var(--text-soft); }
+    .espn-picked { margin-top: 0.7rem; font-size: 0.8rem; color: var(--text-soft); line-height: 1.6; }
+    .espn-picked .espn-chip { display: inline-block; padding: 0.05rem 0.5rem; margin: 0 0.3rem 0.3rem 0; border: 1px solid var(--border); border-radius: 999px; color: var(--text); }
+    .espn-picked .espn-chip small { color: var(--text-muted); font-size: 0.74rem; }
+    .espn-picked.is-empty { color: var(--warning-soft); }
+    .espn-sport-list { margin-top: 0.7rem; max-height: 340px; overflow-y: auto; border-top: 1px solid var(--border); }
+    .espn-sport { border-bottom: 1px solid var(--border); }
+    .espn-sport-row { display: flex; align-items: center; gap: 0.5rem; padding: 0.4rem 0.15rem; }
+    .espn-sport-row label { display: flex; align-items: center; gap: 0.5rem; flex: 1; min-width: 0; font-size: 0.84rem; color: var(--text); cursor: pointer; }
+    .espn-count { color: var(--text-muted); font-size: 0.76rem; font-variant-numeric: tabular-nums; }
+    .espn-league-toggle { background: none; border: 0; padding: 0.15rem 0.35rem; border-radius: 4px; color: var(--text-muted); font-size: 0.76rem; cursor: pointer; white-space: nowrap; }
+    .espn-league-toggle:hover { color: var(--text); background: var(--surface-4); }
+    .espn-league-toggle:focus-visible { outline: 2px solid var(--focus-accent); outline-offset: 1px; }
+    .espn-league-toggle::after { content: ' ▸'; }
+    .espn-sport.is-open .espn-league-toggle::after { content: ' ▾'; }
+    .espn-leagues { display: none; flex-wrap: wrap; gap: 0.35rem 1.1rem; padding: 0 0.15rem 0.55rem 1.9rem; }
+    .espn-sport.is-open .espn-leagues { display: flex; }
+    .espn-leagues label { display: flex; align-items: center; gap: 0.4rem; font-size: 0.78rem; color: var(--text-soft); cursor: pointer; }
+    .espn-list-note { padding: 0.6rem 0.15rem; font-size: 0.8rem; color: var(--text-muted); }
     .amazon-account-details {
       margin-top: 0.9rem; border-top: 1px solid var(--border); padding-top: 0.75rem;
     }
@@ -3582,7 +3613,6 @@
     const _espnEventPolicy = {};
     const _espnEventPreview = {};
     const _espnSportNames = {};
-    const _espnLeagueNames = {};
 
     function renderEspnConfig(sourceId, schema, values, cfg) {
       const info = (cfg && cfg.espn) || {};
@@ -3593,6 +3623,7 @@
         (info.providers || []).map(p =>
           `<option value="${escapeHtml(p.id)}" ${p.id === defaultMvpd ? 'selected' : ''}>${escapeHtml(p.name)}</option>`)
       ).join('');
+      setTimeout(() => espnEventsInit(sourceId), 0);
       return `
         <div class="config-title">ESPN Settings</div>
         <div class="config-subtitle" style="font-weight:600">Sign in</div>
@@ -3641,36 +3672,59 @@
             </div>
           </details>
         </div>
-        <div class="config-subtitle" style="margin-top:1rem;font-weight:600">Event channels</div>
-        <div class="config-note">
-          Adds upcoming events as temporary channels with guide data. Availability depends on your
-          ESPN account. Channels retire two hours after their scheduled end and are deleted a day later.
-        </div>
-        <div class="field field-full" style="margin:.65rem 0;display:flex;gap:1rem;flex-wrap:wrap">
-          <label style="display:flex;align-items:center;gap:.5rem">
-            <input type="checkbox" data-key="include_espn_plus_events"
+        <div class="espn-events" id="espn-events-${sourceId}">
+          <div class="espn-events-head">
+            <div class="config-subtitle">Event channels</div>
+            <span class="espn-match" id="espn-match-${sourceId}" aria-live="polite"></span>
+          </div>
+          <div class="config-note">
+            Adds upcoming events as temporary channels with guide data. Availability depends on your
+            ESPN account. Channels retire two hours after their scheduled end and are deleted a day later.
+          </div>
+          <div class="espn-services">
+            <label><input type="checkbox" data-key="include_espn_plus_events"
                    ${String(values.include_espn_plus_events || 'false').toLowerCase() === 'true' ? 'checked' : ''}
-                   onchange="renderEspnEventFilters(${sourceId})">ESPN+
-          </label>
-          <label style="display:flex;align-items:center;gap:.5rem">
-            <input type="checkbox" data-key="include_acc_extra_events"
+                   onchange="espnEventsRefresh(${sourceId})">ESPN+</label>
+            <label><input type="checkbox" data-key="include_acc_extra_events"
                    ${String(values.include_acc_extra_events || 'false').toLowerCase() === 'true' ? 'checked' : ''}
-                   onchange="renderEspnEventFilters(${sourceId})">ACC Extra
-          </label>
-          <label style="display:flex;align-items:center;gap:.5rem">
-            <input type="checkbox" data-key="include_sec_plus_events"
+                   onchange="espnEventsRefresh(${sourceId})">ACC Extra</label>
+            <label><input type="checkbox" data-key="include_sec_plus_events"
                    ${String(values.include_sec_plus_events || 'false').toLowerCase() === 'true' ? 'checked' : ''}
-                   onchange="renderEspnEventFilters(${sourceId})">SEC Plus
-          </label>
+                   onchange="espnEventsRefresh(${sourceId})">SEC Plus</label>
+          </div>
+          <div class="espn-filter" id="espn-filter-${sourceId}">
+            <div class="espn-mode" role="radiogroup" aria-label="Sports">
+              <span class="espn-mode-label">Sports</span>
+              <label><input type="radio" name="espn-mode-${sourceId}" value="all"
+                     ${_espnEventPolicy[sourceId].sport_mode === 'all' ? 'checked' : ''}
+                     onchange="espnSetSportMode(${sourceId}, this.value)">All, including new ones</label>
+              <label><input type="radio" name="espn-mode-${sourceId}" value="selected"
+                     ${_espnEventPolicy[sourceId].sport_mode === 'selected' ? 'checked' : ''}
+                     onchange="espnSetSportMode(${sourceId}, this.value)">Only the ones I pick</label>
+            </div>
+            <div class="espn-hide-shows">
+              <label><input type="checkbox" ${_espnEventPolicy[sourceId].hide_likely_shows ? 'checked' : ''}
+                     onchange="espnSetHideLikelyShows(${sourceId}, this.checked)">Hide studio shows and uncategorized events</label>
+            </div>
+            <div class="espn-picked" id="espn-picked-${sourceId}"></div>
+            <div class="espn-sport-list" id="espn-sports-${sourceId}" hidden></div>
+          </div>
         </div>
-        <div class="config-note" id="espn-event-summary-${sourceId}">${_espnEventPolicy[sourceId].sport_mode === 'selected' ? 'Only selected sports' : 'All sports and leagues, including future ones'}${_espnEventPolicy[sourceId].hide_likely_shows ? '; likely shows hidden' : ''}</div>
-        <button class="btn btn-cancel btn-sm" type="button" onclick="loadEspnEventPreview(${sourceId})">Choose sports and leagues…</button>
-        <div id="espn-event-filter-${sourceId}" style="display:none;margin:.7rem 0"></div>
         <div class="config-actions">
           <span class="config-status" id="config-status-${sourceId}"></span>
           <button class="btn btn-run" type="button" onclick="saveSourceConfig(${sourceId})">Save settings</button>
         </div>`;
     }
+
+    // ── ESPN event sport/league picker ──────────────────────────────────
+    // The saved policy (_espnEventPolicy) keeps the server's format:
+    //   {sport_mode: 'all'|'selected', hide_likely_shows,
+    //    sports: {name: {league_mode: 'all'|'selected', leagues: [...]}}}
+    // Each sport's checkbox shows it: unchecked = not in sports, checked =
+    // league_mode 'all' (new leagues included), mixed = 'selected'.
+    // Checkbox clicks update rows in place, so the list keeps its scroll
+    // position and focus; only mode/service changes rebuild it.
+    const _espnOpenSports = {};
 
     function _espnSelectedServices(sourceId) {
       const keys = {
@@ -3683,131 +3737,195 @@
       ).map(([, service]) => service);
     }
 
+    function _espnRule(policy, sport) {
+      const key = Object.keys(policy.sports).find(name => name.toLocaleLowerCase() === sport.toLocaleLowerCase());
+      return key === undefined ? null : policy.sports[key];
+    }
+
     function _espnEventIncluded(event, policy) {
       if (policy.hide_likely_shows && event.likely_show) return false;
       if (policy.sport_mode === 'all') return true;
-      const rule = Object.entries(policy.sports).find(([sport]) =>
-        sport.toLocaleLowerCase() === event.sport.toLocaleLowerCase())?.[1];
+      const rule = _espnRule(policy, event.sport);
       return !!rule && (rule.league_mode === 'all' || rule.leagues.some(league =>
         league.toLocaleLowerCase() === event.league.toLocaleLowerCase()));
     }
 
-    function renderEspnEventFilters(sourceId) {
+    // Events in the selected services, and their sports/leagues with counts.
+    // Saved sports and leagues stay listed at 0 when out of season.
+    function _espnCatalog(sourceId) {
       const policy = _espnEventPolicy[sourceId];
-      if (!policy) return;
-      const summary = document.getElementById(`espn-event-summary-${sourceId}`);
-      summary.textContent = (policy.sport_mode === 'all'
-        ? 'All sports and leagues, including future ones'
-        : `${Object.keys(policy.sports).length} selected sport(s); new sports stay out until selected`)
-        + (policy.hide_likely_shows ? '; likely shows hidden' : '');
       const preview = _espnEventPreview[sourceId];
-      if (!preview) return;
       const services = _espnSelectedServices(sourceId);
-      const events = preview.events.filter(event => event.services.some(service => services.includes(service)));
-      const included = events.filter(event => _espnEventIncluded(event, policy)).length;
-      const browsable = policy.hide_likely_shows ? events.filter(event => !event.likely_show) : events;
+      const events = preview ? preview.events.filter(e => e.services.some(s => services.includes(s))) : [];
+      const listed = policy.hide_likely_shows ? events.filter(e => !e.likely_show) : events;
       const bySport = new Map();
-      for (const event of browsable) {
-        if (!bySport.has(event.sport)) bySport.set(event.sport, {count: 0, leagues: new Map()});
-        const entry = bySport.get(event.sport);
-        entry.count++;
-        entry.leagues.set(event.league, (entry.leagues.get(event.league) || 0) + 1);
-      }
-      for (const [sport, rule] of Object.entries(policy.sports)) {
+      const add = (sport, league, n) => {
         if (!bySport.has(sport)) bySport.set(sport, {count: 0, leagues: new Map()});
-        for (const league of rule.leagues || []) {
-          if (!bySport.get(sport).leagues.has(league)) bySport.get(sport).leagues.set(league, 0);
-        }
-      }
-      const names = [...bySport.keys()].sort((a, b) => a.localeCompare(b));
-      _espnSportNames[sourceId] = names;
-      _espnLeagueNames[sourceId] = {};
-      const rows = names.map((sport, i) => {
         const entry = bySport.get(sport);
-        const rule = policy.sports[sport];
-        const leagues = [...entry.leagues.keys()].sort((a, b) => a.localeCompare(b));
-        _espnLeagueNames[sourceId][i] = leagues;
-        const leagueOptions = rule?.league_mode === 'selected'
-          ? `<div style="margin:.35rem 0 .3rem 1.4rem;display:flex;gap:.5rem 1rem;flex-wrap:wrap">${leagues.map((league, j) =>
-              `<label style="font-size:.75rem"><input type="checkbox" ${rule.leagues.includes(league) ? 'checked' : ''}
-                onchange="espnToggleLeague(${sourceId},${i},${j},this.checked)"> ${escapeHtml(league)} (${entry.leagues.get(league)})</label>`
-            ).join('')}</div>` : '';
-        return `<div style="padding:.35rem 0;border-bottom:1px solid var(--border)">
-          <label style="font-size:.8rem"><input type="checkbox" ${rule ? 'checked' : ''}
-            onchange="espnToggleSport(${sourceId},${i},this.checked)"> ${escapeHtml(sport)} <span style="color:var(--text-muted)">(${entry.count})</span></label>
-          ${rule ? `<div style="margin:.3rem 0 0 1.4rem;font-size:.76rem">Leagues:
-            <select onchange="espnSetLeagueMode(${sourceId},${i},this.value)">
-              <option value="all" ${rule.league_mode === 'all' ? 'selected' : ''}>All, including future</option>
-              <option value="selected" ${rule.league_mode === 'selected' ? 'selected' : ''}>Only selected</option>
-            </select></div>${leagueOptions}` : ''}
-        </div>`;
-      });
-      document.getElementById(`espn-event-filter-${sourceId}`).innerHTML = `
-        <div class="config-note">${included} of ${events.length} upcoming event(s) match your choices in the next ${preview.window_hours} hours. Saved sports and leagues remain listed at 0 when out of season.</div>
-        <label style="display:flex;align-items:center;gap:.5rem;font-size:.8rem;margin-bottom:.35rem">
-          <input type="checkbox" ${policy.hide_likely_shows ? 'checked' : ''}
-            onchange="espnSetHideLikelyShows(${sourceId},this.checked)">Hide likely shows
-        </label>
-        <div class="config-note" style="margin-bottom:.7rem">Uses ESPN's studio label and missing sport. Some shows may still appear.</div>
-        <label style="font-size:.8rem">Sports:
-          <select onchange="espnSetSportMode(${sourceId},this.value)">
-            <option value="all" ${policy.sport_mode === 'all' ? 'selected' : ''}>All, including future</option>
-            <option value="selected" ${policy.sport_mode === 'selected' ? 'selected' : ''}>Only selected</option>
-          </select>
-        </label>
-        <div style="max-height:330px;overflow-y:auto;margin-top:.45rem;padding:.35rem .65rem;border:1px solid var(--border);border-radius:6px">
-          ${policy.sport_mode === 'selected' ? rows.join('') || '<div class="config-note">No sports available yet.</div>'
-            : names.map(sport => `<div style="font-size:.78rem;padding:.2rem 0">${escapeHtml(sport)} (${bySport.get(sport).count})</div>`).join('') || '<div class="config-note">No events in the selected services right now.</div>'}
-        </div>`;
+        entry.count += n;
+        if (league !== null) entry.leagues.set(league, (entry.leagues.get(league) || 0) + n);
+      };
+      for (const e of listed) add(e.sport, e.league, 1);
+      for (const [sport, rule] of Object.entries(policy.sports)) {
+        add(sport, null, 0);
+        for (const league of rule.leagues || []) add(sport, league, 0);
+      }
+      const sports = [...bySport.keys()].sort((a, b) => a.localeCompare(b)).map(name => ({
+        name, count: bySport.get(name).count,
+        leagues: [...bySport.get(name).leagues].sort((a, b) => a[0].localeCompare(b[0])),
+      }));
+      return {events, sports};
     }
 
-    async function loadEspnEventPreview(sourceId) {
-      const panel = document.getElementById(`espn-event-filter-${sourceId}`);
-      if (panel.style.display !== 'none') { panel.style.display = 'none'; return; }
-      panel.style.display = '';
-      panel.textContent = 'Loading ESPN event schedule…';
-      try {
-        const response = await fetch(`/api/sources/${sourceId}/espn-event-preview`);
-        const data = await response.json();
-        if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
-        _espnEventPreview[sourceId] = data;
-        renderEspnEventFilters(sourceId);
-      } catch (error) {
-        panel.textContent = error.message;
+    function espnEventsInit(sourceId) {
+      espnEventsRefresh(sourceId);
+      if (_espnEventPreview[sourceId]) return;
+      fetch(`/api/sources/${sourceId}/espn-event-preview`)
+        .then(r => r.json().then(d => { if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`); return d; }))
+        .then(data => { _espnEventPreview[sourceId] = data; espnEventsRefresh(sourceId); })
+        .catch(err => {
+          _espnEventPreview[sourceId] = null;
+          const match = document.getElementById(`espn-match-${sourceId}`);
+          if (match) match.textContent = 'Event counts unavailable';
+          const list = document.getElementById(`espn-sports-${sourceId}`);
+          if (list) list.innerHTML = `<div class="espn-list-note">${escapeHtml(err.message)}</div>`;
+        });
+    }
+
+    // Rebuild everything that depends on the services, mode or show filter.
+    function espnEventsRefresh(sourceId) {
+      const policy = _espnEventPolicy[sourceId];
+      const box = document.getElementById(`espn-filter-${sourceId}`);
+      if (!policy || !box) return;
+      box.classList.toggle('is-off', !_espnSelectedServices(sourceId).length);
+      const list = document.getElementById(`espn-sports-${sourceId}`);
+      list.hidden = policy.sport_mode !== 'selected';
+      if (!list.hidden) {
+        const loaded = _espnEventPreview[sourceId];
+        if (loaded === undefined) {
+          list.innerHTML = '<div class="espn-list-note">Loading this week\'s sports…</div>';
+        } else if (loaded) {
+          const scroll = list.scrollTop;
+          const {sports} = _espnCatalog(sourceId);
+          _espnSportNames[sourceId] = sports;
+          list.innerHTML = sports.length ? sports.map((sport, i) => {
+            const open = _espnOpenSports[sourceId]?.has(sport.name);
+            const leagues = sport.leagues.map(([league, n], j) => `
+              <label><input type="checkbox" data-league="${j}"
+                     onchange="espnToggleLeague(${sourceId}, ${i}, ${j}, this.checked)">${escapeHtml(league)}
+                <span class="espn-count">${n}</span></label>`).join('');
+            return `<div class="espn-sport${open ? ' is-open' : ''}" data-sport="${i}">
+              <div class="espn-sport-row">
+                <label><input type="checkbox" onchange="espnToggleSport(${sourceId}, ${i}, this.checked)">
+                  ${escapeHtml(sport.name)} <span class="espn-count">${sport.count}</span></label>
+                ${sport.leagues.length > 1 ? `<button type="button" class="espn-league-toggle"
+                    aria-expanded="${open ? 'true' : 'false'}" onclick="espnToggleLeagues(${sourceId}, ${i})"></button>` : ''}
+              </div>
+              ${sport.leagues.length > 1 ? `<div class="espn-leagues">${leagues}</div>` : ''}
+            </div>`;
+          }).join('') : '<div class="espn-list-note">No events in the selected services right now.</div>';
+          sports.forEach((_, i) => _espnSyncSport(sourceId, i));
+          list.scrollTop = scroll;
+        }
       }
+      _espnSyncSummary(sourceId);
+    }
+
+    // Reflect one sport's rule in its checkboxes and league-toggle label.
+    function _espnSyncSport(sourceId, index) {
+      const sport = _espnSportNames[sourceId][index];
+      const row = document.querySelector(`#espn-sports-${sourceId} .espn-sport[data-sport="${index}"]`);
+      if (!sport || !row) return;
+      const rule = _espnRule(_espnEventPolicy[sourceId], sport.name);
+      const box = row.querySelector('.espn-sport-row input');
+      box.checked = !!rule && rule.league_mode === 'all';
+      box.indeterminate = !!rule && rule.league_mode === 'selected';
+      const picked = new Set((rule?.leagues || []).map(l => l.toLocaleLowerCase()));
+      row.querySelectorAll('[data-league]').forEach(input => {
+        const league = sport.leagues[Number(input.dataset.league)][0];
+        input.checked = !!rule && (rule.league_mode === 'all' || picked.has(league.toLocaleLowerCase()));
+      });
+      const toggle = row.querySelector('.espn-league-toggle');
+      if (toggle) {
+        toggle.textContent = !rule ? `${sport.leagues.length} leagues`
+          : rule.league_mode === 'all' ? 'All leagues, incl. new'
+          : `${sport.leagues.filter(([l]) => picked.has(l.toLocaleLowerCase())).length} of ${sport.leagues.length} leagues`;
+      }
+    }
+
+    function _espnSyncSummary(sourceId) {
+      const policy = _espnEventPolicy[sourceId];
+      const picked = document.getElementById(`espn-picked-${sourceId}`);
+      const match = document.getElementById(`espn-match-${sourceId}`);
+      if (!picked) return;
+      const sports = Object.entries(policy.sports).sort((a, b) => a[0].localeCompare(b[0]));
+      picked.classList.toggle('is-empty', policy.sport_mode === 'selected' && !sports.length);
+      picked.innerHTML = policy.sport_mode === 'all'
+        ? 'Every sport and league, including ones ESPN adds later.'
+        : sports.length
+          ? sports.map(([name, rule]) => `<span class="espn-chip">${escapeHtml(name)}${rule.league_mode === 'selected'
+              ? ` <small>· ${escapeHtml(rule.leagues.join(', '))}</small>` : ''}</span>`).join('')
+          : 'No sports picked — no event channels will be added.';
+      const preview = _espnEventPreview[sourceId];
+      if (!match || !preview) {
+        if (match && preview === undefined) match.textContent = 'Counting events…';
+        return;
+      }
+      const {events} = _espnCatalog(sourceId);
+      const included = events.filter(e => _espnEventIncluded(e, policy)).length;
+      match.innerHTML = `<strong>${included}</strong> of ${events.length} events in the next ${preview.window_hours}h`;
     }
 
     function espnSetSportMode(sourceId, mode) {
       _espnEventPolicy[sourceId].sport_mode = mode;
-      renderEspnEventFilters(sourceId);
+      espnEventsRefresh(sourceId);
     }
 
     function espnSetHideLikelyShows(sourceId, checked) {
       _espnEventPolicy[sourceId].hide_likely_shows = checked;
-      renderEspnEventFilters(sourceId);
+      espnEventsRefresh(sourceId);
+    }
+
+    function espnToggleLeagues(sourceId, index) {
+      const sport = _espnSportNames[sourceId][index];
+      const row = document.querySelector(`#espn-sports-${sourceId} .espn-sport[data-sport="${index}"]`);
+      const open = !row.classList.contains('is-open');
+      row.classList.toggle('is-open', open);
+      row.querySelector('.espn-league-toggle').setAttribute('aria-expanded', String(open));
+      (_espnOpenSports[sourceId] ||= new Set())[open ? 'add' : 'delete'](sport.name);
     }
 
     function espnToggleSport(sourceId, index, checked) {
+      const policy = _espnEventPolicy[sourceId];
       const sport = _espnSportNames[sourceId][index];
-      if (checked) _espnEventPolicy[sourceId].sports[sport] = {league_mode: 'all', leagues: []};
-      else delete _espnEventPolicy[sourceId].sports[sport];
-      renderEspnEventFilters(sourceId);
-    }
-
-    function espnSetLeagueMode(sourceId, index, mode) {
-      const sport = _espnSportNames[sourceId][index];
-      const rule = _espnEventPolicy[sourceId].sports[sport];
-      rule.league_mode = mode;
-      if (mode === 'selected' && !rule.leagues.length) rule.leagues = [..._espnLeagueNames[sourceId][index]];
-      renderEspnEventFilters(sourceId);
+      for (const name of Object.keys(policy.sports)) {
+        if (name.toLocaleLowerCase() === sport.name.toLocaleLowerCase()) delete policy.sports[name];
+      }
+      if (checked) policy.sports[sport.name] = {league_mode: 'all', leagues: []};
+      _espnSyncSport(sourceId, index);
+      _espnSyncSummary(sourceId);
     }
 
     function espnToggleLeague(sourceId, sportIndex, leagueIndex, checked) {
+      const policy = _espnEventPolicy[sourceId];
       const sport = _espnSportNames[sourceId][sportIndex];
-      const league = _espnLeagueNames[sourceId][sportIndex][leagueIndex];
-      const rule = _espnEventPolicy[sourceId].sports[sport];
-      rule.leagues = checked ? [...new Set([...rule.leagues, league])] : rule.leagues.filter(name => name !== league);
-      renderEspnEventFilters(sourceId);
+      const league = sport.leagues[leagueIndex][0];
+      let rule = _espnRule(policy, sport.name);
+      if (!rule) rule = policy.sports[sport.name] = {league_mode: 'selected', leagues: []};
+      if (rule.league_mode === 'all') {
+        // Unticking one league of an all-leagues sport keeps the rest.
+        rule.league_mode = 'selected';
+        rule.leagues = sport.leagues.map(([name]) => name);
+      }
+      const others = rule.leagues.filter(name => name.toLocaleLowerCase() !== league.toLocaleLowerCase());
+      rule.leagues = checked ? [...others, league] : others;
+      if (!rule.leagues.length) {
+        for (const name of Object.keys(policy.sports)) {
+          if (name.toLocaleLowerCase() === sport.name.toLocaleLowerCase()) delete policy.sports[name];
+        }
+      }
+      _espnSyncSport(sourceId, sportIndex);
+      _espnSyncSummary(sourceId);
     }
 
     async function espnTveStart(sourceId) {

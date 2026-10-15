@@ -518,20 +518,30 @@ def get_source_config(source_id):
 
 @sources_bp.route('/sources/<int:source_id>/espn-event-preview')
 def espn_event_preview(source_id):
+    """Sports and leagues in the event window, for the ESPN card's picker.
+
+    Served from the summary the last scrape saved, so the picker opens at
+    once; a live schedule fetch is the fallback before any scrape has saved
+    one, or once it is older than a scrape interval or two.
+    """
     source = Source.query.get_or_404(source_id)
     if source.name != 'espn':
         return jsonify({'error': 'Not an ESPN source'}), 404
-    from ..scrapers.espn import ESPNScraper, event_services, event_sport, event_league, event_is_likely_show
-    try:
-        airings = ESPNScraper(config=source.config or {})._candidate_event_airings()
-    except Exception:
-        logger.exception('[espn] event lineup preview failed')
-        return jsonify({'error': 'Could not load the ESPN event schedule'}), 502
-    return jsonify({'window_hours': 48, 'events': [
-        {'services': sorted(event_services(a)), 'sport': event_sport(a), 'league': event_league(a),
-         'likely_show': event_is_likely_show(a)}
-        for a in airings
-    ]})
+    from ..config_store import load_source_cache, persist_source_cache_updates
+    from ..scrapers.espn import (EVENT_END_GRACE_SECONDS, EVENT_PREVIEW_CACHE_KEY, ESPNScraper,
+                                 event_preview_summary)
+    summary = load_source_cache(source.id).get(EVENT_PREVIEW_CACHE_KEY)
+    if not isinstance(summary, dict) or _time.time() - float(summary.get('fetched_at') or 0) > 12 * 3600:
+        try:
+            summary = event_preview_summary(ESPNScraper(config=source.config or {})._candidate_event_airings())
+        except Exception:
+            logger.exception('[espn] event lineup preview failed')
+            return jsonify({'error': 'Could not load the ESPN event schedule'}), 502
+        persist_source_cache_updates(source.id, {EVENT_PREVIEW_CACHE_KEY: summary})
+    # Drop events whose retirement grace has passed since the summary was made.
+    cutoff = _time.time() - EVENT_END_GRACE_SECONDS
+    events = [e for e in summary.get('events') or [] if not e.get('end') or e['end'] > cutoff]
+    return jsonify({'window_hours': 48, 'fetched_at': summary.get('fetched_at'), 'events': events})
 
 
 def _espn_tv_provider() -> tuple[str, str]:

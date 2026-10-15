@@ -60,6 +60,7 @@ import logging
 import re
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urljoin
 from xml.sax.saxutils import escape
@@ -171,6 +172,20 @@ def event_league(airing: dict) -> str:
 def event_is_likely_show(airing: dict) -> bool:
     """ESPN's studio flag misses some shows; a missing sport catches more."""
     return (airing.get('program') or {}).get('isStudio') is True or event_sport(airing) == EVENT_UNCATEGORIZED
+
+
+EVENT_PREVIEW_CACHE_KEY = 'espn_event_preview'
+
+
+def event_preview_summary(airings: list[dict]) -> dict:
+    """What the sport/league picker needs from a schedule fetch."""
+    events = []
+    for a in airings:
+        end = _parse_time(a.get('endDateTime'))
+        events.append({'services': sorted(event_services(a)), 'sport': event_sport(a),
+                       'league': event_league(a), 'likely_show': event_is_likely_show(a),
+                       'end': int(end.timestamp()) if end else None})
+    return {'fetched_at': int(time.time()), 'events': events}
 
 
 def clean_event_filter(value) -> dict:
@@ -736,9 +751,12 @@ class ESPNScraper(BaseScraper):
         horizon = now + timedelta(hours=_EVENT_LOOKAHEAD_HOURS)
         grace = timedelta(seconds=EVENT_END_GRACE_SECONDS)
         found: dict[str, dict] = {}
-        for offset in range(-1, _EPG_DAYS):
-            day = (now.date() + timedelta(days=offset)).isoformat()
-            for airing in self._airings(day):
+        days = [(now.date() + timedelta(days=offset)).isoformat() for offset in range(-1, _EPG_DAYS)]
+        # One request per day; fetched together, they take as long as the slowest.
+        with ThreadPoolExecutor(max_workers=len(days)) as pool:
+            schedules = list(pool.map(self._airings, days))
+        for airings in schedules:
+            for airing in airings:
                 airing_id = airing.get('id')
                 start = _parse_time(airing.get('startDateTime'))
                 end = _parse_time(airing.get('endDateTime'))
@@ -751,6 +769,9 @@ class ESPNScraper(BaseScraper):
     def _fetch_event_airings(self) -> list[dict]:
         enabled = self._enabled_event_services()
         candidates = self._candidate_event_airings()
+        # The source card's sport/league picker reads this instead of
+        # fetching the schedule again (see /api/sources/<id>/espn-event-preview).
+        self._update_cache(EVENT_PREVIEW_CACHE_KEY, event_preview_summary(candidates))
         # A completed event inventory can retire old event rows on this scrape.
         # The generic three-miss rule is for persistent linear channels.
         self.hide_missing_event_channels = True
