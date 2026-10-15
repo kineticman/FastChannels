@@ -1153,6 +1153,8 @@ def run_stream_audit(source_name: str, scope: str = 'linear'):
                     consecutive_errors = 0
                     consecutive_skipped_403 = 0
                     consecutive_transient_errors = 0
+                    if ch.disable_reason == 'NotAuthorized':
+                        ch.is_enabled = True
                     if not ch.is_active:
                         ch.is_active = True
                         ch.disable_reason = None
@@ -1346,6 +1348,8 @@ def run_stream_audit(source_name: str, scope: str = 'linear'):
                             ch.requires_drm_bridge = True
                             if not ch.is_active:
                                 ch.is_active = True
+                            if ch.disable_reason == 'NotAuthorized':
+                                ch.is_enabled = True
                             # Re-enable a channel a prior (pre-bridge-eligible) pass legacy-
                             # disabled for this same DRM reason — e.g. Roku channels disabled
                             # before 'roku' joined DRM_BRIDGE_TRUSTED_SOURCES. Never touches
@@ -1370,6 +1374,8 @@ def run_stream_audit(source_name: str, scope: str = 'linear'):
                         # re-activate if it was previously dead.
                         if getattr(ch, 'requires_drm_bridge', False):
                             ch.requires_drm_bridge = False
+                        if ch.disable_reason == 'NotAuthorized':
+                            ch.is_enabled = True
                         if not ch.is_active:
                             ch.is_active = True
                             ch.disable_reason = None
@@ -1439,6 +1445,8 @@ def run_stream_audit(source_name: str, scope: str = 'linear'):
                         ch.requires_drm_bridge = True
                         if not ch.is_active:
                             ch.is_active = True
+                        if ch.disable_reason == 'NotAuthorized':
+                            ch.is_enabled = True
                         if not ch.is_enabled and (ch.disable_reason or '').startswith('DRM'):
                             ch.is_enabled = True
                         ch.disable_reason = None
@@ -1467,6 +1475,8 @@ def run_stream_audit(source_name: str, scope: str = 'linear'):
                     if getattr(ch, 'requires_drm_bridge', False):
                         ch.requires_drm_bridge = False
                         logger.info('[audit] DRM-bridge cleared (now clear HLS): %s', ch.name)
+                    if ch.disable_reason == 'NotAuthorized':
+                        ch.is_enabled = True
                     if not ch.is_active:
                         ch.is_active = True
                         ch.disable_reason = None
@@ -1671,6 +1681,8 @@ def run_stream_audit_recheck(source_name: str, channel_ids: list):
                     continue
 
                 # Live — re-enable if it was previously flagged
+                if ch.disable_reason == 'NotAuthorized':
+                    ch.is_enabled = True
                 if not ch.is_active:
                     ch.is_active = True
                     ch.disable_reason = None

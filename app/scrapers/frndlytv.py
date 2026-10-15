@@ -18,6 +18,7 @@ from .base import (BaseScraper, ChannelData, ConfigField, ProgramData, ScrapeSki
                    StreamDeadError, infer_language_from_metadata,
                    dedupe_dominant_episode_id, null_placeholder_season_episode)
 from .category_utils import infer_category_from_name
+from app.tve.adobe_pass import TVENotAuthorizedError
 
 logger = logging.getLogger(__name__)
 
@@ -175,26 +176,33 @@ class FrndlyTVScraper(BaseScraper):
     # ── API helpers ──────────────────────────────────────────────────────────
 
     def _api_get(self, url: str, params: dict | None = None) -> Any:
-        """GET with Frndly auth headers; re-logins once on auth failure."""
+        """GET with Frndly auth headers; re-login only for an expired session."""
         for attempt in range(2):
             r = self.session.get(url, params=params, headers=self._frndly_headers, timeout=15)
             try:
                 data = r.json()
             except ValueError:
-                if attempt == 0:
-                    logger.debug('[frndlytv] non-JSON response (HTTP %s) on %s, re-logging in', r.status_code, url)
+                if r.status_code == 401 and attempt == 0:
                     self._login()
                     continue
                 raise RuntimeError(f'Frndly TV API returned non-JSON (HTTP {r.status_code}) for {url}')
-            if 'response' in data:
+            if isinstance(data, dict) and 'response' in data:
                 return data['response']
-            error_code = (data.get('error') or {}).get('code')
-            if error_code == 404:
+            error = (data.get('error') or {}) if isinstance(data, dict) else {}
+            error_code = error.get('code') if isinstance(error, dict) else None
+            if str(error_code) == '404':
                 raise requests.HTTPError(response=r)
-            if attempt == 0:
-                logger.debug('[frndlytv] API error %s on %s, re-logging in', error_code, url)
+            if (str(error_code) == '401' or r.status_code == 401) and attempt == 0:
+                logger.debug('[frndlytv] session rejected on %s, re-logging in', url)
                 self._login()
-        raise RuntimeError(f'Frndly TV API failed for {url}')
+                continue
+            message = str(error.get('message') or '').strip().replace('\n', ' ')[:200]
+            detail = f'API code {error_code}' if error_code is not None else f'HTTP {r.status_code}'
+            if message:
+                detail += f': {message}'
+            if url == _STREAM_URL and str(error_code) == '402':
+                raise TVENotAuthorizedError(f'Frndly TV {detail}')
+            raise RuntimeError(f'Frndly TV {detail} for {url}')
 
     @staticmethod
     def _logo(image_url: str) -> str | None:
