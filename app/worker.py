@@ -4010,13 +4010,65 @@ def _rq_ytdlp_upgrade():
     _reload_gunicorn_workers()
 
 
+def _scrub_feed_channel_refs() -> int:
+    """Drop feed-filter channel ids whose channel no longer exists.
+
+    Only playlist deletion scrubs these inline; channels removed upstream,
+    ended event channels, deleted custom channels and boot-time dedup all
+    leave stale ids behind. channels.id has no AUTOINCREMENT, so SQLite can
+    hand a deleted max id to a new channel and a stale pin/exclude would
+    silently attach to it. Returns the number of feeds changed.
+    """
+    keys = ('channel_ids', 'excluded_channel_ids', 'pinned_channel_ids')
+    feeds = Feed.query.all()
+    referenced = set()
+    for feed in feeds:
+        for key in keys:
+            ids = (feed.filters or {}).get(key)
+            if isinstance(ids, list):
+                referenced.update(i for i in ids if isinstance(i, int))
+    if not referenced:
+        return 0
+
+    existing = {
+        row[0] for row in db.session.query(Channel.id)
+        .filter(Channel.id.in_(referenced)).all()
+    }
+    gone = referenced - existing
+    if not gone:
+        return 0
+
+    changed_feeds = 0
+    for feed in feeds:
+        filters = dict(feed.filters or {})
+        changed = False
+        for key in keys:
+            ids = filters.get(key)
+            if isinstance(ids, list) and gone.intersection(ids):
+                filters[key] = [cid for cid in ids if cid not in gone]
+                changed = True
+        if changed:
+            feed.filters = filters
+            changed_feeds += 1
+    db.session.commit()
+    logger.info('[maint] scrubbed %d stale channel id(s) from %d feed(s): %s',
+                len(gone), changed_feeds, sorted(gone))
+    return changed_feeds
+
+
 def _rq_weekly_maintenance():
-    """RQ job target: sanity-prune bogus EPG rows, then VACUUM if the live DB
-    file is heavily fragmented. Runs on the scraper queue so its exclusive
-    VACUUM lock is serialized against scrapes, same as _rq_prune.
+    """RQ job target: sanity-prune bogus EPG rows, scrub stale feed-filter
+    channel ids, then VACUUM if the live DB file is heavily fragmented. Runs
+    on the scraper queue so its exclusive VACUUM lock is serialized against
+    scrapes, same as _rq_prune.
     """
     with flask_app.app_context():
         _prune_bogus_programs()
+        try:
+            _scrub_feed_channel_refs()
+        except Exception as exc:
+            db.session.rollback()
+            logger.warning('[maint] feed channel-id scrub failed: %s', exc)
 
         free = db.session.execute(text('PRAGMA freelist_count')).scalar() or 0
         total = db.session.execute(text('PRAGMA page_count')).scalar() or 1
