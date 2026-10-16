@@ -450,6 +450,7 @@ class AppSettings(db.Model):
     gracenote_auto_fill  = db.Column(db.Boolean, nullable=False, default=True, server_default=db.text('1'))  # scrapers auto-assign Gracenote IDs
     dvr_epg_auto_refresh = db.Column(db.Boolean, nullable=False, default=True, server_default=db.text('1'))  # hourly PUT to Channels DVR lineups
     image_proxy_enabled  = db.Column(db.Boolean, nullable=False, default=True, server_default=db.text('1'))  # proxy/cache logos and posters in output
+    event_guide_filler   = db.Column(db.Boolean, nullable=False, default=True, server_default=db.text('1'))  # XMLTV: "Event Not Started"/"Event Ended" blocks around event channels' programmes
     m3u_rewrite_timestamps = db.Column(db.Boolean, nullable=False, default=False, server_default=db.text('0'))  # experimental: add Channels DVR timestamp-rewrite directive to M3U entries
     gracenote_map_url          = db.Column(db.Text, nullable=True)      # remote community CSV URL (defaults to built-in Gist)
     gracenote_exclusions_url   = db.Column(db.Text, nullable=True)      # remote known-bad-ID CSV URL (defaults to built-in Gist)

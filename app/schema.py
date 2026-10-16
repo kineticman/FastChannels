@@ -277,6 +277,10 @@ def ensure_runtime_schema() -> None:
                 conn.execute(text(
                     "ALTER TABLE app_settings ADD COLUMN image_proxy_enabled BOOLEAN NOT NULL DEFAULT 1"
                 ))
+            if "event_guide_filler" not in cols:
+                conn.execute(text(
+                    "ALTER TABLE app_settings ADD COLUMN event_guide_filler BOOLEAN NOT NULL DEFAULT 1"
+                ))
             if "m3u_rewrite_timestamps" not in cols:
                 # Experimental Channels DVR directive. Default off because it changes
                 # recording-time stream handling and may affect in-progress playback.

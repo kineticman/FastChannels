@@ -999,11 +999,13 @@ class ESPNScraper(BaseScraper):
                 title=a.get('name') or a.get('shortName') or 'ESPN+ Event',
                 start_time=start,
                 end_time=end,
-                description=a.get('description') or None,
+                description=a.get('description') or _event_description(a),
                 poster_url=(a.get('image') or {}).get('url'),
                 category=_event_epg_categories(a),
                 episode_title=(a.get('feedName') or (a.get('league') or {}).get('name')),
-                is_live=a.get('type') == 'LIVE' and not a.get('isReAir'),
+                # Upcoming events are type UPCOMING until they start, but a
+                # first airing is still live; only re-airs are not.
+                is_live=not a.get('isReAir'),
                 episode_id=a['id'],
             ))
         for offset in range(-1, _EPG_DAYS):
@@ -1250,6 +1252,25 @@ def _parse_time(value: str | None) -> datetime | None:
         return datetime.fromisoformat(value.replace('Z', '+00:00'))
     except ValueError:
         return None
+
+
+def _event_description(airing: dict) -> str:
+    """ESPN rarely describes an event; say what it is and where it streams."""
+    league = ((airing.get('league') or {}).get('name') or '').strip()
+    sport = ((airing.get('sport') or {}).get('name') or '').strip()
+    # "NCAA Football" already names its sport; "CWHOC" doesn't.
+    label = league if sport and sport.casefold() in league.casefold() else ' '.join(x for x in (league, sport) if x)
+    name = airing.get('name') or airing.get('shortName') or 'ESPN event'
+    services = event_services(airing)
+    service = ', '.join(EVENT_SERVICE_LABELS[k].removesuffix(' Events') for k in ('espn_plus', 'acc_extra', 'sec_plus') if k in services)
+    parts = [f'{label}: {name}' if label else name]
+    if airing.get('feedName'):
+        parts.append(f'{airing["feedName"].strip()} feed')
+    if airing.get('isReAir'):
+        parts.append('Re-air')
+    if service:
+        parts.append(f'Streaming on {service}')
+    return '. '.join(parts) + '.'
 
 
 def _event_epg_categories(airing: dict) -> str:
