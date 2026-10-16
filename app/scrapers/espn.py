@@ -144,7 +144,7 @@ _ACTIVATION_TIMEOUT = 600
 
 _Q_AIRINGS = '''query($day:String!,$tz:String!){ airings(countryCode:"us", deviceType:SETTOP, tz:$tz, day:$day, limit:3000){
   id name shortName type startDateTime endDateTime description isReAir
-  network{ id } sport{ name } league{ name sportwareSlug } category{ name } subcategory{ name }
+  network{ id adobeResource } authTypes sport{ name } league{ name sportwareSlug } category{ name } subcategory{ name }
   program{ isStudio } eventId
   image{ url } source{ playbackId }
   packages{ name } feedName feedType language } }'''
@@ -160,6 +160,17 @@ def event_services(airing: dict) -> set[str]:
     if network in _EVENT_NETWORK_SERVICES:
         services.add(_EVENT_NETWORK_SERVICES[network])
     return services
+
+
+def event_playable(airing: dict, config: dict) -> bool:
+    """Whether a current sign-in can play this event. ESPN+ events are
+    authTypes ["DIRECT"] — an ESPN account only; ACC Extra and SEC Plus are
+    ["MVPD"], which a TV-provider sign-in also plays (checked 2026-10-16).
+    With an ESPN account everything is listed and its plan decides at play
+    time; the audit drops what it doesn't cover."""
+    if config.get('refresh_token'):
+        return True
+    return 'MVPD' in (airing.get('authTypes') or []) and bool(config.get('adobe_client_id'))
 
 
 def event_sport(airing: dict) -> str:
@@ -954,6 +965,8 @@ class ESPNScraper(BaseScraper):
     def _fetch_event_airings(self) -> list[dict]:
         enabled = self._enabled_event_services()
         candidates = self._candidate_event_airings()
+        # Events no current sign-in can play would only ever show a black screen.
+        candidates = [a for a in candidates if event_playable(a, self.config)]
         self._update_cache(EVENT_TEAMS_CACHE_KEY,
                            attach_event_teams(candidates, self.cache.get(EVENT_TEAMS_CACHE_KEY), fetch=True))
         # The source card's sport/league picker reads this instead of
@@ -1091,18 +1104,40 @@ class ESPNScraper(BaseScraper):
             return cached['manifest_url']
         r = self.session.post(_WATCH_API, params={'apiKey': _WATCH_API_KEY, 'features': 'pbov7'},
                               headers={'User-Agent': _UA, 'Origin': 'https://www.espn.com'},
-                              json={'query': 'query($id:ID!){ airing(id:$id, countryCode:"us", deviceType:SETTOP, tz:"UTC"){ source{ playbackId } } }',
+                              json={'query': 'query($id:ID!){ airing(id:$id, countryCode:"us", deviceType:SETTOP, tz:"UTC"){ id name authTypes network{ adobeResource } source{ playbackId } } }',
                                     'variables': {'id': airing_id}}, timeout=20)
-        pid = ((((r.json().get('data') or {}).get('airing') or {}).get('source')) or {}).get('playbackId')
+        airing = (r.json().get('data') or {}).get('airing') or {}
+        pid = (airing.get('source') or {}).get('playbackId')
         if not pid:
             raise RuntimeError(f'ESPN: no playbackId for airing {airing_id}')
         # Events use the non-channel license route; /channel/ 400s with
         # content-key.invalid-linear-key for them (confirmed 2026-09-26).
-        entry = self._mint_playback(pid, f'airing {airing_id}')
+        entry = self._mint_event(pid, airing)
         entry['license_url'] = _EVENT_LICENSE_URL
         streams[EVENT_CHANNEL_PREFIX + airing_id] = entry
         self._update_cache('espn_streams', streams)
         return entry['manifest_url']
+
+    def _mint_event(self, playback_id: str, airing: dict) -> dict:
+        """Like _mint: the ESPN account first, then the TV-provider sign-in for
+        MVPD events (ACC Extra, SEC Plus), minted against the event network's
+        Adobe resource ('acc'/'sec')."""
+        resource = (airing.get('network') or {}).get('adobeResource')
+        tve = (bool(self.config.get('adobe_client_id')) and bool(resource)
+               and 'MVPD' in (airing.get('authTypes') or []))
+        if self.config.get('refresh_token'):
+            try:
+                return self._mint_playback(playback_id, f'airing {airing.get("id")}')
+            except (TVENotAuthorizedError, ESPNAuthError):
+                if not tve:
+                    raise
+        if tve:
+            return self._mint_tve(playback_id, airing, resource)
+        if self.config.get('adobe_client_id'):
+            # Not-authorized rather than signed-out, so the audit drops it.
+            raise TVENotAuthorizedError('ESPN: this event needs an ESPN+ account; '
+                                        'a TV-provider sign-in doesn\'t include it')
+        raise ESPNAuthError('ESPN is not signed in — use the Sources page to sign in.')
 
     @classmethod
     def get_license_url(cls, config: dict, channel_id: str | None = None) -> str | None:

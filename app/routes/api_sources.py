@@ -529,14 +529,16 @@ def espn_event_preview(source_id):
         return jsonify({'error': 'Not an ESPN source'}), 404
     from ..config_store import load_source_cache, persist_source_cache_updates
     from ..scrapers.espn import (EVENT_END_GRACE_SECONDS, EVENT_PREVIEW_CACHE_KEY, EVENT_TEAMS_CACHE_KEY,
-                                 ESPNScraper, attach_event_teams, event_preview_summary)
+                                 ESPNScraper, attach_event_teams, event_playable,
+                                 event_preview_summary)
     cache = load_source_cache(source.id)
     summary = cache.get(EVENT_PREVIEW_CACHE_KEY)
     # Summaries saved before team filtering have no teams for the team picker.
     if (not isinstance(summary, dict) or _time.time() - float(summary.get('fetched_at') or 0) > 12 * 3600
             or any('teams' not in e for e in summary.get('events') or [])):
         try:
-            airings = ESPNScraper(config=source.config or {})._candidate_event_airings()
+            airings = [a for a in ESPNScraper(config=source.config or {})._candidate_event_airings()
+                       if event_playable(a, source.config or {})]
             # Teams the last scrape looked up; new events fall back to their
             # titles rather than making the picker wait on hundreds of lookups.
             attach_event_teams(airings, cache.get(EVENT_TEAMS_CACHE_KEY), fetch=False)
