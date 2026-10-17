@@ -309,15 +309,33 @@ def _wait_for_otp_submission(page, timeout: float = 45.0) -> str:
 
 # ── Debug helpers ─────────────────────────────────────────────────────────────
 
+def _log_step(page, label: str) -> None:
+    """One-line progress note for the normal sign-in path."""
+    try:
+        logger.info('[amazon-auth] %s — %s', label, page.url.split('?')[0])
+    except Exception:
+        pass
+
+
 def _dump_page_debug(page, label: str) -> None:
-    """Log URL, title, visible inputs, and save a screenshot — all best-effort."""
+    """Log URL, title, visible inputs, and save a screenshot — all best-effort.
+
+    Only called when sign-in fails or stalls; the normal path uses _log_step.
+    """
     try:
         logger.info('[amazon-auth] DEBUG %s — url: %s', label, page.url)
         logger.info('[amazon-auth] DEBUG %s — title: %s', label, page.title())
-        inputs = page.query_selector_all('input')
-        input_info = [(el.get_attribute('name'), el.get_attribute('id'), el.get_attribute('type'))
-                      for el in inputs]
-        logger.info('[amazon-auth] DEBUG %s — inputs: %s', label, input_info)
+        # Amazon repeats the same hidden fields in every form on the page, so
+        # list non-hidden inputs in full and hidden ones once by name.
+        visible, hidden = [], []
+        for el in page.query_selector_all('input'):
+            name, type_ = el.get_attribute('name'), el.get_attribute('type')
+            if type_ == 'hidden':
+                if name and name not in hidden:
+                    hidden.append(name)
+            else:
+                visible.append((name, el.get_attribute('id'), type_))
+        logger.info('[amazon-auth] DEBUG %s — inputs: %s; hidden: %s', label, visible, hidden)
         # First 800 chars of body text to see what Amazon returned
         body = (page.inner_text('body') or '')[:800].replace('\n', ' ')
         logger.info('[amazon-auth] DEBUG %s — body: %s', label, body)
@@ -559,7 +577,7 @@ def run_amazon_auth(
                     login_outcome = _wait_for_login_outcome(page)
                 if login_outcome == 'otp':
                     logger.info('[amazon-auth] OTP challenge detected for source_id=%s', source_id)
-                    _dump_page_debug(page, 'otp_challenge')
+                    _log_step(page, 'otp_challenge')
                     _write_status(r, source_id, 'waiting_otp',
                                   'Enter the one-time code Amazon sent to your phone or email.')
                     otp = _wait_for_otp(r, source_id)
@@ -572,14 +590,14 @@ def run_amazon_auth(
                     try:
                         page.wait_for_selector(_OTP_INPUT_SELECTOR, timeout=8000)
                         page.fill(_OTP_INPUT_SELECTOR, otp.strip())
-                        _dump_page_debug(page, 'otp_ready_to_submit')
+                        _log_step(page, 'otp_ready_to_submit')
                         submit_selector = (
                             'input#auth-signin-button, '
                             'input#cvf-submit-otp-button, '
                             'input[type="submit"]'
                         )
                         page.click(submit_selector, timeout=8000)
-                        _dump_page_debug(page, 'otp_submitted')
+                        _log_step(page, 'otp_submitted')
                     except _PWTimeout:
                         _dump_page_debug(page, 'otp_submit_timeout')
                         _write_status(r, source_id, 'failed', 'OTP submission timed out.')
