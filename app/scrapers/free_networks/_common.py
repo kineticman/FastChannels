@@ -112,3 +112,36 @@ def chain_ends(rows: list[tuple[datetime, dict]], max_gap_hours: float = 4, fall
         else:
             end = start + timedelta(minutes=fallback_minutes)
         yield start, end, row
+
+
+def xmltv_programs(channel_id: str, content: bytes) -> list[ProgramData]:
+    """ProgramData from an XMLTV document (all its programmes, as one channel).
+    Handles both '20261017175530 +0000' and '2026-10-16T10:00:00.000+0000'
+    start/stop forms."""
+    import xml.etree.ElementTree as ET
+
+    def when(val):
+        for fmt in ('%Y%m%d%H%M%S %z', '%Y-%m-%dT%H:%M:%S.%f%z', '%Y-%m-%dT%H:%M:%S%z'):
+            try:
+                return datetime.strptime(val or '', fmt)
+            except ValueError:
+                continue
+        return None
+
+    out = []
+    for el in ET.fromstring(content).iter('programme'):
+        icons = [i.get('src') for i in el.findall('icon') if i.get('src')]
+        season = episode = None
+        ns = next((e.text for e in el.findall('episode-num') if e.get('system') == 'xmltv_ns'), None)
+        if ns and ns.count('.') == 2:
+            try:
+                season, episode = int(ns.split('.')[0]) + 1, int(ns.split('.')[1]) + 1
+            except ValueError:
+                pass
+        p = program(channel_id, el.findtext('title'), when(el.get('start')), when(el.get('stop')),
+                    episode_title=el.findtext('sub-title'), description=el.findtext('desc'),
+                    category=el.findtext('category'), poster_url=icons[0] if icons else None,
+                    season=season, episode=episode)
+        if p:
+            out.append(p)
+    return out

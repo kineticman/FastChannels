@@ -17,7 +17,6 @@ class StaticNetwork(Network):
         return list(self._channels)
 
 
-_JW = 'https://cdn.jwplayer.com/v2/sites/f902XiZc/media/{}/ssai.m3u8?ad_config_id={}'
 _DAI = 'https://dai.google.com/linear/hls/event/{}/master.m3u8'
 _GLOBAL_LOGO = 'https://assets.news.corusappservices.com/upload/news/{}/thumbnail-450x300-GlobalLiveStreamThumbnails_{}.png'
 # Global News 24/7 streams: globalnews.ca/live/<city>/ -> its video-entry's
@@ -42,7 +41,6 @@ _GLOBAL_NEWS = [
 ]
 _TMS_LOGO = 'https://tmsimg.fancybits.co/assets/s{}_ll_h15_aa.png?w=360&h=270'  # Gracenote station logos
 _CMC_LOGO = 'https://cmctv.com/cmc/images/CMC_Logo.png'
-_OUTSIDE_LOGO = 'https://wp.watch.outsideonline.com/wp-content/uploads/2024/04/Outside-TV-Web-Snippet-v3.png'
 
 NETWORKS = [
     StaticNetwork('sky', 'Sky News', [
@@ -97,25 +95,15 @@ NETWORKS = [
                    logo='https://nrbtv.org/wp-content/uploads/2020/09/nrbtv-social1.png', category='Faith', gracenote_id='49097'),
     ]),
     StaticNetwork('thedove', 'theDove', [
-        # Gracenote's "Dove" stations are the unrelated Dove Channel, so no guide.
+        # theDove is KDOV-LD Medford, Oregon (its TitanTV widget); checked against
+        # the stream on 2026-10-17 (both airing Stand in the Gap).
         NetChannel('thedove', 'theDove TV', 'https://thedovetv.bozztv.com/thedovetv/thedovetv/index.m3u8',
-                   logo='https://thedove.us/wp-content/uploads/2026/04/doveLive.png', category='Faith'),
+                   logo='https://thedove.us/wp-content/uploads/2026/04/doveLive.png', category='Faith',
+                   gracenote_id='65731'),
     ]),
     StaticNetwork('eplustv6', 'EPlusTV 6', [
         NetChannel('eplustv6', 'EPlusTV 6 Jackson',
                    'https://livestream.telvue.com/jacksonenergy1/f7b44cfafd5c52223d5498196c8a2e7b.sdp/playlist.m3u8',
                    logo='https://eplustv6.com/assets/svgs/tv6-logo.svg', category='Local News', gracenote_id='44861'),
-    ]),
-    StaticNetwork('outside', 'Outside TV', [
-        NetChannel('outsidetv', 'Outside TV',
-                   'https://cdn-ue1-prod.tsv2.amagi.tv/linear/outsidetv-outsidetvplus-oando/playlist.m3u8',
-                   logo=_OUTSIDE_LOGO, category='Outdoors', gracenote_id='114313'),
-        NetChannel('climbing', 'Climbing', _JW.format('Z61LZzEf', 'wMGfd1m7'), logo=_OUTSIDE_LOGO, category='Outdoors'),
-        NetChannel('mixtape', 'Outside Mixtape', _JW.format('8lqjEAz5', '6MkBJaRl'), logo=_OUTSIDE_LOGO,
-                   category='Outdoors'),
-        NetChannel('pinkbike', 'Pinkbike TV', _JW.format('kfFzR2PG', 'wMGfd1m7'), logo=_OUTSIDE_LOGO,
-                   category='Outdoors'),
-        NetChannel('warrenmiller', 'Warren Miller TV', _JW.format('gxAjbUJX', 'wMGfd1m7'), logo=_OUTSIDE_LOGO,
-                   category='Outdoors'),
     ]),
 ]

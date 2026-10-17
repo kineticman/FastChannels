@@ -10,7 +10,7 @@ from ...gracenote_map import resolve_gracenote
 from ._common import UA, NetChannel
 from . import (
     aetn, aljazeera, arirang, bloomberg, cbn, cbsnews, dw, ewtn, fstv, gameandfish, hsn, ksl,
-    newsmax, nhk, positiv, qvc, scripps, simple, sinclair, tastemade, trt,
+    newsmax, nhk, outside, positiv, qvc, scripps, simple, sinclair, tastemade, trt,
 )
 
 logger = logging.getLogger(__name__)
@@ -20,7 +20,7 @@ NETWORKS = [
     arirang.Arirang(), bloomberg.Bloomberg(), cbsnews.CBSNews(), scripps.Scripps(),
     newsmax.Newsmax(), fstv.FreeSpeechTV(), ewtn.EWTN(), positiv.PosiTV(),
     hsn.HSN(), qvc.QVC(), tastemade.Tastemade(), aetn.AETN(), ksl.KSL(), cbn.CBN(),
-    gameandfish.GameAndFish(), *simple.NETWORKS,
+    gameandfish.GameAndFish(), outside.OutsideTV(), *simple.NETWORKS,
 ]
 _BY_KEY = {n.key: n for n in NETWORKS}
 
