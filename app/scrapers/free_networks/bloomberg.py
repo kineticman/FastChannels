@@ -9,14 +9,16 @@ Guide: GET www.bloomberg.com/live/schedule/<region> with header RSC: 1 returns
 a Next.js RSC payload of LiveSchedule objects (~a week, UTC). All of
 bloomberg.com/live* is behind PerimeterX: it passes with a curl_cffi Chrome
 fingerprint, but plain requests get a 403 and a burst of them seems to earn
-the IP a temporary block. So: impersonated requests only, at most once a day,
-and on any failure the existing guide is simply kept (programs are replaced
-per channel, so returning nothing leaves it in place).
+the IP a temporary block. So: impersonated requests only, at most once a day
+(sooner only if there's no stored guide left to keep, e.g. after the channels
+were deleted), and on any failure the existing guide is simply kept (programs
+are replaced per channel, so returning nothing leaves it in place).
 """
 from __future__ import annotations
 
 import json
 import time
+from datetime import datetime, timedelta, timezone
 
 from ._common import Network, NetChannel, logger, parse_iso, program
 
@@ -56,10 +58,16 @@ class Bloomberg(Network):
         return channel_id in _GUIDED
 
     def programs(self, s, channels):
+        wanted = {ch.id for ch in channels}
         last = float(s.cache.get(_CACHE_KEY) or 0)
         if time.time() - last < _REFRESH_SECONDS:
-            return None  # guide fetched recently; keep what's stored
-        wanted = {ch.id for ch in channels}
+            # Fetched recently: keep what's stored, as long as there is a stored
+            # guide that still runs a day ahead. Its channels may have been
+            # deleted since (source or network switched off and on again).
+            stored_end = s.stored_guide_end(self.key, wanted & _GUIDED)
+            if stored_end and stored_end > datetime.now(timezone.utc) + timedelta(days=1):
+                return None
+            logger.info('[free_networks] Bloomberg: no stored guide to keep, fetching despite the daily limit')
         out, ok = [], 0
         for cid, _, _, region in _CHANNELS:
             if not region or cid not in wanted:

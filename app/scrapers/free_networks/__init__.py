@@ -243,6 +243,31 @@ class FreeNetworksScraper(BaseScraper):
                             category=cd.category)
                 for h in range(-1, cls._FILLER_HOURS)]
 
+    def stored_guide_end(self, net_key: str, channel_ids) -> datetime | None:
+        """The earliest, across these channels, of how far each one's stored
+        guide runs; None if any of them has no stored guide at all. Lets a
+        throttled network tell 'keep what's stored' from 'nothing is stored'."""
+        try:
+            from app.models import Channel, Program, Source
+            from sqlalchemy import func
+            src = Source.query.filter_by(name=self.source_name).first()
+            if not src:
+                return None
+            scids = [f'{net_key}.{cid}' for cid in channel_ids]
+            ends = dict(Channel.query
+                        .filter(Channel.source_id == src.id, Channel.source_channel_id.in_(scids))
+                        .outerjoin(Program, Program.channel_id == Channel.id)
+                        .group_by(Channel.id)
+                        .with_entities(Channel.source_channel_id, func.max(Program.end_time))
+                        .all())
+        except Exception:
+            logger.debug('[%s] could not read stored guide', self.source_name, exc_info=True)
+            return None
+        if not scids or any(ends.get(scid) is None for scid in scids):
+            return None
+        earliest = min(ends.values())
+        return earliest if earliest.tzinfo else earliest.replace(tzinfo=timezone.utc)
+
     def _tvtv_programs(self, scid: str, station_id: str) -> list[ProgramData]:
         try:
             from app.models import TvtvProgramCache
