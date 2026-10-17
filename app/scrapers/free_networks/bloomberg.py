@@ -1,0 +1,108 @@
+"""Bloomberg TV (US, BTV+ US, Europe, Asia, Australia, Originals) plus the live
+event, Politics, QuickTake and Radio feeds.
+
+Streams play from plain requests: Google DAI events for the TV feeds, and
+www.bloomberg.com/media-manifest/streams/<name>.m3u8 for the rest. The event
+IDs were matched to /live/<page> from browser HARs (2026-10-17).
+
+Guide: GET www.bloomberg.com/live/schedule/<region> with header RSC: 1 returns
+a Next.js RSC payload of LiveSchedule objects (~a week, UTC). All of
+bloomberg.com/live* is behind PerimeterX: it passes with a curl_cffi Chrome
+fingerprint, but plain requests get a 403 and a burst of them seems to earn
+the IP a temporary block. So: impersonated requests only, at most once a day,
+and on any failure the existing guide is simply kept (programs are replaced
+per channel, so returning nothing leaves it in place).
+"""
+from __future__ import annotations
+
+import json
+import time
+
+from ._common import Network, NetChannel, logger, parse_iso, program
+
+_DAI = 'https://dai.google.com/linear/hls/event/{}/master.m3u8'
+_MANIFEST = 'https://www.bloomberg.com/media-manifest/streams/{}.m3u8'
+_SCHEDULE = 'https://www.bloomberg.com/live/schedule/{}'
+_LOGO = 'https://www.bloomberg.com/favicon-black.png'
+
+# id, name, stream, schedule region
+_CHANNELS = [
+    ('us', 'Bloomberg TV US', _DAI.format('6JVA-Zs8Rbuj0qoA5Gso1Q'), 'us-btv'),
+    ('us-plus', 'Bloomberg TV+ US', _DAI.format('k-VHR5unRdusBDqoXAuB0Q'), 'us'),
+    ('europe', 'Bloomberg TV Europe', _DAI.format('TE-eb6hOS1GBMm6Ofp1r3g'), 'europe'),
+    ('asia', 'Bloomberg TV Asia', _DAI.format('FvrjI2MQSs6_bNTURP2CaA'), 'asia'),
+    ('australia', 'Bloomberg TV Australia', _DAI.format('eqieA1HDSue0bSrHM5Rj6w'), 'australia'),
+    ('originals', 'Bloomberg Originals', _DAI.format('jKwfd4apQcuxQtyRI9Q6-Q'), 'originals'),
+    ('us-event', 'Bloomberg U.S. Live Event', _MANIFEST.format('us-event'), None),
+    ('asia-event', 'Bloomberg Asia Live Event', _MANIFEST.format('asia-event'), None),
+    ('emea-event', 'Bloomberg EMEA Live Event', _MANIFEST.format('eu-event'), None),
+    ('politics', 'Bloomberg Politics', _MANIFEST.format('politics'), None),
+    ('quicktake', 'Bloomberg QuickTake', _MANIFEST.format('qt'), None),
+    ('radio', 'Bloomberg Radio', _MANIFEST.format('radio-national-video'), None),
+]
+_GUIDED = {cid for cid, _, _, region in _CHANNELS if region}
+_CACHE_KEY = 'bloomberg_schedule_fetched_at'
+_REFRESH_SECONDS = 20 * 3600
+
+
+class Bloomberg(Network):
+    key = 'bloomberg'
+    name = 'Bloomberg'
+
+    def channels(self, s):
+        return [NetChannel(cid, name, url, logo=_LOGO, category='News') for cid, name, url, _ in _CHANNELS]
+
+    def has_guide(self, channel_id):
+        return channel_id in _GUIDED
+
+    def programs(self, s, channels):
+        last = float(s.cache.get(_CACHE_KEY) or 0)
+        if time.time() - last < _REFRESH_SECONDS:
+            return None  # guide fetched recently; keep what's stored
+        wanted = {ch.id for ch in channels}
+        out, ok = [], 0
+        for cid, _, _, region in _CHANNELS:
+            if not region or cid not in wanted:
+                continue
+            try:
+                r = s.impersonated().get(_SCHEDULE.format(region), headers={'RSC': '1'}, timeout=20)
+            except Exception as exc:
+                logger.warning('[free_networks] Bloomberg schedule %s failed: %s', region, exc)
+                continue
+            if r.status_code != 200:
+                logger.warning('[free_networks] Bloomberg schedule %s: HTTP %s (bot check?) — keeping existing guide',
+                               region, r.status_code)
+                break  # don't keep knocking after a block
+            ok += 1
+            out.extend(self._parse(cid, r.text))
+        if not ok:
+            return None
+        s._update_cache(_CACHE_KEY, time.time())
+        return out
+
+    @staticmethod
+    def _parse(cid, text):
+        out, seen = [], set()
+        dec = json.JSONDecoder()
+        i = text.find('{"showInfo":')
+        while i != -1:
+            try:
+                obj, end = dec.raw_decode(text, i)
+            except ValueError:
+                end = i + 1
+                obj = None
+            if isinstance(obj, dict):
+                ep = obj.get('episodeInfo') or {}
+                show = obj.get('showInfo') or {}
+                start = parse_iso(ep.get('episodeStartTime'))
+                if start and start not in seen:
+                    seen.add(start)
+                    title = show.get('showTitle') or ep.get('episodeTitle')
+                    p = program(cid, title, start, parse_iso(ep.get('episodeEndTime')),
+                                episode_title=ep.get('episodeTitle') if ep.get('episodeTitle') != title else None,
+                                description=ep.get('episodeDescription'),
+                                poster_url=(ep.get('thumbnail') or {}).get('url'))
+                    if p:
+                        out.append(p)
+            i = text.find('{"showInfo":', end)
+        return out
