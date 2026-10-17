@@ -423,9 +423,13 @@ public class PlaybackActivity extends Activity {
     private void reprepare() {
         MediaItem.Builder itemBuilder = new MediaItem.Builder().setUri(activeStreamUrl);
         if (activeDrm && activeLicenseUrl != null && !activeLicenseUrl.isEmpty()) {
+            // Multi-session: a stream that rotates keys mid-stream (a new pssh in each
+            // fragment, e.g. Versant) needs a new license for each key. With one session
+            // Media3 keeps the first key and fails with "Crypto key not available".
             itemBuilder.setDrmConfiguration(
                     new MediaItem.DrmConfiguration.Builder(C.WIDEVINE_UUID)
                             .setLicenseUri(activeLicenseUrl)
+                            .setMultiSession(true)
                             .build());
         }
         player.setMediaItem(itemBuilder.build());
