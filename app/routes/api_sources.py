@@ -1378,10 +1378,13 @@ def amazon_auto_login(source_id):
 
     redis_url = current_app.config['REDIS_URL']
     storage_state_json = cfg.get('browser_storage_state') or None
+    # Read here: the sign-in thread runs without an app context.
+    from ..debug_flag import debug_logging_enabled
+    debug = debug_logging_enabled()
 
     t = threading.Thread(
         target=run_amazon_auth,
-        args=(redis_url, source_id, email, password, storage_state_json),
+        args=(redis_url, source_id, email, password, storage_state_json, debug),
         daemon=True,
     )
     t.start()

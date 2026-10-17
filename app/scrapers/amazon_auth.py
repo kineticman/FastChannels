@@ -317,14 +317,18 @@ def _log_step(page, label: str) -> None:
         pass
 
 
-def _dump_page_debug(page, label: str) -> None:
-    """Log URL, title, visible inputs, and save a screenshot — all best-effort.
+def _dump_page_debug(page, debug: bool, label: str) -> None:
+    """Record what the page showed when sign-in failed or stalled.
 
-    Only called when sign-in fails or stalls; the normal path uses _log_step.
+    URL (query-stripped), title and input fields always — none carry account
+    details. Page text and a screenshot only with debug logging on (FC_DEBUG
+    or the Settings toggle, see app/debug_flag.py): the page shows the
+    account email, and this log is mirrored into the UI activity feed.
+    Best-effort; never raises.
     """
     try:
-        logger.info('[amazon-auth] DEBUG %s — url: %s', label, page.url)
-        logger.info('[amazon-auth] DEBUG %s — title: %s', label, page.title())
+        logger.info('[amazon-auth] %s — url: %s', label, page.url.split('?')[0])
+        logger.info('[amazon-auth] %s — title: %s', label, page.title())
         # Amazon repeats the same hidden fields in every form on the page, so
         # list non-hidden inputs in full and hidden ones once by name.
         visible, hidden = [], []
@@ -335,8 +339,9 @@ def _dump_page_debug(page, label: str) -> None:
                     hidden.append(name)
             else:
                 visible.append((name, el.get_attribute('id'), type_))
-        logger.info('[amazon-auth] DEBUG %s — inputs: %s; hidden: %s', label, visible, hidden)
-        # First 800 chars of body text to see what Amazon returned
+        logger.info('[amazon-auth] %s — inputs: %s; hidden: %s', label, visible, hidden)
+        if not debug:
+            return
         body = (page.inner_text('body') or '')[:800].replace('\n', ' ')
         logger.info('[amazon-auth] DEBUG %s — body: %s', label, body)
         path = f'/tmp/amazon_auth_{int(time.time())}_{label.replace(" ", "_")}.png'
@@ -378,12 +383,15 @@ def run_amazon_auth(
     email: str,
     password: str,
     storage_state_json: str | None = None,
+    debug: bool = False,
 ) -> None:
     """
     Drive a Playwright browser through Amazon's sign-in flow.
     Status updates land in Redis; the Flask status endpoint reads them.
     On success, writes cookie_header + browser_storage_state to Redis for
     the Flask endpoint to consume and persist into source.config.
+    ``debug`` (the debug-logging setting, read by the caller while it still
+    has an app context) adds page text and screenshots to failure dumps.
     """
     import redis as _redis
     r = _redis.from_url(redis_url)
@@ -453,7 +461,7 @@ def run_amazon_auth(
                         with page.expect_navigation(wait_until='domcontentloaded', timeout=15000):
                             page.click('button:has-text("Continue shopping"), input[type="submit"]')
                     except _PWTimeout:
-                        _dump_page_debug(page, 'after_botcheck')
+                        _dump_page_debug(page, debug, 'after_botcheck')
                         _write_status(r, source_id, 'failed',
                                       'Could not click through Amazon bot check.')
                         return
@@ -481,7 +489,7 @@ def run_amazon_auth(
                     except _PWTimeout:
                         pass
                 except _PWTimeout:
-                    _dump_page_debug(page, 'email_timeout')
+                    _dump_page_debug(page, debug, 'email_timeout')
                     _write_status(r, source_id, 'failed',
                                   'Email field not found on sign-in page.')
                     return
@@ -510,7 +518,7 @@ def run_amazon_auth(
                         except _PWTimeout:
                             pass
                     except _PWTimeout:
-                        _dump_page_debug(page, 'password_timeout')
+                        _dump_page_debug(page, debug, 'password_timeout')
                         if page.query_selector('form#signin-with-otp-form'):
                             _write_status(r, source_id, 'failed',
                                           'This Amazon account signs in without a password. '
@@ -538,7 +546,7 @@ def run_amazon_auth(
                     # entered and goes straight to the code page.
                     how = 'already sent' if _is_otp_page(page) else page.evaluate(_CODE_SIGNIN_JS)
                     if how == 'none':
-                        _dump_page_debug(page, 'no_code_signin')
+                        _dump_page_debug(page, debug, 'no_code_signin')
                         _write_status(r, source_id, 'failed',
                                       'Amazon did not offer sign-in with a code for this account. '
                                       'Save your Amazon password, or turn on passwordless sign-in '
@@ -599,7 +607,7 @@ def run_amazon_auth(
                         page.click(submit_selector, timeout=8000)
                         _log_step(page, 'otp_submitted')
                     except _PWTimeout:
-                        _dump_page_debug(page, 'otp_submit_timeout')
+                        _dump_page_debug(page, debug, 'otp_submit_timeout')
                         _write_status(r, source_id, 'failed', 'OTP submission timed out.')
                         return
 
@@ -607,12 +615,12 @@ def run_amazon_auth(
                                   'Waiting for Amazon to confirm the code or app approval…')
                     login_outcome = _wait_for_otp_submission(page)
                     if login_outcome != 'signed_in':
-                        _dump_page_debug(page, 'otp_confirmation_pending')
+                        _dump_page_debug(page, debug, 'otp_confirmation_pending')
 
                 # ── Verify success ─────────────────────────────────────────
                 if login_outcome != 'signed_in':
                     final_url = page.url
-                    _dump_page_debug(page, 'verify_failed')
+                    _dump_page_debug(page, debug, 'verify_failed')
                     auth_error = _auth_error_text(page)
                     if _is_captcha_page(page):
                         _write_status(r, source_id, 'captcha',
