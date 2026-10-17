@@ -78,6 +78,52 @@ _SIGN_IN_URL = (
 )
 
 
+# Fill an input the way a typing user would: native value setter plus
+# input/change events.  A bare ``el.value = v`` is invisible to Amazon's
+# script-driven /ax/claim pages, which then never submit the password.
+_FILL_JS = """
+([selector, value]) => {
+    const els = Array.from(document.querySelectorAll(selector));
+    const el = els.find(e => e.offsetParent !== null) || els[0];
+    if (!el) return false;
+    el.focus();
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+    setter.call(el, value);
+    el.dispatchEvent(new Event('input', {bubbles: true}));
+    el.dispatchEvent(new Event('change', {bubbles: true}));
+    return true;
+}
+"""
+
+# Submit the form that owns ``field`` through requestSubmit() so submit
+# handlers run (Amazon fills metadata1 there).  Falls back to clicking the
+# first matching button when the field has no form.
+_SUBMIT_JS = """
+([field, buttons]) => {
+    const els = Array.from(document.querySelectorAll(field));
+    const el = els.find(e => e.offsetParent !== null) || els[0];
+    const form = el && el.form;
+    if (form) {
+        const btn = form.querySelector(buttons);
+        const submitter = btn && btn.type === 'submit' ? btn : null;
+        if (form.requestSubmit) {
+            form.requestSubmit(submitter);
+            return 'requestSubmit';
+        }
+        if (btn) { btn.click(); return 'click'; }
+        form.submit();
+        return 'submit';
+    }
+    const btn = document.querySelector(buttons);
+    if (btn) { btn.click(); return 'click'; }
+    return 'none';
+}
+"""
+
+_EMAIL_SELECTOR = 'input#ap_email, input[name="email"]'
+_PASSWORD_SELECTOR = 'input#ap_password, input[name="password"], input[type="password"]'
+
+
 # ── Redis helpers ──────────────────────────────────────────────────────────────
 
 def _status_key(source_id: int) -> str:
@@ -145,7 +191,7 @@ def _is_otp_page(page) -> bool:
 
 def _is_signed_in(page) -> bool:
     url = page.url
-    for blocked in ('/ap/signin', '/ap/mfa', '/ap/cvf', '/errors/validateCaptcha'):
+    for blocked in ('/ap/signin', '/ap/mfa', '/ap/cvf', '/ax/claim', '/errors/validateCaptcha'):
         if blocked in url:
             return False
     if 'amazon.com' not in url:
@@ -173,6 +219,19 @@ def _is_signed_in(page) -> bool:
         return True  # URL check already passed, assume ok
 
 
+def _auth_error_text(page) -> str | None:
+    """Return Amazon's visible sign-in error text (e.g. wrong password), if any."""
+    try:
+        for el in page.query_selector_all('#auth-error-message-box, .a-alert-error'):
+            if el.is_visible():
+                text = ' '.join((el.inner_text() or '').split())
+                if text:
+                    return text[:200]
+    except Exception:
+        pass
+    return None
+
+
 def _wait_for_login_outcome(page, timeout: float = 12.0) -> str:
     """Wait for either a completed login or an MFA challenge.
 
@@ -187,6 +246,10 @@ def _wait_for_login_outcome(page, timeout: float = 12.0) -> str:
                 return 'otp'
             if _is_signed_in(page):
                 return 'signed_in'
+            if _is_captcha_page(page):
+                return 'captcha'
+            if _auth_error_text(page):
+                return 'auth_error'
         except Exception:
             pass
         time.sleep(0.5)
@@ -359,18 +422,12 @@ def run_amazon_auth(
                 # can hang when running inside a gevent-monkey-patched thread.
                 _write_status(r, source_id, 'running', 'Entering email address…')
                 try:
-                    page.wait_for_selector('input[name="email"]', timeout=15000)
-                    page.evaluate(
-                        "(v) => { const el = document.querySelector('input[name=\"email\"]'); "
-                        "if (el) el.value = v; }",
-                        email,
-                    )
-                    # JS-click the submit/continue button — bypasses actionability timeouts
-                    page.evaluate(
-                        "() => { const b = document.querySelector("
-                        "'input#continue, input[type=\"submit\"], button[type=\"submit\"]'); "
-                        "if (b) b.click(); }"
-                    )
+                    page.wait_for_selector(_EMAIL_SELECTOR, timeout=15000)
+                    page.evaluate(_FILL_JS, [_EMAIL_SELECTOR, email])
+                    page.evaluate(_SUBMIT_JS, [
+                        _EMAIL_SELECTOR,
+                        'input#continue, input[type="submit"], button[type="submit"]',
+                    ])
                     # Wait for password field to appear (SPA reveal or page nav)
                     try:
                         page.wait_for_load_state('domcontentloaded', timeout=8000)
@@ -394,17 +451,12 @@ def run_amazon_auth(
                         'input[name="password"]:visible, input[type="password"]:visible',
                         timeout=15000,
                     )
-                    page.evaluate(
-                        "(v) => { const el = document.querySelector("
-                        "'input[name=\"password\"], input[type=\"password\"]'); "
-                        "if (el) el.value = v; }",
-                        password,
-                    )
-                    page.evaluate(
-                        "() => { const b = document.querySelector("
-                        "'input#signInSubmit, input[type=\"submit\"], button[type=\"submit\"]'); "
-                        "if (b) b.click(); }"
-                    )
+                    page.evaluate(_FILL_JS, [_PASSWORD_SELECTOR, password])
+                    how = page.evaluate(_SUBMIT_JS, [
+                        _PASSWORD_SELECTOR,
+                        'input#signInSubmit, input[type="submit"], button[type="submit"]',
+                    ])
+                    logger.info('[amazon-auth] password submitted via %s', how)
                     try:
                         page.wait_for_load_state('domcontentloaded', timeout=10000)
                     except _PWTimeout:
@@ -425,6 +477,21 @@ def run_amazon_auth(
                 # navigation event, so wait for either a signed-in page or a
                 # challenge instead of checking the page only once.
                 login_outcome = _wait_for_login_outcome(page)
+                try:
+                    stuck = login_outcome == 'pending' and bool(
+                        page.query_selector('input[type="password"]:visible'))
+                except Exception:
+                    stuck = False
+                if stuck:
+                    # Still on the password form with no error: the submit
+                    # never registered.  Retry once with a real Enter keypress.
+                    logger.info('[amazon-auth] password form still showing, retrying with Enter')
+                    try:
+                        page.focus('input[type="password"]:visible', timeout=3000)
+                        page.keyboard.press('Enter')
+                    except Exception:
+                        pass
+                    login_outcome = _wait_for_login_outcome(page)
                 if login_outcome == 'otp':
                     logger.info('[amazon-auth] OTP challenge detected for source_id=%s', source_id)
                     _dump_page_debug(page, 'otp_challenge')
@@ -468,9 +535,13 @@ def run_amazon_auth(
                 if login_outcome != 'signed_in':
                     final_url = page.url
                     _dump_page_debug(page, 'verify_failed')
+                    auth_error = _auth_error_text(page)
                     if _is_captcha_page(page):
                         _write_status(r, source_id, 'captcha',
                                       'Amazon served a CAPTCHA during login. Please paste cookies manually.')
+                    elif auth_error:
+                        logger.warning('[amazon-auth] Amazon rejected sign-in: %s', auth_error)
+                        _write_status(r, source_id, 'failed', f'Amazon said: {auth_error}')
                     else:
                         _write_status(r, source_id, 'failed',
                                       f'Login did not succeed (landed on: {final_url[:80]})')
