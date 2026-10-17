@@ -504,6 +504,8 @@ def get_source_config(source_id):
                          **_espn_tve_info(saved)}
     if source.name == 'nfl':
         extra['nfl'] = _nfl_signin_info(saved)
+    if source.name == 'cbs_sports':
+        extra['cbs_sports'] = _cbs_sports_signin_info(saved)
     from ..tve.accounts import SEPARATE_SIGNIN_SOURCES
     if source.name in SEPARATE_SIGNIN_SOURCES:
         from .api_tve import _source_signin_payload
@@ -797,11 +799,14 @@ def save_source_config(source_id):
             FeedChannelNumber.query.filter_by(channel_id=ch.id).delete(synchronize_session=False)
             db.session.delete(ch)
             event_deleted += 1
-    nfl_games_changed = source.name == 'nfl' and (
-        _toggle_enabled(old, 'include_games') != _toggle_enabled(current, 'include_games'))
-    if nfl_games_changed and not _toggle_enabled(current, 'include_games'):
+    # NFL and CBS Sports game channels: turning them off removes them now.
+    game_toggle, game_prefix = {'nfl': ('include_games', 'game:'),
+                                'cbs_sports': ('include_events', 'event:')}.get(source.name, (None, None))
+    games_changed = bool(game_toggle) and (
+        _toggle_enabled(old, game_toggle) != _toggle_enabled(current, game_toggle))
+    if games_changed and not _toggle_enabled(current, game_toggle):
         from ..models import FeedChannelNumber
-        for ch in source.channels.filter(Channel.source_channel_id.like('game:%')).all():
+        for ch in source.channels.filter(Channel.source_channel_id.like(f'{game_prefix}%')).all():
             FeedChannelNumber.query.filter_by(channel_id=ch.id).delete(synchronize_session=False)
             db.session.delete(ch)
             event_deleted += 1
@@ -834,8 +839,8 @@ def save_source_config(source_id):
     elif espn_events_changed and source.is_enabled and espn_any_events:
         trigger_scrape('espn', force_full=True)
         full_scrape_queued = True
-    elif nfl_games_changed and source.is_enabled and _toggle_enabled(current, 'include_games'):
-        trigger_scrape('nfl', force_full=True)
+    elif games_changed and source.is_enabled and _toggle_enabled(current, game_toggle):
+        trigger_scrape(source.name, force_full=True)
         full_scrape_queued = True
     elif source.name == 'pbs' and old != current and source.is_enabled:
         # Any PBS config change (curated toggle, ZIP codes, or hand-editing
@@ -1643,6 +1648,95 @@ def _nfl_signin_info(saved: dict) -> dict:
             'account_email': saved.get('nfl_email'),
             'plans': sorted(p for p in active_plans(claims) if p != 'FREE'),
             'networks': sorted((claims.get('networks') or {}).keys())}
+
+
+# ── CBS Sports TV-provider sign-in (short code at cbssports.com/androidtv/activate)
+# The provider sign-in lives at Adobe (requestor CBS_SPORTS) keyed by the
+# source's device id; a sign-in-queue job polls for it — see app.scrapers.cbs_sports.
+
+def _cbs_sports_source_or_400(source_id):
+    source = Source.query.get_or_404(source_id)
+    if source.name != 'cbs_sports':
+        return None, (jsonify({'error': 'not a cbs_sports source'}), 400)
+    return source, None
+
+
+@sources_bp.route('/sources/<int:source_id>/cbs-sports-link/start', methods=['POST'])
+def cbs_sports_link_start(source_id):
+    import redis as _redis
+    import requests as _requests
+    import uuid as _uuid
+    from ..scrapers.cbs_sports import LINK_STATUS_KEY, CBSAuthError, link_status, start_link
+    from .tasks import get_signin_queue
+
+    source, err = _cbs_sports_source_or_400(source_id)
+    if err:
+        return err
+    # A fresh device id per sign-in: Adobe keys the sign-in to it, so a new
+    # one can't pick up a previous account's.
+    try:
+        ctx = start_link(str(_uuid.uuid4()))
+    except (CBSAuthError, _requests.RequestException) as e:
+        return jsonify({'error': str(e)}), 502
+    status = link_status(ctx, 'waiting')
+    _redis.from_url(current_app.config['REDIS_URL']).setex(LINK_STATUS_KEY, 720, json.dumps(status))
+    get_signin_queue().enqueue('app.scrapers.cbs_sports.run_link', ctx, job_timeout=660)
+    return jsonify(status)
+
+
+@sources_bp.route('/sources/<int:source_id>/cbs-sports-link/state')
+def cbs_sports_link_state(source_id):
+    import redis as _redis
+    from ..scrapers.cbs_sports import LINK_STATUS_KEY
+
+    _, err = _cbs_sports_source_or_400(source_id)
+    if err:
+        return err
+    raw = _redis.from_url(current_app.config['REDIS_URL']).get(LINK_STATUS_KEY)
+    return jsonify(json.loads(raw) if raw else {'state': 'idle'})
+
+
+@sources_bp.route('/sources/<int:source_id>/cbs-sports-link/stop', methods=['POST'])
+def cbs_sports_link_stop(source_id):
+    import redis as _redis
+    from ..scrapers.cbs_sports import LINK_STATUS_KEY
+
+    _, err = _cbs_sports_source_or_400(source_id)
+    if err:
+        return err
+    _redis.from_url(current_app.config['REDIS_URL']).delete(LINK_STATUS_KEY)
+    return jsonify({'status': 'stopped'})
+
+
+@sources_bp.route('/sources/<int:source_id>/cbs-sports-auth/<kind>', methods=['DELETE'])
+def clear_cbs_sports_auth(source_id, kind):
+    from ..scrapers.cbs_sports import SIGNIN_CONFIG_KEYS, adobe_logout
+
+    source, err = _cbs_sports_source_or_400(source_id)
+    if err:
+        return err
+    cfg = dict(source.config or {})
+    if cfg.get('device_id') and cfg.get('adobe_user_id'):
+        try:
+            adobe_logout(cfg['device_id'])
+        except Exception:  # noqa: BLE001 — signing out locally still counts
+            logger.warning('[cbs_sports] Adobe logout failed', exc_info=True)
+    for key in SIGNIN_CONFIG_KEYS + ('signin_error',):
+        cfg.pop(key, None)
+    source.config = cfg
+    db.session.commit()
+    if source.is_enabled:
+        trigger_scrape('cbs_sports', force_full=True)
+    return jsonify({'status': 'cleared'})
+
+
+def _cbs_sports_signin_info(saved: dict) -> dict:
+    authz = saved.get('authz') or {}
+    return {'signed_in': bool(saved.get('adobe_user_id')),
+            'provider': saved.get('adobe_mvpd'),
+            'signin_error': saved.get('signin_error'),
+            'cbs': bool((authz.get('CBS_ENTERTAINMENT') or {}).get('ok')),
+            'cbssn': bool((authz.get('CBS_SPORTS_NETWORK') or {}).get('ok'))}
 
 
 # ── ESPN TV-provider sign-in (Adobe Pass v2 link) ───────────────────────────

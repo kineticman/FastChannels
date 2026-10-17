@@ -1453,7 +1453,7 @@
       row.style.display = isOpen ? 'none' : '';
       if (isOpen) {  // no-ops unless a sign-in is waiting here
         espnAbandon(sourceId);
-        nflAbandon(sourceId);
+        codeLinkAbandon(sourceId);
       }
       document.querySelectorAll(`.configure-btn-display[data-source-id="${sourceId}"]`).forEach(btn => {
         btn.textContent = isOpen ? 'Configure ▾' : 'Configure ▴';
@@ -4349,33 +4349,33 @@
     }
     // ── end ESPN sign-in ──────────────────────────────────────────────────────
 
-    // ── NFL activation-code sign-in (TV provider or NFL account) ─────────────
-    // One code at a time: a new one (either kind) retires the previous wait.
-    const _nflPollTimers = {};
-    const _nflActive = {};
+    // ── Activation-code sign-ins (NFL, CBS Sports) ──────────────────────────
+    // The card shows a code to enter on the provider's activate page while a
+    // sign-in job waits for it. One code per source at a time: a new one
+    // retires the previous wait. `slug` is the route prefix (/api/sources/<id>/<slug>-link/…).
+    const _codeLinkTimers = {};
+    const _codeLinkActive = {};   // sourceId → slug
 
-    function _nflStop(sourceId) {
-      clearTimeout(_nflPollTimers[sourceId]);
-      if (!_nflActive[sourceId]) return;
-      delete _nflActive[sourceId];
-      fetch(`/api/sources/${sourceId}/nfl-link/stop`, { method: 'POST' }).catch(() => {});
+    function _codeLinkStop(sourceId) {
+      clearTimeout(_codeLinkTimers[sourceId]);
+      const slug = _codeLinkActive[sourceId];
+      if (!slug) return;
+      delete _codeLinkActive[sourceId];
+      fetch(`/api/sources/${sourceId}/${slug}-link/stop`, { method: 'POST' }).catch(() => {});
     }
 
-    // Closing the card abandons any NFL wait on it (called by toggleConfigPanel).
-    function nflAbandon(sourceId) { _nflStop(sourceId); }
+    // Closing the card abandons any wait on it (called by toggleConfigPanel).
+    function codeLinkAbandon(sourceId) { _codeLinkStop(sourceId); }
 
     window.addEventListener('pagehide', () => {
-      for (const sourceId of Object.keys(_nflActive)) {
-        navigator.sendBeacon(`/api/sources/${sourceId}/nfl-link/stop`);
+      for (const [sourceId, slug] of Object.entries(_codeLinkActive)) {
+        navigator.sendBeacon(`/api/sources/${sourceId}/${slug}-link/stop`);
       }
     });
 
-    function renderNflConfig(sourceId, schema, values, cfg) {
-      const info = (cfg && cfg.nfl) || {};
-      const unlocks = [];
-      if ((info.networks || []).includes('NFLN') || (info.plans || []).length) unlocks.push('NFL Network');
-      if ((info.networks || []).includes('NFLRZ') || (info.plans || []).some(p => p !== 'NFL_PLUS')) unlocks.push('RedZone');
-      const option = (kind, title, sub, signedIn, detail, note) => `
+    // One sign-in option: a collapsible row with its state, a Get-code button and Sign out.
+    function codeLinkOption(sourceId, slug, sourceName, kind, title, sub, signedIn, detail, note) {
+      return `
           <details class="espn-auth-option">
             <summary>
               <span class="espn-auth-label"><strong>${title}</strong><small>${sub}</small></span>
@@ -4385,52 +4385,27 @@
               <div class="config-note">${note}</div>
               <div class="amazon-autologin-panel">
                 <div class="amazon-autologin-header">
-                  <button class="btn btn-run" type="button" id="nfl-${kind}-btn-${sourceId}"
-                          onclick="nflStartLink(${sourceId}, '${kind}')">${signedIn ? 'Sign in again' : 'Get code'}</button>
+                  <button class="btn btn-run" type="button" id="${slug}-${kind}-btn-${sourceId}"
+                          onclick="codeLinkStart(${sourceId}, '${slug}', '${sourceName}', '${kind}')">${signedIn ? 'Sign in again' : 'Get code'}</button>
                   ${signedIn ? `<button class="btn btn-cancel btn-sm" type="button"
-                          onclick="nflClearAuth(${sourceId}, '${kind}')">Sign out</button>` : ''}
+                          onclick="codeLinkClear(${sourceId}, '${slug}', '${sourceName}', '${kind}', '${escapeHtml(title)}')">Sign out</button>` : ''}
                 </div>
-                <span class="amazon-status-text" id="nfl-${kind}-status-${sourceId}">${signedIn ? escapeHtml(detail) : ''}</span>
+                <span class="amazon-status-text" id="${slug}-${kind}-status-${sourceId}">${escapeHtml(detail || '')}</span>
               </div>
             </div>
           </details>`;
-      return `
-        <div class="config-title">NFL Settings</div>
-        <div class="config-subtitle" style="font-weight:600">Sign in</div>
-        <div class="config-note">NFL Channel plays without signing in. Sign in with a TV provider, an NFL account, or both,
-          to add NFL Network, RedZone and live games.${unlocks.length ? ` This sign-in includes ${unlocks.join(' and ')}.` : ''}</div>
-        <div class="espn-auth-options">
-          ${option('tve', 'TV provider', 'NFL Network, RedZone and in-market games your TV package includes',
-                   info.tve_signed_in, `Signed in with ${info.tve_provider || 'your TV provider'}`,
-                   'Get a code, enter it at nfl.com/activate on your phone or computer, then pick your TV provider and sign in.')}
-          ${option('account', 'NFL account', 'NFL+ subscriptions',
-                   info.account_signed_in, `Signed in${info.account_email ? ' as ' + info.account_email : ''}`,
-                   'Get a code and enter it at nfl.com/activate while signed in to your NFL account. NFL+ adds NFL Network and in-market games; NFL+ Premium adds RedZone.')}
-        </div>
-        <div class="config-subtitle" style="margin-top:0.8rem">Game channels</div>
-        <div class="config-note">Adds each game in the next two days that your sign-in can play as a temporary channel.
-          Games on NFL Network stay on that channel. Channels retire two hours after the scheduled end and are deleted a day later.</div>
-        <div class="espn-services">
-          <label><input type="checkbox" data-key="include_games"
-                 ${String(values.include_games || 'false').toLowerCase() === 'true' ? 'checked' : ''}>Include live game channels</label>
-        </div>
-        <div class="config-actions">
-          <span class="config-status" id="config-status-${sourceId}"></span>
-          <button class="btn btn-run" type="button" onclick="saveSourceConfig(${sourceId})">Save settings</button>
-        </div>`;
     }
 
-    async function nflStartLink(sourceId, kind) {
-      const btn      = document.getElementById(`nfl-${kind}-btn-${sourceId}`);
-      const statusEl = document.getElementById(`nfl-${kind}-status-${sourceId}`);
-      for (const other of ['tve', 'account']) {
-        const el = document.getElementById(`nfl-${other}-status-${sourceId}`);
-        if (other !== kind && el && _nflActive[sourceId]) el.innerHTML = '';
+    async function codeLinkStart(sourceId, slug, sourceName, kind) {
+      const btn      = document.getElementById(`${slug}-${kind}-btn-${sourceId}`);
+      const statusEl = document.getElementById(`${slug}-${kind}-status-${sourceId}`);
+      if (_codeLinkActive[sourceId]) {
+        document.querySelectorAll(`[id^="${slug}-"][id$="-status-${sourceId}"]`).forEach(el => { el.innerHTML = ''; });
       }
       btn.disabled = true;
       statusEl.innerHTML = '<span style="color:var(--text-muted)">Getting a code…</span>';
       try {
-        const r = await fetch(`/api/sources/${sourceId}/nfl-link/start`, {
+        const r = await fetch(`/api/sources/${sourceId}/${slug}-link/start`, {
           method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({kind}),
         });
         const d = await r.json().catch(() => ({}));
@@ -4438,15 +4413,15 @@
           statusEl.innerHTML = `<span style="color:var(--danger-soft)">${escapeHtml(d.error || 'Could not get a code.')}</span>`;
           return;
         }
-        _nflActive[sourceId] = true;
+        _codeLinkActive[sourceId] = slug;
         const row = document.getElementById(`config-panel-row-${sourceId}`);
-        if (!row || row.style.display === 'none') { _nflStop(sourceId); return; }  // closed meanwhile
+        if (!row || row.style.display === 'none') { _codeLinkStop(sourceId); return; }  // closed meanwhile
         statusEl.innerHTML = `
-          Go to <a href="${escapeHtml(d.url)}" target="_blank" rel="noopener">${escapeHtml(d.url.replace(/^https?:\/\/(www\.)?/, ''))}</a>
+          Go to <a href="${escapeHtml(d.url)}" target="_blank" rel="noopener">${escapeHtml(d.url.replace(/^https?:\/\/(www\.)?/, '').replace(/\/$/, ''))}</a>
           and enter <b style="font-size:1.4em;letter-spacing:.15em;font-family:monospace">${escapeHtml(d.code)}</b>
           <span style="color:var(--text-muted)">— waiting…</span>
-          <button class="btn btn-cancel btn-sm" type="button" onclick="nflCancel(${sourceId}, '${kind}')">Cancel</button>`;
-        nflPoll(sourceId, kind);
+          <button class="btn btn-cancel btn-sm" type="button" onclick="codeLinkCancel(${sourceId}, '${slug}', '${kind}')">Cancel</button>`;
+        _codeLinkPoll(sourceId, slug, sourceName, kind);
       } catch (e) {
         statusEl.innerHTML = '<span style="color:var(--danger-soft)">Network error getting a code.</span>';
       } finally {
@@ -4454,45 +4429,107 @@
       }
     }
 
-    function nflCancel(sourceId, kind) {
-      _nflStop(sourceId);
-      const statusEl = document.getElementById(`nfl-${kind}-status-${sourceId}`);
+    function codeLinkCancel(sourceId, slug, kind) {
+      _codeLinkStop(sourceId);
+      const statusEl = document.getElementById(`${slug}-${kind}-status-${sourceId}`);
       if (statusEl) statusEl.innerHTML = '<span style="color:var(--text-muted)">Cancelled.</span>';
     }
 
-    function nflPoll(sourceId, kind) {
-      clearTimeout(_nflPollTimers[sourceId]);
-      _nflPollTimers[sourceId] = setTimeout(async () => {
-        const statusEl = document.getElementById(`nfl-${kind}-status-${sourceId}`);
-        if (!statusEl) { _nflStop(sourceId); return; }  // panel gone
+    function _codeLinkPoll(sourceId, slug, sourceName, kind) {
+      clearTimeout(_codeLinkTimers[sourceId]);
+      _codeLinkTimers[sourceId] = setTimeout(async () => {
+        const statusEl = document.getElementById(`${slug}-${kind}-status-${sourceId}`);
+        if (!statusEl) { _codeLinkStop(sourceId); return; }  // panel gone
         let d = {};
         try {
-          d = await (await fetch(`/api/sources/${sourceId}/nfl-link/state`)).json();
+          d = await (await fetch(`/api/sources/${sourceId}/${slug}-link/state`)).json();
         } catch (e) {
-          nflPoll(sourceId, kind);
+          _codeLinkPoll(sourceId, slug, sourceName, kind);
           return;
         }
         if (d.state === 'waiting') {
-          nflPoll(sourceId, kind);
+          _codeLinkPoll(sourceId, slug, sourceName, kind);
           return;
         }
-        delete _nflActive[sourceId];
+        delete _codeLinkActive[sourceId];
         if (d.state === 'success') {
           statusEl.innerHTML = '<span style="color:var(--success-soft)">&#10003; Signed in — updating channels…</span>';
-          setTimeout(() => loadSourceConfig(sourceId, 'nfl'), 1500);
+          setTimeout(() => loadSourceConfig(sourceId, sourceName), 1500);
         } else if (d.state === 'expired' || d.state === 'error') {
           statusEl.innerHTML = `<span style="color:var(--danger-soft)">${escapeHtml(d.message || 'Sign-in failed.')} Get a new code to try again.</span>`;
         }
       }, 3000);
     }
 
-    async function nflClearAuth(sourceId, kind) {
-      const what = kind === 'tve' ? 'your TV provider' : 'your NFL account';
-      if (!confirm(`Sign out of ${what} for NFL? Channels that need it stop playing.`)) return;
-      await fetch(`/api/sources/${sourceId}/nfl-auth/${kind}`, { method: 'DELETE' }).catch(() => {});
-      loadSourceConfig(sourceId, 'nfl');
+    async function codeLinkClear(sourceId, slug, sourceName, kind, title) {
+      if (!confirm(`Sign out of ${title}? Channels that need it stop playing.`)) return;
+      await fetch(`/api/sources/${sourceId}/${slug}-auth/${kind}`, { method: 'DELETE' }).catch(() => {});
+      loadSourceConfig(sourceId, sourceName);
     }
-    // ── end NFL sign-in ───────────────────────────────────────────────────────
+
+    function _eventToggle(key, label, values) {
+      return `<div class="espn-services">
+          <label><input type="checkbox" data-key="${key}"
+                 ${String(values[key] || 'false').toLowerCase() === 'true' ? 'checked' : ''}>${label}</label>
+        </div>`;
+    }
+
+    function _saveRow(sourceId) {
+      return `<div class="config-actions">
+          <span class="config-status" id="config-status-${sourceId}"></span>
+          <button class="btn btn-run" type="button" onclick="saveSourceConfig(${sourceId})">Save settings</button>
+        </div>`;
+    }
+
+    function renderNflConfig(sourceId, schema, values, cfg) {
+      const info = (cfg && cfg.nfl) || {};
+      const unlocks = [];
+      if ((info.networks || []).includes('NFLN') || (info.plans || []).length) unlocks.push('NFL Network');
+      if ((info.networks || []).includes('NFLRZ') || (info.plans || []).some(p => p !== 'NFL_PLUS')) unlocks.push('RedZone');
+      return `
+        <div class="config-title">NFL Settings</div>
+        <div class="config-subtitle" style="font-weight:600">Sign in</div>
+        <div class="config-note">NFL Channel plays without signing in. Sign in with a TV provider, an NFL account, or both,
+          to add NFL Network, RedZone and live games.${unlocks.length ? ` This sign-in includes ${unlocks.join(' and ')}.` : ''}</div>
+        <div class="espn-auth-options">
+          ${codeLinkOption(sourceId, 'nfl', 'nfl', 'tve', 'TV provider', 'NFL Network, RedZone and in-market games your TV package includes',
+                   info.tve_signed_in, info.tve_signed_in ? `Signed in with ${info.tve_provider || 'your TV provider'}` : '',
+                   'Get a code, enter it at nfl.com/activate on your phone or computer, then pick your TV provider and sign in.')}
+          ${codeLinkOption(sourceId, 'nfl', 'nfl', 'account', 'NFL account', 'NFL+ subscriptions',
+                   info.account_signed_in, info.account_signed_in ? `Signed in${info.account_email ? ' as ' + info.account_email : ''}` : '',
+                   'Get a code and enter it at nfl.com/activate while signed in to your NFL account. NFL+ adds NFL Network and in-market games; NFL+ Premium adds RedZone.')}
+        </div>
+        <div class="config-subtitle" style="margin-top:0.8rem">Game channels</div>
+        <div class="config-note">Adds each game in the next two days that your sign-in can play as a temporary channel.
+          Games on NFL Network stay on that channel. Channels retire two hours after the scheduled end and are deleted a day later.</div>
+        ${_eventToggle('include_games', 'Include live game channels', values)}
+        ${_saveRow(sourceId)}`;
+    }
+
+    function renderCbsSportsConfig(sourceId, schema, values, cfg) {
+      const info = (cfg && cfg.cbs_sports) || {};
+      const nets = [info.cbs && 'CBS games', info.cbssn && 'CBS Sports Network'].filter(Boolean);
+      const detail = info.signed_in
+        ? `Signed in with ${info.provider || 'your TV provider'}` + (nets.length ? ` — includes ${nets.join(' and ')}` : ' — your package includes neither CBS nor CBS Sports Network')
+        : (info.signin_error || '');
+      return `
+        <div class="config-title">CBS Sports Settings</div>
+        <div class="config-subtitle" style="font-weight:600">Sign in</div>
+        <div class="config-note">CBS Sports HQ, Golazo and the Champions League channel play without signing in.
+          A TV-provider sign-in adds CBS Sports Network and CBS games from your local CBS station, if your package includes them.</div>
+        <div class="espn-auth-options">
+          ${codeLinkOption(sourceId, 'cbs-sports', 'cbs_sports', 'tve', 'TV provider', 'CBS Sports Network and CBS games',
+                   info.signed_in, detail,
+                   'Get a code, enter it at cbssports.com/androidtv/activate on your phone or computer, then pick your TV provider and sign in. The sign-in lasts about 90 days.')}
+        </div>
+        <div class="config-subtitle" style="margin-top:0.8rem">Game channels</div>
+        <div class="config-note">Adds each CBS game in the next two days as a temporary channel (the CBS Sports app only carries
+          your local CBS station during games). CBS Sports Network games stay on that channel.
+          Channels retire two hours after the scheduled end and are deleted a day later.</div>
+        ${_eventToggle('include_events', 'Include game channels', values)}
+        ${_saveRow(sourceId)}`;
+    }
+    // ── end activation-code sign-ins ──────────────────────────────────────────
 
     function renderFuboConfig(sourceId, schema, values) {
       const fastOnly = values.fast_only !== 'false';
@@ -5626,6 +5663,8 @@
         return renderEspnConfig(sourceId, schema, values, cfg);
       } else if (sourceName === 'nfl') {
         return renderNflConfig(sourceId, schema, values, cfg);
+      } else if (sourceName === 'cbs_sports') {
+        return renderCbsSportsConfig(sourceId, schema, values, cfg);
       } else if (sourceName === 'sling') {
         return renderSlingConfig(sourceId, schema, values, cfg);
       } else if (sourceName === 'spectrum') {
