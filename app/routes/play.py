@@ -1760,6 +1760,18 @@ def spectrum_dash_proxy(channel_id: str):
     return redirect(mpd_url, code=302)
 
 
+@play_bp.route('/play/versant_tve/<channel_id>/dash.mpd')
+def versant_tve_dash(channel_id: str):
+    """The play proxy under a .mpd name, for the same reason as spectrum_dash_proxy:
+    FastChannels Player picks its parser from the URL extension, and on the
+    generic .m3u8 URL it parsed Versant's DASH manifest as HLS and failed
+    (confirmed on a Fire TV 2026-10-17). The manifest needs no rewriting — its
+    BaseURLs are absolute and MediaTailor allows CORS — so this is the ordinary
+    resolve + 302, error handling included."""
+    from urllib.parse import unquote as _unquote
+    return play('versant_tve', _unquote(channel_id))
+
+
 _FUBO_MPD_SEG_ATTR_RE = re.compile(r'(initialization|media)="([^"]+)"')
 
 
