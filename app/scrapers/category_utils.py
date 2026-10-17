@@ -1423,6 +1423,7 @@ _NAME_OVERRIDES: dict[str, str] = {
     'ice road truckers':                    'Reality TV',
     'ink master':                           'Reality TV',
     'perform by lifetime':                  'Reality TV',
+    'perform':                              'Reality TV',  # Lifetime's dance-reality FAST channel, not sports
     'real housewives vault':                'Reality TV',
     'ice pilots nwt (en español)':          'Reality TV',
     'la fiebre del jade':                   'Reality TV',
@@ -1486,7 +1487,6 @@ _NAME_OVERRIDES: dict[str, str] = {
     'motogp tv':                            'Sports',
     'mtrspt1':                              'Sports',
     'victory plus national':                'Sports',
-    'perform':                              'Sports',
     'acc digital network':                  'Sports',
     'acc network':                          'Sports',
     'big 12 studios':                       'Sports',
