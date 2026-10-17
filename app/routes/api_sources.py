@@ -1372,8 +1372,9 @@ def amazon_auto_login(source_id):
     cfg = source.config or {}
     email = (cfg.get('amazon_email') or '').strip()
     password = (cfg.get('amazon_password') or '').strip()
-    if not email or not password:
-        return jsonify({'error': 'amazon_email and amazon_password must be saved first'}), 400
+    # A blank password means sign in with a code Amazon texts to the phone.
+    if not email:
+        return jsonify({'error': 'amazon_email must be saved first'}), 400
 
     redis_url = current_app.config['REDIS_URL']
     storage_state_json = cfg.get('browser_storage_state') or None

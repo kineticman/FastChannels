@@ -70,7 +70,7 @@ class AmazonPrimeFreeScraper(BaseScraper):
             "Amazon Password",
             field_type="password",
             secret=True,
-            help_text="Your Amazon account password. Stored securely alongside other source credentials.",
+            help_text="Your Amazon account password. Leave blank to sign in with a code Amazon texts to your phone.",
         ),
         ConfigField(
             "cookie_header",

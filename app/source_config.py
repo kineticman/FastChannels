@@ -59,11 +59,12 @@ def is_source_config_complete(source_name: str, scraper_cls, values: dict | None
     saved = values or {}
 
     # Amazon playback may work with a manually pasted cookie, but the source
-    # should not be presented as fully configured until the account credentials
-    # and the captured session cookie are all present.
+    # should not be presented as fully configured until the account email and
+    # the captured session cookie are present. The password is optional: a
+    # blank one means sign in with a code texted to the phone.
     if source_name == 'amazon_prime_free':
         return all((saved.get(key) or '').strip() for key in (
-            'amazon_email', 'amazon_password', 'cookie_header',
+            'amazon_email', 'cookie_header',
         ))
 
     # DirecTV has two sign-in methods: saved email + password, or a code
