@@ -502,6 +502,8 @@ def get_source_config(source_id):
                          'signed_in_at': saved.get('signed_in_at'),
                          'event_filter': _espn_event_filter(saved) or {'sport_mode': 'all', 'sports': {}, 'teams': []},
                          **_espn_tve_info(saved)}
+    if source.name == 'nfl':
+        extra['nfl'] = _nfl_signin_info(saved)
     from ..tve.accounts import SEPARATE_SIGNIN_SOURCES
     if source.name in SEPARATE_SIGNIN_SOURCES:
         from .api_tve import _source_signin_payload
@@ -788,13 +790,21 @@ def save_source_config(source_id):
                         db.session.delete(ch)
                         pbs_deleted += 1
 
-    espn_deleted = 0
+    event_deleted = 0
     if espn_events_changed and not espn_any_events:
         from ..models import FeedChannelNumber
         for ch in source.channels.filter(Channel.source_channel_id.like('airing:%')).all():
             FeedChannelNumber.query.filter_by(channel_id=ch.id).delete(synchronize_session=False)
             db.session.delete(ch)
-            espn_deleted += 1
+            event_deleted += 1
+    nfl_games_changed = source.name == 'nfl' and (
+        _toggle_enabled(old, 'include_games') != _toggle_enabled(current, 'include_games'))
+    if nfl_games_changed and not _toggle_enabled(current, 'include_games'):
+        from ..models import FeedChannelNumber
+        for ch in source.channels.filter(Channel.source_channel_id.like('game:%')).all():
+            FeedChannelNumber.query.filter_by(channel_id=ch.id).delete(synchronize_session=False)
+            db.session.delete(ch)
+            event_deleted += 1
 
     source.config = current
     auto_enabled = False
@@ -807,7 +817,7 @@ def save_source_config(source_id):
         source.is_enabled = True
         auto_enabled = True
     db.session.commit()
-    if pbs_deleted or espn_deleted:
+    if pbs_deleted or event_deleted:
         _invalidate_and_refresh_xml()
     full_scrape_queued = False
     if source.name == 'sling' and (creds_changed or sling_lineup_changed) and source.is_enabled:
@@ -823,6 +833,9 @@ def save_source_config(source_id):
         full_scrape_queued = True
     elif espn_events_changed and source.is_enabled and espn_any_events:
         trigger_scrape('espn', force_full=True)
+        full_scrape_queued = True
+    elif nfl_games_changed and source.is_enabled and _toggle_enabled(current, 'include_games'):
+        trigger_scrape('nfl', force_full=True)
         full_scrape_queued = True
     elif source.name == 'pbs' and old != current and source.is_enabled:
         # Any PBS config change (curated toggle, ZIP codes, or hand-editing
@@ -843,7 +856,7 @@ def save_source_config(source_id):
         'is_enabled': source.is_enabled,
         'auto_enabled': auto_enabled,
         'full_scrape_queued': full_scrape_queued,
-        'deleted_channels': pbs_deleted + espn_deleted,
+        'deleted_channels': pbs_deleted + event_deleted,
         'config_complete': config_complete,
         'config_status': config_status,
     })
@@ -1532,6 +1545,104 @@ def clear_espn_auth(source_id):
     source.config = cfg
     db.session.commit()
     return jsonify({'status': 'cleared'})
+
+
+# ── NFL activation code (TV provider or NFL account) ────────────────────────
+# Both sign-ins are NFL's own activation code entered at nfl.com/activate; a
+# sign-in-queue job polls NFL's keystore for the result — see app.scrapers.nfl.
+
+def _nfl_source_or_400(source_id):
+    source = Source.query.get_or_404(source_id)
+    if source.name != 'nfl':
+        return None, (jsonify({'error': 'not an nfl source'}), 400)
+    return source, None
+
+
+@sources_bp.route('/sources/<int:source_id>/nfl-link/start', methods=['POST'])
+def nfl_link_start(source_id):
+    import redis as _redis
+    import requests as _requests
+    import uuid as _uuid
+    from ..scrapers.nfl import LINK_KINDS, LINK_STATUS_KEY, NFLAuthError, link_status, start_link
+    from .tasks import get_signin_queue
+
+    source, err = _nfl_source_or_400(source_id)
+    if err:
+        return err
+    kind = ((request.get_json(silent=True) or {}).get('kind') or '').strip()
+    if kind not in LINK_KINDS:
+        return jsonify({'error': 'Unknown sign-in type'}), 400
+    cfg = dict(source.config or {})
+    if not cfg.get('device_id'):
+        cfg['device_id'] = str(_uuid.uuid4())
+        source.config = cfg
+        db.session.commit()
+    try:
+        ctx = start_link(kind, cfg['device_id'])
+    except (NFLAuthError, _requests.RequestException) as e:
+        return jsonify({'error': str(e)}), 502
+    # Overwriting the status with the new code is also what retires any job
+    # still waiting on an older code (run_link watches this key).
+    status = link_status(ctx, 'waiting')
+    _redis.from_url(current_app.config['REDIS_URL']).setex(LINK_STATUS_KEY, 720, json.dumps(status))
+    get_signin_queue().enqueue('app.scrapers.nfl.run_link', ctx, job_timeout=660)
+    return jsonify(status)
+
+
+@sources_bp.route('/sources/<int:source_id>/nfl-link/state')
+def nfl_link_state(source_id):
+    import redis as _redis
+    from ..scrapers.nfl import LINK_STATUS_KEY
+
+    _, err = _nfl_source_or_400(source_id)
+    if err:
+        return err
+    raw = _redis.from_url(current_app.config['REDIS_URL']).get(LINK_STATUS_KEY)
+    return jsonify(json.loads(raw) if raw else {'state': 'idle'})
+
+
+@sources_bp.route('/sources/<int:source_id>/nfl-link/stop', methods=['POST'])
+def nfl_link_stop(source_id):
+    import redis as _redis
+    from ..scrapers.nfl import LINK_STATUS_KEY
+
+    _, err = _nfl_source_or_400(source_id)
+    if err:
+        return err
+    _redis.from_url(current_app.config['REDIS_URL']).delete(LINK_STATUS_KEY)
+    return jsonify({'status': 'stopped'})
+
+
+@sources_bp.route('/sources/<int:source_id>/nfl-auth/<kind>', methods=['DELETE'])
+def clear_nfl_auth(source_id, kind):
+    from ..scrapers.nfl import LINK_CONFIG_KEYS, TOKEN_CONFIG_KEYS
+
+    source, err = _nfl_source_or_400(source_id)
+    if err:
+        return err
+    if kind not in LINK_CONFIG_KEYS:
+        return jsonify({'error': 'Unknown sign-in type'}), 400
+    cfg = dict(source.config or {})
+    # Tokens carry the sign-in's claims, so they go too.
+    for key in LINK_CONFIG_KEYS[kind] + TOKEN_CONFIG_KEYS:
+        cfg.pop(key, None)
+    source.config = cfg
+    db.session.commit()
+    if source.is_enabled:
+        trigger_scrape('nfl', force_full=True)
+    return jsonify({'status': 'cleared'})
+
+
+def _nfl_signin_info(saved: dict) -> dict:
+    """What the NFL card shows about its sign-ins and what they unlock."""
+    from ..scrapers.nfl import active_plans, jwt_claims
+    claims = jwt_claims(saved.get('phone_access_token'))
+    return {'tve_signed_in': bool(saved.get('mvpd_user_id')),
+            'tve_provider': saved.get('mvpd_name') or saved.get('mvpd_idp'),
+            'account_signed_in': bool(saved.get('nfl_uid')),
+            'account_email': saved.get('nfl_email'),
+            'plans': sorted(p for p in active_plans(claims) if p != 'FREE'),
+            'networks': sorted((claims.get('networks') or {}).keys())}
 
 
 # ── ESPN TV-provider sign-in (Adobe Pass v2 link) ───────────────────────────

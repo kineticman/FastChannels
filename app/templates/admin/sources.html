@@ -1451,7 +1451,10 @@
       if (!row) return;
       const isOpen = row.style.display !== 'none';
       row.style.display = isOpen ? 'none' : '';
-      if (isOpen) espnAbandon(sourceId);  // no-op unless an ESPN sign-in is waiting here
+      if (isOpen) {  // no-ops unless a sign-in is waiting here
+        espnAbandon(sourceId);
+        nflAbandon(sourceId);
+      }
       document.querySelectorAll(`.configure-btn-display[data-source-id="${sourceId}"]`).forEach(btn => {
         btn.textContent = isOpen ? 'Configure ▾' : 'Configure ▴';
         btn.classList.toggle('open', !isOpen);
@@ -4346,6 +4349,151 @@
     }
     // ── end ESPN sign-in ──────────────────────────────────────────────────────
 
+    // ── NFL activation-code sign-in (TV provider or NFL account) ─────────────
+    // One code at a time: a new one (either kind) retires the previous wait.
+    const _nflPollTimers = {};
+    const _nflActive = {};
+
+    function _nflStop(sourceId) {
+      clearTimeout(_nflPollTimers[sourceId]);
+      if (!_nflActive[sourceId]) return;
+      delete _nflActive[sourceId];
+      fetch(`/api/sources/${sourceId}/nfl-link/stop`, { method: 'POST' }).catch(() => {});
+    }
+
+    // Closing the card abandons any NFL wait on it (called by toggleConfigPanel).
+    function nflAbandon(sourceId) { _nflStop(sourceId); }
+
+    window.addEventListener('pagehide', () => {
+      for (const sourceId of Object.keys(_nflActive)) {
+        navigator.sendBeacon(`/api/sources/${sourceId}/nfl-link/stop`);
+      }
+    });
+
+    function renderNflConfig(sourceId, schema, values, cfg) {
+      const info = (cfg && cfg.nfl) || {};
+      const unlocks = [];
+      if ((info.networks || []).includes('NFLN') || (info.plans || []).length) unlocks.push('NFL Network');
+      if ((info.networks || []).includes('NFLRZ') || (info.plans || []).some(p => p !== 'NFL_PLUS')) unlocks.push('RedZone');
+      const option = (kind, title, sub, signedIn, detail, note) => `
+          <details class="espn-auth-option">
+            <summary>
+              <span class="espn-auth-label"><strong>${title}</strong><small>${sub}</small></span>
+              <span class="espn-auth-state ${signedIn ? 'signed-in' : ''}">${signedIn ? '&#10003; Signed in' : 'Not signed in'}</span>
+            </summary>
+            <div class="espn-auth-body">
+              <div class="config-note">${note}</div>
+              <div class="amazon-autologin-panel">
+                <div class="amazon-autologin-header">
+                  <button class="btn btn-run" type="button" id="nfl-${kind}-btn-${sourceId}"
+                          onclick="nflStartLink(${sourceId}, '${kind}')">${signedIn ? 'Sign in again' : 'Get code'}</button>
+                  ${signedIn ? `<button class="btn btn-cancel btn-sm" type="button"
+                          onclick="nflClearAuth(${sourceId}, '${kind}')">Sign out</button>` : ''}
+                </div>
+                <span class="amazon-status-text" id="nfl-${kind}-status-${sourceId}">${signedIn ? escapeHtml(detail) : ''}</span>
+              </div>
+            </div>
+          </details>`;
+      return `
+        <div class="config-title">NFL Settings</div>
+        <div class="config-subtitle" style="font-weight:600">Sign in</div>
+        <div class="config-note">NFL Channel plays without signing in. Sign in with a TV provider, an NFL account, or both,
+          to add NFL Network, RedZone and live games.${unlocks.length ? ` This sign-in includes ${unlocks.join(' and ')}.` : ''}</div>
+        <div class="espn-auth-options">
+          ${option('tve', 'TV provider', 'NFL Network, RedZone and in-market games your TV package includes',
+                   info.tve_signed_in, `Signed in with ${info.tve_provider || 'your TV provider'}`,
+                   'Get a code, enter it at nfl.com/activate on your phone or computer, then pick your TV provider and sign in.')}
+          ${option('account', 'NFL account', 'NFL+ subscriptions',
+                   info.account_signed_in, `Signed in${info.account_email ? ' as ' + info.account_email : ''}`,
+                   'Get a code and enter it at nfl.com/activate while signed in to your NFL account. NFL+ adds NFL Network and in-market games; NFL+ Premium adds RedZone.')}
+        </div>
+        <div class="config-subtitle" style="margin-top:0.8rem">Game channels</div>
+        <div class="config-note">Adds each game in the next two days that your sign-in can play as a temporary channel.
+          Games on NFL Network stay on that channel. Channels retire two hours after the scheduled end and are deleted a day later.</div>
+        <div class="espn-services">
+          <label><input type="checkbox" data-key="include_games"
+                 ${String(values.include_games || 'false').toLowerCase() === 'true' ? 'checked' : ''}>Include live game channels</label>
+        </div>
+        <div class="config-actions">
+          <span class="config-status" id="config-status-${sourceId}"></span>
+          <button class="btn btn-run" type="button" onclick="saveSourceConfig(${sourceId})">Save settings</button>
+        </div>`;
+    }
+
+    async function nflStartLink(sourceId, kind) {
+      const btn      = document.getElementById(`nfl-${kind}-btn-${sourceId}`);
+      const statusEl = document.getElementById(`nfl-${kind}-status-${sourceId}`);
+      for (const other of ['tve', 'account']) {
+        const el = document.getElementById(`nfl-${other}-status-${sourceId}`);
+        if (other !== kind && el && _nflActive[sourceId]) el.innerHTML = '';
+      }
+      btn.disabled = true;
+      statusEl.innerHTML = '<span style="color:var(--text-muted)">Getting a code…</span>';
+      try {
+        const r = await fetch(`/api/sources/${sourceId}/nfl-link/start`, {
+          method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({kind}),
+        });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok) {
+          statusEl.innerHTML = `<span style="color:var(--danger-soft)">${escapeHtml(d.error || 'Could not get a code.')}</span>`;
+          return;
+        }
+        _nflActive[sourceId] = true;
+        const row = document.getElementById(`config-panel-row-${sourceId}`);
+        if (!row || row.style.display === 'none') { _nflStop(sourceId); return; }  // closed meanwhile
+        statusEl.innerHTML = `
+          Go to <a href="${escapeHtml(d.url)}" target="_blank" rel="noopener">${escapeHtml(d.url.replace(/^https?:\/\/(www\.)?/, ''))}</a>
+          and enter <b style="font-size:1.4em;letter-spacing:.15em;font-family:monospace">${escapeHtml(d.code)}</b>
+          <span style="color:var(--text-muted)">— waiting…</span>
+          <button class="btn btn-cancel btn-sm" type="button" onclick="nflCancel(${sourceId}, '${kind}')">Cancel</button>`;
+        nflPoll(sourceId, kind);
+      } catch (e) {
+        statusEl.innerHTML = '<span style="color:var(--danger-soft)">Network error getting a code.</span>';
+      } finally {
+        btn.disabled = false;
+      }
+    }
+
+    function nflCancel(sourceId, kind) {
+      _nflStop(sourceId);
+      const statusEl = document.getElementById(`nfl-${kind}-status-${sourceId}`);
+      if (statusEl) statusEl.innerHTML = '<span style="color:var(--text-muted)">Cancelled.</span>';
+    }
+
+    function nflPoll(sourceId, kind) {
+      clearTimeout(_nflPollTimers[sourceId]);
+      _nflPollTimers[sourceId] = setTimeout(async () => {
+        const statusEl = document.getElementById(`nfl-${kind}-status-${sourceId}`);
+        if (!statusEl) { _nflStop(sourceId); return; }  // panel gone
+        let d = {};
+        try {
+          d = await (await fetch(`/api/sources/${sourceId}/nfl-link/state`)).json();
+        } catch (e) {
+          nflPoll(sourceId, kind);
+          return;
+        }
+        if (d.state === 'waiting') {
+          nflPoll(sourceId, kind);
+          return;
+        }
+        delete _nflActive[sourceId];
+        if (d.state === 'success') {
+          statusEl.innerHTML = '<span style="color:var(--success-soft)">&#10003; Signed in — updating channels…</span>';
+          setTimeout(() => loadSourceConfig(sourceId, 'nfl'), 1500);
+        } else if (d.state === 'expired' || d.state === 'error') {
+          statusEl.innerHTML = `<span style="color:var(--danger-soft)">${escapeHtml(d.message || 'Sign-in failed.')} Get a new code to try again.</span>`;
+        }
+      }, 3000);
+    }
+
+    async function nflClearAuth(sourceId, kind) {
+      const what = kind === 'tve' ? 'your TV provider' : 'your NFL account';
+      if (!confirm(`Sign out of ${what} for NFL? Channels that need it stop playing.`)) return;
+      await fetch(`/api/sources/${sourceId}/nfl-auth/${kind}`, { method: 'DELETE' }).catch(() => {});
+      loadSourceConfig(sourceId, 'nfl');
+    }
+    // ── end NFL sign-in ───────────────────────────────────────────────────────
+
     function renderFuboConfig(sourceId, schema, values) {
       const fastOnly = values.fast_only !== 'false';
       return `
@@ -5476,6 +5624,8 @@
         return renderPhiloConfig(sourceId, schema, values);
       } else if (sourceName === 'espn') {
         return renderEspnConfig(sourceId, schema, values, cfg);
+      } else if (sourceName === 'nfl') {
+        return renderNflConfig(sourceId, schema, values, cfg);
       } else if (sourceName === 'sling') {
         return renderSlingConfig(sourceId, schema, values, cfg);
       } else if (sourceName === 'spectrum') {
