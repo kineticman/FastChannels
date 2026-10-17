@@ -365,6 +365,7 @@
       white-space: nowrap;
       overflow: hidden;
     }
+    .prog-year, .gm-prog-year { font-weight: 400; color: var(--text-muted); }
     .program-block.narrow .prog-title,
     .program-block.narrow .prog-time { display: none; }
 
@@ -740,7 +741,8 @@
       }
       const html = programs.map(p => {
         const cls     = 'program-block' + (p.current ? ' prog-current' : '') + (p.width < 4 ? ' narrow' : '');
-        const tooltip = escapeHtml(p.title) + ' · ' + escapeHtml(p.start) + '–' + escapeHtml(p.end)
+        const yearHtml = p.year ? ` <span class="prog-year">(${escapeHtml(p.year)})</span>` : '';
+        const tooltip = escapeHtml(p.title) + (p.year ? ` (${escapeHtml(p.year)})` : '') + ' · ' + escapeHtml(p.start) + '–' + escapeHtml(p.end)
                         + (p.desc ? ' · ' + escapeHtml(p.desc.slice(0, 120)) : '');
         return `<div class="${cls}"
           style="left:${p.left}%;width:${p.width}%"
@@ -756,10 +758,11 @@
           data-season="${p.season || ''}"
           data-episode="${p.episode || ''}"
           data-program-type="${escapeHtml(p.program_type || '')}"
+          data-year="${p.year || ''}"
           ${p.current ? 'data-current="1"' : ''}
           title="${tooltip}"
           onclick="openGuideProgModal(this)">
-          <span class="prog-title">${escapeHtml(p.title)}</span>
+          <span class="prog-title">${escapeHtml(p.title)}${yearHtml}</span>
           <span class="prog-time">${escapeHtml(p.start)}</span>
         </div>`;
       }).join('');
@@ -1034,6 +1037,7 @@
         season:  el.dataset.season || '',
         episode: el.dataset.episode || '',
         programType: el.dataset.programType || '',
+        year:    el.dataset.year || '',
         current: !!el.dataset.current,
       };
     }
@@ -1220,7 +1224,7 @@
             <div class="gm-prog-label">${prog.current ? 'Now Playing' : 'Upcoming'} ${badge}</div>
             <div class="gm-program-card">
               ${poster}
-              <div class="gm-prog-title">${escapeHtml(prog.title || '—')}</div>
+              <div class="gm-prog-title">${escapeHtml(prog.title || '—')}${prog.year ? ` <span class="gm-prog-year">(${escapeHtml(prog.year)})</span>` : ''}</div>
               <div class="gm-prog-time">${escapeHtml(prog.start)} – ${escapeHtml(prog.end)}</div>
               ${episodeLine}
               ${prog.desc ? `<div class="gm-prog-desc">${escapeHtml(prog.desc)}</div>` : ''}

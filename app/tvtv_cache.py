@@ -20,6 +20,7 @@ Standalone dry run (prints stats, writes nothing):
 from __future__ import annotations
 
 import logging
+import re
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -521,6 +522,94 @@ def get_now_next(station_id: str, now_utc: datetime | None = None) -> dict[str, 
         "now":        _row_dict(now_row),
         "next":       _row_dict(next_row),
     }
+
+
+# Gracenote movie airings carry "(1961, Western)" as their tvtv subtitle.
+_SUBTITLE_YEAR = re.compile(r"^\((\d{4})\b")
+_LEADING_ARTICLE = re.compile(r"^(the|a|an)\s+")
+_BRACKETED = re.compile(r"\[[^\]]*\]|\([^)]*\)")
+_NON_ALNUM = re.compile(r"[^0-9a-z]+")
+# A FAST airing and its tvtv row rarely start on the same second.
+_MOVIE_MATCH_SLOP = 300
+
+
+def _norm_title(title: str | None) -> str:
+    t = _BRACKETED.sub(" ", (title or "").casefold()).strip()
+    t = _LEADING_ARTICLE.sub("", t)
+    return _NON_ALNUM.sub("", t)
+
+
+def _titles_agree(ours: str, theirs: str) -> bool:
+    if not ours or not theirs:
+        return False
+    if ours == theirs:
+        return True
+    shorter, longer = sorted((ours, theirs), key=len)
+    return len(shorter) >= 6 and longer.startswith(shorter)
+
+
+def _epoch(dt: datetime) -> float:
+    # SQLite hands back naive UTC.
+    return (dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)).timestamp()
+
+
+class MovieYearLookup:
+    """Release years for movie airings on Gracenote-mapped stations, taken from
+    the tvtv cache. An airing gets a year only when tvtv has a Gracenote movie
+    (MV…) starting within a few minutes on the same station *and* the titles
+    agree — FAST schedules drift from Gracenote's, and a time-only match would
+    hand one movie another's year."""
+
+    def __init__(self, rows):
+        self._by_station: dict[str, list[tuple[float, str, int]]] = {}
+        max_year = datetime.now(timezone.utc).year + 1
+        for station_id, title, subtitle, start in rows:
+            m = _SUBTITLE_YEAR.match(subtitle or "")
+            if not m or not 1900 <= int(m.group(1)) <= max_year:
+                continue
+            # The cached title has the subtitle appended to it.
+            if subtitle and title and title.endswith(subtitle):
+                title = title[: -len(subtitle)]
+            self._by_station.setdefault(station_id, []).append(
+                (_epoch(start), _norm_title(title), int(m.group(1)))
+            )
+
+    def __bool__(self) -> bool:
+        return bool(self._by_station)
+
+    def year_for(self, station_id: str | None, title: str | None, start: datetime) -> int | None:
+        rows = self._by_station.get(station_id or "")
+        if not rows:
+            return None
+        ours = _norm_title(title)
+        t = _epoch(start)
+        for row_start, theirs, year in rows:
+            if abs(row_start - t) <= _MOVIE_MATCH_SLOP and _titles_agree(ours, theirs):
+                return year
+        return None
+
+
+def movie_year_lookup(station_ids, start: datetime, end: datetime) -> MovieYearLookup:
+    """Load cached Gracenote movie airings for ``station_ids`` in [start, end)."""
+    from .models import TvtvProgramCache
+    ids = sorted({s for s in station_ids if s})
+    if not ids:
+        return MovieYearLookup([])
+    rows = []
+    for i in range(0, len(ids), 500):
+        rows.extend(
+            TvtvProgramCache.query
+            .with_entities(TvtvProgramCache.station_id, TvtvProgramCache.title,
+                           TvtvProgramCache.subtitle, TvtvProgramCache.start_time)
+            .filter(
+                TvtvProgramCache.station_id.in_(ids[i:i + 500]),
+                TvtvProgramCache.program_id.like("MV%"),
+                TvtvProgramCache.end_time > start,
+                TvtvProgramCache.start_time < end,
+            )
+            .all()
+        )
+    return MovieYearLookup(rows)
 
 
 # ---------------------------------------------------------------------------

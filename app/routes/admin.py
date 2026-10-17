@@ -1294,6 +1294,7 @@ def guide_programs():
             Program.title, Program.description, Program.category,
             Program.rating, Program.poster_url, Program.episode_title,
             Program.season, Program.episode, Program.program_type,
+            Program.original_air_date,
         ))
         .filter(
             Program.channel_id.in_(channel_ids),
@@ -1303,6 +1304,39 @@ def guide_programs():
         .order_by(Program.channel_id, Program.start_time)
         .all()
     )
+
+    # Movies show their release year. Most scrapers don't give one, so for a
+    # channel mapped to a Gracenote station borrow it from the tvtv cache.
+    from ..tvtv_cache import movie_year_lookup, MovieYearLookup
+    guide_channels = (
+        Channel.query
+        .options(load_only(Channel.id, Channel.category, Channel.gracenote_id, Channel.slug))
+        .filter(Channel.id.in_(channel_ids))
+        .all()
+    )
+    ch_cat = {ch.id: (ch.category or '') for ch in guide_channels}
+    # Any stored station ID will do, whatever the channel's gracenote_mode: the
+    # lookup also has to match the title.
+    gn_station = {}
+    for ch in guide_channels:
+        gid = (ch.gracenote_id or '').strip()
+        if not gid and '|' in (ch.slug or ''):
+            gid = ch.slug.split('|', 1)[1].strip()
+        if gid:
+            gn_station[ch.id] = gid
+    try:
+        movie_years = movie_year_lookup(gn_station.values(), window_start_utc, window_end_utc)
+    except Exception:
+        current_app.logger.warning('[guide] tvtv movie-year lookup failed', exc_info=True)
+        movie_years = MovieYearLookup([])
+
+    def _movie_year(p):
+        cats = f'{p.category or ""};{ch_cat.get(p.channel_id, "")}'.casefold().split(';')
+        is_movie = p.program_type == 'movie' or any(c.strip() in ('movie', 'movies') for c in cats)
+        if is_movie and p.original_air_date:
+            return p.original_air_date.year
+        # A Gracenote MV match is a movie even when the scraper didn't tag it.
+        return movie_years.year_for(gn_station.get(p.channel_id), p.title, p.start_time) if movie_years else None
 
     def _as_utc(dt):
         return dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt.astimezone(timezone.utc)
@@ -1335,6 +1369,7 @@ def guide_programs():
             'season': p.season,
             'episode': p.episode,
             'program_type': p.program_type or '',
+            'year': _movie_year(p),
         })
     return jsonify(result)
 
