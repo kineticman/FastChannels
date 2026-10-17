@@ -513,6 +513,13 @@ def get_source_config(source_id):
     if source.name == 'directv':
         from ..scrapers import directv_device_auth
         extra['directv'] = {'code_signed_in': directv_device_auth.is_device_session(saved)}
+    if source.name == 'free_networks':
+        # Channel count per network for the checklist labels.
+        counts: dict[str, int] = {}
+        for (scid,) in source.channels.with_entities(Channel.source_channel_id):
+            key = (scid or '').split('.', 1)[0]
+            counts[key] = counts.get(key, 0) + 1
+        extra['option_counts'] = {'disabled_networks': counts}
     return jsonify({'schema': schema, 'values': values, 'config_complete': config_complete,
                     'config_status': config_status,
                     'oauth_token_time': saved.get('oauth_token_time'),
@@ -811,6 +818,22 @@ def save_source_config(source_id):
             db.session.delete(ch)
             event_deleted += 1
 
+    # Free Networks: an unticked network's channels go now, not after the
+    # reconcile grace period (same reasoning as PBS above); ticking one back on
+    # queues a full scrape below to bring them back.
+    networks_reenabled = False
+    if source.name == 'free_networks':
+        from ..models import FeedChannelNumber
+        from ..scrapers.free_networks import FreeNetworksScraper
+        old_off = FreeNetworksScraper.disabled_networks(old)
+        new_off = FreeNetworksScraper.disabled_networks(current)
+        networks_reenabled = bool(old_off - new_off)
+        for key in new_off - old_off:
+            for ch in source.channels.filter(Channel.source_channel_id.like(f'{key}.%')).all():
+                FeedChannelNumber.query.filter_by(channel_id=ch.id).delete(synchronize_session=False)
+                db.session.delete(ch)
+                event_deleted += 1
+
     source.config = current
     auto_enabled = False
     if (
@@ -838,6 +861,9 @@ def save_source_config(source_id):
         full_scrape_queued = True
     elif espn_events_changed and source.is_enabled and espn_any_events:
         trigger_scrape('espn', force_full=True)
+        full_scrape_queued = True
+    elif networks_reenabled and source.is_enabled:
+        trigger_scrape(source.name, force_full=True)
         full_scrape_queued = True
     elif games_changed and source.is_enabled and _toggle_enabled(current, game_toggle):
         trigger_scrape(source.name, force_full=True)

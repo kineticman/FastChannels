@@ -411,6 +411,16 @@
       margin-bottom: 0.3rem; text-transform: uppercase; letter-spacing: 0.04em;
     }
     .field label .req { color: var(--danger); margin-left: 2px; }
+    .config-checklist {
+      display: grid; grid-template-columns: repeat(auto-fill, minmax(13rem, 1fr)); gap: 0.15rem 1rem;
+      padding: 0.5rem 0.7rem; background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
+    }
+    .field label.config-checklist-item {
+      display: flex; align-items: center; gap: 0.45rem; margin: 0; padding: 0.2rem 0; cursor: pointer;
+      font-size: 0.84rem; font-weight: 400; color: var(--text); text-transform: none; letter-spacing: normal;
+    }
+    .config-checklist-item input { margin: 0; flex: none; }
+    .config-checklist-count { color: var(--text-muted); font-size: 0.75rem; }
     .field input[type=text],
     .field input[type=password],
     .field input[type=number] {
@@ -5689,6 +5699,25 @@
           const multiple = f.multiple ? ' multiple' : '';
           const size = f.multiple ? ` size="${Math.min(Math.max(f.options.length, 4), 8)}"` : '';
           control = `<select id="cfg-${sourceId}-${f.key}" data-key="${f.key}"${multiple}${size}>${opts}</select>`;
+        } else if (f.field_type === 'checklist' && Array.isArray(f.options) && f.options.length) {
+          // Checked = on. The saved value lists the unchecked options.
+          const off = new Set(String(val).split(',').map(v => v.trim()).filter(Boolean));
+          const counts = (cfg && cfg.option_counts && cfg.option_counts[f.key]) || {};
+          const items = f.options.map(o => {
+            const v = String(o.value);
+            const n = counts[v];
+            return `
+              <label class="config-checklist-item">
+                <input type="checkbox" data-key="${f.key}" data-checklist="true" value="${escapeHtml(v)}"${off.has(v) ? '' : ' checked'}>
+                <span>${escapeHtml(o.label)}${n ? ` <span class="config-checklist-count">${n}</span>` : ''}</span>
+              </label>`;
+          }).join('');
+          return `
+            <div class="field field-full">
+              <label>${escapeHtml(f.label)}${req}</label>
+              <div class="config-checklist">${items}</div>
+              ${help}
+            </div>`;
         } else if (f.field_type === 'toggle') {
           const checked = ['1', 'true', 'yes', 'on'].includes(String(val).trim().toLowerCase()) ? ' checked' : '';
           return `
@@ -5792,6 +5821,10 @@
           payload[key] = [...new Set([...selected, ...custom])].join(',');
           return;
         }
+        if (keyFields[0].dataset.checklist === 'true') {
+          payload[key] = keyFields.filter(el => !el.checked).map(el => el.value).join(',');
+          return;
+        }
         if (keyFields[0].type === 'checkbox') {
           payload[key] = keyFields[0].checked ? 'true' : 'false';
           return;
@@ -5849,6 +5882,8 @@
       document.querySelectorAll(`#source-config-${sourceId} input[data-key], #source-config-${sourceId} select[data-key]`).forEach(field => {
         if (field.tagName === 'SELECT' && field.multiple) {
           [...field.options].forEach(opt => { opt.selected = false; });
+        } else if (field.dataset.checklist === 'true') {
+          field.checked = true;  // a checklist's default is everything on
         } else if (field.type === 'checkbox') {
           field.checked = false;
         } else {

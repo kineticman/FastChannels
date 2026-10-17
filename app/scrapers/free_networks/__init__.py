@@ -5,7 +5,7 @@ import time
 from datetime import datetime, timedelta, timezone
 from urllib.parse import quote, unquote
 
-from ..base import BaseScraper, ChannelData, ProgramData
+from ..base import BaseScraper, ChannelData, ConfigField, ProgramData
 from ...gracenote_map import resolve_gracenote
 from ._common import UA, NetChannel
 from . import (
@@ -49,7 +49,13 @@ class FreeNetworksScraper(BaseScraper):
     scrape_interval = 360
     stream_audit_enabled = True
     source_category = 'specialty'
-    config_schema = []
+    config_schema = [
+        ConfigField(
+            'disabled_networks', 'Networks', field_type='checklist',
+            options=[{'value': n.key, 'label': n.name} for n in sorted(NETWORKS, key=lambda n: n.name.lower())],
+            help_text='Untick a network to drop its channels. New networks start out on.',
+        ),
+    ]
     phase_timeouts = {
         'init':      30,
         'bootstrap': 60,
@@ -85,7 +91,12 @@ class FreeNetworksScraper(BaseScraper):
 
     def fetch_channels(self) -> list[ChannelData]:
         out: list[ChannelData] = []
+        disabled = self.disabled_networks(self.config)
+        if disabled:
+            logger.info('[%s] skipping disabled networks: %s', self.source_name, ', '.join(sorted(disabled)))
         for net in NETWORKS:
+            if net.key in disabled:
+                continue
             t0 = time.monotonic()
             try:
                 chans = net.channels(self)
@@ -96,17 +107,19 @@ class FreeNetworksScraper(BaseScraper):
                 out.append(self._channel_data(net, ch))
             logger.info('[%s] %s: %d channels (%.1fs)', self.source_name, net.name,
                         len(chans), time.monotonic() - t0)
-        logger.info('[%s] %d channels from %d networks', self.source_name, len(out), len(NETWORKS))
+        logger.info('[%s] %d channels from %d networks', self.source_name, len(out),
+                    len(NETWORKS) - len(disabled))
         return out
 
     def fetch_epg(self, channels: list[ChannelData], **kwargs) -> list[ProgramData]:
         by_net: dict[str, list[tuple[ChannelData, NetChannel]]] = {}
+        disabled = self.disabled_networks(self.config)
         for cd in channels:
             parsed = self._split_id(cd.source_channel_id)
             if not parsed:
                 continue
             key, local_id = parsed
-            if key in _BY_KEY:
+            if key in _BY_KEY and key not in disabled:
                 ref = self._split_url(cd.stream_url)
                 nc = NetChannel(id=local_id, name=cd.name, stream=ref[1] if ref else '')
                 by_net.setdefault(key, []).append((cd, nc))
@@ -164,6 +177,13 @@ class FreeNetworksScraper(BaseScraper):
         return net.resolve(self, ref) if net else ref
 
     # ── Internals ────────────────────────────────────────────
+
+    @staticmethod
+    def disabled_networks(config: dict | None) -> set[str]:
+        """Network keys the user unticked (the 'disabled_networks' checklist)."""
+        raw = (config or {}).get('disabled_networks') or ''
+        return {k.strip() for k in str(raw).split(',') if k.strip()}
+
 
     def _channel_data(self, net, ch: NetChannel) -> ChannelData:
         scid = f'{net.key}.{ch.id}'

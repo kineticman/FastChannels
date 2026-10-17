@@ -46,7 +46,7 @@ _SITES = {n[0]: n[2] for n in _NETS}
 
 class Sinclair(Network):
     key = 'sinclair'
-    name = 'Sinclair'
+    name = 'Sinclair (Comet, Charge!, TheNest)'
 
     def channels(self, s):
         out = []

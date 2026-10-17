@@ -319,6 +319,9 @@ class ConfigField:
         self.key         = key          # key in source.config JSON
         self.label       = label        # human label in UI
         self.field_type  = field_type   # 'text' | 'password' | 'select' | 'toggle' | 'number'
+                                        # | 'checklist' (one checkbox per option, all on by default;
+                                        #   the value stores the UNCHECKED options, comma-separated,
+                                        #   so options added later start out on)
         self.required    = required
         self.secret      = secret       # never echo back in API responses
         self.placeholder = placeholder
