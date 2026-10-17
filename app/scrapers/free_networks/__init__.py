@@ -9,8 +9,8 @@ from ..base import BaseScraper, ChannelData, ConfigField, ProgramData
 from ...gracenote_map import resolve_gracenote
 from ._common import UA, NetChannel
 from . import (
-    aetn, aljazeera, arirang, bloomberg, cbsnews, dw, ewtn, fstv, hsn, newsmax, nhk,
-    positiv, qvc, scripps, simple, sinclair, tastemade, trt,
+    aetn, aljazeera, arirang, bloomberg, cbn, cbsnews, dw, ewtn, fstv, gameandfish, hsn, ksl,
+    newsmax, nhk, positiv, qvc, scripps, simple, sinclair, tastemade, trt,
 )
 
 logger = logging.getLogger(__name__)
@@ -19,7 +19,8 @@ NETWORKS = [
     sinclair.Sinclair(), dw.DW(), aljazeera.AlJazeera(), trt.TRT(), nhk.NHK(),
     arirang.Arirang(), bloomberg.Bloomberg(), cbsnews.CBSNews(), scripps.Scripps(),
     newsmax.Newsmax(), fstv.FreeSpeechTV(), ewtn.EWTN(), positiv.PosiTV(),
-    hsn.HSN(), qvc.QVC(), tastemade.Tastemade(), aetn.AETN(), *simple.NETWORKS,
+    hsn.HSN(), qvc.QVC(), tastemade.Tastemade(), aetn.AETN(), ksl.KSL(), cbn.CBN(),
+    gameandfish.GameAndFish(), *simple.NETWORKS,
 ]
 _BY_KEY = {n.key: n for n in NETWORKS}
 
@@ -28,9 +29,9 @@ class FreeNetworksScraper(BaseScraper):
     """
     Free networks that stream on their own websites: news (DW, Al Jazeera, TRT,
     NHK, Arirang, Bloomberg, CBS News, Scripps, Newsmax2, Free Speech TV, Sky
-    News), faith (EWTN, PosiTV), shopping (HSN, QVC), Sinclair's diginets
-    (Comet, Charge!, TheNest), Tastemade, A+E's FAST channels, Outside TV and a
-    few singles.
+    News, Global News, KSL), faith (EWTN, PosiTV, CBN, NRB, theDove), shopping
+    (HSN, QVC), Sinclair's diginets (Comet, Charge!, TheNest), Tastemade, A+E's
+    FAST channels, Outside TV, Game & Fish TV and a few singles.
 
     Each network is a small module in this package (see _common.Network) with
     its own channel list and guide fetch; one failing never takes the others
