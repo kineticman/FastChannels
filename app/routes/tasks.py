@@ -929,6 +929,38 @@ def stop_spectrum_signin() -> None:
     _force_kill_mvpd_browser()
 
 
+# Link-login family -> (browser-login job_id, its stop function). TCM and
+# FOX One have no browser sign-in; AMCN/Discovery reuse the legacy job.
+_FAMILY_BROWSER_LOGINS = {
+    'legacy': ('mvpd-browser-login', stop_mvpd_browser_login),
+    'amcn': ('mvpd-browser-login', stop_mvpd_browser_login),
+    'discovery': ('mvpd-browser-login', stop_mvpd_browser_login),
+    'nbc': ('nbc-mvpd-browser-login', stop_nbc_browser_login),
+    'fox': ('fox-mvpd-browser-login', stop_fox_browser_login),
+}
+
+
+def stop_family_browser_login(family: str) -> bool:
+    """Stop a network family's browser sign-in if one is queued or running.
+    For when that sign-in has been abandoned: the source moved to a
+    different login, or a phone-link sign-in is starting for it (forum
+    #3527: an NBC browser login left waiting on a captcha held the one
+    maintenance worker for its full 30 minutes, so the phone link queued
+    behind it never showed up). Returns True if one was stopped."""
+    job_id, stop = _FAMILY_BROWSER_LOGINS.get(family) or (None, None)
+    if not job_id:
+        return False
+    try:
+        if not _job_already_active(get_signin_queue(), job_id):
+            return False
+    except Exception as e:
+        logger.warning(f'Could not check sign-in job {job_id}: {e}')
+        return False
+    logger.info('Stopping abandoned %s browser sign-in (%s)', family, job_id)
+    stop()
+    return True
+
+
 def trigger_tvtv_cache_refresh() -> str:
     """Returns 'queued', 'deferred' (scraper work active), or 'active'
     (refresh already queued/running)."""

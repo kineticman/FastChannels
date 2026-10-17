@@ -611,16 +611,42 @@ def run_spectrum_signin():
                 headless='virtual', os='windows', persistent_context=True,
                 user_data_dir=profile_dir, window=(1280, 800), block_images=True,
             ) as context:
+                def _prepare_page(p) -> None:
+                    # Before any navigation: a "You're signing in as" screen for
+                    # another account (e.g. the one tied to this home network)
+                    # must get "Sign in with another account", not the usual auto-Continue.
+                    _set_expected_spectrum_username(p, username)
+                    _watch_spectrum_auth_results(p, 'spectrum-signin')
+                    p.on('crash', lambda p: logger.warning('[spectrum-signin] page CRASH event fired (url was %s)', _safe_page_url(p)))
+                    p.on('close', lambda p: logger.warning('[spectrum-signin] page CLOSE event fired'))
+                    p.on('pageerror', lambda exc: logger.warning('[spectrum-signin] page JS error: %s', str(exc)[:500]))
+                    p.on('response', _on_response)
+
                 page = context.pages[0] if context.pages else context.new_page()
-                # Before any navigation: a "You're signing in as" screen for
-                # another account (e.g. the one tied to this home network)
-                # must get "Sign in with another account", not the usual auto-Continue.
-                _set_expected_spectrum_username(page, username)
-                _watch_spectrum_auth_results(page, 'spectrum-signin')
-                page.on('crash', lambda p: logger.warning('[spectrum-signin] page CRASH event fired (url was %s)', _safe_page_url(p)))
-                page.on('close', lambda p: logger.warning('[spectrum-signin] page CLOSE event fired'))
-                page.on('pageerror', lambda exc: logger.warning('[spectrum-signin] page JS error: %s', str(exc)[:500]))
-                page.on('response', _on_response)
+                _prepare_page(page)
+
+                def _restart_after_clear() -> None:
+                    """Back to the start URL after _clear_spectrum_cox_cookies.
+                    Clearing localStorage under the running guide app breaks
+                    it (forum #3527: angular injector() undefined, then the
+                    page closed and this goto died with NS_BINDING_ABORTED,
+                    failing an unattended re-login outright) — so a closed
+                    page is replaced and an aborted navigation retried once."""
+                    nonlocal page
+                    for attempt in (1, 2):
+                        if page.is_closed():
+                            logger.info('[spectrum-signin] page closed after clearing the saved session — opening a new one')
+                            page = context.new_page()
+                            _prepare_page(page)
+                        try:
+                            page.goto(_START_URL, wait_until='domcontentloaded', timeout=30000)
+                            return
+                        except Exception as exc:  # noqa: BLE001
+                            if attempt == 2 or not (page.is_closed() or 'NS_BINDING_ABORTED' in str(exc)):
+                                raise
+                            logger.info('[spectrum-signin] navigation after clearing the saved session '
+                                        'was interrupted (%s) — retrying', str(exc).splitlines()[0][:200])
+                            time.sleep(1.0)
 
                 def _dismiss_tos_and_autofill() -> None:
                     """Shared between the initial attempt below and the
@@ -731,7 +757,7 @@ def run_spectrum_signin():
                     _clear_spectrum_cox_cookies(
                         context, page,
                         'force_fresh_signin requested (credentials changed, or "Clear sign-in" was used)')
-                    page.goto(_START_URL, wait_until='domcontentloaded', timeout=30000)
+                    _restart_after_clear()
                     set_status('running', 'Sign in below, including any captcha if shown.', page.url)
                     _clear_force_fresh_flag()
                 else:
@@ -747,7 +773,7 @@ def run_spectrum_signin():
                     if not _try_capture(page) and _rejected:
                         set_status('running', 'Saved session looks stale — starting a fresh sign-in…', page.url)
                         _clear_spectrum_cox_cookies(context, page, 'SSO-carried-over token failed verification')
-                        page.goto(_START_URL, wait_until='domcontentloaded', timeout=30000)
+                        _restart_after_clear()
                         set_status('running', 'Sign in below, including any captcha if shown.', page.url)
 
                 _dismiss_tos_and_autofill()
