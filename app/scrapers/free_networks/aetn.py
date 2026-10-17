@@ -10,7 +10,9 @@ Guide: A+E only exposes the current program (/tve-play/api/now-playing), so
 the guide comes from tvtv via Gracenote IDs. IDs below were checked on
 2026-10-17 by matching A+E's now-playing start time and episode against tvtv
 (First 48, Live PD Presents and Tiny House Nation match on slot times, but
-tvtv's episode titles are generic). The rest get placeholder blocks.
+tvtv's episode titles are generic). Chaos Cam and Xtreme Outdoors get
+placeholder blocks: their tvtv stations (171976; 116101 / 120962) carry the
+same shows but at different times, so they're other playouts.
 """
 from __future__ import annotations
 
@@ -44,6 +46,9 @@ _GRACENOTE = {
     'movie-favorites-by-lifetime': '121308',
     'matched-married-meet': '129047',
     'perform': '123424',
+    'classic-car-auctions': '158083',
+    'crime-360': '113780',
+    'lifetime-movies-love-and-drama': '177720',
 }
 _CATEGORY = {
     'the-first-48': 'True Crime', 'live-pd-presents': 'True Crime', 'crime-360': 'True Crime',
