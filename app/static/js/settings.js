@@ -878,6 +878,7 @@ const MVPD_LOGIN_FAMILIES = {
   amcn:      { base: '/api/settings/tve/amcn/browser-login', needsRequestor: false },
   discovery: { base: '/api/settings/tve/discovery/browser-login', needsRequestor: false },
   tcm:       { base: '/api/settings/tve/link-login', needsRequestor: false },
+  versant:   { base: '/api/settings/tve/link-login', needsRequestor: false },
   google:    { base: '/api/settings/tve/google/browser-login', needsRequestor: false },
 };
 // Phone-link sign-in (app/tve/link_login.py): the families whose provider
@@ -885,7 +886,9 @@ const MVPD_LOGIN_FAMILIES = {
 // Discovery uses a typed code on its own page (the status carries it); the
 // Google step isn't a network sign-in, so it stays browser-only.
 MVPD_LOGIN_FAMILIES.link = { base: '/api/settings/tve/link-login', needsRequestor: false };
-const TVE_LINK_FAMILIES = new Set(['legacy', 'nbc', 'tcm', 'fox', 'amcn', 'discovery']);
+const TVE_LINK_FAMILIES = new Set(['legacy', 'nbc', 'tcm', 'fox', 'amcn', 'discovery', 'versant']);
+// Families with no browser sign-in at all: always the phone link.
+const TVE_LINK_ONLY_FAMILIES = new Set(['tcm', 'versant']);
 let _mvpdLoginActive = false;
 let _mvpdLoginDone = false;
 let _mvpdLoginPollTimer = null;
@@ -1017,7 +1020,7 @@ async function loadTveNetworkStatus() {
 // that login signs in; everything else follows the page's choice.
 function openMvpdLoginModal(family, requestorId, method) {
   family = family || 'legacy';
-  if ((family === 'tcm' || (method || _tveSigninMethod()) === 'phone') && TVE_LINK_FAMILIES.has(family)) {
+  if ((TVE_LINK_ONLY_FAMILIES.has(family) || (method || _tveSigninMethod()) === 'phone') && TVE_LINK_FAMILIES.has(family)) {
     openTveLinkModal(family, requestorId);
     return;
   }
@@ -1358,8 +1361,8 @@ async function signInToAllTve() {
     _mvpdLoginFamily = n.family;  // so a mid-batch cancel/force-stop hits the right endpoint
     steps[i].state = 'running';
     _renderMvpdLoginSteps(steps);
-    const result = n.family === 'tcm'
-      ? await _tveLinkRunOne('tcm', null, status, null)
+    const result = TVE_LINK_ONLY_FAMILIES.has(n.family)
+      ? await _tveLinkRunOne(n.family, null, status, null)
       : await _mvpdLoginRunOneForBatch(MVPD_LOGIN_FAMILIES[n.family], n.requestor_id, n.label, status, hintEl);
     if (!_mvpdLoginActive) return;
     steps[i].state = result.ok ? 'done' : 'failed';

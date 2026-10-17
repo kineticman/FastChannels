@@ -33,7 +33,7 @@ from .adobe_pass import TVEAuthError, TVENotAuthorizedError, TVEPendingAuthError
 logger = logging.getLogger(__name__)
 
 STATUS_KEY = 'tve:link-login:status'
-LINK_FAMILIES = ('legacy', 'nbc', 'tcm', 'fox', 'amcn', 'discovery')
+LINK_FAMILIES = ('legacy', 'nbc', 'tcm', 'fox', 'amcn', 'discovery', 'versant')
 _PER_TARGET_TIMEOUT = 10 * 60
 _POLL_SECONDS = 3.0
 _POLL_MAX_SECONDS = 15.0
@@ -234,6 +234,88 @@ class _Tcm:
         cfg['tcm_mvpd_auth'] = {'mso_id': self.mso_id, 'captured_at': int(time.time())}
         self.account.config = cfg
         db.session.commit()
+        return 'authorized'
+
+
+class _Versant:
+    """Versant (USA, E!, Syfy, Oxygen, CNBC, MS NOW, Golf) — one Adobe v2
+    sign-in under usanetwork.com's `sparkmedia` requestor covers all of them.
+    A re-sign-in reuses the saved client + device fingerprint, so Adobe may
+    answer "already signed in" with nothing to open."""
+    error_key = 'versant'
+
+    def __init__(self, account, mso_id: str, requestor_id: str | None):
+        from ..models import Source
+        from ..scrapers.versant_tve import VersantTVEScraper
+        self.account, self.mso_id = account, mso_id
+        self.source = Source.query.filter_by(name='versant_tve').first()
+        if not self.source or not self.source.is_enabled:
+            raise TVEAuthError('Enable the Versant TVE source before signing in to it.')
+        self.scraper = VersantTVEScraper(config=dict(self.source.config or {}))
+
+    def targets(self):
+        return ['Versant']
+
+    def start(self, label):
+        from ..scrapers.versant_tve import ADOBE_BASE, DOMAIN_NAME, REDIRECT_URL, REQUESTOR_ID
+        page = self.scraper._page_config()
+        saved = (self.account.config or {}).get('versant_mvpd_auth') or {}
+        if saved.get('mso_id') != self.mso_id:
+            saved = {}
+        auth = {'device_fingerprint': saved.get('device_fingerprint') or str(uuid.uuid4()),
+                **{k: saved.get(k) for k in ('client_id', 'client_secret', 'access_token')}}
+        client = self.scraper.adobe_client(page['software_statement'], auth)
+        if client.client_id and client.client_secret:
+            client.refresh_access_token()
+        else:
+            client._client_creds = None
+            client._register_client()
+        data = client._post(
+            f'{ADOBE_BASE}/api/v2/{REQUESTOR_ID}/sessions',
+            data={'mvpd': self.mso_id, 'redirectUrl': REDIRECT_URL, 'domainName': DOMAIN_NAME},
+            headers={**client._bearer_headers(), 'Content-Type': 'application/x-www-form-urlencoded'},
+        ).json()
+        ctx = {'client': client, 'page': page, 'fingerprint': auth['device_fingerprint'],
+               'profile_url': f'{ADOBE_BASE}/api/v2/{REQUESTOR_ID}/profiles/{self.mso_id}'}
+        if data.get('reasonType') == 'authenticated':
+            return None, ctx
+        if not data.get('url'):
+            raise TVEAuthError('Versant: Adobe did not return a sign-in URL.')
+        return ADOBE_BASE + data['url'], ctx
+
+    def poll(self, ctx):
+        client = ctx['client']
+        r = client.session.get(ctx['profile_url'], headers=client._bearer_headers(), timeout=20)
+        if r.status_code == 401:
+            client.refresh_access_token()
+            return None
+        if not r.ok:
+            return None
+        return ((r.json() or {}).get('profiles') or {}).get(self.mso_id) or None
+
+    def save(self, ctx, profile):
+        from ..config_store import persist_source_cache_updates
+        from ..extensions import db
+
+        client = ctx['client']
+        # Raises TVENotAuthorizedError when the package has none of the brands.
+        session = self.scraper.sign_in_viewlift(client, self.mso_id, profile, ctx['page'])
+        session['adobe_client_id'] = client.client_id
+        cfg = dict(self.account.config or {})
+        cfg['versant_mvpd_auth'] = {
+            'mso_id': self.mso_id, 'client_id': client.client_id, 'client_secret': client.client_secret,
+            'access_token': client.access_token, 'device_fingerprint': ctx['fingerprint'],
+            'captured_at': int(time.time()),
+        }
+        self.account.config = cfg
+        db.session.commit()
+        self.scraper._update_cache('versant_session', session)
+        self.scraper._update_cache('versant_playback', {})
+        persist_source_cache_updates(self.source.id, self.scraper._pending_cache_updates)
+        self.scraper._pending_cache_updates = {}
+        denied = sorted(res for res, ok in session['decisions'].items() if not ok)
+        if denied:
+            return 'authorized (your package doesn\'t include: ' + ', '.join(denied) + ')'
         return 'authorized'
 
 
@@ -502,7 +584,7 @@ class _Discovery:
 
 
 _ADAPTERS = {'legacy': _Legacy, 'nbc': _Nbc, 'tcm': _Tcm, 'fox': _Fox, 'amcn': _Amcn, 'foxone': _FoxOne,
-             'discovery': _Discovery}
+             'discovery': _Discovery, 'versant': _Versant}
 
 
 # ── job ──────────────────────────────────────────────────────────────────────
