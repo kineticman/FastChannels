@@ -6,8 +6,8 @@ All streams are clear HLS (checked 2026-10-17):
   - CBS Sports Network and CBS (the broadcast network, from the viewer's local
     affiliate) come from Syncbak through a TV-provider sign-in, up to 1080p.
     The CBS Sports app only carries the local CBS station during CBS Sports
-    events — outside them the feed is a "game unavailable" slate — so CBS is
-    event channels only, while CBS Sports Network is a 24/7 channel.
+    events — outside them the feed is a "game unavailable" slate — so the
+    24/7 CBS channel comes from cbs.com's live TV instead (below).
 
 TV-provider sign-in is the CBS Sports TV app's short code:
   GET video-api.cbssports.com/vms/shortcode/v1?deviceId=… → {code}; the user
@@ -23,6 +23,14 @@ it carries no Adobe token, and the URL it returns isn't bound to the viewer.
 So every tune first asks Adobe to authorize the resource (CBS_SPORTS_NETWORK
 or CBS_ENTERTAINMENT) for this sign-in, and only an authorized resource gets a
 stream. Never call _syncbak_url without a passing _authorize.
+
+The local CBS station 24/7 (added 2026-10-18): cbs.com/live-tv puts the
+visitor's IP location in the page (CBS.Registry.geoLoc), /live-tv/dma/<lat>/
+<lon> names the station, and /live-tv/channels/<callsign>/metadata.json with
+mvpd_name returns a Syncbak URL (90-second token, clear 1080p HLS). That call
+too only names the provider — cbs.com's own page authorizes CBS_ENTERTAINMENT
+at Adobe first — so it is gated on _authorize exactly like _syncbak_url. Its
+guide is Paramount+'s listings for the station's slug.
 """
 from __future__ import annotations
 
@@ -73,6 +81,12 @@ NETWORKS = {
     'CBSCHAMPIONSLEAGUE': {'name': 'CBS Sports Champions League', 'dai': 'ydKcHHYQSt27vbSP38xMVw'},
 }
 EVENT_LABELS = {'CBSE': 'CBS', 'CBSSN': 'CBS Sports Network'}
+# The viewer's local CBS station: a 24/7 channel under the CBSE code, so CBS
+# games fold into it the way CBSSN's do into CBS Sports Network.
+LOCAL_CODE = 'CBSE'
+_CBS_SITE = 'https://www.cbs.com'
+_CBS_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36'
+_PPLUS_IMAGES = 'https://wwwimage-us.pplusstatic.com/base/'
 
 # HQ and Golazo's full program grids come from Paramount+'s live-channel
 # listings (CBS Sports' own API only lists events). Anonymous with the
@@ -303,6 +317,37 @@ class CBSSportsScraper(BaseScraper):
                 self._update_config('dma_at', int(time.time()))
         return self.config.get('dma') or ''
 
+    def _station(self) -> dict | None:
+        """The local CBS station for this server's location (cbs.com's own
+        IP lookup): {call_sign, lat, lon, dma_name, logo, gracenote}. Daily."""
+        cached = self.config.get('cbs_station') or {}
+        if cached.get('call_sign') and time.time() - float(cached.get('at') or 0) < 86400:
+            return cached
+        try:
+            headers = {'User-Agent': _CBS_UA}
+            html = self.session.get(f'{_CBS_SITE}/live-tv/stream/', headers=headers, timeout=20).text
+            geo = json.loads(re.search(r'CBS\.Registry\.geoLoc\s*=\s*(\{[^}]*\})', html).group(1))
+            r = self.session.get(f'{_CBS_SITE}/live-tv/dma/{geo["lat"]}/{geo["lng"]}', headers=headers, timeout=20)
+            dma = ((r.json() or {}).get('result') or {}).get('dmas') or []
+            if not dma or not dma[0].get('callSign'):
+                raise ValueError('cbs.com has no CBS station for this location')
+            call = dma[0]['callSign'].upper()
+            station = {'call_sign': call, 'lat': geo['lat'], 'lon': geo['lng'],
+                       'dma_name': dma[0].get('dmaName'), 'at': time.time()}
+            r = self.session.get(_PPLUS_LISTINGS.format(slug=call.lower()), timeout=20, params={
+                'at': _PPLUS_TOKEN, 'locale': 'en-us', 'rows': 1, 'start': 0,
+                'showListing': 'true', '_clientRegion': 'US'})
+            channel = next(iter((r.json() or {}).get('channel') or []), {}) if r.ok else {}
+            if channel.get('filePathLogoSelected'):
+                station['logo'] = _PPLUS_IMAGES + channel['filePathLogoSelected']
+            if channel.get('prgSvcId'):
+                station['gracenote'] = str(channel['prgSvcId'])
+        except (requests.RequestException, ValueError, AttributeError, KeyError) as exc:
+            logger.warning('[cbs_sports] could not find the local CBS station: %s', exc)
+            return cached or None
+        self._update_config('cbs_station', station)
+        return station
+
     def pre_run_setup(self) -> None:
         self._dma()
         if self._signed_in() and not adobe_authn(self._device_id()):
@@ -329,9 +374,11 @@ class CBSSportsScraper(BaseScraper):
         self._update_cache('cbs_events', {'at': time.time(), 'items': items})
         return items
 
-    def _games(self, authorized: set[str]) -> list[dict]:
+    def _games(self, authorized: set[str], local: bool = False) -> list[dict]:
         """Adobe-gated events in the next two days on a network this sign-in can
-        play. CBS Sports Network's events are left to its 24/7 channel."""
+        play. CBS Sports Network's events are left to its 24/7 channel, and
+        CBS's to the local station when there is one."""
+        linear = authorized_linear(authorized) | ({LOCAL_CODE} if local else set())
         now = datetime.now(timezone.utc)
         horizon = now + timedelta(hours=_EVENT_LOOKAHEAD_HOURS)
         grace = timedelta(seconds=EVENT_END_GRACE_SECONDS)
@@ -339,7 +386,7 @@ class CBSSportsScraper(BaseScraper):
         for event in self._events():
             video = event['video']
             network = video.get('network')
-            if (network not in RESOURCES or network in authorized_linear(authorized)
+            if (network not in RESOURCES or network in linear
                     or 'adobe' not in (video.get('authentication') or [])
                     or (video.get('properties') or {}).get('type') != 'live'
                     or RESOURCES[network] not in authorized):
@@ -363,6 +410,19 @@ class CBSSportsScraper(BaseScraper):
     def fetch_channels(self) -> list[ChannelData]:
         authorized = {res for res in RESOURCES.values() if self._authorize(res)}
         channels = []
+        station = self._station() if 'CBS_ENTERTAINMENT' in authorized else None
+        if station:
+            call = station['call_sign']
+            channels.append(ChannelData(
+                source_channel_id=LOCAL_CODE,
+                name=f'CBS ({call})',
+                stream_url=SCHEME + LOCAL_CODE,
+                logo_url=station.get('logo'),
+                category='Entertainment',
+                stream_type='hls',
+                guide_key=f'CBS:{call}',
+                gracenote_id=resolve_gracenote('cbs_sports', upstream_id=station.get('gracenote'), lookup_key=call),
+            ))
         for code, meta in NETWORKS.items():
             if meta.get('resource') and meta['resource'] not in authorized:
                 continue
@@ -378,7 +438,7 @@ class CBSSportsScraper(BaseScraper):
             ))
         self._game_items = []
         if self._events_enabled():
-            self._game_items = self._games(authorized)
+            self._game_items = self._games(authorized, local=bool(station))
             self.hide_missing_event_channels = True
             for event in self._game_items:
                 video = event['video']
@@ -400,7 +460,7 @@ class CBSSportsScraper(BaseScraper):
                 ))
         return channels
 
-    def _pplus_programs(self, code: str, slug: str) -> list[ProgramData]:
+    def _pplus_programs(self, code: str, slug: str, category: str | None = 'Sports') -> list[ProgramData]:
         r = self.session.get(_PPLUS_LISTINGS.format(slug=slug), timeout=30, params={
             'at': _PPLUS_TOKEN, 'locale': 'en-us', 'rows': 500, 'start': 0,
             'showListing': 'true', '_clientRegion': 'US'})
@@ -411,7 +471,7 @@ class CBSSportsScraper(BaseScraper):
             if not start or not end or end <= start:
                 continue
             thumb = (item.get('filePathThumb') or '').removeprefix('files/')
-            title = (item.get('title') or '').strip() or NETWORKS[code]['name']
+            title = (item.get('title') or '').strip() or (NETWORKS.get(code) or {}).get('name') or 'CBS'
             episode = (item.get('episodeTitle') or '').strip()
             programs.append(ProgramData(
                 source_channel_id=code,
@@ -420,7 +480,7 @@ class CBSSportsScraper(BaseScraper):
                 end_time=end,
                 description=item.get('description') or None,
                 poster_url=_PPLUS_THUMBS + thumb if thumb else None,
-                category='Sports',
+                category=category,
                 episode_title=episode if episode and episode != title else None,
                 episode_id=item.get('tmsProgramId') or None,
             ))
@@ -431,6 +491,16 @@ class CBSSportsScraper(BaseScraper):
         programs = []
         # Channels with a full Paramount+ grid skip the event list below.
         gridded: set[str] = set()
+        station = self.config.get('cbs_station') or {}
+        if LOCAL_CODE in wanted and station.get('call_sign'):
+            try:
+                grid = self._pplus_programs(LOCAL_CODE, station['call_sign'].lower(), category=None)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning('[cbs_sports] %s listings unavailable: %s', station['call_sign'], exc)
+                grid = []
+            if grid:
+                programs.extend(grid)
+                gridded.add(LOCAL_CODE)
         for code, meta in NETWORKS.items():
             if code in wanted and meta.get('pplus'):
                 try:
@@ -487,12 +557,26 @@ class CBSSportsScraper(BaseScraper):
             raise RuntimeError(f'CBS Sports: no stream for {resource} (HTTP {r.status_code})')
         return stream
 
-    def _gated_stream(self, resource: str, label: str) -> str:
+    def _local_url(self) -> str:
+        """The local CBS station 24/7. Callers must have authorized CBS_ENTERTAINMENT."""
+        station = self._station()
+        if not station:
+            raise RuntimeError('CBS Sports: cbs.com has no CBS station for this location')
+        r = self.session.get(f'{_CBS_SITE}/live-tv/channels/{station["call_sign"].lower()}/metadata.json',
+                             params={'lat': station['lat'], 'lon': station['lon'],
+                                     'mvpd_name': self.config['adobe_mvpd']},
+                             headers={'User-Agent': _CBS_UA}, timeout=20)
+        data = (r.json() or {}) if r.ok else {}
+        if not data.get('success') or not data.get('assetURL'):
+            raise RuntimeError(f'CBS Sports: no stream for {station["call_sign"]} (HTTP {r.status_code})')
+        return data['assetURL']
+
+    def _gated_stream(self, resource: str, label: str, local: bool = False) -> str:
         if not self._signed_in():
             raise CBSAuthError('CBS Sports: sign in with your TV provider on the Sources page.')
         if not self._authorize(resource):
             raise TVENotAuthorizedError(f'CBS Sports: your TV package does not include {label}')
-        return self._syncbak_url(resource)
+        return self._local_url() if local else self._syncbak_url(resource)
 
     def resolve(self, raw_url: str) -> str:
         if raw_url.startswith(EVENT_SCHEME):
@@ -506,6 +590,8 @@ class CBSSportsScraper(BaseScraper):
                 raise StreamDeadError('CBS Sports event has ended')
             return self._gated_stream(RESOURCES[network], EVENT_LABELS[network])
         code = raw_url.removeprefix(SCHEME)
+        if code == LOCAL_CODE:
+            return self._gated_stream('CBS_ENTERTAINMENT', 'CBS', local=True)
         meta = NETWORKS.get(code)
         if not meta:
             raise ValueError(f'Unsupported CBS Sports stream URL: {raw_url}')
