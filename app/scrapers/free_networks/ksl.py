@@ -24,9 +24,9 @@ def _category(title: str) -> str:
     t = title.lower()
     if 'sports' in t:
         return 'Sports'
-    if 'weather' in t:
-        return 'Weather'
-    if title in ('BEONDTV', 'Utah TV'):
+    if title == 'Utah TV':
+        return 'Travel'
+    if title == 'BEONDTV':
         return 'Entertainment'
     return 'Local News'
 

@@ -72,7 +72,8 @@ class AlJazeera(Network):
         out = []
         for path_key, (cid, name, lang, _, _) in _KNOWN.items():
             if path_key in found:
-                out.append(NetChannel(cid, name, found[path_key], logo=_LOGOS[lang], category='News',
+                out.append(NetChannel(cid, name, found[path_key], logo=_LOGOS[lang],
+                                      category='Documentary' if cid == 'ajd' else 'News',
                                       language=lang, country='QA', gracenote_id=_GRACENOTE.get(cid)))
         return out
 

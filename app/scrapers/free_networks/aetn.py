@@ -54,9 +54,11 @@ _CATEGORY = {
     'the-first-48': 'True Crime', 'live-pd-presents': 'True Crime', 'crime-360': 'True Crime',
     'crime-cults-killers': 'True Crime', 'cold-case-files': 'True Crime', 'chaos-cam-by-ae': 'True Crime',
     'home-made-nation': 'Lifestyle', 'tiny-house-nation': 'Lifestyle',
-    'deal-zone': 'Entertainment', 'torque': 'Automotive', 'classic-car-auctions': 'Automotive',
+    'deal-zone': 'Shopping', 'torque': 'Automotive', 'classic-car-auctions': 'Automotive',
     'xtreme-outdoors': 'Outdoors', 'modern-marvels': 'Documentary', 'unxplained-zone': 'Documentary',
     'lifetime-movies-love-and-drama': 'Movies', 'movie-favorites-by-lifetime': 'Movies',
+    'ax-men': 'Reality TV', 'duck-dynasty': 'Reality TV', 'dance-moms': 'Reality TV',
+    'matched-married-meet': 'Reality TV', 'storage-wars': 'Reality TV',
 }
 _FLIGHT_RE = re.compile(r'self\.__next_f\.push\(\[1,"(.*?)"\]\)</script>', re.S)
 _CHANNEL_RE = re.compile(r'\{"id":"[^"]+","slug":')
