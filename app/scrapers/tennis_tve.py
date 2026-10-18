@@ -172,6 +172,7 @@ class TennisTVEScraper(MvpdCooldownMixin, BaseScraper):
                 slug='tennis-tve-' + name.lower().replace(' ', '-'),
                 logo_url=_LOGO,
                 stream_url=f'{SCHEME}{feed["epg"]}/{feed["content"]}' + ('?free=1' if feed['free'] else ''),
+                stream_type='dash',
                 category='Sports',
                 language='en',
                 country='US',
