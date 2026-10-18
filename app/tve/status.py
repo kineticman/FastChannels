@@ -164,6 +164,22 @@ def tve_network_status(account) -> list[dict]:
         'needs_signin': _needs_signin('univision', univision_last_signed_in_at, _errors('univision_tve')),
     })
 
+    disney = _cfg('disney_tve').get('disney_mvpd_auth') or {}
+    disney_signed_in = [a.get('captured_at') for a in disney.values() if a.get('captured_at')]
+    disney_last_signed_in_at = min(disney_signed_in) if disney_signed_in else None
+    disney_error_message, disney_error_at = _last_error('disney', disney_last_signed_in_at, _errors('disney_tve'))
+    entries.append({
+        'source': 'disney_tve',
+        'label': 'Disney TVE (ABC, Freeform, FX, Nat Geo, Disney Channel)',
+        'last_signed_in_at': disney_last_signed_in_at,
+        'note': 'Two links, one after the other: abc.com, then DisneyNOW. ABC News Live and ABC local news play without it.',
+        'family': 'disney',
+        'requestor_id': None,
+        'last_error_message': disney_error_message,
+        'last_error_at': disney_error_at,
+        'needs_signin': _needs_signin('disney', disney_last_signed_in_at, _errors('disney_tve')),
+    })
+
     fox_last_signed_in_at = _cfg('fox_tve').get('fox_sports_access_token_captured_at')
     fox_error_message, fox_error_at = _last_error('fox', fox_last_signed_in_at, _errors('fox_tve'))
     entries.append({

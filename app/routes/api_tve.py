@@ -164,7 +164,7 @@ def tve_network_status_route():
 # Sources whose auth identity is TVE/Adobe-Pass-tied. Kept as one list so
 # reset and any future TVE-wide admin action stay in sync automatically.
 _TVE_SOURCE_NAMES = ('aenetworks_tve', 'fox_tve', 'discovery_tve', 'amcn_tve', 'warner_tve', 'nbc_tve',
-                     'versant_tve', 'univision_tve')
+                     'versant_tve', 'univision_tve', 'disney_tve')
 
 # FOX One is a Premium source with its own settings (sign-in method,
 # separate login, home ZIP); a TVE reset only drops the sign-in it got from
@@ -225,7 +225,8 @@ def tve_reset():
                 SourceCache.cache_key.in_(('discovery_tve_session', 'nbc_entitlements', 'nbc_playback',
                                             'versant_session', 'versant_playback',
                                             'univision_user', 'univision_qpat_user',
-                                            'univision_media_tokens')),
+                                            'univision_media_tokens', 'disney_adobe_tokens',
+                                            'disney_streams')),
             ),
         ).delete(synchronize_session=False)
 

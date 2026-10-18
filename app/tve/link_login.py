@@ -33,14 +33,14 @@ from .adobe_pass import TVEAuthError, TVENotAuthorizedError, TVEPendingAuthError
 logger = logging.getLogger(__name__)
 
 STATUS_KEY = 'tve:link-login:status'
-LINK_FAMILIES = ('legacy', 'nbc', 'tcm', 'fox', 'amcn', 'discovery', 'versant', 'univision')
+LINK_FAMILIES = ('legacy', 'nbc', 'tcm', 'fox', 'amcn', 'discovery', 'versant', 'univision', 'disney')
 _PER_TARGET_TIMEOUT = 10 * 60
 _POLL_SECONDS = 3.0
 _POLL_MAX_SECONDS = 15.0
 
 
 def job_timeout(family: str) -> int:
-    targets = 4 if family == 'amcn' else 1
+    targets = {'amcn': 4, 'disney': 2}.get(family, 1)
     return targets * _PER_TARGET_TIMEOUT + 300
 
 
@@ -401,6 +401,119 @@ class _Univision:
         return 'authorized'
 
 
+class _Disney:
+    """Disney TVE — two Adobe v2 sign-ins, one link each: abc.com's `dtci`
+    requestor (ABC, Freeform, FX, Nat Geo) and disneynow.com's
+    `DisneyChannels` (Disney Channel, Junior, XD). Each requestor's software
+    statement is found on its own site."""
+    error_key = 'disney'
+    _RESOURCES = {'dtci': ('ABC', 'ABCFamily', 'fx', 'fxx', 'fxm', 'ngc', 'ngw'),
+                  'DisneyChannels': ('Disney', 'DisneyJunior', 'DisneyXD')}
+
+    def __init__(self, account, mso_id: str, requestor_id: str | None):
+        from ..models import Source
+        from ..scrapers.disney_tve import REQUESTORS, DisneyTVEScraper
+        self.account, self.mso_id = account, mso_id
+        self.source = Source.query.filter_by(name='disney_tve').first()
+        if not self.source or not self.source.is_enabled:
+            raise TVEAuthError('Enable the Disney TVE source before signing in to it.')
+        self.scraper = DisneyTVEScraper(config=dict(self.source.config or {}))
+        self.requestors = {info['label']: requestor for requestor, info in REQUESTORS.items()}
+
+    def targets(self):
+        return list(self.requestors)
+
+    def start(self, label):
+        from ..scrapers.disney_tve import ADOBE_BASE, REQUESTORS, software_statements
+        from ..scrapers.nbc_tve import AdobePassV2Client
+        requestor = self.requestors[label]
+        site = REQUESTORS[requestor]
+        saved = ((self.account.config or {}).get('disney_mvpd_auth') or {}).get(requestor) or {}
+        if saved.get('mso_id') != self.mso_id:
+            saved = {}
+        fingerprint = saved.get('device_fingerprint') or str(uuid.uuid4())
+        client = AdobePassV2Client(requestor, '', site['redirect'], fingerprint,
+                                   origin=site['redirect'].rstrip('/'))
+
+        def open_session():
+            return client.session.post(
+                f'{ADOBE_BASE}/api/v2/{requestor}/sessions',
+                data={'mvpd': self.mso_id, 'redirectUrl': site['redirect'], 'domainName': site['domain']},
+                headers={**client._bearer_headers(), 'Content-Type': 'application/x-www-form-urlencoded'},
+                timeout=30)
+
+        r = None
+        if saved.get('client_id') and saved.get('client_secret'):
+            client.client_id, client.client_secret = saved['client_id'], saved['client_secret']
+            client.refresh_access_token()
+            r = open_session()
+        if r is None or r.status_code == 401:
+            # A site carries one statement per brand; only one is this requestor's.
+            for statement in software_statements(requestor):
+                client.software_statement, client._client_creds = statement, None
+                try:
+                    client._register_client()
+                except TVEAuthError:
+                    continue
+                r = open_session()
+                if r.status_code != 401:
+                    break
+            else:
+                raise TVEAuthError(f'Disney: none of the settings on {site["domain"]} were accepted — '
+                                   'Disney may have changed its site.')
+        data = r.json() if r.ok else {}
+        ctx = {'client': client, 'requestor': requestor, 'fingerprint': fingerprint,
+               'profile_url': f'{ADOBE_BASE}/api/v2/{requestor}/profiles/{self.mso_id}'}
+        if data.get('reasonType') == 'authenticated':
+            return None, ctx
+        if not data.get('url'):
+            raise TVEAuthError(f'Disney: Adobe did not return a sign-in URL (HTTP {r.status_code}).')
+        return ADOBE_BASE + data['url'], ctx
+
+    def poll(self, ctx):
+        client = ctx['client']
+        r = client.session.get(ctx['profile_url'], headers=client._bearer_headers(), timeout=20)
+        if r.status_code == 401:
+            client.refresh_access_token()
+            return None
+        if not r.ok:
+            return None
+        return ((r.json() or {}).get('profiles') or {}).get(self.mso_id) or None
+
+    def save(self, ctx, profile):
+        from ..config_store import persist_source_cache_updates
+        from ..extensions import db
+        from ..scrapers.disney_tve import ADOBE_BASE
+
+        client, requestor = ctx['client'], ctx['requestor']
+        r = client._post(
+            f'{ADOBE_BASE}/api/v2/{requestor}/decisions/preauthorize/{self.mso_id}',
+            json={'resources': list(self._RESOURCES[requestor])},
+            headers={**client._bearer_headers(), 'Content-Type': 'application/json'},
+        )
+        decisions = {d.get('resource'): bool(d.get('authorized')) for d in (r.json() or {}).get('decisions') or []}
+        cfg = dict(self.account.config or {})
+        auth = dict(cfg.get('disney_mvpd_auth') or {})
+        auth[requestor] = {
+            'mso_id': self.mso_id, 'client_id': client.client_id, 'client_secret': client.client_secret,
+            'access_token': client.access_token, 'device_fingerprint': ctx['fingerprint'],
+            'captured_at': int(time.time()),
+        }
+        cfg['disney_mvpd_auth'] = auth
+        self.account.config = cfg
+        db.session.commit()
+        self.scraper._update_cache('disney_adobe_tokens', {})
+        self.scraper._update_cache('disney_streams', {})
+        persist_source_cache_updates(self.source.id, self.scraper._pending_cache_updates)
+        self.scraper._pending_cache_updates = {}
+        if decisions and not any(decisions.values()):
+            raise TVENotAuthorizedError(f'your package doesn\'t include {ctx["requestor"]} channels')
+        denied = sorted(res for res, ok in decisions.items() if not ok)
+        if denied:
+            return 'authorized (your package doesn\'t include: ' + ', '.join(denied) + ')'
+        return 'authorized'
+
+
 class _Fox:
     """FOX TVE — FOX's api3 regcode wrapper around an Adobe v2 link; the
     sign-in is tied to a fresh device_id, as in run_fox_browser_login."""
@@ -666,7 +779,8 @@ class _Discovery:
 
 
 _ADAPTERS = {'legacy': _Legacy, 'nbc': _Nbc, 'tcm': _Tcm, 'fox': _Fox, 'amcn': _Amcn, 'foxone': _FoxOne,
-             'discovery': _Discovery, 'versant': _Versant, 'univision': _Univision}
+             'discovery': _Discovery, 'versant': _Versant, 'univision': _Univision,
+             'disney': _Disney}
 
 
 # ── job ──────────────────────────────────────────────────────────────────────

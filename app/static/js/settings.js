@@ -880,6 +880,7 @@ const MVPD_LOGIN_FAMILIES = {
   tcm:       { base: '/api/settings/tve/link-login', needsRequestor: false },
   versant:   { base: '/api/settings/tve/link-login', needsRequestor: false },
   univision: { base: '/api/settings/tve/link-login', needsRequestor: false },
+  disney:    { base: '/api/settings/tve/link-login', needsRequestor: false },
   google:    { base: '/api/settings/tve/google/browser-login', needsRequestor: false },
 };
 // Phone-link sign-in (app/tve/link_login.py): the families whose provider
@@ -887,9 +888,9 @@ const MVPD_LOGIN_FAMILIES = {
 // Discovery uses a typed code on its own page (the status carries it); the
 // Google step isn't a network sign-in, so it stays browser-only.
 MVPD_LOGIN_FAMILIES.link = { base: '/api/settings/tve/link-login', needsRequestor: false };
-const TVE_LINK_FAMILIES = new Set(['legacy', 'nbc', 'tcm', 'fox', 'amcn', 'discovery', 'versant', 'univision']);
+const TVE_LINK_FAMILIES = new Set(['legacy', 'nbc', 'tcm', 'fox', 'amcn', 'discovery', 'versant', 'univision', 'disney']);
 // Families with no browser sign-in at all: always the phone link.
-const TVE_LINK_ONLY_FAMILIES = new Set(['tcm', 'versant', 'univision']);
+const TVE_LINK_ONLY_FAMILIES = new Set(['tcm', 'versant', 'univision', 'disney']);
 let _mvpdLoginActive = false;
 let _mvpdLoginDone = false;
 let _mvpdLoginPollTimer = null;

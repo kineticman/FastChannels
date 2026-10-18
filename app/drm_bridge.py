@@ -42,7 +42,7 @@ from . import fc_player_bridge
 # source of truth.
 DRM_BRIDGE_TRUSTED_SOURCES = frozenset({
     'sling', 'nbc_tve', 'pbs', 'amazon_prime_free', 'directv', 'vidaa', 'philo', 'roku',
-    'fubo', 'warner_tve', 'spectrum', 'espn', 'versant_tve', 'vix',
+    'fubo', 'warner_tve', 'spectrum', 'espn', 'versant_tve', 'vix', 'disney_tve',
 })
 
 
