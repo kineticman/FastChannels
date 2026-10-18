@@ -27,6 +27,8 @@ class ZeamScraper(BaseScraper):
     resolve() calls StreamInfo, which returns a master playlist with a 90-second
     access_token bound to the requester's IP — so it's resolved per tune and
     never cached. Streams are clear AES-128 HLS; out-of-market stations play.
+    The session's variant/key URLs only answer the user agent that fetched the
+    master most recently, so nothing else may fetch it after the client does.
 
     Local stations here are the stations' streaming news channels, not their
     over-the-air broadcasts, so they're never given the OTA Gracenote ID.
@@ -36,6 +38,9 @@ class ZeamScraper(BaseScraper):
     display_name = 'Zeam'
     scrape_interval = 360
     stream_audit_enabled = True
+    # Zeam binds the stream session to the user agent of the latest master
+    # fetch; the play proxy's follow-up fetch would steal it from the player.
+    play_manifest_check = False
 
     _BASE_URL = 'https://zeam.com'
     _LIVE_PAGE = _BASE_URL + '/live'

@@ -577,6 +577,11 @@ class BaseScraper(ABC):
     min_scrape_interval: int = 30
     max_scrape_interval: int = 10080
     stream_audit_enabled: bool = False  # opt-in; enable Stream Audit (health + DRM scan) for this source
+    # The play proxy re-fetches the resolved manifest in the background after
+    # its 302 (DRM/dead check + resolution badge). Off for upstreams that hand
+    # the playback session to whoever fetched the manifest last (Zeam), where
+    # that second fetch would break the client's stream.
+    play_manifest_check: bool = True
     # 'full' = descriptions + posters + episode metadata; 'basic' = titles + times only.
     # Used by the resolve-duplicates priority key to prefer richer EPG when breaking ties.
     epg_quality: str = 'full'

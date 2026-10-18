@@ -3030,8 +3030,9 @@ def play(source_name: str, channel_id: str):
     # list: a VOD or DRM entry in it is theirs to keep or remove, not ours to
     # auto-disable.
     _is_playlist = is_playlist_source(source_name)
+    _manifest_check = getattr(scraper_cls, 'play_manifest_check', True) if scraper_cls else True
     if (channel.is_active and resolved_url and resolved_url.startswith('http')
-            and not _is_muxed and not _is_playlist):
+            and not _is_muxed and not _is_playlist and _manifest_check):
         from flask import current_app
         _app = current_app._get_current_object()
         _channel_id = channel.id
