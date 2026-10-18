@@ -1972,6 +1972,13 @@ def _local_news_rule(name_lower: str, name: str) -> str | None:
     return None
 
 
+def _western_is_a_place(name_lower: str) -> bool:
+    """"Western" as geography, not the genre: "WGGB Western Mass News",
+    "Spectrum News NECN Central & Western MA", "NCAA Football - Western
+    Michigan vs. ..."."""
+    return 'news' in name_lower or ' vs' in name_lower or name_lower.startswith('ncaa ')
+
+
 def category_for_channel(name: str, raw_category: str | None, source_name: str | None = None) -> str | None:
     """Return the canonical category for a channel, applying hard overrides first.
 
@@ -2008,7 +2015,7 @@ def category_for_channel(name: str, raw_category: str | None, source_name: str |
         return 'Drama'
     if name_lower.endswith(' westerns') or name_lower.endswith(' western'):
         return 'Westerns'
-    if name_lower.startswith('western ') or ' western ' in name_lower:
+    if (name_lower.startswith('western ') or ' western ' in name_lower) and not _western_is_a_place(name_lower):
         return 'Westerns'
 
     # Local News patterns
@@ -2094,7 +2101,8 @@ def explain_category(name: str, raw_category: str | None, source_name: str | Non
     if 'k-drama' in name_lower or 'kdrama' in name_lower:
         return {'source': 'name_pattern', 'rule': 'kdrama', 'detail': 'Name contains "K-Drama" or "KDrama" → Drama.'}
     if (name_lower.endswith(' westerns') or name_lower.endswith(' western')
-            or name_lower.startswith('western ') or ' western ' in name_lower):
+            or ((name_lower.startswith('western ') or ' western ' in name_lower)
+                and not _western_is_a_place(name_lower))):
         return {'source': 'name_pattern', 'rule': 'western', 'detail': 'Name contains "Western" → Westerns.'}
     local_rule = _local_news_rule(name_lower, name_clean)
     if local_rule:
