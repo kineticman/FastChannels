@@ -10,7 +10,7 @@ from ...gracenote_map import resolve_gracenote
 from ._common import UA, NetChannel
 from . import (
     aetn, aljazeera, arirang, bloomberg, cbn, cbsnews, cw, dw, ewtn, fstv, gameandfish, hsn, ksl,
-    newsmax, nhk, outside, positiv, qvc, scripps, simple, sinclair, tastemade, trt,
+    newsmax, nhk, outside, positiv, qvc, scripps, simple, sinclair, tastemade, tbn, trt,
 )
 
 logger = logging.getLogger(__name__)
@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 NETWORKS = [
     sinclair.Sinclair(), dw.DW(), aljazeera.AlJazeera(), trt.TRT(), nhk.NHK(),
     arirang.Arirang(), bloomberg.Bloomberg(), cbsnews.CBSNews(), scripps.Scripps(),
-    newsmax.Newsmax(), fstv.FreeSpeechTV(), ewtn.EWTN(), positiv.PosiTV(),
+    newsmax.Newsmax(), fstv.FreeSpeechTV(), ewtn.EWTN(), positiv.PosiTV(), tbn.TBN(),
     hsn.HSN(), qvc.QVC(), tastemade.Tastemade(), aetn.AETN(), ksl.KSL(), cbn.CBN(),
     gameandfish.GameAndFish(), outside.OutsideTV(), cw.CW(), *simple.NETWORKS,
 ]
@@ -29,7 +29,7 @@ class FreeNetworksScraper(BaseScraper):
     """
     Free networks that stream on their own websites: news (DW, Al Jazeera, TRT,
     NHK, Arirang, Bloomberg, CBS News, Scripps, Newsmax2 + World at War, Free Speech TV, Sky
-    News, Global News, KSL), faith (EWTN, PosiTV, CBN, NRB, theDove), shopping
+    News, Global News, KSL), faith (EWTN, PosiTV, TBN, CBN, NRB, theDove), shopping
     (HSN, QVC), Sinclair's diginets (Comet, Charge!, TheNest), Tastemade, A+E's
     FAST channels, The CW's FAST lineup, Outside TV, Game & Fish TV and a few
     singles.
