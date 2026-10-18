@@ -5,7 +5,7 @@ import logging
 import re
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 from .base import BaseScraper, ChannelData, ProgramData
 
@@ -19,8 +19,10 @@ class ZeamScraper(BaseScraper):
 
     The full "All Channels" lineup (~400, every market) only exists as the
     `var json={...}` blob inlined in zeam.com/live; /api/services/livechannels
-    returns just the ~90 channels near the requester. Each channel carries a
-    public schedule.json URL for the guide.
+    returns just the ~90 channels near the requester. Each channel carries
+    public schedule.json URLs for the guide; v4 is the one zeam.com's own guide
+    reads. v2 lists only live newscasts (holes between them on looped
+    channels) and v3 is the stations' OTA schedule with most rows blacked out.
 
     resolve() calls StreamInfo, which returns a master playlist with a 90-second
     access_token bound to the requester's IP — so it's resolved per tune and
@@ -85,6 +87,12 @@ class ZeamScraper(BaseScraper):
         'sky link tv drama channel': 'zh',
     }
     _EPG_WORKERS = 6
+    # Looped stations replay their last newscast until the next one, which v4
+    # gives as one block of up to several days under the newscast's title.
+    # Blocks this long are cut into hourly pieces so a DVR rule for the show
+    # never records the whole stretch.
+    _SPLIT_BLOCKS_OVER = 4 * 3600
+    _PIECE = 3600
 
     def __init__(self, config: dict | None = None):
         super().__init__(config)
@@ -122,9 +130,12 @@ class ZeamScraper(BaseScraper):
 
     def fetch_epg(self, channels: list[ChannelData], **kwargs) -> list[ProgramData]:
         schedule_urls = {}
+        looped = set()
         for obj in self._load_channel_objects():
+            if obj.get('offAirProfile') == 'looped':
+                looped.add(str(obj.get('stationId')))
             urls = obj.get('scheduleUrls') or {}
-            url = urls.get('v2') or obj.get('scheduleUrl')
+            url = urls.get('v4') or obj.get('scheduleUrl')
             if obj.get('stationId') and url:
                 schedule_urls[str(obj['stationId'])] = url
 
@@ -143,7 +154,8 @@ class ZeamScraper(BaseScraper):
             except (ValueError, AttributeError) as exc:
                 logger.warning('[%s] schedule parse error for %s: %s', self.source_name, channel_id, exc)
                 return []
-            return [p for p in (self._parse_program(channel_id, row) for row in rows) if p]
+            replay = channel_id in looped
+            return [p for row in rows for p in self._parse_program(channel_id, row, replay)]
 
         with ThreadPoolExecutor(max_workers=self._EPG_WORKERS) as pool:
             futures = [pool.submit(_one, cid, url) for cid, url in wanted]
@@ -222,23 +234,39 @@ class ZeamScraper(BaseScraper):
             return 'News'
         return None
 
-    def _parse_program(self, channel_id: str, row: dict) -> ProgramData | None:
+    def _parse_program(self, channel_id: str, row: dict, looped: bool = False) -> list[ProgramData]:
         try:
             start_ts = int(row['startTime'])
             end_ts = int(row.get('endTime') or start_ts + int(row.get('duration') or 0))
         except (KeyError, TypeError, ValueError):
-            return None
+            return []
         if end_ts <= start_ts:
-            return None
+            return []
         title = str(row.get('name') or '').strip()
         if not title:
-            return None
-        start = datetime.fromtimestamp(start_ts, tz=timezone.utc)
-        return ProgramData(
-            source_channel_id=channel_id,
-            title=title,
-            start_time=start,
-            end_time=start + timedelta(seconds=end_ts - start_ts),
-            description=(row.get('description') or '').strip() or None,
-            episode_title=(row.get('episodeTitle') or '').strip() or None,
-        )
+            return []
+        description = (row.get('description') or '').strip() or None
+        episode_title = (row.get('episodeTitle') or '').strip() or None
+
+        pieces = [(start_ts, end_ts)]
+        if end_ts - start_ts > self._SPLIT_BLOCKS_OVER:
+            # Cut on the hour so the pieces line up with the rest of the guide.
+            pieces, t = [], start_ts
+            while t < end_ts:
+                nxt = min(end_ts, (t // self._PIECE + 1) * self._PIECE)
+                pieces.append((t, nxt))
+                t = nxt
+            if looped and 'replay' not in title.lower():
+                title = f'{title} (Replay)'
+
+        return [
+            ProgramData(
+                source_channel_id=channel_id,
+                title=title,
+                start_time=datetime.fromtimestamp(a, tz=timezone.utc),
+                end_time=datetime.fromtimestamp(b, tz=timezone.utc),
+                description=description,
+                episode_title=episode_title,
+            )
+            for a, b in pieces
+        ]
