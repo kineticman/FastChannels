@@ -264,6 +264,9 @@ class CBSSportsScraper(BaseScraper):
     source_category = 'premium'
     is_premium = True
     scrape_interval = 360
+    # Gated channels raise TVENotAuthorizedError when the package drops them,
+    # which the audit records as NotAuthorized and re-checks every run.
+    stream_audit_enabled = True
     LAZY_CACHE_KEYS = frozenset({'cbs_events'})
 
     config_schema = [
@@ -577,6 +580,13 @@ class CBSSportsScraper(BaseScraper):
         if not self._authorize(resource):
             raise TVENotAuthorizedError(f'CBS Sports: your TV package does not include {label}')
         return self._local_url() if local else self._syncbak_url(resource)
+
+    def audit_resolve(self, raw_url: str) -> str:
+        # An upcoming game's stream is the "game unavailable" slate; its place
+        # in the schedule is the audit check, playback is tested at tune time.
+        if raw_url.startswith(EVENT_SCHEME):
+            return raw_url
+        return self.resolve(raw_url)
 
     def resolve(self, raw_url: str) -> str:
         if raw_url.startswith(EVENT_SCHEME):
