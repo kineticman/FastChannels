@@ -28,7 +28,7 @@ _BY_KEY = {n.key: n for n in NETWORKS}
 class FreeNetworksScraper(BaseScraper):
     """
     Free networks that stream on their own websites: news (DW, Al Jazeera, TRT,
-    NHK, Arirang, Bloomberg, CBS News, Scripps, Newsmax2, Free Speech TV, Sky
+    NHK, Arirang, Bloomberg, CBS News, Scripps, Newsmax2 + World at War, Free Speech TV, Sky
     News, Global News, KSL), faith (EWTN, PosiTV, CBN, NRB, theDove), shopping
     (HSN, QVC), Sinclair's diginets (Comet, Charge!, TheNest), Tastemade, A+E's
     FAST channels, The CW's FAST lineup, Outside TV, Game & Fish TV and a few
