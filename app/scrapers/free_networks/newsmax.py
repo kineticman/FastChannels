@@ -14,12 +14,14 @@ from ._common import ET, Network, NetChannel, program
 
 _SCHEDULE = 'https://api.newsmaxtv.com/api/wideorbittimeline/1011/schedule/{station}'
 # id → (name, stream, WideOrbit station, logo, category). Newsmax2's logo is
-# Gracenote's; newsmaxtv.com itself times out to non-browser clients.
+# Gracenote's. World at War's is self-hosted (cropped from its newsmaxtv.com page
+# art): newsmaxtv.com hangs for most user agents, ours and browsers' included.
+_WAW_LOGO = '/static/logos/newsmax/worldatwar.png'
 _CHANNELS = {
     'n2': ('Newsmax2', 'https://n2ctsota.akamaized.net/hls/live/2113130/Live_1/index.m3u8', 'n2',
            'https://tmsimg.fancybits.co/assets/s121162_ll_h15_aa.png?w=360&h=270', 'News'),
     'worldatwar': ('World at War', 'https://linear-927.frequency.stream/dist/newsmax/927/hls/master/playlist.m3u8',
-                   'WorldAtWar', None, 'History'),
+                   'WorldAtWar', _WAW_LOGO, 'History'),
 }
 
 
