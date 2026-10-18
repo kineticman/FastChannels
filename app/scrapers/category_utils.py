@@ -1566,7 +1566,7 @@ _NAME_OVERRIDES: dict[str, str] = {
     'bkfctv':                               'Sports',
     'bkfc tv espanol':                      'Sports',
     'dp tour':                              'Sports',
-    'hersphere':                            'Sports',
+    'hersphere':                            'Drama',    # Lionsgate movies + dramedies, not sports
     'msg national':                         'Sports',
     'msgsn national':                       'Sports',
     'for the fans':                         'Sports',
@@ -1703,7 +1703,7 @@ _NAME_OVERRIDES: dict[str, str] = {
     'cw presents wwe nxt':                  'Sports',
     'dp world tour':                        'Sports',
     'hbcugo':                               'Sports',
-    'hersphere by lionsgate':               'Sports',
+    'hersphere by lionsgate':               'Drama',
     'motorvision – deutsch':                'Automotive',
     'motorvision – english':                'Automotive',
     'nba':                                  'Sports',
