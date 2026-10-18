@@ -731,6 +731,9 @@ def _get_playback_info(ch, fast_mode=True):
     if ch.source and ch.source.name == 'vix' and ch.source_channel_id:
         from urllib.parse import quote as _quote
         preview_url = f'/play/vix/{_quote(ch.source_channel_id, safe="")}/dash.mpd'
+    if ch.source and ch.source.name == 'tennis_tve' and ch.source_channel_id:
+        from urllib.parse import quote as _quote
+        preview_url = f'/play/tennis_tve/{_quote(ch.source_channel_id, safe="")}/dash.mpd'
 
     # Philo → DASH+Widevine. Philo's MPD CDN locks CORS to philo.com, so the
     # route proxies the manifest body with permissive CORS (segments are CORS-*

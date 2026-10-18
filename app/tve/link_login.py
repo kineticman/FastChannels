@@ -33,7 +33,7 @@ from .adobe_pass import TVEAuthError, TVENotAuthorizedError, TVEPendingAuthError
 logger = logging.getLogger(__name__)
 
 STATUS_KEY = 'tve:link-login:status'
-LINK_FAMILIES = ('legacy', 'nbc', 'tcm', 'fox', 'amcn', 'discovery', 'versant', 'univision', 'disney')
+LINK_FAMILIES = ('legacy', 'nbc', 'tcm', 'fox', 'amcn', 'discovery', 'versant', 'univision', 'disney', 'tennis')
 _PER_TARGET_TIMEOUT = 10 * 60
 _POLL_SECONDS = 3.0
 _POLL_MAX_SECONDS = 15.0
@@ -514,6 +514,72 @@ class _Disney:
         return 'authorized'
 
 
+class _Tennis:
+    """Tennis Channel — one Adobe v2 sign-in under tennischannel.com's
+    `tceverywhere` requestor. The site registers the Adobe client for us and
+    hands out the device identifier the sign-in is bound to."""
+    error_key = 'tennis'
+
+    def __init__(self, account, mso_id: str, requestor_id: str | None):
+        from ..models import Source
+        from ..scrapers.tennis_tve import TennisTVEScraper
+        self.account, self.mso_id = account, mso_id
+        self.source = Source.query.filter_by(name='tennis_tve').first()
+        if not self.source or not self.source.is_enabled:
+            raise TVEAuthError('Enable the Tennis Channel TVE source before signing in to it.')
+        self.scraper = TennisTVEScraper(config=dict(self.source.config or {}))
+
+    def targets(self):
+        return ['Tennis Channel']
+
+    def start(self, label):
+        from ..scrapers.tennis_tve import (ADOBE_BASE, DOMAIN_NAME, REDIRECT_URL, REQUESTOR_ID,
+                                           adobe_headers, register_client)
+        saved = (self.account.config or {}).get('tennis_mvpd_auth') or {}
+        device = saved.get('device_identifier') if saved.get('mso_id') == self.mso_id else None
+        client = register_client(device)
+        device = client['deviceIdentifier']
+        headers = adobe_headers(client['accessToken'], device)
+        r = requests.post(f'{ADOBE_BASE}/api/v2/{REQUESTOR_ID}/sessions', timeout=30, headers=headers,
+                          data={'mvpd': self.mso_id, 'domainName': DOMAIN_NAME, 'redirectUrl': REDIRECT_URL})
+        data = r.json() if r.ok else {}
+        ctx = {'device': device, 'headers': headers,
+               'profile_url': f'{ADOBE_BASE}/api/v2/{REQUESTOR_ID}/profiles/{self.mso_id}'}
+        if data.get('reasonType') == 'authenticated':
+            return None, ctx
+        if not data.get('url'):
+            raise TVEAuthError(f'Tennis Channel: Adobe did not return a sign-in URL (HTTP {r.status_code}).')
+        return ADOBE_BASE + data['url'], ctx
+
+    def poll(self, ctx):
+        r = requests.get(ctx['profile_url'], headers=ctx['headers'], timeout=20)
+        if not r.ok:
+            return None
+        return ((r.json() or {}).get('profiles') or {}).get(self.mso_id) or None
+
+    def save(self, ctx, profile):
+        from ..config_store import persist_source_cache_updates
+        from ..extensions import db
+        from ..scrapers.tennis_tve import ADOBE_BASE, REQUESTOR_ID, RESOURCE
+
+        r = requests.post(f'{ADOBE_BASE}/api/v2/{REQUESTOR_ID}/decisions/preauthorize/{self.mso_id}', timeout=20,
+                          json={'resources': [RESOURCE]},
+                          headers={**ctx['headers'], 'Content-Type': 'application/json'})
+        decisions = (r.json() or {}).get('decisions') or [] if r.ok else []
+        cfg = dict(self.account.config or {})
+        cfg['tennis_mvpd_auth'] = {'mso_id': self.mso_id, 'device_identifier': ctx['device'],
+                                   'captured_at': int(time.time())}
+        self.account.config = cfg
+        db.session.commit()
+        self.scraper._update_cache('tennis_client', {})
+        self.scraper._update_cache('tennis_streams', {})
+        persist_source_cache_updates(self.source.id, self.scraper._pending_cache_updates)
+        self.scraper._pending_cache_updates = {}
+        if decisions and not any(d.get('authorized') for d in decisions):
+            raise TVENotAuthorizedError('your package doesn\'t include Tennis Channel')
+        return 'authorized'
+
+
 class _Fox:
     """FOX TVE — FOX's api3 regcode wrapper around an Adobe v2 link; the
     sign-in is tied to a fresh device_id, as in run_fox_browser_login."""
@@ -780,7 +846,7 @@ class _Discovery:
 
 _ADAPTERS = {'legacy': _Legacy, 'nbc': _Nbc, 'tcm': _Tcm, 'fox': _Fox, 'amcn': _Amcn, 'foxone': _FoxOne,
              'discovery': _Discovery, 'versant': _Versant, 'univision': _Univision,
-             'disney': _Disney}
+             'disney': _Disney, 'tennis': _Tennis}
 
 
 # ── job ──────────────────────────────────────────────────────────────────────

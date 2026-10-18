@@ -180,6 +180,20 @@ def tve_network_status(account) -> list[dict]:
         'needs_signin': _needs_signin('disney', disney_last_signed_in_at, _errors('disney_tve')),
     })
 
+    tennis_last_signed_in_at = (_cfg('tennis_tve').get('tennis_mvpd_auth') or {}).get('captured_at')
+    tennis_error_message, tennis_error_at = _last_error('tennis', tennis_last_signed_in_at, _errors('tennis_tve'))
+    entries.append({
+        'source': 'tennis_tve',
+        'label': 'Tennis Channel TVE',
+        'last_signed_in_at': tennis_last_signed_in_at,
+        'note': 'Sign in with a link on your phone or computer.',
+        'family': 'tennis',
+        'requestor_id': None,
+        'last_error_message': tennis_error_message,
+        'last_error_at': tennis_error_at,
+        'needs_signin': _needs_signin('tennis', tennis_last_signed_in_at, _errors('tennis_tve')),
+    })
+
     fox_last_signed_in_at = _cfg('fox_tve').get('fox_sports_access_token_captured_at')
     fox_error_message, fox_error_at = _last_error('fox', fox_last_signed_in_at, _errors('fox_tve'))
     entries.append({
