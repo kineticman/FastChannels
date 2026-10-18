@@ -1018,6 +1018,11 @@ def ensure_runtime_schema() -> None:
         conn.execute(
             text("UPDATE sources SET last_scraped_at = NULL WHERE scrape_interval = 0")
         )
+        # cbs_sports carries the local CBS station 24/7 since 2026-10-18; it's
+        # shown as "CBS" now. Only the untouched old label is renamed.
+        conn.execute(
+            text("UPDATE sources SET display_name = 'CBS' WHERE name = 'cbs_sports' AND display_name = 'CBS Sports'")
+        )
         conn.execute(
             text(
                 "UPDATE channels SET missed_scrapes = 0"

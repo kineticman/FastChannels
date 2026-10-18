@@ -1,4 +1,4 @@
-"""CBS Sports — CBS Sports Network, CBS game windows and the free CBS Sports channels.
+"""CBS (source cbs_sports) — the local CBS station, CBS Sports Network, CBS game windows and the free CBS Sports channels.
 
 All streams are clear HLS (checked 2026-10-17):
   - CBS Sports HQ, Golazo and the Champions League channel are free Google DAI
@@ -260,7 +260,7 @@ def _image(about: dict) -> str | None:
 
 class CBSSportsScraper(BaseScraper):
     source_name = 'cbs_sports'
-    display_name = 'CBS Sports'
+    display_name = 'CBS'
     source_category = 'premium'
     is_premium = True
     scrape_interval = 360
