@@ -148,6 +148,22 @@ def tve_network_status(account) -> list[dict]:
         'needs_signin': _needs_signin('versant', versant_last_signed_in_at, _errors('versant_tve')),
     })
 
+    univision = _cfg('univision_tve').get('univision_mvpd_auth') or {}
+    univision_last_signed_in_at = univision.get('captured_at')
+    univision_error_message, univision_error_at = _last_error('univision', univision_last_signed_in_at,
+                                                              _errors('univision_tve'))
+    entries.append({
+        'source': 'univision_tve',
+        'label': 'Univision TVE (Univision, UniMás, Galavisión, TUDN)',
+        'last_signed_in_at': univision_last_signed_in_at,
+        'note': 'Sign in with a link on your phone or computer. N+ 24/7, Zona TUDN and Canal ViX play without it.',
+        'family': 'univision',
+        'requestor_id': None,
+        'last_error_message': univision_error_message,
+        'last_error_at': univision_error_at,
+        'needs_signin': _needs_signin('univision', univision_last_signed_in_at, _errors('univision_tve')),
+    })
+
     fox_last_signed_in_at = _cfg('fox_tve').get('fox_sports_access_token_captured_at')
     fox_error_message, fox_error_at = _last_error('fox', fox_last_signed_in_at, _errors('fox_tve'))
     entries.append({

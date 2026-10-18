@@ -24,6 +24,7 @@ SHARED_DISPLAY_NAME = 'TV Provider'
 # account.
 SEPARATE_SIGNIN_SOURCES = frozenset({
     'nbc_tve', 'fox_tve', 'warner_tve', 'aenetworks_tve', 'amcn_tve', 'discovery_tve', 'versant_tve',
+    'univision_tve',
 })
 
 # What a source's sign-in leaves behind outside its account row. All of it is
@@ -45,6 +46,7 @@ SIGNIN_STATE = {
     'fox_tve': {},
     'aenetworks_tve': {},
     'versant_tve': {'cache': ('versant_session', 'versant_playback'), 'account': ('versant_mvpd_auth',)},
+    'univision_tve': {'cache': ('univision_user', 'univision_qpat_user'), 'account': ('univision_mvpd_auth',)},
 }
 
 # The keys sign-in status and errors are recorded under (tve_last_error,
@@ -70,6 +72,7 @@ _NETWORK_KEY_SOURCES = {
     'ifc': 'amcn_tve',
     'wetv': 'amcn_tve',
     'versant': 'versant_tve',
+    'univision': 'univision_tve',
 }
 
 
