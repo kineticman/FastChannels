@@ -155,7 +155,8 @@ class ZeamScraper(BaseScraper):
                 logger.warning('[%s] schedule parse error for %s: %s', self.source_name, channel_id, exc)
                 return []
             replay = channel_id in looped
-            return [p for row in rows for p in self._parse_program(channel_id, row, replay)]
+            parsed = [p for row in rows for p in self._parse_program(channel_id, row, replay)]
+            return self._drop_overlaps(parsed)
 
         with ThreadPoolExecutor(max_workers=self._EPG_WORKERS) as pool:
             futures = [pool.submit(_one, cid, url) for cid, url in wanted]
@@ -233,6 +234,21 @@ class ZeamScraper(BaseScraper):
         if 'news' in name.lower():
             return 'News'
         return None
+
+    @staticmethod
+    def _drop_overlaps(programs: list[ProgramData]) -> list[ProgramData]:
+        """Some v4 feeds nest their rows (KOTV: each day's block runs to the
+        same end time), so later rows start inside earlier ones. Keep the guide
+        a single timeline: a row starting before the previous one ends is
+        trimmed to start there, or dropped if nothing is left."""
+        out: list[ProgramData] = []
+        for p in sorted(programs, key=lambda p: (p.start_time, p.end_time)):
+            if out and p.start_time < out[-1].end_time:
+                if p.end_time <= out[-1].end_time:
+                    continue
+                p.start_time = out[-1].end_time
+            out.append(p)
+        return out
 
     def _parse_program(self, channel_id: str, row: dict, looped: bool = False) -> list[ProgramData]:
         try:
