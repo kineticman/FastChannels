@@ -39,7 +39,51 @@ class ZeamScraper(BaseScraper):
     _LIVE_PAGE = _BASE_URL + '/live'
     _STREAM_INFO = _BASE_URL + '/api/services/StreamInfo'
     _ALL_CHANNELS_GROUP = 'All Channels'
-    _CALL_SIGN_RE = re.compile(r'^[KW][A-Z]{2,3}\b')
+    # Station call sign at the start of the name: "KGW 8", "KQ2 St. Joseph",
+    # "KTHV11", "WSYX ABC 6". The shared category rule only catches 4-letter
+    # call signs, so locals are tagged here.
+    _CALL_SIGN_RE = re.compile(r'^[KW][A-Z]{2,3}(?=\d|\b)|^KQ2\b')
+
+    # Zeam's own studio channels and the national nets the name alone can't place.
+    _CATEGORY_BY_NAME = {
+        'local news live': 'Local News',
+        'ky3 news': 'Local News',
+        'et': 'Entertainment',
+        'jtv': 'Shopping',
+        'big apple live': 'Entertainment',
+        "zeam's big apple live (previously recorded)": 'Entertainment',
+        'live at the west end': 'Entertainment',
+        'recent podcasts from zeam studios': 'Entertainment',
+        'going full jack with john stamos': 'Entertainment',
+        'jax perry. indie creator.': 'Entertainment',
+        'mike young presents': 'Comedy',
+        'fast lane tv': 'Automotive',
+        'food. curated.': 'Food',
+        'the martin yan channel': 'Food',
+        'fun roads tv': 'Travel',
+        'northern michigan from above': 'Travel',
+        'utah-tv': 'Travel',
+        'zeamextreme route 66 roadtrip': 'Travel',
+        'zeamextreme van': 'Travel',
+        'zeamextreme replay': 'Travel',
+        'zeam new york studios street cam': 'Ambiance',
+        'quili.tv': 'Ambiance',
+        'police in pusuit': 'Reality TV',
+        'premier guitar channel': 'Music',
+        'the fly-over music hour': 'Music',
+        'tcn+': 'True Crime',
+        'zeaming behind the race': 'Sports',
+        'locked on nba': 'Sports',
+        'sky link tv': 'International',
+        'sky link tv drama channel': 'Drama',
+    }
+    _LANGUAGE_BY_NAME = {
+        'kese telemundo': 'es',
+        'kuna 15 telemundo': 'es',
+        'wfmz edicion en espanol': 'es',
+        'sky link tv': 'zh',
+        'sky link tv drama channel': 'zh',
+    }
     _EPG_WORKERS = 6
 
     def __init__(self, config: dict | None = None):
@@ -70,7 +114,7 @@ class ZeamScraper(BaseScraper):
                 description=(obj.get('description') or '').strip() or None,
                 guide_key=f'ZEAM:{station_id}',
                 country='US',
-                language='en',
+                language=self._LANGUAGE_BY_NAME.get(name.lower(), 'en'),
                 stream_type='hls',
             ))
         logger.info('[%s] %d channels', self.source_name, len(channels))
@@ -169,7 +213,12 @@ class ZeamScraper(BaseScraper):
 
     @classmethod
     def _category(cls, name: str) -> str | None:
-        if cls._CALL_SIGN_RE.match(name) or 'news' in name.lower():
+        known = cls._CATEGORY_BY_NAME.get(name.lower())
+        if known:
+            return known
+        if cls._CALL_SIGN_RE.match(name):
+            return 'Local News'
+        if 'news' in name.lower():
             return 'News'
         return None
 
