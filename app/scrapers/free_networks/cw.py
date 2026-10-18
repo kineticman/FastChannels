@@ -34,9 +34,19 @@ def _category(ch: dict) -> str | None:
     return raw or None
 
 
+def _is_tba(p: dict) -> bool:
+    return (p.get('title') or '').strip().lower() == 'to be announced' or \
+        str(p.get('asset_id') or '').endswith('_TBA')
+
+
 class CW(Network):
     key = 'cw'
     name = 'The CW'
+    # Slugs whose feed was all "To Be Announced" on the last guide fetch.
+    _tba: set[str] = set()
+
+    def has_guide(self, channel_id):
+        return channel_id not in self._tba
 
     def _feed(self, s) -> list[dict]:
         def fetch():
@@ -69,12 +79,18 @@ class CW(Network):
 
     def programs(self, s, channels):
         wanted = {c.id for c in channels}
-        out = []
+        tba, out = set(), []
         for ch in self._feed(s):
             slug = ch.get('slug')
             if slug not in wanted:
                 continue
-            for p in ch.get('programs') or []:
+            rows = ch.get('programs') or []
+            # A feed that's nothing but "To Be Announced" (ACC Digital Network) is
+            # no guide; leave the channel uncovered so it gets named placeholders.
+            if rows and all(_is_tba(p) for p in rows):
+                tba.add(slug)
+                continue
+            for p in rows:
                 prog = program(slug, p.get('title'), from_epoch(p.get('program_start_ts')),
                                from_epoch(p.get('program_end_ts')),
                                episode_title=p.get('subtitle'), description=p.get('description'),
@@ -82,4 +98,5 @@ class CW(Network):
                                poster_url=p.get('details_image_url') or None)
                 if prog:
                     out.append(prog)
+        type(self)._tba = tba
         return out
