@@ -1781,6 +1781,103 @@ def vix_dash(channel_id: str):
     return play('vix', _unquote(channel_id))
 
 
+# Lura's segment hosts (live-N.vix.com) send CORS to https://vix.com only, so a
+# browser on any other origin gets the manifest and keys but no segments.
+# FastChannels Player doesn't enforce CORS and keeps vix_dash's plain 302; the
+# admin/watch players get vix_browser_dash, which relays every segment.
+_VIX_SEG_ATTR_RE = re.compile(r'\b(sourceURL|media|initialization)="(https?://[^"]+)"')
+_VIX_LOCATION_RE = re.compile(r'<Location>([^<]*)</Location>')
+
+
+def _vix_sig(url: str) -> str:
+    import hashlib
+    import hmac
+    key = (current_app.secret_key or 'fastchannels').encode()
+    return hmac.new(key, url.encode(), hashlib.sha256).hexdigest()[:32]
+
+
+@play_bp.route('/play/vix/<channel_id>/browser.mpd')
+def vix_browser_dash(channel_id: str):
+    """ViX's manifest for a browser player, with every segment URL pointed at
+    vix_segment. The manifest's <Location> (Lura's session URL, which the player
+    refreshes from every few seconds) is pointed back here with that URL as ?s=,
+    so a refresh fetches the same Lura session instead of starting a new tune."""
+    import html as _html
+    from urllib.parse import unquote as _unquote, quote as _quote
+
+    raw_id = _unquote(channel_id)
+    session_url = request.args.get('s') or ''
+    if session_url and (request.args.get('sig') != _vix_sig(session_url)
+                        or not (urlsplit(session_url).hostname or '').endswith('.lura.live')):
+        abort(403)
+    r = None
+    if session_url:
+        try:
+            r = _requests.get(session_url, timeout=(5, 15))
+        except Exception as e:
+            logger.warning('[vix-browser] session refresh failed for %s: %s', raw_id, e)
+        if r is not None and r.status_code != 200:
+            logger.info('[vix-browser] session HTTP %s for %s; re-tuning', r.status_code, raw_id)
+            r = None
+    if r is None:
+        channel = (Channel.query.join(Source)
+                   .filter(Source.name == 'vix', Channel.source_channel_id == raw_id).first())
+        scraper_cls = registry.get('vix')
+        if not channel or not scraper_cls:
+            abort(404)
+        try:
+            scraper = scraper_cls(config={**(channel.source.config or {}), **load_source_cache(channel.source.id)})
+            mpd_url = scraper.resolve(channel.stream_url)
+            if scraper._pending_cache_updates:
+                persist_source_cache_updates(channel.source.id, scraper._pending_cache_updates)
+            r = _requests.get(mpd_url, timeout=(5, 15))
+        except Exception as e:
+            logger.warning('[vix-browser] resolve failed for %s: %s', raw_id, e)
+            return _unavailable_response()
+        if r.status_code != 200:
+            logger.warning('[vix-browser] manifest HTTP %s for %s', r.status_code, raw_id)
+            return _unavailable_response()
+
+    base = request.host_url.rstrip('/') + f'/play/vix/{_quote(raw_id, safe="")}'
+
+    def _seg(m):
+        url = _html.unescape(m.group(2))
+        relayed = f'{base}/seg?u={_quote(url, safe="")}&sig={_vix_sig(url)}'
+        return f'{m.group(1)}="{_html.escape(relayed)}"'
+
+    def _location(m):
+        url = _html.unescape(m.group(1))
+        here = f'{base}/browser.mpd?s={_quote(url, safe="")}&sig={_vix_sig(url)}'
+        return f'<Location>{_html.escape(here, quote=False)}</Location>'
+
+    mpd = _VIX_SEG_ATTR_RE.sub(_seg, r.text)
+    mpd = _VIX_LOCATION_RE.sub(_location, mpd)
+    return Response(mpd, mimetype='application/dash+xml',
+                    headers={'Cache-Control': 'no-cache', 'Access-Control-Allow-Origin': '*'})
+
+
+@play_bp.route('/play/vix/<channel_id>/seg')
+def vix_segment(channel_id: str):
+    """One segment named by a manifest vix_browser_dash served — signed, so this
+    relays nothing else."""
+    url = request.args.get('u') or ''
+    if not url.startswith('https://') or request.args.get('sig') != _vix_sig(url):
+        abort(403)
+    try:
+        r = _requests.get(url, timeout=(5, 30), stream=True)
+    except Exception as e:
+        logger.warning('[vix-seg] fetch failed for %s: %s', url[:80], e)
+        abort(502)
+    if r.status_code != 200:
+        status = r.status_code
+        r.close()
+        logger.warning('[vix-seg] HTTP %s for %s', status, url[:80])
+        abort(502 if status >= 500 else status)
+    return _stream_upstream_response(
+        r, content_type=r.headers.get('Content-Type', 'application/octet-stream'),
+        headers={'Access-Control-Allow-Origin': '*'}, label='vix-seg')
+
+
 @play_bp.route('/play/tennis_tve/<channel_id>/dash.mpd')
 def tennis_tve_dash(channel_id: str):
     """Tennis Channel under a .mpd name for FastChannels Player, like vix_dash.
@@ -3482,7 +3579,7 @@ def watch(channel_id):
         from urllib.parse import urlencode as _urlencode
         return redirect(f'{request.path}?{_urlencode(qs)}', 302)
     channel = Channel.query.get_or_404(channel_id)
-    info = _get_playback_info(channel, fast_mode=False)
+    info = _get_playback_info(channel, fast_mode=False, browser=True)
     settings = AppSettings.get()
     max_height = int(settings.prismcast_max_height or 0)
     play_url = info.get('preview_url') or info.get('play_url') or ''
