@@ -1840,9 +1840,18 @@ def dazn_tve_dash(channel_id: str):
     if r.status_code != 200:
         logger.warning('[dazn-dash] manifest HTTP %s for %s', r.status_code, raw_id[:40])
         return _unavailable_response()
-    base = request.host_url.rstrip('/') + f'/play/dazn_tve/{_quote(raw_id, safe="")}/seg/'
-    mpd = re.sub(r'<BaseURL>[^<]*</BaseURL>\s*', '', r.text)
-    mpd = mpd.replace('<Period', f'<BaseURL>{base}</BaseURL>\n  <Period', 1)
+    mpd = r.text
+    # Some channels (Unbeaten) redirect to a partner's ad-insertion server
+    # whose manifest has absolute BaseURLs on segment hosts that aren't
+    # user-agent bound and send CORS, so it's served untouched. Only DAZN's
+    # own CDN needs the relay.
+    if not re.search(r'<BaseURL[^>]*>\s*https?://', mpd):
+        if urlsplit(r.url).netloc != urlsplit(stream['manifest']).netloc:
+            base = r.url.split('?', 1)[0].rsplit('/', 1)[0] + '/'
+        else:
+            base = request.host_url.rstrip('/') + f'/play/dazn_tve/{_quote(raw_id, safe="")}/seg/'
+        mpd = re.sub(r'<BaseURL>[^<]*</BaseURL>\s*', '', mpd)
+        mpd = mpd.replace('<Period', f'<BaseURL>{base}</BaseURL>\n  <Period', 1)
     return Response(mpd, mimetype='application/dash+xml',
                     headers={'Cache-Control': 'no-cache', 'Access-Control-Allow-Origin': '*'})
 
