@@ -33,14 +33,14 @@ from .adobe_pass import TVEAuthError, TVENotAuthorizedError, TVEPendingAuthError
 logger = logging.getLogger(__name__)
 
 STATUS_KEY = 'tve:link-login:status'
-LINK_FAMILIES = ('legacy', 'nbc', 'tcm', 'fox', 'amcn', 'discovery', 'versant', 'univision', 'disney', 'tennis')
+LINK_FAMILIES = ('legacy', 'nbc', 'tcm', 'fox', 'amcn', 'discovery', 'versant', 'univision', 'disney', 'tennis', 'dazn')
 _PER_TARGET_TIMEOUT = 10 * 60
 _POLL_SECONDS = 3.0
 _POLL_MAX_SECONDS = 15.0
 
 
 def job_timeout(family: str) -> int:
-    targets = {'amcn': 4, 'disney': 2}.get(family, 1)
+    targets = {'amcn': 4, 'disney': 2, 'dazn': 2}.get(family, 1)
     return targets * _PER_TARGET_TIMEOUT + 300
 
 
@@ -580,6 +580,102 @@ class _Tennis:
         return 'authorized'
 
 
+class _Dazn:
+    """DAZN — two links, one after the other: DAZN's own "sign in with your
+    phone" pairing (dazn.com/signin/device/<id>, opened where the user is
+    signed in to DAZN), then the TV provider under the Gotham requestor,
+    which DAZN binds to that same DAZN device. A saved DAZN sign-in that still
+    renews skips the first link."""
+    error_key = 'dazn'
+    _ACCOUNT, _PROVIDER = 'DAZN account', 'TV provider (YES, MSG)'
+
+    def __init__(self, account, mso_id: str, requestor_id: str | None):
+        from ..models import Source
+        from ..scrapers.dazn_tve import DaznTVEScraper
+        self.account, self.mso_id = account, mso_id
+        self.source = Source.query.filter_by(name='dazn_tve').first()
+        if not self.source or not self.source.is_enabled:
+            raise TVEAuthError('Enable the DAZN source before signing in to it.')
+        self.scraper = DaznTVEScraper(config=dict(self.source.config or {}))
+
+    def targets(self):
+        return [self._ACCOUNT, self._PROVIDER]
+
+    def _saved(self) -> dict:
+        from ..extensions import db
+        db.session.refresh(self.account)
+        return (self.account.config or {}).get('dazn_auth') or {}
+
+    def start(self, label):
+        from ..scrapers import dazn_tve as dz
+        if label == self._ACCOUNT:
+            saved = self._saved()
+            if saved.get('token') and saved.get('device_id'):
+                try:
+                    token = dz.refresh_token(saved['token'], saved['device_id'])
+                    return None, {'step': 'account', 'token': token, 'device_id': saved['device_id'], 'reused': True}
+                except TVEAuthError:
+                    pass
+            device_id = dz.new_device_id()
+            link = dz.request_device_link(device_id)
+            return link['url'], {'step': 'account', 'device_id': device_id, 'second_screen_id': link['second_screen_id']}
+
+        saved = self._saved()
+        if not saved.get('token'):
+            raise TVEAuthError('DAZN: sign in to your DAZN account first.')
+        client = dz.register_adobe_client(saved['token'])
+        headers = dz.adobe_headers(client['access_token'], saved['device_id'])
+        r = requests.post(f'{dz.ADOBE_BASE}/api/v2/{dz.REQUESTOR_ID}/sessions', timeout=30, headers=headers,
+                          data={'mvpd': self.mso_id, 'domainName': dz.DOMAIN_NAME, 'redirectUrl': dz.REDIRECT_URL})
+        data = r.json() if r.ok else {}
+        ctx = {'step': 'provider', 'client': client, 'headers': headers, 'device_id': saved['device_id'],
+               'profile_url': f'{dz.ADOBE_BASE}/api/v2/{dz.REQUESTOR_ID}/profiles/{self.mso_id}'}
+        if data.get('reasonType') == 'authenticated':
+            return None, ctx
+        if not data.get('url'):
+            raise TVEAuthError(f'DAZN: Adobe did not return a sign-in URL (HTTP {r.status_code}).')
+        return dz.ADOBE_BASE + data['url'], ctx
+
+    def poll(self, ctx):
+        from ..scrapers import dazn_tve as dz
+        if ctx['step'] == 'account':
+            return ctx.get('token') or dz.poll_device_link(ctx['second_screen_id'])
+        r = requests.get(ctx['profile_url'], headers=ctx['headers'], timeout=20)
+        if not r.ok:
+            return None
+        return ((r.json() or {}).get('profiles') or {}).get(self.mso_id) or None
+
+    def save(self, ctx, result):
+        from ..config_store import persist_source_cache_updates
+        from ..extensions import db
+        from ..scrapers import dazn_tve as dz
+
+        cfg = dict(self.account.config or {})
+        auth = dict(cfg.get('dazn_auth') or {})
+        if ctx['step'] == 'account':
+            if ctx.get('reused'):
+                auth['token'] = result
+                message = 'already signed in'
+            else:
+                auth = {'token': result, 'device_id': ctx['device_id'], 'captured_at': int(time.time())}
+                message = 'signed in'
+        else:
+            token = dz.link_tv_provider(auth['token'], ctx['device_id'], ctx['client'], self.mso_id, result)
+            auth.update({'token': token, 'mso_id': self.mso_id, 'linked_at': int(time.time()),
+                         'captured_at': int(time.time())})
+            message = 'authorized' if dz.rsn_status(token) == 'ActivePaid' else None
+        cfg['dazn_auth'] = auth
+        self.account.config = cfg
+        db.session.commit()
+        self.scraper._update_cache('dazn_session', {})
+        self.scraper._update_cache('dazn_streams', {})
+        persist_source_cache_updates(self.source.id, self.scraper._pending_cache_updates)
+        self.scraper._pending_cache_updates = {}
+        if message is None:
+            raise TVENotAuthorizedError(f'your TV provider ({self.mso_id}) doesn\'t include YES or MSG on DAZN')
+        return message
+
+
 class _Fox:
     """FOX TVE — FOX's api3 regcode wrapper around an Adobe v2 link; the
     sign-in is tied to a fresh device_id, as in run_fox_browser_login."""
@@ -846,7 +942,7 @@ class _Discovery:
 
 _ADAPTERS = {'legacy': _Legacy, 'nbc': _Nbc, 'tcm': _Tcm, 'fox': _Fox, 'amcn': _Amcn, 'foxone': _FoxOne,
              'discovery': _Discovery, 'versant': _Versant, 'univision': _Univision,
-             'disney': _Disney, 'tennis': _Tennis}
+             'disney': _Disney, 'tennis': _Tennis, 'dazn': _Dazn}
 
 
 # ── job ──────────────────────────────────────────────────────────────────────

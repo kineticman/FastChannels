@@ -194,6 +194,21 @@ def tve_network_status(account) -> list[dict]:
         'needs_signin': _needs_signin('tennis', tennis_last_signed_in_at, _errors('tennis_tve')),
     })
 
+    dazn_last_signed_in_at = (_cfg('dazn_tve').get('dazn_auth') or {}).get('captured_at')
+    dazn_error_message, dazn_error_at = _last_error('dazn', dazn_last_signed_in_at, _errors('dazn_tve'))
+    entries.append({
+        'source': 'dazn_tve',
+        'label': 'DAZN (YES, MSG and DAZN\'s free channels)',
+        'last_signed_in_at': dazn_last_signed_in_at,
+        'note': 'Two links, one after the other: your DAZN account (open it where you\'re signed in to DAZN; '
+                'a free account works), then your TV provider for YES and MSG.',
+        'family': 'dazn',
+        'requestor_id': None,
+        'last_error_message': dazn_error_message,
+        'last_error_at': dazn_error_at,
+        'needs_signin': _needs_signin('dazn', dazn_last_signed_in_at, _errors('dazn_tve')),
+    })
+
     fox_last_signed_in_at = _cfg('fox_tve').get('fox_sports_access_token_captured_at')
     fox_error_message, fox_error_at = _last_error('fox', fox_last_signed_in_at, _errors('fox_tve'))
     entries.append({

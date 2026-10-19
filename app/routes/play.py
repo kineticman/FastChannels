@@ -1790,6 +1790,98 @@ def tennis_tve_dash(channel_id: str):
     return play('tennis_tve', _unquote(channel_id))
 
 
+def _dazn_stream(channel_id: str):
+    """(source, scraper, resolved stream) for a DAZN channel; the stream's
+    cache entry is persisted so the segment relay and license proxy see it."""
+    channel = (
+        Channel.query.join(Source)
+        .filter(Source.name == 'dazn_tve', Channel.source_channel_id == channel_id)
+        .first()
+    )
+    if not channel:
+        abort(404)
+    scraper_cls = registry.get('dazn_tve')
+    if not scraper_cls:
+        abort(404)
+    cfg = {**(channel.source.config or {}), **load_source_cache(channel.source_id)}
+    scraper = scraper_cls(config=cfg)
+    try:
+        stream = scraper.resolve_stream(channel.stream_url)
+    finally:
+        if getattr(scraper, '_pending_cache_updates', None):
+            try:
+                persist_source_cache_updates(channel.source_id, scraper._pending_cache_updates)
+            except Exception:
+                pass
+    return channel, stream
+
+
+@play_bp.route('/play/dazn_tve/<channel_id>/dash.mpd')
+def dazn_tve_dash(channel_id: str):
+    """DAZN's manifest, relayed. Its CDN token is bound to the user agent that
+    asked for it (dazn_tve.UA) and its segment URLs are relative, so the
+    manifest is fetched here and pointed at dazn_tve_segment, which fetches
+    each segment with that user agent and the token. Segments stay encrypted;
+    the player gets keys through the license proxy as usual."""
+    from urllib.parse import unquote as _unquote, quote as _quote
+    from ..scrapers.dazn_tve import UA as _DAZN_UA
+
+    raw_id = _unquote(channel_id)
+    try:
+        _, stream = _dazn_stream(raw_id)
+    except Exception as e:
+        logger.warning('[dazn-dash] resolve failed for %s: %s', raw_id[:40], e)
+        return _unavailable_response()
+    try:
+        r = _requests.get(stream['manifest'], headers={'User-Agent': _DAZN_UA}, timeout=(5, 15))
+    except Exception as e:
+        logger.warning('[dazn-dash] manifest fetch failed for %s: %s', raw_id[:40], e)
+        return _unavailable_response()
+    if r.status_code != 200:
+        logger.warning('[dazn-dash] manifest HTTP %s for %s', r.status_code, raw_id[:40])
+        return _unavailable_response()
+    base = request.host_url.rstrip('/') + f'/play/dazn_tve/{_quote(raw_id, safe="")}/seg/'
+    mpd = re.sub(r'<BaseURL>[^<]*</BaseURL>\s*', '', r.text)
+    mpd = mpd.replace('<Period', f'<BaseURL>{base}</BaseURL>\n  <Period', 1)
+    return Response(mpd, mimetype='application/dash+xml',
+                    headers={'Cache-Control': 'no-cache', 'Access-Control-Allow-Origin': '*'})
+
+
+@play_bp.route('/play/dazn_tve/<channel_id>/seg/<path:segment>')
+def dazn_tve_segment(channel_id: str, segment: str):
+    """One DAZN segment from the CDN directory of the channel's cached
+    manifest — never any other host — with the token and user agent it's
+    bound to (see dazn_tve_dash)."""
+    from urllib.parse import unquote as _unquote
+    from ..scrapers.dazn_tve import UA as _DAZN_UA
+
+    raw_id = _unquote(channel_id)
+    if '..' in segment or segment.startswith('/'):
+        abort(400)
+    source = Source.query.filter_by(name='dazn_tve').first()
+    if not source:
+        abort(404)
+    stream = ((load_source_cache(source.id).get('dazn_streams') or {}).get(raw_id)) or {}
+    if not stream.get('manifest'):
+        abort(404)
+    cdn_dir = stream['manifest'].split('?', 1)[0].rsplit('/', 1)[0]
+    query = request.query_string.decode()
+    url = f'{cdn_dir}/{segment}?' + (f'{query}&' if query else '') + stream['token_param']
+    try:
+        r = _requests.get(url, headers={'User-Agent': _DAZN_UA}, timeout=(5, 30), stream=True)
+    except Exception as e:
+        logger.warning('[dazn-seg] fetch failed for %s: %s', segment[:60], e)
+        abort(502)
+    if r.status_code != 200:
+        status = r.status_code
+        r.close()
+        logger.warning('[dazn-seg] HTTP %s for %s', status, segment[:60])
+        abort(502 if status >= 500 else status)
+    return _stream_upstream_response(
+        r, content_type=r.headers.get('Content-Type', 'application/octet-stream'),
+        headers={'Access-Control-Allow-Origin': '*'}, label='dazn-seg')
+
+
 _FUBO_MPD_SEG_ATTR_RE = re.compile(r'(initialization|media)="([^"]+)"')
 
 
