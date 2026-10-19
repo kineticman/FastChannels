@@ -50,7 +50,7 @@ class FreeNetworksScraper(BaseScraper):
     display_name = 'Free Networks'
     scrape_interval = 360
     stream_audit_enabled = True
-    source_category = 'specialty'
+    source_category = 'fast'
     config_schema = [
         ConfigField(
             'disabled_networks', 'Networks', field_type='checklist',
