@@ -386,13 +386,20 @@ class UnivisionTVEScraper(MvpdCooldownMixin, BaseScraper):
         url = f'{ADOBE_BASE}/api/v2/{REQUESTOR_ID}/decisions/authorize/{auth["mso_id"]}'
 
         def fetch():
-            return client._post(url, json={'resources': [resource]},
-                                headers={**client._bearer_headers(), 'Content-Type': 'application/json'})
+            # Not client._post: it raises on any HTTP error, so an expired
+            # access token's 401 never reached the refresh below.
+            try:
+                return client.session.post(url, json={'resources': [resource]}, timeout=20,
+                                           headers={**client._bearer_headers(), 'Content-Type': 'application/json'})
+            except requests.RequestException as exc:
+                raise TVEAuthError(f'Univision TVE: could not reach Adobe: {exc}') from exc
 
         r = fetch()
         if r.status_code == 401 and client.client_id and client.client_secret:
             self._save_access_token(client, account)
             r = fetch()
+        if r.status_code == 429 or r.status_code >= 500:
+            raise TVEAuthError(f'Univision TVE: Adobe returned HTTP {r.status_code}; will retry.')
         try:
             decision = next((d for d in (r.json() or {}).get('decisions') or [] if d.get('resource') == resource), {})
         except ValueError:
