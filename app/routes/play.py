@@ -1863,7 +1863,13 @@ def dazn_tve_segment(channel_id: str, segment: str):
         abort(404)
     stream = ((load_source_cache(source.id).get('dazn_streams') or {}).get(raw_id)) or {}
     if not stream.get('manifest'):
-        abort(404)
+        # Dropped from the cache (a sign-in change, or another channel's
+        # write racing this one's): resolve it again rather than stall.
+        try:
+            _, stream = _dazn_stream(raw_id)
+        except Exception as e:
+            logger.warning('[dazn-seg] re-resolve failed for %s: %s', raw_id[:40], e)
+            abort(503)
     cdn_dir = stream['manifest'].split('?', 1)[0].rsplit('/', 1)[0]
     query = request.query_string.decode()
     url = f'{cdn_dir}/{segment}?' + (f'{query}&' if query else '') + stream['token_param']

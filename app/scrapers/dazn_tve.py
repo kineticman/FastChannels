@@ -22,7 +22,11 @@ Key facts established by probing:
   partner-integration-service/initiateMVPDLogin with those returns a DAZN
   token whose productStatus.YESMSG is ActivePaid and whose `geo` claim names
   the zones the user's RSNs are in (yes_national out of market).
-- Channel list: the public Livetvschedule rail, filtered by those zones.
+- Channel list: the public Livetvschedule rail, filtered by those zones and
+  by each tile's EntitlementIds against the token's entitlement sets. A free
+  account plays only the tiles with none (Unbeaten); DAZN 1 USA, Red Bull TV
+  and Fubo Sports need base_dazn_content (paid DAZN), Rally TV its own tier,
+  YES e_r_yes_nt/e_r_yes_ya — the rail lists them all regardless.
 - Playback: api.playback.indazn.com/v5/Playback → per-CDN manifest URLs,
   a 24-hour CDN token and a self-authorizing Widevine license URL. Both the
   Playback API and the license server sit behind a bot filter that only
@@ -30,8 +34,9 @@ Key facts established by probing:
   to the user agent that asked for it, so the manifest and segments are
   relayed by the play routes with that same user agent (play.dazn_tve_*).
   Widevine, so the channels are bridged through FastChannels Player.
-- No program guide: DAZN's EPG lists each Live TV channel as one block, so
-  channels get Gracenote (when mapped) or hourly placeholders.
+- Guide: only Now and Next, from each rail tile's LinearSchedule (DAZN's EPG
+  service lists the channels as one never-ending block); hourly placeholders
+  after that.
 """
 from __future__ import annotations
 
@@ -202,6 +207,12 @@ def rsn_status(token: str) -> str | None:
     return (claims(token).get('productStatus') or {}).get('YESMSG')
 
 
+def entitlements(token: str) -> set[str]:
+    """Every entitlement in a token's entitlement sets."""
+    sets = (claims(token).get('entitlements') or {}).get('entitlementSets') or []
+    return {e for s in sets for e in (s.get('entitlements') or [])}
+
+
 def zones(token: str) -> list[str]:
     """The content zones a token's `geo` claim puts the user in."""
     found = list(_BASE_ZONES)
@@ -260,14 +271,28 @@ class DaznTVEScraper(BaseScraper):
 
     # ── channels + guide ─────────────────────────────────────────────────────
 
-    def fetch_channels(self) -> list[ChannelData]:
-        token, _ = self._token()
+    def _tiles(self, token: str) -> list[dict]:
+        """The Live TV rail's tiles this token can play. Each tile names the
+        entitlements it needs (e.g. base_dazn_content for a paid DAZN plan,
+        e_r_yes_nt for YES); "a_a" is on every tile and isn't one."""
         r = self.session.get(RAIL_URL, timeout=20, params={
             'platform': 'web', 'id': 'Livetvschedule', 'country': 'us', 'brand': 'dazn', 'languageCode': 'en',
             'zones': ','.join(zones(token))})
         r.raise_for_status()
-        out = []
+        held = entitlements(token)
+        tiles = []
         for tile in (r.json() or {}).get('Tiles') or []:
+            needs = set(tile.get('EntitlementIds') or []) - {'a_a'}
+            if needs and not needs & held:
+                logger.info('[dazn_tve] skipping %s — needs %s', tile.get('Title'), ', '.join(sorted(needs)))
+                continue
+            tiles.append(tile)
+        return tiles
+
+    def fetch_channels(self) -> list[ChannelData]:
+        token, _ = self._token()
+        out = []
+        for tile in self._tiles(token):
             asset = tile.get('AssetId')
             name = (tile.get('Title') or '').split(':')[0].strip()
             if not asset or not name:
@@ -295,17 +320,24 @@ class DaznTVEScraper(BaseScraper):
         return out
 
     def fetch_epg(self, channels: list[ChannelData], **kwargs) -> list[ProgramData]:
-        # DAZN's EPG lists each Live TV channel as one never-ending block, so
-        # channels get named hourly placeholders (a Gracenote-mapped channel's
-        # real guide comes from Gracenote in the client).
-        start = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0) - timedelta(hours=1)
+        # The rail carries each channel's Now and Next airing; DAZN publishes
+        # nothing further ahead, so the rest of the window gets hourly blocks
+        # named after the channel. Rescrapes (every 90 minutes) roll it on.
+        token, _ = self._token()
+        schedule = {t.get('AssetId'): t.get('LinearSchedule') or {} for t in self._tiles(token)}
+        now = datetime.now(timezone.utc)
         programs = []
         for ch in channels:
-            for hour in range(48):
-                programs.append(ProgramData(
-                    source_channel_id=ch.source_channel_id, title=ch.name,
-                    start_time=start + timedelta(hours=hour), end_time=start + timedelta(hours=hour + 1),
-                    description=getattr(ch, 'description', None), category='Sports'))
+            sid = ch.source_channel_id
+            real = [p for p in (_airing(sid, (schedule.get(sid) or {}).get(k)) for k in ('Now', 'Next')) if p]
+            programs.extend(real)
+            fill_from = max([p.end_time for p in real] or [now.replace(minute=0, second=0, microsecond=0)])
+            hour = fill_from
+            while hour < now + timedelta(hours=48):
+                nxt = hour.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
+                programs.append(ProgramData(source_channel_id=sid, title=ch.name, start_time=hour, end_time=nxt,
+                                            description=getattr(ch, 'description', None), category='Sports'))
+                hour = nxt
         return programs
 
     # ── playback ─────────────────────────────────────────────────────────────
@@ -391,6 +423,25 @@ class DaznTVEScraper(BaseScraper):
         from ..tve.signin_notice import mark_signin_needed
         mark_signin_needed(NETWORK_KEY, message)
         return TVEAuthError(message)
+
+
+def _airing(source_channel_id: str, item: dict | None) -> ProgramData | None:
+    """One LinearSchedule Now/Next entry."""
+    if not item:
+        return None
+    try:
+        start = datetime.fromisoformat(item['Start'].replace('Z', '+00:00'))
+        end = datetime.fromisoformat(item['End'].replace('Z', '+00:00'))
+    except (KeyError, TypeError, ValueError):
+        return None
+    title = (item.get('Title') or '').strip()
+    if not title or end <= start:
+        return None
+    genre = next((g.get('name') for g in item.get('Genre') or [] if g.get('name')), None)
+    return ProgramData(source_channel_id=source_channel_id, title=title, start_time=start, end_time=end,
+                       episode_title=(item.get('EpisodeTitle') or '').strip() or None,
+                       description=(item.get('Description') or '').strip() or None,
+                       category=genre or 'Sports')
 
 
 def _json(r) -> dict:
