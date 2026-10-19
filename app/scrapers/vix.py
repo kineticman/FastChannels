@@ -8,6 +8,7 @@ import time
 import uuid
 from datetime import datetime, timezone
 
+from ..gracenote_map import resolve_gracenote
 from .base import BaseScraper, ChannelData, ProgramData
 
 logger = logging.getLogger(__name__)
@@ -101,6 +102,7 @@ class ViXScraper(BaseScraper):
                 number=n.get('channelNumber'),
                 guide_key=f'VIX:{_short(cid)}',
                 description=desc if desc and desc.lower() != (n.get('title') or '').strip().lower() else None,
+                gracenote_id=resolve_gracenote('vix', lookup_key=_short(cid)),
             ))
         logger.info('[%s] %d channels', self.source_name, len(out))
         return out

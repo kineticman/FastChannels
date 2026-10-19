@@ -7,6 +7,7 @@ import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 
+from ..gracenote_map import resolve_gracenote
 from .base import BaseScraper, ChannelData, ProgramData
 
 logger = logging.getLogger(__name__)
@@ -129,6 +130,7 @@ class ZeamScraper(BaseScraper):
                 country='US',
                 language=self._LANGUAGE_BY_NAME.get(name.lower(), 'en'),
                 stream_type='hls',
+                gracenote_id=resolve_gracenote('zeam', lookup_key=station_id),
             ))
         logger.info('[%s] %d channels', self.source_name, len(channels))
         return channels
