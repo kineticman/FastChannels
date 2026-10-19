@@ -223,6 +223,22 @@ def tve_network_status(account) -> list[dict]:
         'needs_signin': _needs_signin('cspan', cspan_last_signed_in_at, _errors('cspan_tve')),
     })
 
+    sundance_last_signed_in_at = (_cfg('sundance_tve').get('sundance_auth') or {}).get('captured_at')
+    sundance_error_message, sundance_error_at = _last_error('sundance', sundance_last_signed_in_at,
+                                                            _errors('sundance_tve'))
+    entries.append({
+        'source': 'sundance_tve',
+        'label': 'SundanceTV (AMC Networks)',
+        'last_signed_in_at': sundance_last_signed_in_at,
+        'note': 'Enter your Sundance email and password in the SundanceTV source settings, then sign in to your '
+                'TV provider with a link on your phone or computer.',
+        'family': 'sundance',
+        'requestor_id': None,
+        'last_error_message': sundance_error_message,
+        'last_error_at': sundance_error_at,
+        'needs_signin': _needs_signin('sundance', sundance_last_signed_in_at, _errors('sundance_tve')),
+    })
+
     fox_last_signed_in_at = _cfg('fox_tve').get('fox_sports_access_token_captured_at')
     fox_error_message, fox_error_at = _last_error('fox', fox_last_signed_in_at, _errors('fox_tve'))
     entries.append({

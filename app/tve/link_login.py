@@ -33,7 +33,7 @@ from .adobe_pass import TVEAuthError, TVENotAuthorizedError, TVEPendingAuthError
 logger = logging.getLogger(__name__)
 
 STATUS_KEY = 'tve:link-login:status'
-LINK_FAMILIES = ('legacy', 'nbc', 'tcm', 'fox', 'amcn', 'discovery', 'versant', 'univision', 'disney', 'tennis', 'dazn', 'cspan')
+LINK_FAMILIES = ('legacy', 'nbc', 'tcm', 'fox', 'amcn', 'discovery', 'versant', 'univision', 'disney', 'tennis', 'dazn', 'cspan', 'sundance')
 _PER_TARGET_TIMEOUT = 10 * 60
 _POLL_SECONDS = 3.0
 _POLL_MAX_SECONDS = 15.0
@@ -639,6 +639,68 @@ class _Cspan:
         return 'authorized'
 
 
+class _Sundance:
+    """SundanceTV — Adobe v1 under the SUNDANCE requestor, driven by DICE:
+    log in to the Sundance account (email/password from the source
+    settings), have Sundance issue the regcode, then trade the finished
+    sign-in for a Sundance session that carries the TV-provider licence."""
+    error_key = 'sundance'
+
+    def __init__(self, account, mso_id: str, requestor_id: str | None):
+        from ..models import Source
+        self.account, self.mso_id = account, mso_id
+        self.source = Source.query.filter_by(name='sundance_tve').first()
+        if not self.source or not self.source.is_enabled:
+            raise TVEAuthError('Enable the SundanceTV source before signing in to it.')
+        cfg = self.source.config or {}
+        self.email, self.password = cfg.get('email') or '', cfg.get('password') or ''
+        if not self.email or not self.password:
+            raise TVEAuthError('Enter your Sundance email and password in the SundanceTV source settings first.')
+
+    def targets(self):
+        return ['SundanceTV']
+
+    def start(self, label):
+        from ..scrapers import sundance_tve as sd
+        user = sd.login(self.email, self.password)
+        client = sd.register_adobe_client()
+        reg = sd.request_regcode(user['authorisationToken'], client)
+        pro = (sd.claims(user['authorisationToken']).get('pro') or {}).get('id') or ''
+        ctx = {'user': user['authorisationToken'], 'client': client, 'access_token': reg['accessToken'],
+               'device': pro, 'next_exchange': 0.0}
+        return sd.authenticate_url(reg['code'], self.mso_id), ctx
+
+    def poll(self, ctx):
+        from ..scrapers import sundance_tve as sd
+        signed_in = sd.adobe_signed_in(ctx['access_token'], ctx['device']) if ctx['device'] else None
+        if signed_in is False:
+            return None
+        # Adobe said yes, or gave no usable answer: ask Sundance, but not
+        # more than every 15s on the no-answer path (it rate-limits).
+        if signed_in is None and time.monotonic() < ctx['next_exchange']:
+            return None
+        ctx['next_exchange'] = time.monotonic() + 15
+        return sd.exchange_adobe(ctx['user'], ctx['client'], ctx['access_token'], self.mso_id)
+
+    def save(self, ctx, session):
+        from ..extensions import db
+        from ..scrapers import sundance_tve as sd
+
+        if not sd.has_tv_provider(session['authorisationToken']):
+            raise TVENotAuthorizedError('your package doesn\'t include SundanceTV')
+        captured_at = int(time.time())
+        cfg = dict(self.account.config or {})
+        cfg['sundance_auth'] = {'mso_id': self.mso_id, 'refresh_token': session['refreshToken'],
+                                'client_id': ctx['client']['client_id'],
+                                'client_secret': ctx['client']['client_secret'], 'captured_at': captured_at}
+        self.account.config = cfg
+        db.session.commit()
+        scraper = sd.SundanceTVEScraper(config=dict(self.source.config or {}))
+        scraper._save_session({'auth': session['authorisationToken'], 'refresh': session['refreshToken'],
+                               'signed_in_at': captured_at})
+        return 'authorized'
+
+
 class _Dazn:
     """DAZN — two links, one after the other: DAZN's own "sign in with your
     phone" pairing (dazn.com/signin/device/<id>, opened where the user is
@@ -1001,7 +1063,8 @@ class _Discovery:
 
 _ADAPTERS = {'legacy': _Legacy, 'nbc': _Nbc, 'tcm': _Tcm, 'fox': _Fox, 'amcn': _Amcn, 'foxone': _FoxOne,
              'discovery': _Discovery, 'versant': _Versant, 'univision': _Univision,
-             'disney': _Disney, 'tennis': _Tennis, 'dazn': _Dazn, 'cspan': _Cspan}
+             'disney': _Disney, 'tennis': _Tennis, 'dazn': _Dazn, 'cspan': _Cspan,
+             'sundance': _Sundance}
 
 
 # ── job ──────────────────────────────────────────────────────────────────────
