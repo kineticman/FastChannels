@@ -51,7 +51,7 @@ from app.channel_tags import (AUTO_EVENT_REASONS, EVENT_RETIRED_REASON, EVENT_MI
                               event_channel_clause)
 from app.event_lifecycle import hide_event, restore_event, delete_event
 from app.tve.adobe_pass import TVENotAuthorizedError
-from app.xml_cache import ensure_xml_artifact, get_artifact, invalidate_xml_cache, write_artifact
+from app.xml_cache import ensure_xml_artifact, get_artifact, invalidate_xml_cache, sweep_unused_artifacts, write_artifact
 from app.routes.images import delete_cached_logo
 
 from app.timezone_utils import make_tz_formatter
@@ -2039,6 +2039,17 @@ def _refresh_xml_artifacts() -> None:
         logger.info('[artifacts] refreshed %d XML artifact(s) and %d M3U artifact(s)', rebuilt_xml, rebuilt_m3u)
         if missing_m3u:
             logger.warning('[artifacts] still missing M3U artifact(s) after retry: %s', missing_m3u)
+        # This pass's keys are exactly what the output routes can serve right
+        # now, so anything else on disk is from a deleted feed or a bridge
+        # method that's been switched off (GitHub #73).
+        try:
+            live_keys = {k for k, _w in xml_artifacts} | {k for k, _w in m3u_artifacts}
+            swept, swept_bytes = sweep_unused_artifacts(live_keys)
+            if swept:
+                logger.info('[artifacts] removed %d unused cache file(s), freed %.1f MB',
+                            swept, swept_bytes / 1024 / 1024)
+        except Exception:
+            logger.exception('[artifacts] unused-artifact sweep failed')
         break
 
 

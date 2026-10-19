@@ -159,6 +159,47 @@ def delete_xml_artifact(cache_key: str) -> int:
     return removed
 
 
+def sweep_unused_artifacts(live_keys: set[str], *, min_age_seconds: int = 600) -> tuple[int, int]:
+    """Delete cached artifacts that no longer belong to any live output.
+
+    `live_keys` is every cache key the artifact refresh just produced — anything
+    else named `master*`/`feed-*` is left over from a deleted or disabled feed or
+    a bridge method that's switched off, and its route no longer serves it.
+    Files modified within `min_age_seconds` are kept so an on-demand write that
+    races the refresh (e.g. a DVR import for a just-created feed) survives.
+    Orphaned `.tmp` files from crashed writes are removed once past the lock
+    staleness window. Returns `(files_removed, bytes_freed)`.
+    """
+    if not _CACHE_ROOT.is_dir():
+        return 0, 0
+    live_names: set[str] = set()
+    for key in live_keys:
+        for ext in ('xml', 'm3u', 'xml.stale', 'xml.lock'):
+            live_names.add(_cache_path(key, ext=ext).name)
+    now = time.time()
+    removed = freed = 0
+    for path in _CACHE_ROOT.iterdir():
+        name = path.name
+        if not name.startswith(('master', 'feed-')) or name in live_names:
+            continue
+        try:
+            st = path.stat()
+        except OSError:
+            continue
+        if not path.is_file():
+            continue
+        max_age = _LOCK_STALE_SECONDS if name.endswith('.tmp') else min_age_seconds
+        if now - st.st_mtime < max_age:
+            continue
+        try:
+            path.unlink()
+        except OSError:
+            continue
+        removed += 1
+        freed += st.st_size
+    return removed, freed
+
+
 def ensure_xml_artifact(cache_key: str, writer: Callable[[TextIO], None], *, wait_if_locked: bool = True) -> Path:
     """Return the XML artifact path, rebuilding if missing or stale.
 
