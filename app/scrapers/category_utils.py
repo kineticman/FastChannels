@@ -1918,6 +1918,24 @@ _NAME_OVERRIDES: dict[str, str] = {
 }
 
 
+# Philo's guide omits genres for these channels. Keep these corrections scoped
+# to Philo so a custom playlist entry with the same name is never reclassified.
+_PHILO_NAME_OVERRIDES: dict[str, str] = {
+    'halloween plus':        'Horror',
+    'strangely addicting':   'Reality TV',
+    'hbo':                   'Movies',
+    'hbo hits':              'Movies',
+    'hbo latino hd':         'Latino',
+    'reelz':                 'Entertainment',
+    'shudder tv':            'Horror',
+    'starz encore action':   'Action & Adventure',
+    'starz encore black':    'Movies',
+    'starz encore classic':  'Movies',
+    'starz encore español':  'Latino',
+    'starz encore suspense': 'Movies',
+}
+
+
 _NATIONAL_NETWORK_NEWS = {
     'abc news live',
     'cbs news 24/7',
@@ -1983,13 +2001,14 @@ def category_for_channel(name: str, raw_category: str | None, source_name: str |
     """Return the canonical category for a channel, applying hard overrides first.
 
     Priority order:
-      1. Exact name match in _NAME_OVERRIDES (scraper-proof corrections)
+      1. Source-specific or global exact name override
       2. Pattern checks for reliable name-based signals (XITE, K-Drama, Very Local)
       3. normalize_category(raw_category) — scraper-provided value after mapping
 
     This ensures that re-scraping never undoes manual category corrections.
 
-    `source_name` is optional. Sources in `_CALLSIGN_GENRE_TRUSTED_SOURCES`
+    `source_name` is optional. Philo-only overrides require it; sources in
+    `_CALLSIGN_GENRE_TRUSTED_SOURCES`
     (e.g. HDHomeRun OTA tuners, whose channels are real broadcast call signs
     spanning genres) skip the bare call-sign → Local News guess, so their
     scraper-provided category (a real genre, or 'Broadcast') is honoured.
@@ -1999,6 +2018,8 @@ def category_for_channel(name: str, raw_category: str | None, source_name: str |
     name_lower = name_clean.lower()
 
     # 1. Exact override
+    if source_name == 'philo' and name_lower in _PHILO_NAME_OVERRIDES:
+        return _PHILO_NAME_OVERRIDES[name_lower]
     override = _NAME_OVERRIDES.get(name_lower)
     if override:
         return override
@@ -2086,6 +2107,12 @@ def explain_category(name: str, raw_category: str | None, source_name: str | Non
     name_lower = name_clean.lower()
 
     # 1. Exact override
+    if source_name == 'philo' and name_lower in _PHILO_NAME_OVERRIDES:
+        return {
+            'source': 'override',
+            'rule': 'philo_name_override',
+            'detail': 'Matched a Philo channel name with no genre in its guide.',
+        }
     if name_lower in _NAME_OVERRIDES:
         return {
             'source': 'override',

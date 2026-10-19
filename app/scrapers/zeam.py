@@ -84,6 +84,7 @@ class ZeamScraper(BaseScraper):
         'locked on nba': 'Sports',
         'sky link tv': 'International',
         'sky link tv drama channel': 'Drama',
+        'itv+': 'News',  # InvestigateTV+ — Gray's investigative news magazine
     }
     _LANGUAGE_BY_NAME = {
         'kese telemundo': 'es',

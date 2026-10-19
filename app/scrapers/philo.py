@@ -455,7 +455,7 @@ class PhiloScraper(BaseScraper):
             if src:
                 logo = src
                 break
-        category = category_for_channel(name, None)
+        category = category_for_channel(name, None, self.source_name)
         channels.append(ChannelData(
             source_channel_id=cid,
             name=name,
