@@ -91,13 +91,17 @@ _SUCCESS_SUPPRESS_PATTERNS = (
     'GET /api/stats?source=',              # per-source counts shown in the editor
 )
 # DAZN's segments are relayed (the CDN token is bound to our user agent): one
-# audio and one video segment every ~2s per viewer.
-_SUCCESS_SUPPRESS_RE = re.compile(r'(?:GET|HEAD) /play/directv/browser-asset\?url=|(?:GET|HEAD) /play/dazn_tve/[^/]+/seg/')
+# audio and one video segment every ~2s per viewer. ViX's browser preview relays
+# its segments too (CORS is vix.com-only) and refreshes its manifest every ~5s
+# through browser.mpd?s=; the first browser.mpd (the tune) still logs.
+_SUCCESS_SUPPRESS_RE = re.compile(
+    r'(?:GET|HEAD) /play/directv/browser-asset\?url=|(?:GET|HEAD) /play/dazn_tve/[^/]+/seg/'
+    r'|(?:GET|HEAD) /play/vix/[^/]+/(?:seg\?|browser\.mpd\?s=)')
 _DASH_RE = re.compile(r'(?:GET|HEAD) /play/(amazon_prime_free|cox|philo|sling|pbs|vidaa|fubo|dazn_tve)/[^/]+/dash\.mpd')
 # DirecTV/cox use path-form license URLs (/license/<id>), while vidaa/fubo/sling use
 # query-form URLs (/license?channel_id=<id>) — matched via the separator below. Sling's
 # fire on every tune, block-boundary swap, and FC Player ad-gap rejoin.
-_LICENSE_RE = re.compile(r'POST /play/(directv|cox|vidaa|fubo|sling|espn|dazn_tve)/license(?:/|\?channel_id=)')
+_LICENSE_RE = re.compile(r'POST /play/(directv|cox|vidaa|fubo|sling|espn|dazn_tve|vix)/license(?:/|\?channel_id=)')
 _PLUTO_VARIANT_QUERY_RE = re.compile(r'("(?:GET|HEAD) /play/pluto/variant)\?[^ ]+')
 
 
