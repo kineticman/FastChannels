@@ -1887,6 +1887,15 @@ def tennis_tve_dash(channel_id: str):
     return play('tennis_tve', _unquote(channel_id))
 
 
+@play_bp.route('/play/cnn_tve/<channel_id>/dash.mpd')
+def cnn_tve_dash(channel_id: str):
+    """CNN under a .mpd name for FastChannels Player, like vix_dash. Bolt's
+    manifest and segments send ACAO * and the segment URLs are relative to the
+    tokenized manifest URL, so it's the ordinary resolve + 302."""
+    from urllib.parse import unquote as _unquote
+    return play('cnn_tve', _unquote(channel_id))
+
+
 def _dazn_stream(channel_id: str):
     """(source, scraper, resolved stream) for a DAZN channel; the stream's
     cache entry is persisted so the segment relay and license proxy see it."""

@@ -33,7 +33,7 @@ from .adobe_pass import TVEAuthError, TVENotAuthorizedError, TVEPendingAuthError
 logger = logging.getLogger(__name__)
 
 STATUS_KEY = 'tve:link-login:status'
-LINK_FAMILIES = ('legacy', 'nbc', 'tcm', 'fox', 'amcn', 'discovery', 'versant', 'univision', 'disney', 'tennis', 'dazn', 'cspan', 'sundance')
+LINK_FAMILIES = ('legacy', 'nbc', 'tcm', 'fox', 'amcn', 'discovery', 'versant', 'univision', 'disney', 'tennis', 'dazn', 'cspan', 'sundance', 'cnn')
 _PER_TARGET_TIMEOUT = 10 * 60
 _POLL_SECONDS = 3.0
 _POLL_MAX_SECONDS = 15.0
@@ -639,6 +639,63 @@ class _Cspan:
         return 'authorized'
 
 
+class _Cnn:
+    """CNN — Adobe's v1 regcode sign-in under the `CNN` requestor, one
+    sign-in for CNN, CNN International and HLN. Like C-SPAN, the sign-in is
+    bound to the Adobe client and device it was made with, so both are saved
+    with it."""
+    error_key = 'cnn'
+
+    def __init__(self, account, mso_id: str, requestor_id: str | None):
+        from ..models import Source
+        from ..scrapers.cnn_tve import CNNTVEScraper
+        self.account, self.mso_id = account, mso_id
+        self.source = Source.query.filter_by(name='cnn_tve').first()
+        if not self.source or not self.source.is_enabled:
+            raise TVEAuthError('Enable the CNN TVE source before signing in to it.')
+        self.scraper = CNNTVEScraper(config=dict(self.source.config or {}))
+
+    def targets(self):
+        return ['CNN']
+
+    def start(self, label):
+        from ..scrapers.cnn_tve import adobe_client
+        client = adobe_client(self.scraper.software_statement())
+        client.setup_client()
+        client.register_device()
+        client.create_regcode()
+        return client.authenticate_redirect_url(self.mso_id), client
+
+    def poll(self, client):
+        try:
+            client.fetch_session_token()
+        except TVEPendingAuthError:
+            return None
+        return client.ctx.authn_token
+
+    def save(self, client, authn_token):
+        from ..config_store import persist_source_cache_updates
+        from ..extensions import db
+
+        cfg = dict(self.account.config or {})
+        cfg['cnn_mvpd_auth'] = {
+            'mso_id': self.mso_id, 'fingerprint': client._device_fingerprint, 'authn_token': authn_token,
+            'client_id': client.ctx.client_id, 'client_secret': client.ctx.client_secret,
+            'access_token': client.ctx.access_token, 'captured_at': int(time.time()),
+        }
+        self.account.config = cfg
+        db.session.commit()
+        for key in ('cnn_tve_client', 'cnn_tve_authz', 'cnn_streams'):
+            self.scraper._update_cache(key, {})
+        persist_source_cache_updates(self.source.id, self.scraper._pending_cache_updates)
+        self.scraper._pending_cache_updates = {}
+        try:
+            client.authorize()
+        except TVENotAuthorizedError:
+            raise TVENotAuthorizedError('your package doesn\'t include CNN')
+        return 'authorized'
+
+
 class _Sundance:
     """SundanceTV — Adobe v1 under the SUNDANCE requestor, driven by DICE:
     log in to the Sundance account (email/password from the source
@@ -1064,7 +1121,7 @@ class _Discovery:
 _ADAPTERS = {'legacy': _Legacy, 'nbc': _Nbc, 'tcm': _Tcm, 'fox': _Fox, 'amcn': _Amcn, 'foxone': _FoxOne,
              'discovery': _Discovery, 'versant': _Versant, 'univision': _Univision,
              'disney': _Disney, 'tennis': _Tennis, 'dazn': _Dazn, 'cspan': _Cspan,
-             'sundance': _Sundance}
+             'sundance': _Sundance, 'cnn': _Cnn}
 
 
 # ── job ──────────────────────────────────────────────────────────────────────

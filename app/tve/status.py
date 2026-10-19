@@ -239,6 +239,20 @@ def tve_network_status(account) -> list[dict]:
         'needs_signin': _needs_signin('sundance', sundance_last_signed_in_at, _errors('sundance_tve')),
     })
 
+    cnn_last_signed_in_at = (_cfg('cnn_tve').get('cnn_mvpd_auth') or {}).get('captured_at')
+    cnn_error_message, cnn_error_at = _last_error('cnn', cnn_last_signed_in_at, _errors('cnn_tve'))
+    entries.append({
+        'source': 'cnn_tve',
+        'label': 'CNN TVE (CNN, CNN International, HLN)',
+        'last_signed_in_at': cnn_last_signed_in_at,
+        'note': 'Sign in with a link on your phone or computer.',
+        'family': 'cnn',
+        'requestor_id': None,
+        'last_error_message': cnn_error_message,
+        'last_error_at': cnn_error_at,
+        'needs_signin': _needs_signin('cnn', cnn_last_signed_in_at, _errors('cnn_tve')),
+    })
+
     fox_last_signed_in_at = _cfg('fox_tve').get('fox_sports_access_token_captured_at')
     fox_error_message, fox_error_at = _last_error('fox', fox_last_signed_in_at, _errors('fox_tve'))
     entries.append({

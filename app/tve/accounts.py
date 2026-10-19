@@ -24,7 +24,7 @@ SHARED_DISPLAY_NAME = 'TV Provider'
 # account.
 SEPARATE_SIGNIN_SOURCES = frozenset({
     'nbc_tve', 'fox_tve', 'warner_tve', 'aenetworks_tve', 'amcn_tve', 'discovery_tve', 'versant_tve',
-    'univision_tve', 'disney_tve', 'tennis_tve', 'dazn_tve', 'cspan_tve', 'sundance_tve',
+    'univision_tve', 'disney_tve', 'tennis_tve', 'dazn_tve', 'cspan_tve', 'sundance_tve', 'cnn_tve',
 })
 
 # What a source's sign-in leaves behind outside its account row. All of it is
@@ -52,6 +52,7 @@ SIGNIN_STATE = {
     'dazn_tve': {'cache': ('dazn_session', 'dazn_streams'), 'account': ('dazn_auth',)},
     'cspan_tve': {'cache': ('cspan_tve_client', 'cspan_tve_authz'), 'account': ('cspan_mvpd_auth',)},
     'sundance_tve': {'cache': ('sundance_session', 'sundance_streams'), 'account': ('sundance_auth',)},
+    'cnn_tve': {'cache': ('cnn_tve_client', 'cnn_tve_authz', 'cnn_streams', 'cnn_bolt'), 'account': ('cnn_mvpd_auth',)},
 }
 
 # The keys sign-in status and errors are recorded under (tve_last_error,
@@ -83,6 +84,7 @@ _NETWORK_KEY_SOURCES = {
     'dazn': 'dazn_tve',
     'cspan': 'cspan_tve',
     'sundance': 'sundance_tve',
+    'cnn': 'cnn_tve',
 }
 
 

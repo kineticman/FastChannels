@@ -101,7 +101,7 @@ _DASH_RE = re.compile(r'(?:GET|HEAD) /play/(amazon_prime_free|cox|philo|sling|pb
 # DirecTV/cox use path-form license URLs (/license/<id>), while vidaa/fubo/sling use
 # query-form URLs (/license?channel_id=<id>) — matched via the separator below. Sling's
 # fire on every tune, block-boundary swap, and FC Player ad-gap rejoin.
-_LICENSE_RE = re.compile(r'POST /play/(directv|cox|vidaa|fubo|sling|espn|dazn_tve|vix)/license(?:/|\?channel_id=)')
+_LICENSE_RE = re.compile(r'POST /play/(directv|cox|vidaa|fubo|sling|espn|dazn_tve|vix|cnn_tve)/license(?:/|\?channel_id=)')
 _PLUTO_VARIANT_QUERY_RE = re.compile(r'("(?:GET|HEAD) /play/pluto/variant)\?[^ ]+')
 
 
