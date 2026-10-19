@@ -13,19 +13,33 @@ the IP a temporary block. So: impersonated requests only, at most once a day
 (sooner only if there's no stored guide left to keep, e.g. after the channels
 were deleted), and on any failure the existing guide is simply kept (programs
 are replaced per channel, so returning nothing leaves it in place).
+
+Radio: the radio-national-video stream is the national radio simulcast (its
+bug rotates through the NY, Boston, DC and SiriusXM stations). Its guide is
+www.bloombergradio.com/schedule/'s WBBR grid: plain HTML, not behind
+PerimeterX, a repeating Sunday-Friday week in ET (the dates on the page are
+stale; Saturday isn't listed and gets a plain "Bloomberg Radio" block). Spot
+checked 2026-10-19 against one weekday frame only, so it's best effort.
 """
 from __future__ import annotations
 
+import html
 import json
+import re
 import time
 from datetime import datetime, timedelta, timezone
 
-from ._common import Network, NetChannel, logger, parse_iso, program
+from ._common import ET, Network, NetChannel, logger, parse_iso, program
 
 _DAI = 'https://dai.google.com/linear/hls/event/{}/master.m3u8'
 _MANIFEST = 'https://www.bloomberg.com/media-manifest/streams/{}.m3u8'
 _SCHEDULE = 'https://www.bloomberg.com/live/schedule/{}'
 _LOGO = 'https://www.bloomberg.com/favicon-black.png'
+_RADIO_SCHEDULE = 'https://www.bloombergradio.com/schedule/'
+_RADIO_BLOCK_RE = re.compile(
+    r'class="show-block[^"]*day_(\w+) station_WBBR_RADIO">\s*<div class="col-md-2">(\d\d):(\d\d)</div>'
+    r'.*?<h2>(.*?)</h2>(?:\s*<p class="textbox">(.*?)</p>)?', re.S)
+_WEEKDAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
 
 # id, name, stream, schedule region
 _CHANNELS = [
@@ -42,7 +56,7 @@ _CHANNELS = [
     ('quicktake', 'Bloomberg QuickTake', _MANIFEST.format('qt'), None),
     ('radio', 'Bloomberg Radio', _MANIFEST.format('radio-national-video'), None),
 ]
-_GUIDED = {cid for cid, _, _, region in _CHANNELS if region}
+_GUIDED = {cid for cid, _, _, region in _CHANNELS if region} | {'radio'}
 _CACHE_KEY = 'bloomberg_schedule_fetched_at'
 _REFRESH_SECONDS = 20 * 3600
 
@@ -83,9 +97,44 @@ class Bloomberg(Network):
                 break  # don't keep knocking after a block
             ok += 1
             out.extend(self._parse(cid, r.text))
+        if 'radio' in wanted:
+            radio = self._radio(s)
+            ok += bool(radio)
+            out.extend(radio)
         if not ok:
             return None
         s._update_cache(_CACHE_KEY, time.time())
+        return out
+
+    @staticmethod
+    def _radio(s):
+        """A week of the WBBR grid from today (ET); [] if the page can't be read."""
+        try:
+            r = s.session.get(_RADIO_SCHEDULE, timeout=20)
+        except Exception as exc:
+            logger.warning('[free_networks] Bloomberg Radio schedule failed: %s', exc)
+            return []
+        week = {}
+        for day, hh, mm, title, desc in _RADIO_BLOCK_RE.findall(r.text if r.ok else ''):
+            week.setdefault(day, []).append((int(hh), int(mm), html.unescape(title).strip(),
+                                             html.unescape(desc or '').strip() or None))
+        if not week:
+            logger.warning('[free_networks] Bloomberg Radio schedule: no WBBR grid (HTTP %s)', r.status_code)
+            return []
+        today = datetime.now(ET).date()
+        slots = []
+        for offset in range(-1, 8):
+            day = today + timedelta(days=offset)
+            midnight = datetime(day.year, day.month, day.day, tzinfo=ET)
+            rows = week.get(_WEEKDAYS[day.weekday()]) or [(0, 0, 'Bloomberg Radio', None)]
+            for hh, mm, title, desc in rows:
+                slots.append((midnight.replace(hour=hh, minute=mm), title, desc))
+        slots.sort(key=lambda x: x[0])
+        out = []
+        for (start, title, desc), (end, _, _) in zip(slots, slots[1:]):
+            p = program('radio', title, start, end, description=desc)
+            if p:
+                out.append(p)
         return out
 
     @staticmethod
