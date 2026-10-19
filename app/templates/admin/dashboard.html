@@ -72,7 +72,7 @@
     .warn { color: var(--warning); font-size: 0.75rem; }
     .err-pip { color: var(--danger); font-size: 0.78rem; font-weight: 600; cursor: default; margin-left: 0.3rem; }
 
-    /* Sources status board — each row is a feed; the signal state is the hero. */
+    /* Sources status board. */
     .src-header-right { display: flex; align-items: center; gap: 0.85rem; }
     .src-summary { font-size: 0.72rem; font-weight: 600; letter-spacing: 0.02em; }
     .src-summary.ok { color: var(--success); }
@@ -96,6 +96,20 @@
     .src-row.state-off { opacity: 0.6; }
     .src-row:hover { background: color-mix(in srgb, var(--accent) 7%, transparent); }
     .src-name { font-weight: 600; font-size: 0.9rem; }
+    .src-board .src-group td {
+      padding: 0.55rem 0.7rem 0.4rem; border-bottom: 1px solid var(--border);
+      border-left: 3px solid var(--group-color, var(--border));
+      background: color-mix(in srgb, var(--bg) 55%, var(--surface));
+      color: var(--group-color, var(--text-muted));
+      font-size: 0.7rem; font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase;
+    }
+    .src-group .group-count { margin-left: 0.4rem; font-weight: 600; opacity: 0.75; letter-spacing: normal; }
+    .src-group.cat-fast { --group-color: var(--accent-soft); }
+    .src-group.cat-premium { --group-color: #a78bfa; }
+    .src-group.cat-tve { --group-color: var(--info-soft, #7eb8f7); }
+    .src-group.cat-specialty { --group-color: var(--warning-soft); }
+    .src-group.cat-custom { --group-color: var(--accent-soft); }
+    .src-group.cat-drm { --group-color: var(--danger-soft); }
 
     /* The signal "lock": a steady dot with a soft halo, plus an explicit label
        (never colour-only). State priority: error > guide-stale/overdue > others. */
@@ -302,7 +316,10 @@
           <th></th>
         </tr></thead>
         <tbody>
-          {% for source in enabled_sources %}{{ source_row(source) }}{% endfor %}
+          {% for group in enabled_source_groups %}
+          <tr class="src-group cat-{{ group.category }}"><td colspan="5">{{ group.label }}<span class="group-count">{{ group.sources|length }}</span></td></tr>
+          {% for source in group.sources %}{{ source_row(source) }}{% endfor %}
+          {% endfor %}
         </tbody>
       </table>
       </div>
@@ -313,7 +330,10 @@
         <table class="src-board disabled">
           <colgroup><col><col class="c-status"><col class="c-feeds"><col class="c-updated"><col class="c-act"></colgroup>
           <tbody>
-            {% for source in disabled_sources %}{{ source_row(source) }}{% endfor %}
+            {% for group in disabled_source_groups %}
+            <tr class="src-group cat-{{ group.category }}"><td colspan="5">{{ group.label }}<span class="group-count">{{ group.sources|length }}</span></td></tr>
+            {% for source in group.sources %}{{ source_row(source) }}{% endfor %}
+            {% endfor %}
           </tbody>
         </table>
         </div>

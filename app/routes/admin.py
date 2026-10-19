@@ -470,6 +470,35 @@ def _humanize_age(dt, now):
     return dt.strftime('%b %-d')
 
 
+_SOURCE_CATEGORY_ORDER = ('fast', 'premium', 'tve', 'specialty', 'custom', 'drm', 'retired')
+_SOURCE_CATEGORY_LABELS = {
+    'fast': 'FAST Sources', 'premium': 'Premium Sources', 'tve': 'TVE Sources',
+    'specialty': 'Specialty Sources', 'custom': 'Custom Sources',
+    'drm': 'DRM Sources', 'retired': 'Retired Sources',
+}
+
+
+def _source_category(source, scrapers):
+    if source.name == 'custom':
+        return 'custom'
+    if source.name not in scrapers and source.scraper_missing_since is not None:
+        return 'retired'
+    return getattr(scrapers[source.name], 'source_category', 'fast') if source.name in scrapers else 'fast'
+
+
+def _group_sources(sources, scrapers):
+    groups = {}
+    for source in sources:
+        category = _source_category(source, scrapers)
+        groups.setdefault(category, []).append(source)
+    order = {category: index for index, category in enumerate(_SOURCE_CATEGORY_ORDER)}
+    return [
+        {'category': category, 'label': _SOURCE_CATEGORY_LABELS.get(category, category.title()),
+         'sources': sorted(items, key=lambda source: source.display_name)}
+        for category, items in sorted(groups.items(), key=lambda item: (order.get(item[0], 99), item[0]))
+    ]
+
+
 @admin_bp.route('/')
 def dashboard():
     sources        = Source.query.order_by(Source.display_name).all()
@@ -552,6 +581,8 @@ def dashboard():
     health_summary = {'attention': attention, 'live': live}
     enabled_sources = [s for s in sources if s.is_enabled]
     disabled_sources = [s for s in sources if not s.is_enabled]
+    enabled_source_groups = _group_sources(enabled_sources, all_scrapers)
+    disabled_source_groups = _group_sources(disabled_sources, all_scrapers)
 
     # Scheduler liveness: the scheduler runs in its own supervised process, so the
     # only way the web app knows it's alive is the heartbeat it stamps each tick.
@@ -578,6 +609,8 @@ def dashboard():
         signins_needed = []
     return render_template('admin/dashboard.html', sources=sources,
                            enabled_sources=enabled_sources, disabled_sources=disabled_sources,
+                           enabled_source_groups=enabled_source_groups,
+                           disabled_source_groups=disabled_source_groups,
                            total_channels=total_channels, base_url=base_url,
                            feeds=feeds, source_output_meta=source_output_meta,
                            epg_meta=epg_meta, source_health=source_health,
@@ -694,10 +727,10 @@ def sources():
         if source_config_status.get(s.id) == 'required' and s.is_enabled
     ]
 
-    _CAT_ORDER = {'fast': 0, 'premium': 1, 'tve': 2, 'specialty': 3, 'custom': 4, 'drm': 5, 'retired': 6}
+    _CAT_ORDER = {category: index for index, category in enumerate(_SOURCE_CATEGORY_ORDER)}
 
     def _cat_for(s):
-        return source_categories.get(s.name, 'fast') if s.name != 'custom' else 'custom'
+        return _source_category(s, all_scrapers)
 
     sources_list.sort(key=lambda s: (_CAT_ORDER.get(_cat_for(s), 99), s.display_name))
 
@@ -717,6 +750,8 @@ def sources():
                            premium_sources=premium_sources,
                            under_development=under_development,
                            source_categories=source_categories,
+                           source_category_labels=_SOURCE_CATEGORY_LABELS,
+                           source_category_order=_SOURCE_CATEGORY_ORDER,
                            source_interval_meta=source_interval_meta,
                            source_config_status=source_config_status,
                            source_retired=source_retired,
