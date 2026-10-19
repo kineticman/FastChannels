@@ -46,7 +46,7 @@ NETWORKS = [
     StaticNetwork('sky', 'Sky News', [
         NetChannel('news', 'Sky News',
                    'https://linear901-oo-hls0-prd-gtm.delivery.skycdp.com/17501/sde-fast-skynews/master.m3u8',
-                   logo=_TMS_LOGO.format('101290'), category='News', country='GB'),
+                   logo=_TMS_LOGO.format('101290'), category='News', country='GB', gracenote_id='122885'),
         NetChannel('arabia', 'Sky News Arabia',
                    'https://live-stream.skynewsarabia.com/c-horizontal-channel/horizontal-stream/index.m3u8',
                    logo='https://www.skynewsarabia.com/icon-192x192.png', category='News', language='ar', country='AE',
