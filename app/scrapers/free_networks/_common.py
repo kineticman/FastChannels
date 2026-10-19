@@ -52,6 +52,12 @@ class Network:
         placeholders, so a failed fetch can't overwrite their real guide."""
         return type(self).programs is not Network.programs
 
+    def borrows_tvtv(self, channel_id: str) -> bool:
+        """Whether a channel with no guide of its own may take tvtv's guide for
+        its Gracenote ID. False for channels whose Gracenote schedule is known
+        not to match the stream; they keep the ID but get placeholders."""
+        return True
+
     def resolve(self, s, ref: str) -> str:
         return ref
 

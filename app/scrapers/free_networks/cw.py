@@ -25,6 +25,10 @@ _CATEGORY = {
     'bounce-xl': 'Entertainment',
     'jack-hanna': 'Nature',
 }
+# Gracenote's schedule for these is a stale loop that doesn't match the stream
+# (ACC Digital Network 124806 lists 2022 lacrosse replays during live football),
+# so they keep the ID for matching but get placeholders, not tvtv's guide.
+_NO_TVTV = {'acc-digital-network'}
 
 
 def _category(ch: dict) -> str | None:
@@ -47,6 +51,9 @@ class CW(Network):
 
     def has_guide(self, channel_id):
         return channel_id not in self._tba
+
+    def borrows_tvtv(self, channel_id):
+        return channel_id not in _NO_TVTV
 
     def _feed(self, s) -> list[dict]:
         def fetch():

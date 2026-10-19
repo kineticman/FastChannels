@@ -154,7 +154,7 @@ class FreeNetworksScraper(BaseScraper):
                 if nc.id in covered or (skipped and net.has_guide(nc.id)):
                     continue
                 gid = gracenote.get(cd.source_channel_id)
-                rows = self._tvtv_programs(cd.source_channel_id, gid) if gid else []
+                rows = self._tvtv_programs(cd.source_channel_id, gid) if gid and net.borrows_tvtv(nc.id) else []
                 if rows:
                     borrowed += len(rows)
                 elif not net.has_guide(nc.id):
