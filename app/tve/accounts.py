@@ -24,7 +24,7 @@ SHARED_DISPLAY_NAME = 'TV Provider'
 # account.
 SEPARATE_SIGNIN_SOURCES = frozenset({
     'nbc_tve', 'fox_tve', 'warner_tve', 'aenetworks_tve', 'amcn_tve', 'discovery_tve', 'versant_tve',
-    'univision_tve', 'disney_tve', 'tennis_tve', 'dazn_tve',
+    'univision_tve', 'disney_tve', 'tennis_tve', 'dazn_tve', 'cspan_tve',
 })
 
 # What a source's sign-in leaves behind outside its account row. All of it is
@@ -50,6 +50,7 @@ SIGNIN_STATE = {
     'disney_tve': {'cache': ('disney_adobe_tokens', 'disney_streams'), 'account': ('disney_mvpd_auth',)},
     'tennis_tve': {'cache': ('tennis_client', 'tennis_streams'), 'account': ('tennis_mvpd_auth',)},
     'dazn_tve': {'cache': ('dazn_session', 'dazn_streams'), 'account': ('dazn_auth',)},
+    'cspan_tve': {'cache': ('cspan_tve_client', 'cspan_tve_authz'), 'account': ('cspan_mvpd_auth',)},
 }
 
 # The keys sign-in status and errors are recorded under (tve_last_error,
@@ -79,6 +80,7 @@ _NETWORK_KEY_SOURCES = {
     'disney': 'disney_tve',
     'tennis': 'tennis_tve',
     'dazn': 'dazn_tve',
+    'cspan': 'cspan_tve',
 }
 
 

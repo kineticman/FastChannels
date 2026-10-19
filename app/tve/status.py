@@ -209,6 +209,20 @@ def tve_network_status(account) -> list[dict]:
         'needs_signin': _needs_signin('dazn', dazn_last_signed_in_at, _errors('dazn_tve')),
     })
 
+    cspan_last_signed_in_at = (_cfg('cspan_tve').get('cspan_mvpd_auth') or {}).get('captured_at')
+    cspan_error_message, cspan_error_at = _last_error('cspan', cspan_last_signed_in_at, _errors('cspan_tve'))
+    entries.append({
+        'source': 'cspan_tve',
+        'label': 'C-SPAN TVE (C-SPAN, C-SPAN2, C-SPAN3)',
+        'last_signed_in_at': cspan_last_signed_in_at,
+        'note': 'Sign in with a link on your phone or computer.',
+        'family': 'cspan',
+        'requestor_id': None,
+        'last_error_message': cspan_error_message,
+        'last_error_at': cspan_error_at,
+        'needs_signin': _needs_signin('cspan', cspan_last_signed_in_at, _errors('cspan_tve')),
+    })
+
     fox_last_signed_in_at = _cfg('fox_tve').get('fox_sports_access_token_captured_at')
     fox_error_message, fox_error_at = _last_error('fox', fox_last_signed_in_at, _errors('fox_tve'))
     entries.append({
