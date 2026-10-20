@@ -44,6 +44,7 @@ import base64
 import json
 import logging
 import os
+import re
 import time
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urlencode
@@ -479,14 +480,52 @@ def _program(source_channel_id: str, row: dict) -> ProgramData | None:
         end = datetime.fromisoformat(row['endDate'].replace('Z', '+00:00'))
     except (KeyError, AttributeError, ValueError):
         return None
-    title = (row.get('episode') or row.get('title') or '').strip()
-    if not title or end <= start:
+    raw = (row.get('episode') or row.get('title') or '').strip()
+    if not raw or end <= start:
         return None
+    title, episode_title, season, episode = _split_guide_title(raw)
     return ProgramData(
         source_channel_id=source_channel_id,
         title=title,
         start_time=start,
         end_time=end,
         poster_url=row.get('thumbnailUrl') or None,
-        category='Movies',
+        category=None if season else 'Movies',
+        episode_title=episode_title,
+        season=season,
+        episode=episode,
+        program_type='episode' if season else 'movie',
     )
+
+
+_GUIDE_EPISODE_RE = re.compile(r'^S(\d+)\s+E(\d+)\s+(.*)$')
+
+
+def _split_guide_title(raw: str) -> tuple[str, str | None, int | None, int | None]:
+    """The guide gives one string per slot: a movie's name, or for an episode
+    'S04 E91 NCIS 421 of NCIS' / 'S02 E5 of A-Team, The of A-Team, The' —
+    season, an episode number that's often counted across the whole series
+    (NCIS 4x21 is E91), a placeholder episode title, then ' of <series>'."""
+    m = _GUIDE_EPISODE_RE.match(raw)
+    if not m or ' of ' not in f' {m.group(3)}':
+        return raw, None, None, None
+    season, number, rest = int(m.group(1)), int(m.group(2)), f' {m.group(3)}'
+    middle, series = rest.rsplit(' of ', 1)
+    series = _the_first(series.strip())
+    middle = _the_first(middle.strip().removeprefix('of ').strip())
+    episode = None
+    code = re.fullmatch(rf'{re.escape(series)}\s+(\d{{3,4}})', middle)
+    if code and code.group(1).startswith(str(season)) and len(code.group(1)) - len(str(season)) == 2:
+        episode = int(code.group(1)[len(str(season)):])  # '421' → 4x21
+    elif number <= 30:
+        episode = number
+    episode_title = None if not middle or middle == series or code else middle
+    return series or raw, episode_title, season, episode
+
+
+def _the_first(name: str) -> str:
+    """'A-Team, The' → 'The A-Team'."""
+    for article in ('The', 'A', 'An'):
+        if name.endswith(f', {article}'):
+            return f'{article} {name[:-len(article) - 2]}'
+    return name
