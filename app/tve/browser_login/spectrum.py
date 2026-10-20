@@ -188,7 +188,12 @@ def _dismiss_spectrum_tos_welcome(page) -> bool:
         return False
 
 
-def run_spectrum_signin():
+def run_spectrum_signin(unattended: bool = False):
+    # unattended=True when fired by the scraper's re-login watchdog rather
+    # than a human clicking "Sign in to Spectrum". No one is watching the
+    # relay then, so the IDID-4004 account-portal fallback (which needs a
+    # person to complete the phone/text verification) is skipped — see the
+    # 4004 branch below. Everything else is identical.
     _ctx = flask_app.app_context()
     _ctx.push()
     _ctx_popped = {'v': False}
@@ -935,12 +940,29 @@ def run_spectrum_signin():
                             # common off-home case. watch.spectrum.net offers
                             # no step-up here, so route to the account portal,
                             # which does (see _run_account_portal_fallback).
-                            if not _account_portal_attempted:
+                            # Skipped for an unattended watchdog re-login: no
+                            # one is watching the relay to complete the
+                            # verification, so holding the browser on the
+                            # portal for minutes would just waste the sign-in
+                            # slot — fail fast instead (same end state as
+                            # today, token stays dead until a manual sign-in).
+                            if not unattended and not _account_portal_attempted:
                                 _account_portal_attempted = True
                                 if _run_account_portal_fallback():
                                     continue
                                 # Portal fallback stopped/timed out without a
                                 # usable session — fall through to the message.
+                            if unattended:
+                                logger.warning(
+                                    '[spectrum-signin] unattended re-login hit IDID-4004 (ThreatMetrix) '
+                                    '(%s) — device no longer trusted, needs a manual sign-in', auth_name)
+                                set_status(
+                                    'error',
+                                    f'Spectrum\'s device-risk check ({idid_code}) rejected the '
+                                    f'unattended re-login — this device is no longer trusted. Click '
+                                    f'"Sign in to Spectrum" and complete any phone/text verification '
+                                    f'to re-establish it.')
+                                return
                             logger.warning(
                                 '[spectrum-signin] IDID-4004 (ThreatMetrix) not cleared, incl. the '
                                 'account-portal fallback (%s)', auth_name)

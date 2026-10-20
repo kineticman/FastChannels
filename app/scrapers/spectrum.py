@@ -302,7 +302,7 @@ class SpectrumScraper(BaseScraper):
         if time.time() - last_attempt < _RELOGIN_COOLDOWN:
             return False
         from ..routes.tasks import trigger_spectrum_signin
-        if not trigger_spectrum_signin():
+        if not trigger_spectrum_signin(unattended=True):
             return False  # shared browser profile busy with another MVPD login — retry next tick
         self._update_config('auto_relogin_last_attempt_at', int(time.time()))
         return True

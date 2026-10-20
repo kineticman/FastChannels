@@ -895,16 +895,21 @@ def stop_google_signin() -> None:
     _force_kill_mvpd_browser()
 
 
-def trigger_spectrum_signin() -> bool:
+def trigger_spectrum_signin(unattended: bool = False) -> bool:
     """Standalone Spectrum sign-in — see app.tve.browser_login.spectrum.run_spectrum_signin's
-    docstring. Returns True if a job was enqueued, False if one is already running."""
+    docstring. Returns True if a job was enqueued, False if one is already running.
+
+    unattended=True is passed by the scraper's re-login watchdog (no human
+    watching the relay) so run_spectrum_signin skips the IDID-4004
+    account-portal fallback, which needs a person to finish the verification."""
     try:
         q = get_signin_queue()
         job_id = 'spectrum-signin'
         if _mvpd_tve_profile_busy(q):
             logger.debug('MVPD browser login already running')  # see trigger_mvpd_browser_login
             return False
-        q.enqueue('app.tve.browser_login.spectrum.run_spectrum_signin', job_timeout=630, job_id=job_id)
+        q.enqueue('app.tve.browser_login.spectrum.run_spectrum_signin',
+                  kwargs={'unattended': unattended}, job_timeout=630, job_id=job_id)
         logger.info('Enqueued Spectrum sign-in')
         return True
     except Exception as e:
@@ -915,7 +920,8 @@ def trigger_spectrum_signin() -> bool:
         if _mvpd_tve_profile_busy_fallback():
             logger.info('MVPD browser login fallback thread already running')
             return False
-        threading.Thread(target=run_spectrum_signin, daemon=True, name=thread_name).start()
+        threading.Thread(target=run_spectrum_signin, kwargs={'unattended': unattended},
+                         daemon=True, name=thread_name).start()
         return True
 
 
