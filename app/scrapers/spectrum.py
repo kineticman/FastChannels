@@ -203,7 +203,34 @@ class SpectrumScraper(BaseScraper):
             logger.warning('[spectrum] token refresh request failed: %s', exc)
             return False
         if not r.ok:
-            logger.warning('[spectrum] token refresh rejected: HTTP %d', r.status_code)
+            # Capture WHY the refresh died: this is the rare, important moment
+            # for the device_verifier question (a headless deviceverifier/auth
+            # renewal here could avoid the browser re-login + its 2FA, IF the
+            # saved verifier is usable and not ThreatMetrix-gated — see
+            # save_login_result and dev/spectrum/android_app_login_research.md).
+            # Greppable tag 'spectrum-renewal'; WARNING not DEBUG on purpose —
+            # at most ~1/day, and DEBUG is usually off exactly when a real
+            # off-home ceiling-death happens in the wild. Also mirrored into
+            # the DB config so a later session can read it without live logs.
+            detail = ''
+            try:
+                body = r.json()
+                detail = str(body.get('resultCode') or body.get('result_code')
+                             or body.get('error') or body)[:200]
+            except Exception:  # noqa: BLE001
+                detail = (r.text or '')[:200]
+            logger.warning(
+                '[spectrum-renewal] refresh_token grant rejected: HTTP %d reason=%s '
+                '(device_verifier saved=%s, client_device_id saved=%s) — if a browser '
+                're-login follows, this is the window a deviceverifier/auth renewal could '
+                'replace', r.status_code, detail,
+                bool(self.config.get('device_verifier')), bool(self.config.get('client_device_id')))
+            try:
+                self._update_config(
+                    'auto_relogin_last_error',
+                    f'{int(time.time())}: refresh HTTP {r.status_code}: {detail}'[:300])
+            except Exception:  # noqa: BLE001
+                pass
             if r.status_code == 401:
                 # A 401 here means the refresh_token itself was rejected
                 # outright, not just "not due for renewal yet" — confirmed
