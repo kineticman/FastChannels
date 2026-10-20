@@ -53,6 +53,7 @@ import json
 import logging
 import re
 import time
+from urllib.parse import urlsplit
 
 import redis
 
@@ -90,6 +91,49 @@ _START_URL = 'https://watch.spectrum.net/guide'
 # hand, 2026-10-20). Used only as the IDID-4004 fallback, see
 # _run_account_portal_fallback.
 _ACCOUNT_PORTAL_URL = 'https://www.spectrum.net/login'
+# The portal's OAuth redirect_uri (client_id=consumer_portal), seen in a real
+# away-from-home capture 2026-10-20: id.spectrum.net sends the browser here
+# with the auth code once sign-in (and any MFA step) has passed.
+_PORTAL_SIGNIN_REDIRECT_PATH = '/sign-in-redirect'
+# How long to let /sign-in-redirect finish its code exchange before bridging
+# anyway, if the portal never navigates on from it.
+_PORTAL_REDIRECT_SETTLE_SECONDS = 10.0
+
+
+class _PortalSigninTracker:
+    """Decides when the account-portal sign-in has really finished.
+
+    "Any www.spectrum.net page without /login" isn't enough: the portal's
+    login page is a JavaScript app that routes through public, signed-out
+    pages (the home page among them) before reaching id.spectrum.net, and
+    bridging to watch from one of those burns the fallback's only attempt.
+    Done means: the browser reached id.spectrum.net, then came back to
+    www.spectrum.net/sign-in-redirect, then either moved on to another
+    www.spectrum.net page or sat on the redirect page long enough for its
+    code exchange. Fed every main-frame navigation, since polling page.url
+    can miss a fast hop through id.spectrum.net."""
+
+    def __init__(self):
+        self.seen_idm = False
+        self.redirect_at: float | None = None
+        self.left_redirect = False
+
+    def observe(self, url: str, now: float) -> None:
+        parts = urlsplit(url or '')
+        host, path = (parts.hostname or '').lower(), parts.path or ''
+        if host == 'id.spectrum.net':
+            self.seen_idm = True
+        elif host == 'www.spectrum.net' and self.seen_idm:
+            if path.startswith(_PORTAL_SIGNIN_REDIRECT_PATH):
+                if self.redirect_at is None:
+                    self.redirect_at = now
+            elif self.redirect_at is not None:
+                self.left_redirect = True
+
+    def is_complete(self, now: float) -> bool:
+        if self.redirect_at is None:
+            return False
+        return self.left_redirect or now - self.redirect_at >= _PORTAL_REDIRECT_SETTLE_SECONDS
 
 # Suffix match (not a fixed list of subdomains) so any current or future
 # spectrum.net-owned host (watch./id./apis./bare) counts as "ours" without
@@ -703,51 +747,67 @@ def run_spectrum_signin(unattended: bool = False):
                         'spectrum.net account-portal sign-in so the device-verification step is offered')
                     set_status('running',
                                'Spectrum needs to verify this device. Signing in through '
-                               'spectrum.net — complete the phone/text verification in the '
+                               'spectrum.net — complete the email/text verification in the '
                                'browser below.', _safe_page_url(page))
+                    tracker = _PortalSigninTracker()
+
+                    def _on_nav(frame) -> None:
+                        try:
+                            if frame == page.main_frame:
+                                _debug_log('portal fallback navigated: %s', frame.url)
+                                tracker.observe(frame.url, time.monotonic())
+                        except Exception:  # noqa: BLE001
+                            pass
+
+                    page.on('framenavigated', _on_nav)
                     try:
-                        page.goto(_ACCOUNT_PORTAL_URL, wait_until='domcontentloaded', timeout=30000)
-                    except Exception as exc:  # noqa: BLE001
-                        logger.warning('[spectrum-signin] could not open the account portal: %s', exc)
-                        return False
-                    _dismiss_tos_and_autofill()
-                    # Cap the verification window so a walked-away session can't
-                    # hold the relay until the whole-job deadline; still bounded
-                    # by the outer deadline too.
-                    portal_deadline = min(deadline, time.monotonic() + 300)
-                    last_relay = 0.0
-                    while time.monotonic() < portal_deadline:
-                        if r.exists(SPECTRUM_SIGNIN_STOP_KEY):
+                        try:
+                            page.goto(_ACCOUNT_PORTAL_URL, wait_until='domcontentloaded', timeout=30000)
+                        except Exception as exc:  # noqa: BLE001
+                            logger.warning('[spectrum-signin] could not open the account portal: %s', exc)
                             return False
-                        if page.is_closed():
-                            raise _BrowserSessionDied('browser page closed during account-portal verification')
-                        now = time.monotonic()
-                        url = _safe_page_url(page)
-                        # id.spectrum.net hosts the actual form + step-up; once
-                        # the portal redirects back to a www.spectrum.net page
-                        # that isn't the login flow, sign-in + verification are
-                        # done (a trusted device skips the step-up and lands
-                        # here immediately — also correct).
-                        if 'www.spectrum.net' in url and '/login' not in url and 'id.spectrum.net' not in url:
-                            logger.info('[spectrum-signin] account-portal sign-in looks complete (%s) — '
-                                        'bridging to watch.spectrum.net', url)
-                            set_status('running', 'Verified — opening the TV guide…', url)
-                            page.goto(_START_URL, wait_until='domcontentloaded', timeout=30000)
-                            wait_started = time.monotonic()
-                            last_seen_url = _safe_page_url(page)
-                            return True
-                        if now - last_relay > 0.25:
-                            last_relay = now
-                            if _relay_input_and_screenshot(
-                                page, r, waiting_since=now,
-                                stop_key=SPECTRUM_SIGNIN_STOP_KEY, input_key=SPECTRUM_SIGNIN_INPUT_KEY,
-                                shot_key=SPECTRUM_SIGNIN_SHOT_KEY, hint_key=SPECTRUM_SIGNIN_HINT_KEY,
-                            ):
+                        _dismiss_tos_and_autofill()
+                        # Cap the verification window so a walked-away session can't
+                        # hold the relay until the whole-job deadline; still bounded
+                        # by the outer deadline too.
+                        portal_deadline = min(deadline, time.monotonic() + 300)
+                        last_relay = 0.0
+                        while time.monotonic() < portal_deadline:
+                            if r.exists(SPECTRUM_SIGNIN_STOP_KEY):
                                 return False
-                        page.wait_for_timeout(200)
-                    logger.warning('[spectrum-signin] account-portal verification did not complete '
-                                   'before the deadline')
-                    return False
+                            if page.is_closed():
+                                raise _BrowserSessionDied('browser page closed during account-portal verification')
+                            now = time.monotonic()
+                            url = _safe_page_url(page)
+                            tracker.observe(url, now)
+                            if tracker.is_complete(now):
+                                logger.info('[spectrum-signin] account-portal sign-in complete (%s, %s) — '
+                                            'bridging to watch.spectrum.net', url,
+                                            'left sign-in-redirect' if tracker.left_redirect
+                                            else 'sign-in-redirect settled')
+                                set_status('running', 'Verified — opening the TV guide…', url)
+                                page.goto(_START_URL, wait_until='domcontentloaded', timeout=30000)
+                                wait_started = time.monotonic()
+                                last_seen_url = _safe_page_url(page)
+                                return True
+                            if now - last_relay > 0.25:
+                                last_relay = now
+                                if _relay_input_and_screenshot(
+                                    page, r, waiting_since=now,
+                                    stop_key=SPECTRUM_SIGNIN_STOP_KEY, input_key=SPECTRUM_SIGNIN_INPUT_KEY,
+                                    shot_key=SPECTRUM_SIGNIN_SHOT_KEY, hint_key=SPECTRUM_SIGNIN_HINT_KEY,
+                                ):
+                                    return False
+                            page.wait_for_timeout(200)
+                        logger.warning('[spectrum-signin] account-portal verification did not complete '
+                                       'before the deadline (reached id.spectrum.net: %s, reached '
+                                       'sign-in-redirect: %s)', tracker.seen_idm, tracker.redirect_at is not None)
+                        return False
+                    finally:
+                        try:
+                            page.remove_listener('framenavigated', _on_nav)
+                        except Exception:  # noqa: BLE001
+                            pass
 
                 if not foreign_cookies_scrubbed:
                     # This profile's non-spectrum.net cookies are
