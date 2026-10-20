@@ -81,6 +81,15 @@ SPECTRUM_SIGNIN_HINT_KEY = 'spectrum:browser-login:hint'
 _SPECTRUM_SIGNIN_TIMEOUT_SECONDS = 600
 
 _START_URL = 'https://watch.spectrum.net/guide'
+# The My Spectrum account portal's own sign-in. Unlike watch.spectrum.net —
+# which bounces an unauthenticated session to the id.spectrum.net video-client
+# login that ThreatMetrix rejects outright (IDID-4004) with no step-up — the
+# account portal offers a device verification ("phone link") for an untrusted/
+# off-home device, and once that's completed the *.spectrum.net device trust
+# carries into watch.spectrum.net by SSO (a user confirmed exactly this by
+# hand, 2026-10-20). Used only as the IDID-4004 fallback, see
+# _run_account_portal_fallback.
+_ACCOUNT_PORTAL_URL = 'https://www.spectrum.net/login'
 
 # Suffix match (not a fixed list of subdomains) so any current or future
 # spectrum.net-owned host (watch./id./apis./bare) counts as "ours" without
@@ -669,6 +678,72 @@ def run_spectrum_signin():
                         )
                         set_status('running', 'Sign in below, including any captcha if shown.', page.url)
 
+                def _run_account_portal_fallback() -> bool:
+                    """IDID-4004 (ThreatMetrix) fallback via the account portal.
+
+                    watch.spectrum.net's sign-in rejects an untrusted/off-home
+                    device outright and never offers a step-up; the My Spectrum
+                    account portal DOES offer a device verification, and once
+                    completed the *.spectrum.net trust carries into
+                    watch.spectrum.net by SSO (user-confirmed by hand
+                    2026-10-20). Drive the portal login in the relay so the user
+                    can complete the phone/text verification, then bridge back
+                    to watch.spectrum.net/guide for the normal capture path.
+
+                    Returns True once back on watch.spectrum.net (the main loop
+                    then captures), or False on stop / page death / timeout."""
+                    nonlocal page, wait_started, last_seen_url
+                    logger.info(
+                        '[spectrum-signin] IDID-4004 (ThreatMetrix) — falling back to the '
+                        'spectrum.net account-portal sign-in so the device-verification step is offered')
+                    set_status('running',
+                               'Spectrum needs to verify this device. Signing in through '
+                               'spectrum.net — complete the phone/text verification in the '
+                               'browser below.', _safe_page_url(page))
+                    try:
+                        page.goto(_ACCOUNT_PORTAL_URL, wait_until='domcontentloaded', timeout=30000)
+                    except Exception as exc:  # noqa: BLE001
+                        logger.warning('[spectrum-signin] could not open the account portal: %s', exc)
+                        return False
+                    _dismiss_tos_and_autofill()
+                    # Cap the verification window so a walked-away session can't
+                    # hold the relay until the whole-job deadline; still bounded
+                    # by the outer deadline too.
+                    portal_deadline = min(deadline, time.monotonic() + 300)
+                    last_relay = 0.0
+                    while time.monotonic() < portal_deadline:
+                        if r.exists(SPECTRUM_SIGNIN_STOP_KEY):
+                            return False
+                        if page.is_closed():
+                            raise _BrowserSessionDied('browser page closed during account-portal verification')
+                        now = time.monotonic()
+                        url = _safe_page_url(page)
+                        # id.spectrum.net hosts the actual form + step-up; once
+                        # the portal redirects back to a www.spectrum.net page
+                        # that isn't the login flow, sign-in + verification are
+                        # done (a trusted device skips the step-up and lands
+                        # here immediately — also correct).
+                        if 'www.spectrum.net' in url and '/login' not in url and 'id.spectrum.net' not in url:
+                            logger.info('[spectrum-signin] account-portal sign-in looks complete (%s) — '
+                                        'bridging to watch.spectrum.net', url)
+                            set_status('running', 'Verified — opening the TV guide…', url)
+                            page.goto(_START_URL, wait_until='domcontentloaded', timeout=30000)
+                            wait_started = time.monotonic()
+                            last_seen_url = _safe_page_url(page)
+                            return True
+                        if now - last_relay > 0.25:
+                            last_relay = now
+                            if _relay_input_and_screenshot(
+                                page, r, waiting_since=now,
+                                stop_key=SPECTRUM_SIGNIN_STOP_KEY, input_key=SPECTRUM_SIGNIN_INPUT_KEY,
+                                shot_key=SPECTRUM_SIGNIN_SHOT_KEY, hint_key=SPECTRUM_SIGNIN_HINT_KEY,
+                            ):
+                                return False
+                        page.wait_for_timeout(200)
+                    logger.warning('[spectrum-signin] account-portal verification did not complete '
+                                   'before the deadline')
+                    return False
+
                 if not foreign_cookies_scrubbed:
                     # This profile's non-spectrum.net cookies are
                     # unattributable — some could be Spectrum's own past Okta
@@ -783,12 +858,13 @@ def run_spectrum_signin():
                 last_debug_url_log = 0.0
                 last_seen_url = _safe_page_url(page)
                 _idid_retries_remaining = 2  # up to 3 total attempts at this error specifically
-                # IDID-4004 (ThreatMetrix device-risk reject) is handled on
-                # its own shorter budget: a single reload has been seen to
-                # clear it from a trusted device, but repeated rapid retries
-                # only push the device-risk score higher — exactly the wrong
-                # move for the off-home case this reject usually means.
-                _thmx_retries_remaining = 1
+                # IDID-4004 (ThreatMetrix device-risk reject) gets routed to
+                # the account-portal fallback rather than retried in place —
+                # watch.spectrum.net never offers the verification an
+                # untrusted/off-home device needs, so a bare retry there just
+                # re-rejects and nudges the risk score higher. Tried at most
+                # once per sign-in.
+                _account_portal_attempted = False
                 while time.monotonic() < deadline:
                     if r.exists(SPECTRUM_SIGNIN_STOP_KEY):
                         set_status('stopped', 'Cancelled')
@@ -855,38 +931,30 @@ def run_spectrum_signin():
                         if 'THMX' in auth_name:
                             # IDID-4004 = AUTH_REJECT_BY_RECAPTCHA_PASS_THMX_REJECT_STATUS:
                             # reCAPTCHA passed but Spectrum's ThreatMetrix
-                            # device-risk check rejected the device. From a
-                            # trusted device a single reload has cleared it,
-                            # so retry ONCE — but no further: this reject is
-                            # usually a device/network that isn't recognised
-                            # (the common off-home case), and hammering it
-                            # only drives the risk score up.
-                            if _thmx_retries_remaining > 0:
-                                _thmx_retries_remaining -= 1
-                                logger.info(
-                                    '[spectrum-signin] hit Spectrum\'s "%s" error — ThreatMetrix '
-                                    'device reject (%s), retrying once', idid_code, auth_name)
-                                set_status('running', f'Spectrum returned "{idid_code}" — retrying once…',
-                                           page.url)
-                                page.wait_for_timeout(5000)
-                                page.goto(_START_URL, wait_until='domcontentloaded', timeout=30000)
-                                _dismiss_tos_and_autofill()
-                                wait_started = time.monotonic()
-                                last_seen_url = _safe_page_url(page)
-                                continue
+                            # device-risk check rejected the device — the
+                            # common off-home case. watch.spectrum.net offers
+                            # no step-up here, so route to the account portal,
+                            # which does (see _run_account_portal_fallback).
+                            if not _account_portal_attempted:
+                                _account_portal_attempted = True
+                                if _run_account_portal_fallback():
+                                    continue
+                                # Portal fallback stopped/timed out without a
+                                # usable session — fall through to the message.
                             logger.warning(
-                                '[spectrum-signin] hit Spectrum\'s "%s" error again — ThreatMetrix '
-                                'device reject (%s), not retrying further', idid_code, auth_name)
+                                '[spectrum-signin] IDID-4004 (ThreatMetrix) not cleared, incl. the '
+                                'account-portal fallback (%s)', auth_name)
                             set_status(
                                 'error',
                                 f'Spectrum rejected the sign-in ({idid_code}). This is Spectrum\'s '
                                 f'device-risk check (ThreatMetrix): the sign-in itself was accepted, '
-                                f'but the device/network was not trusted. Spectrum is strict about '
-                                f'this when you sign in from a connection other than the one on the '
-                                f'account — a device that isn\'t on the account\'s home internet is '
-                                f'often rejected. If you\'re away from the service address, sign in '
-                                f'once from that home connection to get the device trusted; retrying '
-                                f'repeatedly from elsewhere makes it worse.')
+                                f'but the device/network was not trusted. We also tried signing in '
+                                f'through spectrum.net (which can prompt a phone/text verification), '
+                                f'but it didn\'t complete. Spectrum is strict about this off the '
+                                f'account\'s home internet — if you\'re away from the service '
+                                f'address, sign in once from that home connection, or complete the '
+                                f'spectrum.net verification when prompted, to get this device '
+                                f'trusted.')
                             return
                         if _idid_retries_remaining > 0:
                             _idid_retries_remaining -= 1
