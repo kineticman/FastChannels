@@ -783,6 +783,12 @@ def run_spectrum_signin():
                 last_debug_url_log = 0.0
                 last_seen_url = _safe_page_url(page)
                 _idid_retries_remaining = 2  # up to 3 total attempts at this error specifically
+                # IDID-4004 (ThreatMetrix device-risk reject) is handled on
+                # its own shorter budget: a single reload has been seen to
+                # clear it from a trusted device, but repeated rapid retries
+                # only push the device-risk score higher — exactly the wrong
+                # move for the off-home case this reject usually means.
+                _thmx_retries_remaining = 1
                 while time.monotonic() < deadline:
                     if r.exists(SPECTRUM_SIGNIN_STOP_KEY):
                         set_status('stopped', 'Cancelled')
@@ -845,6 +851,42 @@ def run_spectrum_signin():
                                 f'Unavailable... try again from home"). This is Spectrum\'s bot check '
                                 f'(reCAPTCHA), which tends to follow several sign-ins in a short time — '
                                 f'retrying right away makes it worse. Wait a few hours before trying again.')
+                            return
+                        if 'THMX' in auth_name:
+                            # IDID-4004 = AUTH_REJECT_BY_RECAPTCHA_PASS_THMX_REJECT_STATUS:
+                            # reCAPTCHA passed but Spectrum's ThreatMetrix
+                            # device-risk check rejected the device. From a
+                            # trusted device a single reload has cleared it,
+                            # so retry ONCE — but no further: this reject is
+                            # usually a device/network that isn't recognised
+                            # (the common off-home case), and hammering it
+                            # only drives the risk score up.
+                            if _thmx_retries_remaining > 0:
+                                _thmx_retries_remaining -= 1
+                                logger.info(
+                                    '[spectrum-signin] hit Spectrum\'s "%s" error — ThreatMetrix '
+                                    'device reject (%s), retrying once', idid_code, auth_name)
+                                set_status('running', f'Spectrum returned "{idid_code}" — retrying once…',
+                                           page.url)
+                                page.wait_for_timeout(5000)
+                                page.goto(_START_URL, wait_until='domcontentloaded', timeout=30000)
+                                _dismiss_tos_and_autofill()
+                                wait_started = time.monotonic()
+                                last_seen_url = _safe_page_url(page)
+                                continue
+                            logger.warning(
+                                '[spectrum-signin] hit Spectrum\'s "%s" error again — ThreatMetrix '
+                                'device reject (%s), not retrying further', idid_code, auth_name)
+                            set_status(
+                                'error',
+                                f'Spectrum rejected the sign-in ({idid_code}). This is Spectrum\'s '
+                                f'device-risk check (ThreatMetrix): the sign-in itself was accepted, '
+                                f'but the device/network was not trusted. Spectrum is strict about '
+                                f'this when you sign in from a connection other than the one on the '
+                                f'account — a device that isn\'t on the account\'s home internet is '
+                                f'often rejected. If you\'re away from the service address, sign in '
+                                f'once from that home connection to get the device trusted; retrying '
+                                f'repeatedly from elsewhere makes it worse.')
                             return
                         if _idid_retries_remaining > 0:
                             _idid_retries_remaining -= 1
