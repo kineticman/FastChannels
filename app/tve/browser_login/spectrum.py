@@ -82,6 +82,11 @@ SPECTRUM_SIGNIN_HINT_KEY = 'spectrum:browser-login:hint'
 _SPECTRUM_SIGNIN_TIMEOUT_SECONDS = 600
 
 _START_URL = 'https://watch.spectrum.net/guide'
+# Spectrum page-script errors seen on every sign-in that don't affect it;
+# logged at DEBUG instead of WARNING (see _log_page_error).
+_BENIGN_PAGE_ERRORS = (
+    'angular.element(...).injector() is undefined',
+)
 # The My Spectrum account portal's own sign-in. Unlike watch.spectrum.net —
 # which bounces an unauthenticated session to the id.spectrum.net video-client
 # login that ThreatMetrix rejects outright (IDID-4004) with no step-up — the
@@ -681,6 +686,16 @@ def run_spectrum_signin(unattended: bool = False):
                 headless='virtual', os='windows', persistent_context=True,
                 user_data_dir=profile_dir, window=(1280, 800), block_images=True,
             ) as context:
+                def _log_page_error(exc) -> None:
+                    msg = str(exc)[:500]
+                    # Spectrum's own page script throws these on every load
+                    # (an Angular injector lookup before the app boots); they
+                    # don't affect sign-in, so keep them out of WARNING.
+                    if any(m in msg for m in _BENIGN_PAGE_ERRORS):
+                        logger.debug('[spectrum-signin] page JS error (known, harmless): %s', msg)
+                    else:
+                        logger.warning('[spectrum-signin] page JS error: %s', msg)
+
                 def _prepare_page(p) -> None:
                     # Before any navigation: a "You're signing in as" screen for
                     # another account (e.g. the one tied to this home network)
@@ -688,8 +703,10 @@ def run_spectrum_signin(unattended: bool = False):
                     _set_expected_spectrum_username(p, username)
                     _watch_spectrum_auth_results(p, 'spectrum-signin')
                     p.on('crash', lambda p: logger.warning('[spectrum-signin] page CRASH event fired (url was %s)', _safe_page_url(p)))
-                    p.on('close', lambda p: logger.warning('[spectrum-signin] page CLOSE event fired'))
-                    p.on('pageerror', lambda exc: logger.warning('[spectrum-signin] page JS error: %s', str(exc)[:500]))
+                    # After a verified capture, the close is just us shutting the browser down.
+                    p.on('close', lambda p: (logger.info if 'verified' in captured else logger.warning)(
+                        '[spectrum-signin] page CLOSE event fired'))
+                    p.on('pageerror', _log_page_error)
                     p.on('response', _on_response)
 
                 page = context.pages[0] if context.pages else context.new_page()
