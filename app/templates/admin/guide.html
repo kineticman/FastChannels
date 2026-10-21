@@ -533,9 +533,9 @@
           {% endfor %}
         </select>
         <select name="event" onchange="this.form.submit()" aria-label="Events" title="Events">
-          <option value=""{% if not event_filter %} selected{% endif %}>All channels</option>
+          <option value=""{% if not event_filter %} selected{% endif %}>Linear + Events</option>
           <option value="1"{% if event_filter == '1' %} selected{% endif %}>Events only</option>
-          <option value="0"{% if event_filter == '0' %} selected{% endif %}>Non-event channels</option>
+          <option value="0"{% if event_filter == '0' %} selected{% endif %}>Linear only</option>
         </select>
         <details class="ms-dd" ontoggle="msOnToggle(this)" aria-label="Category">
           <summary>{% if category %}Category ({{ category|length }}){% else %}All Categories{% endif %}</summary>
