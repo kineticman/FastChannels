@@ -17,6 +17,7 @@ from __future__ import annotations
 import logging
 import os
 import tempfile
+import time
 import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urlsplit, urlunsplit
@@ -51,6 +52,11 @@ MAX_XMLTV_DOWNLOAD_BYTES = 400 * 1024 * 1024   # as served (usually gzipped)
 # they would have no guide when approved, until the next scheduled refresh.
 # Bigger playlists import the guide for enabled channels only, to bound rows.
 GUIDE_ALL_CHANNELS_MAX = 500
+
+# Playlist hosts often rate-limit per account. A 429 gets one retry after the
+# host's Retry-After, capped so a scrape never stalls for long.
+RATE_LIMIT_DEFAULT_WAIT = 10
+RATE_LIMIT_MAX_WAIT = 30
 
 EPG_PAST_HOURS = 2
 EPG_FUTURE_DAYS = 7
@@ -122,13 +128,31 @@ def validate_url(url: str | None, label: str) -> str:
     return url
 
 
+def _retry_after_seconds(value: str | None) -> int:
+    """Seconds to wait per a Retry-After header (delta-seconds form only),
+    clamped to RATE_LIMIT_MAX_WAIT."""
+    try:
+        wait = int((value or '').strip())
+    except ValueError:
+        wait = RATE_LIMIT_DEFAULT_WAIT
+    return max(1, min(wait, RATE_LIMIT_MAX_WAIT))
+
+
 def _download(session: requests.Session, url: str, label: str, limit: int,
               user_agent: str | None = None, dest=None) -> bytes | None:
     """GET `url` with a hard size cap. Returns the body, or writes it to `dest`
     (a binary file object) and returns None. Errors never include the full URL."""
     headers = {'User-Agent': user_agent} if user_agent else {}
     try:
-        with session.get(url, headers=headers, stream=True, timeout=(15, 120)) as r:
+        for attempt in range(2):
+            r = session.get(url, headers=headers, stream=True, timeout=(15, 120))
+            if r.status_code != 429 or attempt:
+                break
+            wait = _retry_after_seconds(r.headers.get('Retry-After'))
+            r.close()
+            logger.info('%s rate-limited (HTTP 429) by %s; retrying in %ds', label, redact_url(url), wait)
+            time.sleep(wait)
+        with r:
             if r.status_code >= 400:
                 raise PlaylistError(f'{label} request failed: HTTP {r.status_code} from {redact_url(url)}')
             # raw + decode_content: honour Content-Encoding, but count the
