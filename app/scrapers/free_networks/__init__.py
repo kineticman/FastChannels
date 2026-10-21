@@ -24,6 +24,10 @@ NETWORKS = [
 ]
 _BY_KEY = {n.key: n for n in NETWORKS}
 
+# A network taking at least this long gets its own INFO line; the rest only
+# show up in the per-phase summary (per-network detail is at DEBUG).
+_SLOW_NETWORK_SECS = 5.0
+
 
 class FreeNetworksScraper(BaseScraper):
     """
@@ -96,6 +100,7 @@ class FreeNetworksScraper(BaseScraper):
         disabled = self.disabled_networks(self.config)
         if disabled:
             logger.info('[%s] skipping disabled networks: %s', self.source_name, ', '.join(sorted(disabled)))
+        run_t0 = time.monotonic()
         for net in NETWORKS:
             if net.key in disabled:
                 continue
@@ -107,10 +112,18 @@ class FreeNetworksScraper(BaseScraper):
                 continue
             for ch in chans:
                 out.append(self._channel_data(net, ch))
-            logger.info('[%s] %s: %d channels (%.1fs)', self.source_name, net.name,
-                        len(chans), time.monotonic() - t0)
-        logger.info('[%s] %d channels from %d networks', self.source_name, len(out),
-                    len(NETWORKS) - len(disabled))
+            elapsed = time.monotonic() - t0
+            noun = 'channel' if len(chans) == 1 else 'channels'
+            if not chans:
+                logger.info('[%s] %s: 0 channels (%.1fs)', self.source_name, net.name, elapsed)
+            elif elapsed >= _SLOW_NETWORK_SECS:
+                logger.info('[%s] %s channels slow: %d %s (%.1fs)', self.source_name, net.name,
+                            len(chans), noun, elapsed)
+            else:
+                logger.debug('[%s] %s: %d %s (%.1fs)', self.source_name, net.name,
+                             len(chans), noun, elapsed)
+        logger.info('[%s] %d channels from %d networks (%.1fs)', self.source_name, len(out),
+                    len(NETWORKS) - len(disabled), time.monotonic() - run_t0)
         return out
 
     def fetch_epg(self, channels: list[ChannelData], **kwargs) -> list[ProgramData]:
@@ -128,6 +141,9 @@ class FreeNetworksScraper(BaseScraper):
 
         gracenote = self._gracenote_ids(channels)
         programs: list[ProgramData] = []
+        native_total = borrowed_total = 0
+        placeholders: dict[str, int] = {}
+        run_t0 = time.monotonic()
         for key, pairs in by_net.items():
             net = _BY_KEY[key]
             t0 = time.monotonic()
@@ -164,10 +180,27 @@ class FreeNetworksScraper(BaseScraper):
             extra = ''.join([' (not fetched, kept stored guide)' if skipped else '',
                              f' + {borrowed} from tvtv' if borrowed else '',
                              f', {filled} channel(s) with placeholder blocks' if filled else ''])
-            logger.info('[%s] %s: %d guide entries%s (%.1fs)', self.source_name, net.name, len(progs),
-                        extra, time.monotonic() - t0)
+            elapsed = time.monotonic() - t0
+            native_total += len(progs)
+            borrowed_total += borrowed
+            if filled:
+                placeholders[net.name] = filled
+            # A skip is routine (Bloomberg's daily limit); failures warn above.
+            if elapsed >= _SLOW_NETWORK_SECS:
+                logger.info('[%s] %s guide slow: %d entries%s (%.1fs)', self.source_name, net.name,
+                            len(progs), extra, elapsed)
+            else:
+                logger.debug('[%s] %s: %d guide entries%s (%.1fs)', self.source_name, net.name,
+                             len(progs), extra, elapsed)
 
-        logger.info('[%s] %d total EPG entries', self.source_name, len(programs))
+        summary = f'{native_total} native + {borrowed_total} tvtv-borrowed'
+        if placeholders:
+            breakdown = ', '.join(f'{name} {n}' for name, n in
+                                  sorted(placeholders.items(), key=lambda kv: (-kv[1], kv[0])))
+            summary += (f', {sum(placeholders.values())} channel(s) on placeholder blocks '
+                        f'across {len(placeholders)} network(s) ({breakdown})')
+        logger.info('[%s] %d EPG entries: %s (%.1fs)', self.source_name, len(programs), summary,
+                    time.monotonic() - run_t0)
         return programs
 
     def resolve(self, raw_url: str) -> str:
