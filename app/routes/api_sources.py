@@ -1090,6 +1090,11 @@ def sling_browser_login_state(source_id):
     if source.name != 'sling':
         return jsonify({'error': 'not a sling source'}), 400
     r = _redis.from_url(current_app.config['REDIS_URL'])
+    from .tasks import signin_queue_notice
+    notice = signin_queue_notice(job_id='sling-browser-login')
+    if notice:
+        # Not started yet, so any saved status/screenshot is a previous run's.
+        return jsonify({'state': 'queued', 'message': notice, 'queue_notice': notice})
     raw_status = r.get('sling:browser-login:status')
     result = json.loads(raw_status) if raw_status else {'state': 'idle'}
     shot = r.get('sling:browser-login:screenshot')
@@ -1163,6 +1168,11 @@ def spectrum_browser_login_state(source_id):
     if source.name != 'spectrum':
         return jsonify({'error': 'not a spectrum source'}), 400
     r = _redis.from_url(current_app.config['REDIS_URL'])
+    from .tasks import signin_queue_notice
+    notice = signin_queue_notice(job_id='spectrum-signin')
+    if notice:
+        # Not started yet, so any saved status/screenshot is a previous run's.
+        return jsonify({'state': 'queued', 'message': notice, 'queue_notice': notice})
     raw_status = r.get('spectrum:browser-login:status')
     result = json.loads(raw_status) if raw_status else {'state': 'idle'}
     shot = r.get('spectrum:browser-login:screenshot')
@@ -1545,6 +1555,17 @@ def espn_activation_start(source_id):
     return jsonify({'status': 'waiting', 'code': plate['pairingCode'], 'url': ACTIVATE_URL})
 
 
+def _with_code_queue_notice(status: dict, func_name: str) -> dict:
+    """A code/link sign-in's code is on screen before its job runs; if that
+    job is still queued, say what it's behind (the code still works)."""
+    if status.get('state') == 'waiting':
+        from .tasks import SIGNIN_CODE_STILL_USABLE, signin_queue_notice
+        notice = signin_queue_notice(func_name=func_name, tail=SIGNIN_CODE_STILL_USABLE)
+        if notice:
+            status['queue_notice'] = notice
+    return status
+
+
 @sources_bp.route('/sources/<int:source_id>/espn-activation/state')
 def espn_activation_state(source_id):
     import redis as _redis
@@ -1554,7 +1575,8 @@ def espn_activation_state(source_id):
     if source.name != 'espn':
         return jsonify({'error': 'not an espn source'}), 400
     raw = _redis.from_url(current_app.config['REDIS_URL']).get(ACTIVATION_STATUS_KEY)
-    return jsonify(json.loads(raw) if raw else {'state': 'idle'})
+    return jsonify(_with_code_queue_notice(json.loads(raw) if raw else {'state': 'idle'},
+                                           'app.scrapers.espn.run_activation'))
 
 
 @sources_bp.route('/sources/<int:source_id>/espn-activation/stop', methods=['POST'])
@@ -1633,7 +1655,8 @@ def nfl_link_state(source_id):
     if err:
         return err
     raw = _redis.from_url(current_app.config['REDIS_URL']).get(LINK_STATUS_KEY)
-    return jsonify(json.loads(raw) if raw else {'state': 'idle'})
+    return jsonify(_with_code_queue_notice(json.loads(raw) if raw else {'state': 'idle'},
+                                           'app.scrapers.nfl.run_link'))
 
 
 @sources_bp.route('/sources/<int:source_id>/nfl-link/stop', methods=['POST'])
@@ -1723,7 +1746,8 @@ def cbs_sports_link_state(source_id):
     if err:
         return err
     raw = _redis.from_url(current_app.config['REDIS_URL']).get(LINK_STATUS_KEY)
-    return jsonify(json.loads(raw) if raw else {'state': 'idle'})
+    return jsonify(_with_code_queue_notice(json.loads(raw) if raw else {'state': 'idle'},
+                                           'app.scrapers.cbs_sports.run_link'))
 
 
 @sources_bp.route('/sources/<int:source_id>/cbs-sports-link/stop', methods=['POST'])
@@ -1815,7 +1839,8 @@ def espn_tve_state(source_id):
     if source.name != 'espn':
         return jsonify({'error': 'not an espn source'}), 400
     raw = _redis.from_url(current_app.config['REDIS_URL']).get(ADOBE_STATUS_KEY)
-    return jsonify(json.loads(raw) if raw else {'state': 'idle'})
+    return jsonify(_with_code_queue_notice(json.loads(raw) if raw else {'state': 'idle'},
+                                           'app.scrapers.espn.run_adobe_signin'))
 
 
 @sources_bp.route('/sources/<int:source_id>/espn-tve/stop', methods=['POST'])

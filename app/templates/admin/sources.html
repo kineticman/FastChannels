@@ -4246,6 +4246,22 @@
       renderQrCode(statusEl.querySelector('.espn-tve-qr'), url);
     }
 
+    // A code/link sign-in's job can sit queued behind other maintenance-worker
+    // work while its code is already on screen; show what it's waiting on
+    // under the code, and drop the line once the job starts.
+    function _setQueueNotice(statusEl, notice) {
+      let el = statusEl.querySelector('.signin-queue-notice');
+      if (!notice) { if (el) el.remove(); return; }
+      if (!el) {
+        el = document.createElement('div');
+        el.className = 'signin-queue-notice';
+        el.style.color = 'var(--text-muted)';
+        el.style.marginTop = '0.3rem';
+        statusEl.appendChild(el);
+      }
+      el.textContent = notice;
+    }
+
     // Same helper as settings.js's (vendored qrcode-generator, drawn in the page).
     function renderQrCode(el, text) {
       if (!el) return;
@@ -4276,6 +4292,7 @@
           return;
         }
         if (d.state === 'waiting') {
+          _setQueueNotice(statusEl, d.queue_notice);
           espnTvePoll(sourceId);
           return;
         }
@@ -4339,6 +4356,7 @@
           return;
         }
         if (d.state === 'waiting') {
+          _setQueueNotice(statusEl, d.queue_notice);
           espnPoll(sourceId);
           return;
         }
@@ -4458,6 +4476,7 @@
           return;
         }
         if (d.state === 'waiting') {
+          _setQueueNotice(statusEl, d.queue_notice);
           _codeLinkPoll(sourceId, slug, sourceName, kind);
           return;
         }
@@ -4855,8 +4874,8 @@
                 renderQrCode(document.getElementById('foxone-link-qr'), d.url);
               }
               panel.style.display = 'block';
-            } else if (d.state === 'starting' && Date.now() - startedAt > 10000) {
-              status.textContent = 'Waiting for the background worker to pick this up…';
+            } else if (d.state === 'starting' && (d.queue_notice || Date.now() - startedAt > 10000)) {
+              status.textContent = d.queue_notice || 'Waiting for the background worker to pick this up…';
             } else if (d.state === 'success' || d.state === 'error') {
               _foxOneLoginDone = true;
               panel.style.display = 'none';
@@ -5589,6 +5608,8 @@
             el('link-code-row').style.display = d.code ? '' : 'none';
             el('link-code').textContent = d.code || '';
             el('link-body').style.display = '';
+          } else if (d.state === 'starting' && d.queue_notice) {
+            status.textContent = `${prefix}${d.queue_notice}`;
           } else if (d.state === 'success' || d.state === 'error') {
             return { ok: d.state === 'success', message: d.message || (d.state === 'success' ? 'Signed in.' : 'Sign-in failed.') };
           }

@@ -48,6 +48,92 @@ def _dequeue_signin(job_id: str) -> None:
         logger.warning(f'Could not dequeue sign-in job {job_id}: {e}')
 
 
+# What a sign-in modal tells the user its job is stuck behind. Anything not
+# listed reads as "another background task".
+_MAINTENANCE_JOB_LABELS = {
+    'app.worker.run_tvtv_cache_refresh': 'the TV guide cache refresh',
+    'app.worker.run_source_channel_purge': 'a source cleanup',
+    'app.worker.run_playlist_delete': 'a playlist delete',
+    'app.worker.run_bulk_channel_update': 'a bulk channel update',
+    'app.worker.run_bulk_channel_review': 'a bulk channel review',
+    'app.worker.run_gracenote_auto_clear': 'a Gracenote cleanup',
+    'app.worker.run_gracenote_clear_all': 'a Gracenote cleanup',
+    'app.worker._rq_prune': 'nightly maintenance',
+    'app.worker._rq_integrity_cleanup': 'nightly maintenance',
+    'app.worker._rq_db_backup': 'the nightly database backup',
+    'app.worker._rq_ytdlp_upgrade': 'a yt-dlp update',
+    'app.worker._rq_weekly_maintenance': 'weekly database maintenance',
+}
+_SIGNIN_FUNC_PREFIXES = (
+    'app.tve.', 'app.scrapers.espn.run_', 'app.scrapers.nfl.run_link', 'app.scrapers.cbs_sports.run_link',
+)
+
+
+def _describe_maintenance_job(job) -> str:
+    func = job.func_name or ''
+    if func in _MAINTENANCE_JOB_LABELS:
+        return _MAINTENANCE_JOB_LABELS[func]
+    if func.startswith(_SIGNIN_FUNC_PREFIXES):
+        return 'another sign-in'
+    return 'another background task'
+
+
+_SIGNIN_STARTS_AUTOMATICALLY = ' — the sign-in will start automatically.'
+# For code/link flows the code is already on screen; only the "signed in"
+# confirmation waits for the job.
+SIGNIN_CODE_STILL_USABLE = (' — you can still use the code now; this page confirms '
+                            'the sign-in once that finishes.')
+
+
+def signin_queue_notice(job_id: str | None = None, func_name: str | None = None,
+                        arg: tuple[int, object] | None = None,
+                        tail: str = _SIGNIN_STARTS_AUTOMATICALLY) -> str | None:
+    """While a sign-in job is still waiting in the shared queue (not yet
+    started), say what it's waiting on, so its modal doesn't sit on a bare
+    "Signing in…" that looks hung. Match by job_id, or by func_name for the
+    jobs enqueued without one (optionally narrowed by arg=(index, value),
+    e.g. a link login's run_id). None once the job starts, or on any error."""
+    try:
+        q = get_signin_queue()
+        queued = q.jobs
+        pos = None
+        for i, job in enumerate(queued):
+            if job_id is not None:
+                hit = job.id == job_id
+            else:
+                hit = job.func_name == func_name
+                if hit and arg is not None:
+                    idx, value = arg
+                    hit = len(job.args or ()) > idx and job.args[idx] == value
+            if hit:
+                pos = i
+                break
+        if pos is None:
+            return None
+        running = None
+        registry = StartedJobRegistry(q.name, connection=q.connection)
+        for jid in registry.get_job_ids():
+            try:
+                job = Job.fetch(jid, connection=q.connection)
+            except Exception:  # noqa: BLE001 — expired between listing and fetch
+                continue
+            if job.started_at:
+                running = job
+                break
+        if running is not None:
+            mins = int((datetime.now(timezone.utc) - _utc_aware(running.started_at)).total_seconds() // 60)
+            ago = 'just now' if mins < 1 else f'{mins} min ago'
+            msg = f'Waiting for {_describe_maintenance_job(running)} to finish (started {ago})'
+        else:
+            msg = 'Waiting for the background worker'
+        if pos:
+            msg += f', with {pos} more task{"s" if pos != 1 else ""} queued ahead'
+        return msg + tail
+    except Exception as e:  # noqa: BLE001 — a notice must never break a status poll
+        logger.debug(f'signin_queue_notice failed: {e}')
+        return None
+
+
 def _utc_aware(dt):
     if dt is None:
         return None

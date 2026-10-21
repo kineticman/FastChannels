@@ -341,6 +341,11 @@ def mvpd_browser_login_state():
     import redis as _redis
 
     r = _redis.from_url(current_app.config['REDIS_URL'])
+    from .tasks import signin_queue_notice
+    notice = signin_queue_notice(job_id='mvpd-browser-login')
+    if notice:
+        # Not started yet, so any saved status/screenshot is a previous run's.
+        return jsonify({'state': 'queued', 'message': notice, 'queue_notice': notice})
     raw_status = r.get('mvpd:browser-login:status')
     result = json.loads(raw_status) if raw_status else {'state': 'idle'}
     shot = r.get('mvpd:browser-login:screenshot')
@@ -440,8 +445,16 @@ def tve_link_login_start():
 def tve_link_login_state():
     import redis as _redis
     from ..tve.link_login import STATUS_KEY
+    from .tasks import signin_queue_notice
     raw = _redis.from_url(current_app.config['REDIS_URL']).get(STATUS_KEY)
-    return jsonify(json.loads(raw) if raw else {'state': 'idle'})
+    result = json.loads(raw) if raw else {'state': 'idle'}
+    if result.get('state') == 'starting' and result.get('run_id'):
+        # run_link_login(family, requestor_id, mso_id, run_id, ...)
+        notice = signin_queue_notice(func_name='app.tve.link_login.run_link_login',
+                                     arg=(3, result['run_id']))
+        if notice:
+            result['message'] = result['queue_notice'] = notice
+    return jsonify(result)
 
 
 @tve_bp.route('/settings/tve/link-login/stop', methods=['POST'])
@@ -528,6 +541,11 @@ def google_signin_state():
     import redis as _redis
 
     r = _redis.from_url(current_app.config['REDIS_URL'])
+    from .tasks import signin_queue_notice
+    notice = signin_queue_notice(job_id='google-signin')
+    if notice:
+        # Not started yet, so any saved status/screenshot is a previous run's.
+        return jsonify({'state': 'queued', 'message': notice, 'queue_notice': notice})
     raw_status = r.get('google-signin:browser-login:status')
     result = json.loads(raw_status) if raw_status else {'state': 'idle'}
     shot = r.get('google-signin:browser-login:screenshot')
@@ -601,6 +619,11 @@ def nbc_browser_login_state():
     import redis as _redis
 
     r = _redis.from_url(current_app.config['REDIS_URL'])
+    from .tasks import signin_queue_notice
+    notice = signin_queue_notice(job_id='nbc-mvpd-browser-login')
+    if notice:
+        # Not started yet, so any saved status/screenshot is a previous run's.
+        return jsonify({'state': 'queued', 'message': notice, 'queue_notice': notice})
     raw_status = r.get('nbc-mvpd:browser-login:status')
     result = json.loads(raw_status) if raw_status else {'state': 'idle'}
     shot = r.get('nbc-mvpd:browser-login:screenshot')
@@ -673,6 +696,11 @@ def fox_browser_login_state():
     import redis as _redis
 
     r = _redis.from_url(current_app.config['REDIS_URL'])
+    from .tasks import signin_queue_notice
+    notice = signin_queue_notice(job_id='fox-mvpd-browser-login')
+    if notice:
+        # Not started yet, so any saved status/screenshot is a previous run's.
+        return jsonify({'state': 'queued', 'message': notice, 'queue_notice': notice})
     raw_status = r.get('fox-mvpd:browser-login:status')
     result = json.loads(raw_status) if raw_status else {'state': 'idle'}
     shot = r.get('fox-mvpd:browser-login:screenshot')

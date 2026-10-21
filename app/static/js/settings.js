@@ -2747,10 +2747,10 @@ function _tveLinkRunOne(family, requestorId, status, onSteps) {
             _showTveLink(label, d.url, d.code);
           } else if (d.state === 'waiting') {
             status.textContent = `Checking ${label}…`;
-          } else if (d.state === 'starting' && Date.now() - startedAt > 10000) {
+          } else if (d.state === 'starting' && (d.queue_notice || Date.now() - startedAt > 10000)) {
             // Sign-ins share the maintenance worker; a nightly job or a bulk
-            // channel update can hold it for a bit.
-            status.textContent = 'Waiting for the background worker to pick this up…';
+            // channel update can hold it for a bit. The server names it.
+            status.textContent = d.queue_notice || 'Waiting for the background worker to pick this up…';
           }
           if (d.state === 'success' || d.state === 'error') {
             document.getElementById('mvpd-link-panel').style.display = 'none';
