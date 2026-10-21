@@ -1222,10 +1222,11 @@ def spectrum_browser_login_stop(source_id):
 @sources_bp.route('/sources/<int:source_id>/spectrum-auth', methods=['DELETE'])
 def clear_spectrum_auth(source_id):
     """Forget everything Spectrum sign-in captured — tokens, device id, and the
-    opportunistically-harvested cox.com cookie jar. Unlike Amazon's equivalent,
-    there's no separate saved username/password to preserve — Spectrum's login
-    is entirely browser-driven (see app.tve.browser_login.spectrum), so a full
-    wipe is the only meaningful "clear creds" here.
+    opportunistically-harvested cox.com cookie jar — AND the saved
+    username/password, which only feed the browser sign-in's autofill; they
+    have to be re-entered (or typed into the relayed browser) afterwards.
+    The only config kept is foreign_cookies_scrubbed (a fact about the
+    browser profile, not the session — see below).
 
     Sets force_fresh_signin on the (otherwise emptied) config rather than
     leaving it truly blank: this route only clears DB-side bookkeeping
