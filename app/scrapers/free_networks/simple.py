@@ -102,8 +102,10 @@ NETWORKS = [
                    gracenote_id='65731'),
     ]),
     StaticNetwork('eplustv6', 'EPlusTV 6', [
+        # Bundled PNG rendered from eplustv6.com/assets/svgs/tv6-logo.svg: the
+        # logo cache can't decode SVG and Channels DVR apps can't display it.
         NetChannel('eplustv6', 'EPlusTV 6 Jackson',
                    'https://livestream.telvue.com/jacksonenergy1/f7b44cfafd5c52223d5498196c8a2e7b.sdp/playlist.m3u8',
-                   logo='https://eplustv6.com/assets/svgs/tv6-logo.svg', category='Local News', gracenote_id='44861'),
+                   logo='/static/logos/eplustv6/eplustv6.png', category='Local News', gracenote_id='44861'),
     ]),
 ]
