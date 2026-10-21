@@ -21,7 +21,7 @@ import time
 from collections import Counter
 import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta, timezone
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import urlsplit
 
 import requests
 
@@ -110,16 +110,20 @@ def linear_group_miss_limit(config: dict, group: str | None) -> int:
 
 
 def redact_url(url: str | None) -> str:
-    """URL safe to log or show in last_error: no credentials, no query string.
-    Playlist URLs routinely carry a username and password in the query."""
+    """URL safe to log or show in last_error: scheme and host only. Playlist
+    URLs carry credentials in the query (username/password) or the path
+    (a per-user key, e.g. https://host/w/<key>), so both are elided."""
     try:
         parts = urlsplit(url or '')
     except ValueError:
         return '(invalid URL)'
     host = parts.hostname or ''
+    if not parts.scheme or not host:
+        return '(invalid URL)'
     if parts.port:
         host = f'{host}:{parts.port}'
-    return urlunsplit((parts.scheme, host, parts.path, '…' if parts.query else '', ''))
+    elided = '/…' if parts.path.strip('/') or parts.query else ''
+    return f'{parts.scheme}://{host}{elided}'
 
 
 def validate_url(url: str | None, label: str) -> str:
