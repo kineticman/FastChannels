@@ -1245,7 +1245,13 @@ def clear_spectrum_auth(source_id):
     if source.name != 'spectrum':
         return jsonify({'error': 'not a spectrum source'}), 400
 
-    source.config = {'force_fresh_signin': True}
+    cfg = {'force_fresh_signin': True}
+    # About the browser profile, not the session: its one-time foreign-cookie
+    # and recaptcha.net storage scrub stays done, or every clear reruns it
+    # (and wipes reCAPTCHA's history in the profile for nothing).
+    if (source.config or {}).get('foreign_cookies_scrubbed'):
+        cfg['foreign_cookies_scrubbed'] = True
+    source.config = cfg
     db.session.commit()
 
     try:
