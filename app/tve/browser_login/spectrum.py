@@ -685,6 +685,9 @@ def run_spectrum_signin(unattended: bool = False):
             with Camoufox(
                 headless='virtual', os='windows', persistent_context=True,
                 user_data_dir=profile_dir, window=(1280, 800), block_images=True,
+                # block_images is deliberate (1048c0d, ~2.5x faster unattended
+                # re-login); this only silences Camoufox's LeakWarning about it.
+                i_know_what_im_doing=True,
             ) as context:
                 def _log_page_error(exc) -> None:
                     msg = str(exc)[:500]
