@@ -423,6 +423,12 @@ def run_spectrum_signin(unattended: bool = False):
         _ctx_popped['v'] = True
         deadline = time.monotonic() + _SPECTRUM_SIGNIN_TIMEOUT_SECONDS
         captured: dict = {}
+        # Set while _run_account_portal_fallback drives the spectrum.net
+        # portal: its own consumer_portal OAuth exchange can hand the browser
+        # an access_token too, which is no use for playback (lantern, the
+        # license server and the stva-ovp refresh grant all want a watch
+        # token) — and validateSession may not care which client issued it.
+        _portal_fallback_active: dict = {'v': False}
         _rejected: set = set()  # access_token values already proven dead — never re-try one
         _last_mismatch: dict = {}  # {'account': str} — last valid-but-wrong-account
         # identity seen, so a final timeout can say WHY instead of a generic
@@ -484,6 +490,12 @@ def run_spectrum_signin(unattended: bool = False):
                     and response.ok
                     and 'json' in (response.headers.get('content-type') or '')
                 ):
+                    try:
+                        post_body = response.request.post_data or ''
+                    except Exception:  # noqa: BLE001 — undecodable body; don't let it block a watch capture
+                        post_body = ''
+                    if _portal_fallback_active['v'] or 'consumer_portal' in post_body:
+                        return
                     data = response.json()
                     if isinstance(data, dict) and data.get('access_token'):
                         captured['candidate'] = {
@@ -760,6 +772,7 @@ def run_spectrum_signin(unattended: bool = False):
                             pass
 
                     page.on('framenavigated', _on_nav)
+                    _portal_fallback_active['v'] = True
                     try:
                         try:
                             page.goto(_ACCOUNT_PORTAL_URL, wait_until='domcontentloaded', timeout=30000)
@@ -786,6 +799,8 @@ def run_spectrum_signin(unattended: bool = False):
                                             'left sign-in-redirect' if tracker.left_redirect
                                             else 'sign-in-redirect settled')
                                 set_status('running', 'Verified — opening the TV guide…', url)
+                                # Off before watch loads, so its own stva-ovp token is captured.
+                                _portal_fallback_active['v'] = False
                                 page.goto(_START_URL, wait_until='domcontentloaded', timeout=30000)
                                 wait_started = time.monotonic()
                                 last_seen_url = _safe_page_url(page)
@@ -804,6 +819,7 @@ def run_spectrum_signin(unattended: bool = False):
                                        'sign-in-redirect: %s)', tracker.seen_idm, tracker.redirect_at is not None)
                         return False
                     finally:
+                        _portal_fallback_active['v'] = False
                         try:
                             page.remove_listener('framenavigated', _on_nav)
                         except Exception:  # noqa: BLE001
