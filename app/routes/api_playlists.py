@@ -4,6 +4,7 @@ see app/scrapers/playlist.py."""
 import logging
 import os
 import tempfile
+from datetime import datetime, timezone
 from collections import Counter
 
 import requests
@@ -11,11 +12,12 @@ from flask import Blueprint, abort, jsonify, request
 
 from ..extensions import db
 from ..event_lifecycle import delete_event
-from ..models import Source, Channel, Feed
+from ..config_store import load_source_cache
+from ..models import Source, Channel, Feed, Program
 from ..scrapers.m3u_import import slugify
 from ..scrapers.playlist import (
     DEFAULT_MAX_CHANNELS, MAX_SLUG_LEN, SOURCE_PREFIX, PlaylistError, PlaylistScraper,
-    _download, fetch_playlist, is_playlist_source, validate_url,
+    SNAPSHOT_CACHE_KEY, _download, fetch_playlist, is_playlist_source, playlist_summary, validate_url,
 )
 from ..scrapers.xmltv_import import iter_xmltv
 from .api_shared import _invalidate_and_refresh_xml
@@ -86,7 +88,8 @@ def _guide_channel_ids(session: requests.Session, epg_url: str, user_agent: str 
     try:
         with os.fdopen(fd, 'wb') as fp:
             try:
-                _download(session, epg_url, 'Guide', _PREVIEW_GUIDE_BYTES, user_agent, dest=fp)
+                _download(session, epg_url, 'Guide', _PREVIEW_GUIDE_BYTES, user_agent, dest=fp,
+                          retry_rate_limit=False)
             except PlaylistError as exc:
                 if 'larger than' in str(exc):
                     return None
@@ -109,15 +112,44 @@ def _guide_channel_ids(session: requests.Session, epg_url: str, user_agent: str 
             pass
 
 
+def _imported_guide_stats(source: Source) -> dict:
+    """Guide coverage from what the last import stored, instead of
+    downloading the guide again."""
+    active = db.session.query(Channel.id).filter(
+        Channel.source_id == source.id, Channel.is_active == True)
+    with_programs = (db.session.query(db.func.count(db.distinct(Program.channel_id)))
+                     .filter(Program.channel_id.in_(active.scalar_subquery()),
+                             Program.end_time > datetime.now(timezone.utc)).scalar())
+    return {'checked': True, 'matched': with_programs or 0, 'total': active.count(),
+            'from_import': True, 'error': None, 'url_detected': ''}
+
+
+def _preview_response(summary: dict, guide: dict, saved_groups, checked_at: str | None = None):
+    return jsonify({
+        **{k: v for k, v in summary.items() if k not in ('guide_url_detected', 'm3u_url', 'checked_at')},
+        'saved_groups':   saved_groups,
+        'guide':          guide,
+        'checked_at':     checked_at,
+        'max_channels':   DEFAULT_MAX_CHANNELS,
+        'enable_now_threshold': ENABLE_NOW_THRESHOLD,
+    })
+
+
 @playlists_bp.route('/playlists/preview', methods=['POST'])
 def preview_playlist():
-    """Fetch and parse a playlist without saving anything. Drives the add/edit
-    dialog: group checkboxes, counts, and the guide match rate."""
+    """Drives the add/edit dialog: group checkboxes, counts, and the guide
+    match rate. Saves nothing.
+
+    stored=true (edit mode) answers from what the last scrape recorded and
+    contacts nothing; 404 when there is no record yet. A live check of a saved
+    playlist reuses the imported guide coverage unless the guide URL changed,
+    so it costs one playlist download rather than two."""
     data = request.get_json() or {}
     m3u_url = (data.get('m3u_url') or '').strip()
     epg_url = (data.get('epg_url') or '').strip()
     user_agent = None
     saved_groups = None
+    source = None
 
     # Edit mode: fall back to what's saved, so the dialog never has to be sent
     # (or re-send) the stored URLs.
@@ -129,21 +161,25 @@ def preview_playlist():
             epg_url = cfg.get('epg_url') or ''
         user_agent = (cfg.get('user_agent') or '').strip() or None
         saved_groups = cfg.get('groups_include') or []
+        if data.get('stored'):
+            snapshot = load_source_cache(source.id).get(SNAPSHOT_CACHE_KEY)
+            if not snapshot or snapshot.get('m3u_url') != cfg.get('m3u_url'):
+                return jsonify({'error': 'No stored playlist data yet'}), 404
+            guide = (_imported_guide_stats(source) if cfg.get('epg_url')
+                     else {'checked': False, 'matched': None, 'error': None, 'url_detected': ''})
+            return _preview_response(snapshot, guide, saved_groups, snapshot.get('checked_at'))
 
     session = _session()
     try:
-        playlist = fetch_playlist(session, m3u_url, user_agent)
+        playlist = fetch_playlist(session, m3u_url, user_agent, retry_rate_limit=False)
         entries = playlist.entries
-
-        groups = Counter(e.group for e in entries)
-        group_rows = [
-            {'name': name, 'count': count}
-            for name, count in sorted(groups.items(), key=lambda kv: (kv[0] == '', kv[0].casefold()))
-        ]
+        summary = playlist_summary(playlist)
 
         guide_url = epg_url or playlist.guide_url or ''
         guide = {'url_detected': playlist.guide_url or '', 'checked': False, 'matched': None, 'error': None}
-        if guide_url:
+        if source is not None and guide_url and guide_url == (source.config or {}).get('epg_url'):
+            guide = {**_imported_guide_stats(source), 'url_detected': playlist.guide_url or ''}
+        elif guide_url:
             try:
                 declared = _guide_channel_ids(session, validate_url(guide_url, 'Guide URL'), user_agent)
                 if declared is not None:
@@ -161,19 +197,7 @@ def preview_playlist():
     except PlaylistError as exc:
         return jsonify({'error': str(exc)}), 422
 
-    return jsonify({
-        'channel_count':  len(entries),
-        'skipped':        playlist.skipped,
-        'groups':         group_rows,
-        'saved_groups':   saved_groups,
-        'with_tvg_id':    sum(1 for e in entries if e.attr('tvg-id')),
-        'with_gracenote': sum(1 for e in entries if e.attr('tvc-guide-stationid')),
-        'with_headers':   sum(1 for e in entries if e.headers),
-        'with_drm':       sum(1 for e in entries if e.has_drm_props),
-        'guide':          guide,
-        'max_channels':   DEFAULT_MAX_CHANNELS,
-        'enable_now_threshold': ENABLE_NOW_THRESHOLD,
-    })
+    return _preview_response(summary, guide, saved_groups)
 
 
 def _unique_source_name(display_name: str) -> str:

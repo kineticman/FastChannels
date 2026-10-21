@@ -197,7 +197,8 @@
         _plGroupLifecycle = d.group_lifecycle || {};
         _plSavedGroups = d.groups_include || [];
         _plStoredGroups = d.stored_groups || [];
-        checkPlaylist(d.groups_include || []);
+        // Open from what the last scrape saw; only "Check playlist" goes to the host.
+        checkPlaylist(d.groups_include || [], {stored: true});
       } catch (e) {
         _plSetStatus('Could not load this playlist: ' + e.message, true);
       }
@@ -300,7 +301,8 @@
 
     function _plRenderPreview(d, preselect) {
       const facts = [];
-      facts.push(`<strong>${d.channel_count}</strong> channel${d.channel_count === 1 ? '' : 's'} found` +
+      facts.push(`<strong>${d.channel_count}</strong> channel${d.channel_count === 1 ? '' : 's'} ` +
+        (d.checked_at ? 'in the playlist at the last import' : 'found') +
         (d.skipped ? ` (${d.skipped} skipped: no usable stream URL)` : '') + '.');
       const epgGiven = _plEl('pl-epg').value.trim();
       if (!epgGiven && d.guide.url_detected) {
@@ -311,7 +313,9 @@
         facts.push(`<span class="pl-warn">Guide: ${escapeHtml(d.guide.error)}</span>`);
       } else if (d.guide.checked) {
         const cls = d.guide.matched === 0 ? ' class="pl-warn"' : '';
-        facts.push(`<span${cls}>Guide has programmes for <strong>${d.guide.matched}</strong> of ${d.channel_count} channels.</span>`);
+        facts.push(d.guide.from_import
+          ? `<span${cls}>Guide has programmes for <strong>${d.guide.matched}</strong> of ${d.guide.total} imported channels.</span>`
+          : `<span${cls}>Guide has programmes for <strong>${d.guide.matched}</strong> of ${d.channel_count} channels.</span>`);
       } else if (_plEl('pl-epg').value.trim()) {
         facts.push('The guide is too large to check here; it will be matched when the playlist is imported.');
       } else {
@@ -367,24 +371,35 @@
       _plOnGroupsChanged();
     }
 
-    async function checkPlaylist(preselectGroups) {
+    async function checkPlaylist(preselectGroups, opts) {
+      const stored = !!(opts && opts.stored);
       const m3u = _plEl('pl-m3u').value.trim();
       if (!m3u) { _plSetStatus('Enter the playlist URL first.', true); return; }
       const btn = _plEl('pl-check-btn');
+      // A re-check of the same URLs keeps the ticks the user has set.
+      if (!Array.isArray(preselectGroups) && _plPreview) preselectGroups = _plSelectedGroups();
       _plCaptureGroupLifecycle();
       btn.disabled = true;
       _plInvalidatePreview();
-      _plSetStatus('Fetching playlist…');
+      _plSetStatus(stored ? 'Loading…' : 'Fetching playlist…');
       try {
         const body = {m3u_url: m3u, epg_url: _plEl('pl-epg').value.trim()};
         if (_plEditId) body.source_id = _plEditId;
+        if (stored) body.stored = true;
         const r = await fetch('/api/playlists/preview', {
           method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body),
         });
+        if (stored && r.status === 404) {
+          // Not scraped since this was added: nothing stored yet, so check live.
+          btn.disabled = false;
+          return checkPlaylist(preselectGroups);
+        }
         const d = await r.json();
         if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
         _plPreview = d;
-        _plSetStatus('');
+        _plSetStatus(d.checked_at
+          ? `From the last import, ${new Date(d.checked_at).toLocaleString([], {dateStyle: 'medium', timeStyle: 'short'})}. Check playlist fetches it again.`
+          : '');
         _plRenderPreview(d, Array.isArray(preselectGroups) ? preselectGroups : null);
       } catch (e) {
         _plSetStatus(e.message, true);
