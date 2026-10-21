@@ -16,14 +16,43 @@
     #playlist-modal .pl-facts { font-size: .82rem; line-height: 1.6; margin-bottom: .9rem; }
     #playlist-modal .pl-warn { color: var(--warning-soft); }
     #playlist-modal .pl-groups {
-      max-height: 220px; overflow-y: auto; border: 1px solid var(--border); border-radius: 6px;
-      padding: .5rem .7rem; background: var(--bg);
+      max-height: 340px; overflow-y: auto; border: 1px solid var(--border); border-radius: 6px;
+      background: var(--bg);
     }
-    #playlist-modal .pl-group-row { display: flex; align-items: center; gap: .5rem; padding: .2rem 0; flex-wrap: wrap; }
-    #playlist-modal .pl-group-row label { display: flex; align-items: center; gap: .5rem; font-size: .82rem; cursor: pointer; flex: 1 1 12rem; }
-    #playlist-modal .pl-groups .pl-count { color: var(--text-muted); margin-left: auto; font-size: .76rem; }
+    /* name | channels | type | when missing — fixed tracks so every row lines up */
+    #playlist-modal .pl-group-head, #playlist-modal .pl-group-row {
+      display: grid; grid-template-columns: minmax(0, 1fr) 3rem 5.25rem 8.5rem;
+      align-items: center; gap: .65rem; padding: .45rem .7rem;
+    }
+    #playlist-modal .pl-group-head {
+      position: sticky; top: 0; z-index: 1; background: var(--surface); border-bottom: 1px solid var(--border);
+      font-size: .66rem; font-weight: 700; color: var(--text-muted); text-transform: uppercase; letter-spacing: .04em;
+      padding-top: .35rem; padding-bottom: .35rem;
+    }
+    #playlist-modal .pl-group-row + .pl-group-row { border-top: 1px solid var(--border); }
+    #playlist-modal .pl-group-row label { display: flex; align-items: flex-start; gap: .5rem; font-size: .82rem; cursor: pointer; min-width: 0; }
+    #playlist-modal .pl-group-row label input { margin-top: .15rem; flex: none; }
+    #playlist-modal .pl-group-name { min-width: 0; overflow-wrap: anywhere; }
+    #playlist-modal .pl-absent { display: block; font-size: .72rem; color: var(--warning-soft); margin-top: .1rem; }
+    #playlist-modal .pl-absent .pl-link { margin-left: .4rem; font-size: .72rem; }
+    #playlist-modal .pl-group-row.pl-removed .pl-group-name > :not(.pl-absent),
+    #playlist-modal .pl-group-row.pl-removed .pl-count { text-decoration: line-through; opacity: .55; }
+    #playlist-modal .pl-group-row.pl-removed select,
+    #playlist-modal .pl-group-row.pl-removed .pl-miss-cell { opacity: .4; pointer-events: none; }
+    #playlist-modal .pl-col-num { text-align: right; font-variant-numeric: tabular-nums; }
+    #playlist-modal .pl-groups .pl-count { color: var(--text-muted); font-size: .78rem; }
     #playlist-modal .pl-group-type, #playlist-modal .pl-event-limit, #playlist-modal .pl-linear-limit { background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: 5px; padding: .3rem; font-size: .78rem; }
-    #playlist-modal .pl-event-limit, #playlist-modal .pl-linear-limit { width: 3.5rem; }
+    #playlist-modal .pl-group-type { width: 100%; }
+    #playlist-modal .pl-event-limit, #playlist-modal .pl-linear-limit { width: 3.25rem; }
+    #playlist-modal .pl-miss { display: flex; align-items: center; justify-content: space-between; gap: .4rem; font-size: .76rem; color: var(--text-soft); white-space: nowrap; }
+    @media (max-width: 560px) {
+      #playlist-modal .pl-group-head { display: none; }
+      #playlist-modal .pl-group-row { grid-template-columns: minmax(0, 1fr) auto; row-gap: .4rem; }
+      #playlist-modal .pl-group-row label { grid-column: 1; }
+      #playlist-modal .pl-group-row .pl-count { grid-column: 2; }
+      #playlist-modal .pl-group-row .pl-group-type { grid-column: 1; width: 6rem; margin-left: 1.45rem; }
+      #playlist-modal .pl-group-row .pl-miss-cell { grid-column: 2; }
+    }
     #playlist-modal .pl-row { display: flex; gap: .75rem; flex-wrap: wrap; }
     #playlist-modal .pl-row > div { flex: 1 1 8rem; }
     #playlist-modal .pl-radio { display: flex; align-items: flex-start; gap: .5rem; font-size: .82rem; padding: .2rem 0; cursor: pointer; }
@@ -71,7 +100,9 @@
           </label>
           <div class="pl-groups" id="pl-groups"></div>
           <div class="pl-help" id="pl-selected-count"></div>
-          <div class="pl-help">Linear: disable a missing channel after 0–30 imports (0 = off); it stays disabled if it returns. Event: hide after one missed import and delete after 1–30. Pinned channels are exempt, and suspicious partial imports are ignored. Saved rules remain when a group temporarily disappears.</div>
+          <div class="pl-help"><strong>Linear:</strong> disable a channel missing from 0–30 imports in a row (0 = never); it stays disabled if it returns.<br>
+            <strong>Event:</strong> hide after one missed import, delete after 1–30.<br>
+            Pinned channels are exempt, suspicious partial imports are ignored, and a group's rule is kept while it's temporarily absent.</div>
         </div>
 
         <div class="pl-field pl-row">
@@ -177,13 +208,32 @@
       _plEl('playlist-modal').classList.remove('open');
     }
 
+    // An absent group can be forgotten: on Save its rule and selection are
+    // dropped and its stored channels deleted.
+    function _plToggleRemoveGroup(btn, evt) {
+      evt.preventDefault();  // the button sits inside the row's <label>
+      const row = btn.closest('.pl-group-row');
+      const cb = row.querySelector('input[type="checkbox"]');
+      const removing = !row.classList.contains('pl-removed');
+      row.classList.toggle('pl-removed', removing);
+      if (removing) cb.dataset.wasChecked = cb.checked ? '1' : '';
+      cb.checked = removing ? false : cb.dataset.wasChecked === '1';
+      cb.disabled = removing;
+      btn.textContent = removing ? 'Undo' : 'Remove';
+      _plOnGroupsChanged();
+    }
+
+    function _plRemovedRows() {
+      return Array.from(document.querySelectorAll('#pl-groups .pl-group-row.pl-removed'));
+    }
+
     function _plSelectedGroups() {
       return Array.from(document.querySelectorAll('#pl-groups input[type="checkbox"]'))
         .filter(cb => cb.checked).map(cb => cb.dataset.group);
     }
 
     function _plSetAllGroups(checked) {
-      document.querySelectorAll('#pl-groups input[type="checkbox"]').forEach(cb => { cb.checked = checked; });
+      document.querySelectorAll('#pl-groups input[type="checkbox"]:not(:disabled)').forEach(cb => { cb.checked = checked; });
       _plOnGroupsChanged();
     }
 
@@ -195,10 +245,12 @@
       const el = _plEl('pl-selected-count');
       el.textContent = `${count} channel${count === 1 ? '' : 's'} selected` +
         (over ? ` — over the limit of ${_plPreview.max_channels}. Select fewer groups.` : '');
+      const removing = _plRemovedRows().length;
+      if (removing) el.textContent += ` · ${removing} group${removing === 1 ? '' : 's'} will be removed on Save`;
       el.className = 'pl-help' + (over ? ' pl-warn' : '');
       const onlyAbsentEvents = _plEditId && picked.size > 0 && [...picked].every(group =>
         Object.entries(_plGroupLifecycle).some(([name, policy]) => name === group && policy.type === 'event'));
-      _plEl('pl-save-btn').disabled = (count === 0 && !onlyAbsentEvents) || over;
+      _plEl('pl-save-btn').disabled = (count === 0 && !onlyAbsentEvents && !removing) || over;
       if (!_plEditId && !_plEnterTouched) {
         const want = count <= _plPreview.enable_now_threshold ? 'enable' : 'review';
         document.querySelectorAll('input[name="pl-enter"]').forEach(rb => { rb.checked = rb.value === want; });
@@ -221,7 +273,7 @@
     }
 
     function _plCaptureGroupLifecycle() {
-      document.querySelectorAll('#pl-groups .pl-group-row').forEach(row => {
+      document.querySelectorAll('#pl-groups .pl-group-row:not(.pl-removed)').forEach(row => {
         _plOnGroupTypeChanged(row.querySelector('.pl-group-type'));
       });
     }
@@ -236,6 +288,15 @@
     document.querySelectorAll('input[name="pl-enter"]').forEach(rb => {
       rb.addEventListener('change', () => { _plEnterTouched = true; });
     });
+
+    // " · 22 inactive" / " · 22 kept, 3 active" for an absent group's stored rows.
+    function _plStoredNote(stored) {
+      if (!stored || !stored.count) return '';
+      const active = stored.active || 0;
+      if (!active) return ` · ${stored.count} inactive`;
+      if (active === stored.count) return ` · ${stored.count} active`;
+      return ` · ${stored.count} kept, ${active} active`;
+    }
 
     function _plRenderPreview(d, preselect) {
       const facts = [];
@@ -267,17 +328,18 @@
       // Groups gone from the playlist stay listed while they still have a rule,
       // a saved selection, or channels in FastChannels, so a rule can be set.
       const seen = new Set(d.groups.map(g => g.name.toLocaleLowerCase()));
-      const stored = new Map(_plStoredGroups.map(g => [g.name.toLocaleLowerCase(), g.count]));
+      const stored = new Map(_plStoredGroups.map(g => [g.name.toLocaleLowerCase(), g]));
       const absent = [];
       for (const name of [...Object.keys(_plGroupLifecycle), ..._plSavedGroups, ..._plStoredGroups.map(g => g.name)]) {
         const key = name.toLocaleLowerCase();
         if (seen.has(key)) continue;
         seen.add(key);
-        absent.push({name, count: 0, absent: true, stored: stored.get(key) || 0});
+        absent.push({name, count: 0, absent: true, stored: stored.get(key)});
       }
       const rows = [...d.groups, ...absent];
       const want = preselect && preselect.length ? new Set(preselect.map(name => name.toLocaleLowerCase())) : null;
-      _plEl('pl-groups').innerHTML = rows.map((g, i) => {
+      const head = `<div class="pl-group-head"><span>Group</span><span class="pl-col-num">Count</span><span>Type</span><span>If missing</span></div>`;
+      _plEl('pl-groups').innerHTML = head + rows.map((g, i) => {
         const policyKey = Object.keys(_plGroupLifecycle).find(name => name.toLocaleLowerCase() === g.name.toLocaleLowerCase());
         const policy = _plGroupLifecycle[policyKey] || {};
         const isEvent = policy.type === 'event';
@@ -285,14 +347,16 @@
         const linearLimit = Number(policy.disable_after_misses) || 0;
         return `<div class="pl-group-row">
           <label><input type="checkbox" data-idx="${i}" ${(!want || want.has(g.name.toLocaleLowerCase())) ? 'checked' : ''} onchange="_plOnGroupsChanged()">
-            <span>${g.name ? escapeHtml(g.name) : '<em>(no group)</em>'}${g.absent ? ` <span class="pl-warn">(absent now${g.stored ? `, ${g.stored} still in FastChannels` : ''})</span>` : ''}</span>
-            <span class="pl-count">${g.count}</span></label>
+            <span class="pl-group-name"><span>${g.name ? escapeHtml(g.name) : '<em>(no group)</em>'}</span>${g.absent ? `<span class="pl-absent">Not in playlist${_plStoredNote(g.stored)}<button type="button" class="pl-link" onclick="_plToggleRemoveGroup(this, event)">Remove</button></span>` : ''}</span></label>
+          <span class="pl-count pl-col-num">${g.count}</span>
           <select class="pl-group-type" aria-label="Channel type" onchange="_plOnGroupTypeChanged(this)">
             <option value="linear" ${isEvent ? '' : 'selected'}>Linear</option>
             <option value="event" ${isEvent ? 'selected' : ''}>Event</option>
           </select>
-          <span class="pl-event-count" style="display:${isEvent ? '' : 'none'};font-size:.76rem;">Delete after <input class="pl-event-limit" type="number" min="1" max="30" step="1" value="${limit}"> misses</span>
-          <span class="pl-linear-count" style="display:${isEvent ? 'none' : ''};font-size:.76rem;">Disable after <input class="pl-linear-limit" type="number" min="0" max="30" step="1" value="${linearLimit}"> misses</span>
+          <div class="pl-miss-cell">
+            <span class="pl-event-count pl-miss" style="display:${isEvent ? '' : 'none'}">Delete after <input class="pl-event-limit" type="number" min="1" max="30" step="1" value="${limit}" aria-label="Missed imports before deleting"></span>
+            <span class="pl-linear-count pl-miss" style="display:${isEvent ? 'none' : ''}">Disable after <input class="pl-linear-limit" type="number" min="0" max="30" step="1" value="${linearLimit}" aria-label="Missed imports before disabling (0 = never)"></span>
+          </div>
         </div>`;
       }).join('');
       // Group names go on via the DOM, not the markup, so quotes can't break out.
@@ -335,7 +399,7 @@
       if (!_plPreview) { _plSetStatus('Check the playlist first.', true); return; }
       const picked = _plSelectedGroups();
       const groupLifecycle = {};
-      for (const row of document.querySelectorAll('#pl-groups .pl-group-row')) {
+      for (const row of document.querySelectorAll('#pl-groups .pl-group-row:not(.pl-removed)')) {
         const group = row.querySelector('input[type="checkbox"]').dataset.group;
         if (row.querySelector('.pl-group-type').value === 'linear') {
           const input = row.querySelector('.pl-linear-limit');
@@ -366,11 +430,22 @@
         fill_missing_epg: _plEl('pl-fill-missing-epg').checked,
         // All groups selected is stored as "no filter", so groups the playlist
         // adds later are imported too.
-        groups_include: (!_plSavedGroups.length && picked.length === document.querySelectorAll('#pl-groups input[type="checkbox"]').length) ? [] : picked,
+        groups_include: (!_plSavedGroups.length && picked.length === document.querySelectorAll('#pl-groups input[type="checkbox"]:not(:disabled)').length) ? [] : picked,
         group_lifecycle: groupLifecycle,
         default_language: _plEl('pl-lang').value.trim() || 'en',
         default_country: _plEl('pl-country').value.trim() || 'US',
       };
+      const removed = _plRemovedRows().map(row => row.querySelector('input[type="checkbox"]').dataset.group);
+      if (removed.length) {
+        const stored = new Map(_plStoredGroups.map(g => [g.name.toLocaleLowerCase(), g.count]));
+        const doomed = removed.reduce((n, group) => n + (stored.get(group.toLocaleLowerCase()) || 0), 0);
+        const names = removed.map(group => `  • ${group || '(no group)'}`).join('\n');
+        if (doomed && !confirm(`Remove ${removed.length === 1 ? 'this group' : 'these groups'} and permanently delete ` +
+                               `${doomed} channel${doomed === 1 ? '' : 's'}?\n\n${names}\n\n` +
+                               `Their channel numbers, Gracenote IDs and feed pins go too. ` +
+                               `If a group comes back, its channels import as new.`)) return;
+        body.remove_groups = removed;
+      }
       if (!_plEditId) {
         body.enable_now = (document.querySelector('input[name="pl-enter"]:checked') || {}).value === 'enable';
       }

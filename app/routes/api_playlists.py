@@ -10,7 +10,8 @@ import requests
 from flask import Blueprint, abort, jsonify, request
 
 from ..extensions import db
-from ..models import Source, Channel
+from ..event_lifecycle import delete_event
+from ..models import Source, Channel, Feed
 from ..scrapers.m3u_import import slugify
 from ..scrapers.playlist import (
     DEFAULT_MAX_CHANNELS, MAX_SLUG_LEN, SOURCE_PREFIX, PlaylistError, PlaylistScraper,
@@ -233,13 +234,16 @@ def _stored_groups(source: Source) -> list[dict]:
     has dropped out upstream would vanish from it while its channels are still
     here. These let the dialog keep showing it, so a rule can still be set."""
     counts: Counter = Counter()
-    rows = (db.session.query(Channel.playlist_group, Channel.tags)
+    active: Counter = Counter()
+    rows = (db.session.query(Channel.playlist_group, Channel.tags, Channel.is_active)
             .filter(Channel.source_id == source.id).all())
-    for group, tags in rows:
+    for group, tags, is_active in rows:
         if group is None:
             group = (tags or '').split(',', 1)[0]
         counts[group] += 1
-    return [{'name': name, 'count': n} for name, n in sorted(counts.items())]
+        if is_active:
+            active[group] += 1
+    return [{'name': name, 'count': n, 'active': active[name]} for name, n in sorted(counts.items())]
 
 
 def _playlist_dict(source: Source, include_stored_groups: bool = False) -> dict:
@@ -313,6 +317,52 @@ def get_playlist(source_id):
     return jsonify(_playlist_dict(_playlist_source_or_404(source_id), include_stored_groups=True))
 
 
+def _remove_groups(source: Source, config: dict, groups: list[str]) -> int:
+    """Forget groups the user removed in the dialog: drop their selection and
+    rule from `config` (in place) and delete their stored channels. Returns the
+    number of channels deleted. A group that later reappears upstream imports
+    as new channels."""
+    gone = {g.casefold() for g in groups}
+    if not gone:
+        return 0
+    if config.get('groups_include'):
+        kept = [g for g in config['groups_include'] if g.casefold() not in gone]
+        if kept:
+            config['groups_include'] = kept
+        else:
+            config.pop('groups_include', None)
+    if config.get('group_lifecycle'):
+        kept = {g: p for g, p in config['group_lifecycle'].items() if g.casefold() not in gone}
+        if kept:
+            config['group_lifecycle'] = kept
+        else:
+            config.pop('group_lifecycle', None)
+
+    deleted_ids = set()
+    for ch in Channel.query.filter_by(source_id=source.id).all():
+        group = ch.playlist_group
+        if group is None:
+            group = (ch.tags or '').split(',', 1)[0]
+        if group.casefold() in gone:
+            deleted_ids.add(ch.id)
+            delete_event(ch)
+    if deleted_ids:
+        # Feeds can hold channel ids directly; SQLite may reuse a deleted id.
+        for feed in Feed.query.all():
+            filters = dict(feed.filters or {})
+            changed = False
+            for key in ('channel_ids', 'excluded_channel_ids', 'pinned_channel_ids'):
+                ids = filters.get(key)
+                if isinstance(ids, list) and deleted_ids.intersection(ids):
+                    filters[key] = [cid for cid in ids if cid not in deleted_ids]
+                    changed = True
+            if changed:
+                feed.filters = filters
+        logger.info('[%s] removed groups %s: deleted %d channels',
+                    source.name, sorted(groups), len(deleted_ids))
+    return len(deleted_ids)
+
+
 @playlists_bp.route('/playlists/<int:source_id>', methods=['PUT'])
 def update_playlist(source_id):
     source = _playlist_source_or_404(source_id)
@@ -347,6 +397,8 @@ def update_playlist(source_id):
             if group.casefold() in changed_groups:
                 ch.missed_scrapes = 0
 
+    removed = _remove_groups(source, config, _clean_groups(data.get('remove_groups')))
+
     source.config = config
     try:
         db.session.commit()
@@ -364,8 +416,11 @@ def update_playlist(source_id):
         trigger_scrape(source.name, force_full=True)
     elif old.get('fill_missing_epg', True) != config.get('fill_missing_epg', True):
         _invalidate_and_refresh_xml()
+    if removed:
+        _invalidate_and_refresh_xml()
     d = _playlist_dict(source)
     d['scrape_queued'] = rescrape
+    d['removed_channels'] = removed
     return jsonify(d)
 
 
