@@ -506,6 +506,10 @@ def get_source_config(source_id):
         extra['nfl'] = _nfl_signin_info(saved)
     if source.name == 'cbs_sports':
         extra['cbs_sports'] = _cbs_sports_signin_info(saved)
+    if source.name == 'paramount':
+        extra['paramount'] = {'signed_in': bool((saved.get('cookies') or {}).get('CBS_COM')),
+                              'account_status': saved.get('account_status'),
+                              'signin_error': saved.get('signin_error')}
     if source.name == 'nesn_tve':
         login = saved.get('nesn_account') or {}
         extra['nesn'] = {'signed_in': bool(login.get('refresh_token')), 'email': login.get('email'),
@@ -1849,6 +1853,80 @@ def _cbs_sports_signin_info(saved: dict) -> dict:
             'signin_error': saved.get('signin_error'),
             'cbs': bool((authz.get('CBS_ENTERTAINMENT') or {}).get('ok')),
             'cbssn': bool((authz.get('CBS_SPORTS_NETWORK') or {}).get('ok'))}
+
+
+# ── Paramount+ sign-in (activation code at paramountplus.com/activate/androidtv)
+# The user enters the code with a Paramount+ account or a TV provider; a
+# sign-in-queue job polls for it and saves the session — see app.scrapers.paramount.
+
+def _paramount_source_or_400(source_id):
+    source = Source.query.get_or_404(source_id)
+    if source.name != 'paramount':
+        return None, (jsonify({'error': 'not a paramount source'}), 400)
+    return source, None
+
+
+@sources_bp.route('/sources/<int:source_id>/paramount-link/start', methods=['POST'])
+def paramount_link_start(source_id):
+    import redis as _redis
+    import requests as _requests
+    import uuid as _uuid
+    from ..scrapers.paramount import LINK_STATUS_KEY, ParamountAuthError, link_status, start_link
+    from .tasks import get_signin_queue
+
+    _, err = _paramount_source_or_400(source_id)
+    if err:
+        return err
+    try:
+        ctx = start_link(str(_uuid.uuid4()))
+    except (ParamountAuthError, _requests.RequestException) as e:
+        return jsonify({'error': str(e)}), 502
+    status = link_status(ctx, 'waiting')
+    _redis.from_url(current_app.config['REDIS_URL']).setex(LINK_STATUS_KEY, 720, json.dumps(status))
+    get_signin_queue().enqueue('app.scrapers.paramount.run_link', ctx, job_timeout=660)
+    return jsonify(status)
+
+
+@sources_bp.route('/sources/<int:source_id>/paramount-link/state')
+def paramount_link_state(source_id):
+    import redis as _redis
+    from ..scrapers.paramount import LINK_STATUS_KEY
+
+    _, err = _paramount_source_or_400(source_id)
+    if err:
+        return err
+    raw = _redis.from_url(current_app.config['REDIS_URL']).get(LINK_STATUS_KEY)
+    return jsonify(_with_code_queue_notice(json.loads(raw) if raw else {'state': 'idle'},
+                                           'app.scrapers.paramount.run_link'))
+
+
+@sources_bp.route('/sources/<int:source_id>/paramount-link/stop', methods=['POST'])
+def paramount_link_stop(source_id):
+    import redis as _redis
+    from ..scrapers.paramount import LINK_STATUS_KEY
+
+    _, err = _paramount_source_or_400(source_id)
+    if err:
+        return err
+    _redis.from_url(current_app.config['REDIS_URL']).delete(LINK_STATUS_KEY)
+    return jsonify({'status': 'stopped'})
+
+
+@sources_bp.route('/sources/<int:source_id>/paramount-auth/<kind>', methods=['DELETE'])
+def clear_paramount_auth(source_id, kind):
+    from ..scrapers.paramount import SIGNIN_CONFIG_KEYS
+
+    source, err = _paramount_source_or_400(source_id)
+    if err:
+        return err
+    cfg = dict(source.config or {})
+    for key in SIGNIN_CONFIG_KEYS + ('signin_error',):
+        cfg.pop(key, None)
+    source.config = cfg
+    db.session.commit()
+    if source.is_enabled:
+        trigger_scrape('paramount', force_full=True)
+    return jsonify({'status': 'cleared'})
 
 
 # ── ESPN TV-provider sign-in (Adobe Pass v2 link) ───────────────────────────

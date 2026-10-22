@@ -3221,8 +3221,8 @@
           return;
         }
 
-        // ESPN's visible settings are rendered separately from its hidden schema.
-        if (!schema.length && sourceName !== 'espn' && !cfg.tve_signin) {
+        // ESPN's and Paramount+'s visible settings are rendered separately from their hidden schemas.
+        if (!schema.length && sourceName !== 'espn' && sourceName !== 'paramount' && !cfg.tve_signin) {
           if (badge) {
             badge.textContent = 'Auto';
             badge.className = 'config-badge auto';
@@ -4611,7 +4611,7 @@
     }
     // ── end ESPN sign-in ──────────────────────────────────────────────────────
 
-    // ── Activation-code sign-ins (NFL, CBS Sports) ──────────────────────────
+    // ── Activation-code sign-ins (NFL, CBS Sports, Paramount+) ──────────────────────────
     // The card shows a code to enter on the provider's activate page while a
     // sign-in job waits for it. One code per source at a time: a new one
     // retires the previous wait. `slug` is the route prefix (/api/sources/<id>/<slug>-link/…).
@@ -4791,6 +4791,21 @@
           Channels retire two hours after the scheduled end and are deleted a day later.</div>
         ${_eventToggle('include_events', 'Include game channels', values)}
         ${_saveRow(sourceId)}`;
+    }
+    function renderParamountConfig(sourceId, schema, values, cfg) {
+      const info = (cfg && cfg.paramount) || {};
+      const detail = info.signed_in ? 'Signed in' : (info.signin_error || '');
+      return `
+        <div class="config-title">Paramount+ Settings</div>
+        <div class="config-subtitle" style="font-weight:600">Sign in</div>
+        <div class="config-note">Adds Paramount+ live sports — UEFA, Serie A, EFL, UFC, rugby and more — as temporary
+          channels, one per match in the next two days. Needs a Paramount+ subscription, or a TV provider that includes Paramount+.</div>
+        <div class="espn-auth-options">
+          ${codeLinkOption(sourceId, 'paramount', 'paramount', 'account', 'Paramount+', 'Paramount+ account or TV provider',
+                   info.signed_in, detail,
+                   'Get a code, enter it at paramountplus.com/activate/androidtv on your phone or computer, then sign in with your Paramount+ account or choose “Sign in with partner” for your TV provider.')}
+        </div>
+        <div class="config-note" style="margin-top:0.8rem">Match channels retire an hour after the stream window ends and are deleted a day later.</div>`;
     }
     // ── end activation-code sign-ins ──────────────────────────────────────────
 
@@ -5932,6 +5947,8 @@
         return renderNflConfig(sourceId, schema, values, cfg);
       } else if (sourceName === 'cbs_sports') {
         return renderCbsSportsConfig(sourceId, schema, values, cfg);
+      } else if (sourceName === 'paramount') {
+        return renderParamountConfig(sourceId, schema, values, cfg);
       } else if (sourceName === 'sling') {
         return renderSlingConfig(sourceId, schema, values, cfg);
       } else if (sourceName === 'spectrum') {
