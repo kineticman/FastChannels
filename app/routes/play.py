@@ -19,6 +19,7 @@ from datetime import datetime, timedelta, timezone
 from urllib.parse import quote as _url_quote, urljoin, urlsplit, urlunsplit, parse_qs as _parse_qs
 
 import requests as _requests
+from werkzeug.exceptions import HTTPException
 
 from flask import Blueprint, redirect, abort, request, Response, render_template, g, stream_with_context, current_app, jsonify
 from app.config_store import persist_source_config_updates, persist_source_cache_updates, load_source_cache
@@ -1954,6 +1955,8 @@ def dazn_tve_dash(channel_id: str):
     raw_id = _unquote(channel_id)
     try:
         _, stream = _dazn_stream(raw_id)
+    except HTTPException:
+        raise  # an unknown channel is a 404, not a retryable 503
     except Exception as e:
         logger.warning('[dazn-dash] resolve failed for %s: %s', raw_id[:40], e)
         return _unavailable_response()
@@ -2001,12 +2004,14 @@ def dazn_tve_segment(channel_id: str, segment: str):
         # write racing this one's): resolve it again rather than stall.
         try:
             _, stream = _dazn_stream(raw_id)
+        except HTTPException:
+            raise
         except Exception as e:
             logger.warning('[dazn-seg] re-resolve failed for %s: %s', raw_id[:40], e)
             abort(503)
     cdn_dir = stream['manifest'].split('?', 1)[0].rsplit('/', 1)[0]
     query = request.query_string.decode()
-    url = f'{cdn_dir}/{segment}?' + (f'{query}&' if query else '') + stream['token_param']
+    url = f'{cdn_dir}/{segment}?' + (f'{query}&' if query else '') + (stream.get('token_param') or '')
     try:
         r = _requests.get(url, headers={'User-Agent': _DAZN_UA}, timeout=(5, 30), stream=True)
     except Exception as e:
