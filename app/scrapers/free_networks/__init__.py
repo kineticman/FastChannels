@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import time
+from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
 from urllib.parse import quote, unquote
 
@@ -27,6 +28,23 @@ _BY_KEY = {n.key: n for n in NETWORKS}
 # A network taking at least this long gets its own INFO line; the rest only
 # show up in the per-phase summary (per-network detail is at DEBUG).
 _SLOW_NETWORK_SECS = 5.0
+
+# Each network's last non-empty channel list, re-used when its listing fails
+# or comes back empty. Reconcile would otherwise count every channel of a
+# network whose listing endpoint is down as missing upstream and deactivate
+# them after channel_miss_threshold scrapes (18h), though their streams are
+# usually fine. Past _LAST_GOOD_MAX_AGE an empty network is taken at its word.
+_LAST_GOOD_CACHE_KEY = 'free_networks_last_good_channels'
+_LAST_GOOD_MAX_AGE = 3 * 86400
+
+
+def _reraise_if_phase_timeout(exc: Exception) -> None:
+    # The worker's per-phase SIGALRM raises ScrapePhaseTimeoutError (an
+    # Exception, defined in app.worker) inside whichever network is running.
+    # Swallowed as that network's failure, the one-shot timer is spent and the
+    # rest of the phase runs with no limit.
+    if type(exc).__name__ == 'ScrapePhaseTimeoutError':
+        raise exc
 
 
 class FreeNetworksScraper(BaseScraper):
@@ -100,6 +118,8 @@ class FreeNetworksScraper(BaseScraper):
         disabled = self.disabled_networks(self.config)
         if disabled:
             logger.info('[%s] skipping disabled networks: %s', self.source_name, ', '.join(sorted(disabled)))
+        last_good = dict(self.cache.get(_LAST_GOOD_CACHE_KEY) or {})
+        last_good_changed = False
         run_t0 = time.monotonic()
         for net in NETWORKS:
             if net.key in disabled:
@@ -108,8 +128,18 @@ class FreeNetworksScraper(BaseScraper):
             try:
                 chans = net.channels(self)
             except Exception as exc:
+                _reraise_if_phase_timeout(exc)
                 logger.warning('[%s] %s channels failed: %s', self.source_name, net.name, exc)
-                continue
+                chans = []
+            if chans:
+                last_good[net.key] = {'at': time.time(), 'channels': [asdict(ch) for ch in chans]}
+                last_good_changed = True
+            else:
+                kept = last_good.get(net.key) or {}
+                if kept.get('channels') and time.time() - float(kept.get('at') or 0) < _LAST_GOOD_MAX_AGE:
+                    chans = [NetChannel(**c) for c in kept['channels']]
+                    logger.info('[%s] %s listed no channels — keeping its last %d', self.source_name,
+                                net.name, len(chans))
             for ch in chans:
                 out.append(self._channel_data(net, ch))
             elapsed = time.monotonic() - t0
@@ -122,6 +152,8 @@ class FreeNetworksScraper(BaseScraper):
             else:
                 logger.debug('[%s] %s: %d %s (%.1fs)', self.source_name, net.name,
                              len(chans), noun, elapsed)
+        if last_good_changed:
+            self._update_cache(_LAST_GOOD_CACHE_KEY, last_good)
         logger.info('[%s] %d channels from %d networks (%.1fs)', self.source_name, len(out),
                     len(NETWORKS) - len(disabled), time.monotonic() - run_t0)
         return out
@@ -151,6 +183,7 @@ class FreeNetworksScraper(BaseScraper):
             try:
                 progs = net.programs(self, [nc for _, nc in pairs])
             except Exception as exc:
+                _reraise_if_phase_timeout(exc)
                 logger.warning('[%s] %s guide failed: %s — keeping stored guide', self.source_name, net.name, exc)
                 progs = None
             if progs is None:
@@ -252,17 +285,20 @@ class FreeNetworksScraper(BaseScraper):
 
     def _gracenote_ids(self, channels: list[ChannelData]) -> dict[str, str]:
         """source_channel_id -> Gracenote ID, preferring what's stored on the
-        channel (a user's manual ID) over what the scrape supplied."""
+        channel (a user's manual ID) over what the scrape supplied. A channel
+        the user set to 'off' gets none, whatever the scrape supplied."""
         ids = {cd.source_channel_id: cd.gracenote_id for cd in channels if cd.gracenote_id}
         try:
             from app.models import Channel, Source
             src = Source.query.filter_by(name=self.source_name).first()
             if src:
                 for scid, gid, mode in (Channel.query
-                                        .filter(Channel.source_id == src.id, Channel.gracenote_id.isnot(None))
+                                        .filter(Channel.source_id == src.id)
                                         .with_entities(Channel.source_channel_id, Channel.gracenote_id,
                                                        Channel.gracenote_mode)):
-                    if (mode or 'auto') != 'off':
+                    if (mode or 'auto') == 'off':
+                        ids.pop(scid, None)
+                    elif gid:
                         ids[scid] = gid
         except Exception:
             logger.debug('[%s] could not read stored Gracenote IDs', self.source_name, exc_info=True)
@@ -279,9 +315,11 @@ class FreeNetworksScraper(BaseScraper):
                 for h in range(-1, cls._FILLER_HOURS)]
 
     def stored_guide_end(self, net_key: str, channel_ids) -> datetime | None:
-        """The earliest, across these channels, of how far each one's stored
-        guide runs; None if any of them has no stored guide at all. Lets a
-        throttled network tell 'keep what's stored' from 'nothing is stored'."""
+        """The earliest, across these channels that have a stored guide, of
+        how far it runs; None if none of them has one. Lets a throttled network
+        tell 'keep what's stored' from 'nothing is stored'. One channel with no
+        guide (its schedule parsed empty, or a block cut the fetch short) must
+        not count as 'nothing stored', or the throttle never holds."""
         try:
             from app.models import Channel, Program, Source
             from sqlalchemy import func
@@ -298,9 +336,10 @@ class FreeNetworksScraper(BaseScraper):
         except Exception:
             logger.debug('[%s] could not read stored guide', self.source_name, exc_info=True)
             return None
-        if not scids or any(ends.get(scid) is None for scid in scids):
+        stored = [end for end in ends.values() if end is not None]
+        if not stored:
             return None
-        earliest = min(ends.values())
+        earliest = min(stored)
         return earliest if earliest.tzinfo else earliest.replace(tzinfo=timezone.utc)
 
     def _tvtv_programs(self, scid: str, station_id: str) -> list[ProgramData]:

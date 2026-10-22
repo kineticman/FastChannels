@@ -52,12 +52,17 @@ class NewsNation(Network):
             data = json.loads(m.group(1) if m else r.text)
         except ValueError:
             data = {}
-        if ((data.get('exception') or {}).get('code')) == '101':
+        if not isinstance(data, dict):
+            data = {}
+        exception = data.get('exception')
+        if not isinstance(exception, dict):
+            exception = {}
+        if str(exception.get('code')) == '101':
             raise RuntimeError('NewsNation: Lura no longer accepts the access key (Invalid Anvack) — NewsNation '
                                'has rotated it; the new one is on newsnationnow.com/news-nation-live/')
         url = next((p.get('embed_url') for p in data.get('published_urls') or []
                     if '.m3u8' in (p.get('embed_url') or '')), None)
         if not url:
-            desc = (data.get('exception') or {}).get('desc') or ''
+            desc = exception.get('desc') or ''
             raise RuntimeError(f'NewsNation: Lura returned no stream for {ref} (HTTP {r.status_code}) {desc}'.strip())
         return url
