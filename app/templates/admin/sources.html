@@ -269,6 +269,7 @@
     .ch-mix-bar .seg-drm  { background: #a78bfa; }
     .ch-mix-bar .seg-off  { background: color-mix(in srgb, var(--text-muted) 45%, transparent); }
 
+    .custom-note { flex-basis: 100%; color: var(--text-muted); cursor: default; }
     .health-link { color: var(--accent-soft); font-weight: 600; text-decoration: none; white-space: nowrap; }
     .health-link:hover { text-decoration: underline; }
 
@@ -1080,8 +1081,6 @@
                   {% else %}
                     <span class="config-badge auto" id="config-badge-{{ source.id }}">Auto</span>
                   {% endif %}
-                {% else %}
-                  <span class="config-badge user-defined">User-defined</span>
                 {% endif %}
                 {# Off rows collapse to this one quiet note (CSS, so the toggle can flip it live). #}
                 <span class="off-note"{% if source.last_scraped_at and not is_custom %} title="Last scraped {{ source.last_scraped_at | localtime }}"{% endif %}>Off{% if source.last_scraped_at and not is_custom %} · last on {{ source.last_scraped_at.strftime('%b ') ~ source.last_scraped_at.day }}{% endif %}</span>
@@ -1095,7 +1094,7 @@
                   <span class="audit-last-result" id="audit-last-result-{{ source.id }}"></span>
                 </span>
                 {% elif is_custom %}
-                <span class="health-line health-info"><span class="health-dot"></span><span class="health-text">Your own channels and playlists — managed here, never scraped</span></span>
+                <span class="custom-note" title="Paste a link and FastChannels works out the stream; channels play straight from it, with nothing to scrape. For a whole M3U playlist, use + Add Playlist above.">Channels you add one at a time from a link — YouTube, Twitch, a web player, or a direct HLS, DASH or MPEG-TS stream</span>
                 {% endif %}
                 {% set total = mix.get('total', 0) %}
                 <a class="ch-mix" href="/admin/channels?source={{ source.name }}" title="{{ mix_title(mix) if mix else '' }}">
