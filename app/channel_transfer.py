@@ -156,7 +156,11 @@ def transfer_channel(old: Channel, new: Channel) -> dict:
         if not new_gn or new_gn == old_gn or new.gracenote_mode == 'off':
             if new_gn != old_gn or new.gracenote_mode != 'manual':
                 from .routes.api_shared import _apply_gracenote_update
-                _apply_gracenote_update(new, old_gn, 'manual')
+                try:
+                    _apply_gracenote_update(new, old_gn, 'manual')
+                except ValueError as exc:
+                    raise TransferError(f'{old.name} has a saved Gracenote ID ({old_gn}) that '
+                                        f'can\'t be carried over: {exc}') from exc
                 carried.append(f'Gracenote ID {old_gn}')
         elif new_gn != old_gn:
             notes.append(f'Kept {new.name}\'s own Gracenote ID {new_gn} (yours was {old_gn}).')
