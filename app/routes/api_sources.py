@@ -1250,10 +1250,20 @@ def clear_spectrum_auth(source_id):
     session would silently paper over."""
     import redis as _redis
 
+    from .tasks import _job_already_active, get_signin_queue, stop_spectrum_signin
+
     source = Source.query.get_or_404(source_id)
     if source.name != 'spectrum':
         return jsonify({'error': 'not a spectrum source'}), 400
 
+    # A sign-in still running (an unattended re-login, say) would save its
+    # tokens back into the config cleared below. Stopping kills the shared
+    # MVPD browser, so only when Spectrum's own job is the one running.
+    try:
+        if _job_already_active(get_signin_queue(), 'spectrum-signin'):
+            stop_spectrum_signin()
+    except Exception as exc:
+        logger.warning('[spectrum-auth] could not check for a running sign-in: %s', exc)
     cfg = {'force_fresh_signin': True}
     # About the browser profile, not the session: its one-time foreign-cookie
     # and recaptcha.net storage scrub stays done, or every clear reruns it
@@ -1267,8 +1277,7 @@ def clear_spectrum_auth(source_id):
         r = _redis.from_url(current_app.config['REDIS_URL'])
         r.delete(
             'spectrum:browser-login:status', 'spectrum:browser-login:screenshot',
-            'spectrum:browser-login:input', 'spectrum:browser-login:stop',
-            'spectrum:browser-login:hint',
+            'spectrum:browser-login:input', 'spectrum:browser-login:hint',
         )
     except Exception as exc:
         logger.warning('[spectrum-auth] unable to clear Redis state for source_id=%s: %s',
