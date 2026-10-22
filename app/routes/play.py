@@ -7,6 +7,8 @@ is automatically marked is_active=False so it drops out of M3U/EPG output.
 It remains visible in the admin channels page so users can see what was
 disabled and manually re-enable if desired.
 """
+import hashlib
+import hmac
 import json
 import logging
 import re
@@ -1806,8 +1808,6 @@ _VIX_LOCATION_RE = re.compile(r'<Location>([^<]*)</Location>')
 
 
 def _vix_sig(url: str) -> str:
-    import hashlib
-    import hmac
     key = (current_app.secret_key or 'fastchannels').encode()
     return hmac.new(key, url.encode(), hashlib.sha256).hexdigest()[:32]
 
@@ -1823,7 +1823,7 @@ def vix_browser_dash(channel_id: str):
 
     raw_id = _unquote(channel_id)
     session_url = request.args.get('s') or ''
-    if session_url and (request.args.get('sig') != _vix_sig(session_url)
+    if session_url and (not hmac.compare_digest(request.args.get('sig') or '', _vix_sig(session_url))
                         or not (urlsplit(session_url).hostname or '').endswith('.lura.live')):
         abort(403)
     r = None
@@ -1877,7 +1877,10 @@ def vix_segment(channel_id: str):
     """One segment named by a manifest vix_browser_dash served — signed, so this
     relays nothing else."""
     url = request.args.get('u') or ''
-    if not url.startswith('https://') or request.args.get('sig') != _vix_sig(url):
+    host = urlsplit(url).hostname or ''
+    if (not url.startswith('https://')
+            or not (host.endswith('.vix.com') or host.endswith('.lura.live'))
+            or not hmac.compare_digest(request.args.get('sig') or '', _vix_sig(url))):
         abort(403)
     try:
         r = _requests.get(url, timeout=(5, 30), stream=True)
