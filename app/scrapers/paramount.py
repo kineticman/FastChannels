@@ -15,9 +15,11 @@ endpoint; segments load straight from the CDN.
 
 Sign-in is the Paramount+ TV app's activation code: POST apps-api/v2.0/
 androidtv/ott/auth/code.json → code; the user enters it at
-paramountplus.com/activate/androidtv with a Paramount+ account or "Sign in
-with partner" (TV provider); status.json then answers success and sets the
-CBS_COM session cookie (1 year).
+paramountplus.com/activate/androidtv and signs in with their Paramount+
+account (that page takes only email and password); status.json then answers
+success and sets the CBS_COM session cookie (1 year). Viewers who get
+Paramount+ through a TV provider connect it to their Paramount+ account first
+(paramountplus.com → Account → TV Provider).
 
 The saved session is checked for a valid sign-in. Paramount+ determines
 match availability when playback metadata is requested.
@@ -63,7 +65,7 @@ _LINK_TIMEOUT = 600
 _LINK_POLL_SECONDS = 5.0
 
 LINK_STATUS_KEY = 'paramount:link:status'
-SIGNIN_CONFIG_KEYS = ('cookies', 'user_id', 'signed_in_at', 'entitled', 'account_status', 'status_at')
+SIGNIN_CONFIG_KEYS = ('cookies', 'user_id', 'signed_in_at', 'account_status', 'status_at')
 _SIGNIN_LOST = 'The Paramount+ sign-in expired or was removed — sign in again.'
 
 # contentId → (Authorization header value, expiry epoch). Per process; a miss
@@ -169,7 +171,6 @@ def run_link(ctx: dict) -> None:
             return
         cfg = dict(src.config or {})
         cfg.pop('signin_error', None)
-        cfg.pop('entitled', None)
         cfg.update(_signin_config(cookies, status))
         src.config = cfg
         db.session.commit()
@@ -213,7 +214,6 @@ class ParamountScraper(BaseScraper):
     display_name = 'Paramount+'
     source_category = 'premium'
     is_premium = True
-    is_beta = True
     scrape_interval = 360
     # Every channel is a match; its listing is the check (see audit_resolve).
     stream_audit_enabled = False

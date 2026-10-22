@@ -94,9 +94,12 @@ _SUCCESS_SUPPRESS_PATTERNS = (
 # audio and one video segment every ~2s per viewer. ViX's browser preview relays
 # its segments too (CORS is vix.com-only) and refreshes its manifest every ~5s
 # through browser.mpd?s=; the first browser.mpd (the tune) still logs.
+# Paramount+ matches refresh their media playlist through the proxy every ~6s
+# per viewer, plus a key fetch at tune; proxy.m3u8 (the tune) still logs.
 _SUCCESS_SUPPRESS_RE = re.compile(
     r'(?:GET|HEAD) /play/directv/browser-asset\?url=|(?:GET|HEAD) /play/dazn_tve/[^/]+/seg/'
-    r'|(?:GET|HEAD) /play/vix/[^/]+/(?:seg\?|browser\.mpd\?s=)')
+    r'|(?:GET|HEAD) /play/vix/[^/]+/(?:seg\?|browser\.mpd\?s=)'
+    r'|(?:GET|HEAD) /play/paramount/[^/]+/(?:variant\.m3u8|key)\?url=')
 _DASH_RE = re.compile(r'(?:GET|HEAD) /play/(amazon_prime_free|cox|philo|sling|pbs|vidaa|fubo|dazn_tve)/[^/]+/dash\.mpd')
 # DirecTV/cox use path-form license URLs (/license/<id>), while vidaa/fubo/sling use
 # query-form URLs (/license?channel_id=<id>) — matched via the separator below. Sling's
