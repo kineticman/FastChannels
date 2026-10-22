@@ -166,7 +166,8 @@ def preview_playlist():
             if not snapshot or snapshot.get('m3u_url') != cfg.get('m3u_url'):
                 return jsonify({'error': 'No stored playlist data yet'}), 404
             guide = (_imported_guide_stats(source) if cfg.get('epg_url')
-                     else {'checked': False, 'matched': None, 'error': None, 'url_detected': ''})
+                     else {'checked': False, 'matched': None, 'error': None})
+            guide['url_detected'] = snapshot.get('guide_url_detected') or ''
             return _preview_response(snapshot, guide, saved_groups, snapshot.get('checked_at'))
 
     session = _session()
