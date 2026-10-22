@@ -1,6 +1,30 @@
 # FastChannels
 
-FAST channel aggregator — scrapes Pluto TV, Tubi, Roku, Samsung TV Plus, Sling Freestream, Plex, Xumo, LG Channels, Local Now, STIRR, FreeLiveSports, Bally Sports, Hallmark, TCL TV+, Vidaa Free TV, Vizio WatchFree+, Whale TV+, Adult Swim, Frndly TV, FreeCast, Fubo TV, DirecTV Stream, Philo, PBS, C-SPAN, ESPN (linear networks plus ESPN+ events as temporary channels), NFL (NFL Channel, NFL Network, RedZone and live games), CBS Sports (CBS Sports Network, CBS games and the free HQ/Golazo channels), cable-network channels via TV Everywhere (NBCUniversal, FOX, FOX One, Discovery, AMC Networks, A+E Networks, Warner Bros Discovery), your own HDHomeRun tuner, your own M3U playlists with their XMLTV guides, and more, then outputs M3U playlists and XMLTV EPG guides for use in any IPTV player (Jellyfin, Plex, Channels DVR, TiviMate, etc.). DRM-protected sources play back through a real Widevine bridge (browser-based PrismCast, or FastChannels' own Fire TV / Android TV player app) rather than being dropped.
+One live-TV lineup from everything you can watch: free streaming services, the cable networks your TV provider includes, the subscriptions you already pay for, and your own tuner or playlists. FastChannels gathers the channels and their guide data and serves them as M3U playlists and XMLTV guides for Channels DVR, Jellyfin, Emby, TiviMate or any other IPTV player.
+
+It started as a FAST (free ad-supported TV) aggregator, which is where the name comes from, and grew from there.
+
+## Sources
+
+Sources are grouped the same way as on the **Sources** page. A handful of free sources are on out of the box; the rest are one switch away. See [Source Notes](#source-notes) for sign-in and playback details on each.
+
+| Group | Sources |
+|-------|---------|
+| **Free** | The Roku Channel, Samsung TV Plus, Plex, Xumo Play, LG Channels, Vizio WatchFree+, TCL TV+, Whale TV+, STIRR, FreeLiveSports, Bally Sports Live, Hallmark, Adult Swim, Pluto TV, Sling Freestream, Local Now, Vidaa Free TV, PBS, C-SPAN, ViX, Zeam, and **Free Networks** (30+ networks that stream on their own sites: DW, NHK, Al Jazeera, Bloomberg, CBS News, NewsNation, The CW's FAST lineup, HSN, QVC and more) |
+| **Free with an account** | Tubi, Amazon Prime Free Channels, FreeCast |
+| **Subscription** | DirecTV Stream, Spectrum, Fubo, Philo, Frndly TV, ESPN, NFL, CBS, FOX One, Paramount+ |
+| **TV provider** (TV Everywhere) | Sign in with your cable or streaming provider: A+E Networks, AMC Networks, SundanceTV, CNN, C-SPAN, DAZN (YES, MSG), Discovery, Disney (ABC, FX, Nat Geo, Disney Channel), FOX, NBCUniversal, Versant (USA, E!, Syfy, CNBC, MS NOW, Golf), Warner Bros. Discovery (TBS, TNT, truTV, TCM), Univision, Tennis Channel, NESN |
+| **Local** | Your HDHomeRun tuner |
+| **Custom** | Any HLS stream by URL, or your own M3U playlists with their XMLTV guides |
+
+## What it does
+
+- **Feeds**: named, filtered slices of your channels (by source, category, language, Gracenote coverage or hand-picked), each with stable M3U and EPG URLs and one-click **Add to Channels DVR**.
+- **Fresh streams**: playlist entries point at FastChannels, which resolves a live stream URL each time a channel is tuned, so nothing goes stale.
+- **DRM playback**: Widevine-protected channels play through a real DRM bridge, either browser-based [PrismCast](https://github.com/hjdhjd/prismcast) or FastChannels' own Fire TV / Android TV player app, instead of being dropped.
+- **Guide data**: each source's own guide, plus Gracenote station IDs (native or from a community map) for Channels DVR's guide.
+- **Event channels**: ESPN+, NFL, CBS and Paramount+ games show up as temporary channels and leave when they're over.
+- **Lineup cleanup**: Stream Audit flags dead and DRM channels, and the duplicate resolver picks one copy of a channel carried by several sources.
 
 ## Deploy with Portainer
 
@@ -65,7 +89,7 @@ Go to **Admin → Settings** and set two things:
 **3. Configure Sources.**
 Go to **Admin → Sources**. Enable or disable sources to taste, and expand any source card to enter credentials. Changes take effect on the next scrape.
 
-Most sources ship **disabled by default** because they need credentials, a local device, carry mostly DRM content, or have a diminished channel lineup: Pluto TV, Tubi TV, Sling Freestream, Local Now, Amazon Prime Free, Frndly TV, Fubo TV, FreeCast, Vidaa Free TV, DirecTV Stream, Philo, PBS, C-SPAN, ESPN, NFL, CBS Sports, every TV Everywhere source (A+E Networks, AMC Networks, Discovery, FOX, FOX One, NBCUniversal, Warner Bros Discovery), and HDHomeRun. Enable the ones you want and fill in their settings. In particular, **Pluto TV now requires a login** (a free account works), **Tubi TV also requires a free account** (its anonymous channel list stopped working), Frndly/Fubo/FreeCast require account credentials, DirecTV Stream signs in with a code or email/password, Philo signs in with a passwordless emailed code, ESPN signs in with an ESPN account and/or your TV provider, NFL signs in with a code at nfl.com/activate (TV provider and/or NFL account), CBS Sports signs in with a code at cbssports.com/androidtv/activate, and the TV Everywhere sources authenticate once via **Settings → TV Everywhere** (or per source, if one needs a different provider). See [Source Notes](#source-notes) for per-source details.
+Only free sources that need nothing from you start enabled: The Roku Channel, Samsung TV Plus, Plex, Xumo Play, LG Channels, Vizio WatchFree+, TCL TV+, Whale TV+, STIRR, FreeLiveSports, Bally Sports Live, Hallmark and Adult Swim. Everything else ships **disabled** because it needs an account, a TV provider, a local device or a DRM bridge. Enable the ones you want and expand the card to sign in. Many sign-ins are a code or link you approve on your phone, so no password is stored. TV-provider sources share one sign-in from **Settings → TV Everywhere**. Note that **Tubi needs a free account** now. See [Source Notes](#source-notes) for per-source details.
 
 **4. Run Stream Audits.**
 Once channels are populated, run a Stream Audit on each source (see [Stream Audit](#stream-audit) below). This identifies dead and DRM-protected channels and disables them automatically — highly recommended before building your feeds.
@@ -170,7 +194,8 @@ who want to make Plex work anyway, **[docs/plex.md](docs/plex.md)** covers both 
 ### FastChannels Player
 
 DRM channels that need real Widevine playback (Sling, PBS, Amazon Prime Free, Vidaa,
-Philo, Roku, NBCUniversal TVE, Warner Bros Discovery TVE, DirecTV Stream, Fubo) can be routed through a real Fire TV /
+Philo, Roku, Fubo, DirecTV Stream, Spectrum, ESPN, ViX, and the NBCUniversal, Warner Bros. Discovery,
+Versant, Disney, CNN, SundanceTV, Tennis Channel, DAZN and NESN TV Everywhere sources) can be routed through a real Fire TV /
 Android TV device running FastChannels' own player app, captured back off its HDMI
 output and re-published as a normal channel — no browser/PrismCast bridge needed for
 these sources. An alternate HDMI-capture front end, [ah4c](https://github.com/sullrich/ah4c),
@@ -258,11 +283,12 @@ FastChannels never connects to a playlist's streams itself, so it adds nothing t
 
 ### Event channels
 
-Some sources carry one-off events rather than 24/7 channels. FastChannels adds each event as a temporary channel with its own guide entry and removes it automatically when it's over. Four sources produce them today:
+Some sources carry one-off events rather than 24/7 channels. FastChannels adds each event as a temporary channel with its own guide entry and removes it automatically when it's over. Five sources produce them today:
 
 - **ESPN** — opt-in ESPN+, ACC Extra and SEC Plus events in the next 48 hours, filtered by sport and league on the ESPN source card. An event channel retires two hours after its scheduled end (leaving room for overtime) and is deleted a day later. Events dropped from ESPN's schedule, or excluded by your filter, leave the output right away.
 - **NFL** — opt-in live games in the next 48 hours that your sign-in can play (in-market games through your TV provider or NFL+). Games carried on NFL Network stay on that channel. Same retire/delete timing as ESPN.
-- **CBS Sports** — opt-in CBS games in the next 48 hours from your local CBS station, through your TV provider (the CBS Sports app only carries CBS during games). CBS Sports Network games stay on that channel. Same retire/delete timing as ESPN.
+- **CBS** — opt-in CBS games in the next 48 hours from your local CBS station, through your TV provider. CBS Sports Network games stay on that channel. Same retire/delete timing as ESPN.
+- **Paramount+** — live sports matches (UEFA, Serie A, EFL, UFC and more), each as its own channel.
 - **Custom playlists** — any group set to **Event** (see [Custom Playlists](#custom-playlists)).
 
 Event channels are marked with a calendar icon on the Channels and Guide pages. Channels, Guide and feed filters can show events only or leave them out. A channel you disable yourself stays disabled; FastChannels only brings back events it hid automatically.
@@ -290,66 +316,100 @@ Disabling a source deletes all its channels from the DB. Re-enabling and running
 
 ## Source Notes
 
-"Default off" sources are seeded disabled — enable them on the Sources page.
+"Default off" sources are seeded disabled. Enable them on the Sources page.
+
+### Free
 
 | Source | Auth | Notes |
 |--------|------|-------|
-| Pluto TV | Login required | **Default off.** Free Pluto account required; per-country feeds; configurable session pool (default 10); JWT stitcher auth |
-| Tubi TV | Email/password required | **Default off.** Tubi no longer exposes its channel list to signed-out requests; a free Tubi account is required for channel discovery |
-| The Roku Channel | None | Session cookie auth, HLS variant selection; Cloudflare-sensitive — avoid hammering if you get 403s |
+| The Roku Channel | None | Session cookie auth, HLS variant selection; Cloudflare-sensitive, so avoid hammering if you get 403s |
+| Samsung TV Plus | None | Channel data and EPG via [Matt Huisman's public mirror](https://github.com/matthuisman/samsung-tvplus-for-channels). Region configurable (default: `us`) |
 | Plex | None | Session cookie auth |
 | Xumo Play | None | Public API |
-| Samsung TV Plus | None | Channel data and EPG via [Matt Huisman's public mirror](https://github.com/matthuisman/samsung-tvplus-for-channels). Region configurable (default: `us`). |
-| Sling Freestream | Optional (paid) | **Default off.** Two modes: Freestream-only (free, anonymous) or paid Sling account for premium channels; streams are DRM-only for generic IPTV clients |
 | LG Channels | None | Country configurable (default: `US`) |
-| Local Now | None | **Default off.** Public API |
+| Vizio WatchFree+ | None | Public API; clear HLS |
+| TCL TV+ | None | Country configurable (default: `US`) |
+| Whale TV+ | None | Public API |
 | STIRR | None | Public API |
 | FreeLiveSports | None | Public API |
-| Vizio WatchFree+ | None | Public API; clear HLS |
-| Whale TV+ | None | Public API |
-| Adult Swim | None | 24/7 marathon streams |
-| Amazon Prime Free | Optional cookie header | **Default off.** Streams are DRM-only, bridged like the other DRM sources below |
 | Bally Sports Live | None | Free, unauthenticated |
 | Hallmark | None | Free, unauthenticated |
-| TCL TV+ | None | Country configurable (default: `US`) |
-| Vidaa Free TV | None | **Default off.** Free, unauthenticated; most channels are clear HLS but some are Widevine DRM, bridged like the other DRM sources below |
-| Frndly TV | Email/password required | **Default off.** Paid subscription required |
-| Fubo TV | Email/password required | **Default off.** Mostly clear FAST channels; a paid account unlocks ~835 subscription channels, some of which are Widevine DRM and play via the PrismCast/FastChannels Player bridge |
-| FreeCast | Email/password required | **Default off.** Free account at watch.freecast.com required for playback |
-| DirecTV Stream | Sign-in code or email/password | **Default off.** Paid subscription required. **Sign in with a code** (approve a link in your own browser, no password stored) or with email/password. Streams are DRM-only, with browser playback via Widevine and M3U playback via the DRM bridge |
-| Philo | Email (passwordless code) | **Default off.** Requires a Philo subscription; sign-in sends a one-time code by email/text, no password. Streams are DRM-only, via PrismCast or FastChannels Player |
+| Adult Swim | None | 24/7 marathon streams |
+| Pluto TV | None (login optional) | **Default off.** Works anonymously out of the box; signing in with a Pluto account is optional; per-country feeds; configurable session pool (default 10); JWT stitcher auth |
+| Sling Freestream | Optional (paid) | **Default off.** Two modes: Freestream-only (free, anonymous) or a paid Sling account for premium channels; streams are DRM-only for generic IPTV clients |
+| Local Now | None | **Default off.** Public API |
+| Vidaa Free TV | None | **Default off.** Free, unauthenticated; most channels are clear HLS but some are Widevine DRM, played through the DRM bridge |
 | PBS | None (ZIP code optional) | **Default off.** Auto-locates your local station plus a curated set of national/secondary feeds (World, Create, NHK, FNX); add more ZIP codes for additional clear feeds. Stations that require DRM are served through an opt-in bridge feed |
-| ESPN | ESPN account and/or TV provider | **Default off.** ESPN, ESPN2, ESPNU, ESPNews, ESPN Deportes, SEC Network and ACC Network through your TV provider or an ESPN Unlimited plan; NFL Network and MLB Network need an ESPN plan. Plain ESPN+ adds events only. Optional ESPN+ / ACC Extra / SEC Plus [event channels](#event-channels). Playback uses the DRM bridge |
-| NFL | None for NFL Channel; TV provider and/or NFL account for the rest | **Default off.** NFL Channel plays without signing in. A TV-provider or NFL+ sign-in (a code entered at nfl.com/activate) adds NFL Network, RedZone where your package or NFL+ Premium includes it, and optional live-game [event channels](#event-channels). Streams are clear HLS, no DRM bridge |
-| CBS Sports | None for HQ/Golazo/Champions League; TV provider for the rest | **Default off.** CBS Sports HQ, Golazo and the Champions League channel play without signing in. A TV-provider sign-in (a code entered at cbssports.com/androidtv/activate, lasts about 90 days) adds CBS Sports Network and optional CBS game [event channels](#event-channels), if your package includes them. Streams are clear HLS, no DRM bridge |
-| C-SPAN | None | **Default off.** Free, unauthenticated congressional/public-affairs event streams (floor sessions, hearings, Washington Journal). The 24/7 C-SPAN 1/2/3 linear networks sit behind a separate TV-provider login and aren't scraped |
-| A+E Networks TVE | TV Everywhere sign-in | **Default off.** A&E, Lifetime, History, and sister networks. See [TV Everywhere](#tv-everywhere-tve-sources) |
-| AMC Networks TVE | TV Everywhere sign-in | **Default off.** AMC, BBC America, IFC, Sundance TV. See [TV Everywhere](#tv-everywhere-tve-sources) |
-| Discovery TVE | TV Everywhere sign-in | **Default off.** Discovery, HGTV, Food Network, TLC, and sister networks. See [TV Everywhere](#tv-everywhere-tve-sources) |
-| FOX TVE | TV Everywhere sign-in | **Default off.** FOX broadcast plus FS1/FS2. See [TV Everywhere](#tv-everywhere-tve-sources) |
-| FOX One | TV Everywhere sign-in (optional) | **Default off.** FOX Sports direct-subscription streaming; free content works anonymously, paid FOX Sports channels need a linked TV provider |
-| NBCUniversal TVE | TV Everywhere sign-in | **Default off.** Local NBC/Telemundo affiliate (auto-detected by IP, overridable) plus Bravo, USA, NBC Sports Now, and sister networks. See [TV Everywhere](#tv-everywhere-tve-sources) |
-| Warner Bros Discovery TVE | TV Everywhere sign-in | **Default off.** TBS, TNT, truTV, TCM. See [TV Everywhere](#tv-everywhere-tve-sources) |
-| HDHomeRun | Device address | **Default off.** Your own LAN tuner; optional hardware transcode (EXTEND models). See [HDHomeRun](#hdhomerun) |
-| Custom Channels | None | User-added HLS/M3U8 streams; never auto-scraped. See [Custom Channels](#custom-channels) |
-| Custom Playlists | None | Your own M3U + XMLTV, one source per playlist. See [Custom Playlists](#custom-playlists) |
+| C-SPAN | None | **Default off.** Free congressional/public-affairs event streams (floor sessions, hearings, Washington Journal). The 24/7 C-SPAN 1/2/3 networks are a separate [TV provider](#tv-provider-tv-everywhere) source |
+| ViX | None | **Default off.** About 80 free Spanish-language channels (N+ Univision news, telenovelas, movies, comedy, sports). Nearly all are Widevine DRM, so they play through the DRM bridge |
+| Zeam | None | **Default off.** Syncbak's free local-news and FAST service (formerly VUit): about 400 channels across every market. Clear HLS |
+| Free Networks | None | **Default off.** 30+ networks that stream free on their own websites: news (DW, Al Jazeera, TRT, NHK, Arirang, Bloomberg, CBS News, Scripps, Newsmax, NewsNation, Sky News, KSL and more), faith (EWTN, TBN, CBN), shopping (HSN, QVC), Sinclair's diginets, The CW's FAST lineup, A+E's FAST channels, Tastemade, Outside TV. Each network is fetched separately, so one outage doesn't affect the others |
 
-- **Roku**: Cloudflare rate-limiting can cause occasional 403 errors during scraping or playback. If this happens, wait a few minutes before retrying — repeated attempts make it worse. Some channels also expose sparse future guide data; short EPG windows are expected on those channels.
+### Free with an account
+
+| Source | Auth | Notes |
+|--------|------|-------|
+| Tubi TV | Email/password required | **Default off.** Tubi no longer exposes its channel list to signed-out requests; a free Tubi account is required for channel discovery |
+| Amazon Prime Free | Optional cookie header | **Default off.** Streams are DRM-only and play through the DRM bridge |
+| FreeCast | Email/password required | **Default off.** Free account at watch.freecast.com required for playback |
+
+### Subscription
+
+| Source | Auth | Notes |
+|--------|------|-------|
+| DirecTV Stream | Sign-in code or email/password | **Default off.** **Sign in with a code** (approve a link in your own browser, no password stored) or with email/password. Streams are DRM-only, with browser playback via Widevine and M3U playback via the DRM bridge |
+| Spectrum | Browser sign-in | **Default off.** Spectrum TV subscription. Click **Sign in to Spectrum** on the source card: a real browser session opens in an admin-UI modal. Streams are DRM-only and play through the DRM bridge |
+| Fubo TV | Email/password required | **Default off.** Mostly clear FAST channels; a paid account unlocks ~835 subscription channels, some of which are Widevine DRM and play through the DRM bridge |
+| Philo | Email (passwordless code) | **Default off.** Sign-in sends a one-time code by email/text, no password. Streams are DRM-only and play through the DRM bridge |
+| Frndly TV | Email/password required | **Default off.** Paid subscription required |
+| ESPN | ESPN account and/or TV provider | **Default off.** ESPN, ESPN2, ESPNU, ESPNews, ESPN Deportes, SEC Network and ACC Network through your TV provider or an ESPN Unlimited plan; NFL Network and MLB Network need an ESPN plan. Plain ESPN+ adds events only. Optional ESPN+ / ACC Extra / SEC Plus [event channels](#event-channels). Playback uses the DRM bridge |
+| NFL | None for NFL Channel; TV provider and/or NFL account for the rest | **Default off.** NFL Channel plays without signing in. A TV-provider or NFL+ sign-in (a code entered at nfl.com/activate) adds NFL Network, RedZone where your package or NFL+ Premium includes it, and optional live-game [event channels](#event-channels). Clear HLS, no DRM bridge |
+| CBS | None for HQ/Golazo/Champions League; TV provider for the rest | **Default off.** CBS Sports HQ, Golazo and the Champions League channel play without signing in. A TV-provider sign-in (a code entered at cbssports.com/androidtv/activate, lasts about 90 days) adds your local CBS station, CBS Sports Network and optional CBS game [event channels](#event-channels), if your package includes them. Clear HLS, no DRM bridge |
+| FOX One | TV provider (optional) | **Default off.** FOX Sports direct-subscription streaming; free content works anonymously, paid FOX Sports channels need a linked TV provider |
+| Paramount+ | Paramount+ account | **Default off.** Live sports matches (UEFA, Serie A, EFL, UFC and more) as [event channels](#event-channels). Sign in with a code entered at paramountplus.com/activate/androidtv. If you get Paramount+ through your TV provider, connect the provider to your Paramount+ account first (Account → TV Provider on paramountplus.com). Clear HLS, no DRM bridge |
+
+- **Roku**: Cloudflare rate-limiting can cause occasional 403 errors during scraping or playback. If this happens, wait a few minutes before retrying; repeated attempts make it worse. Some channels also expose sparse future guide data, so short EPG windows are expected on those channels.
 - **Amazon Prime Free**: without a valid cookie header, channel discovery pagination is limited.
 - **Sling Freestream**: streams are DRM-only for generic IPTV clients. Toggle on "Paid Sling account (premium channels)" to add premium channels. Off = Freestream-only (free, anonymous; no sign-in, no browser).
-  - Sling gates its login form with invisible hCaptcha Enterprise, which reliably challenges automated browsers regardless of fingerprint spoofing — so signing in still needs a human to solve the captcha when one is shown. Save your email/password in the source config, then click **Sign in to Sling**: FastChannels launches a real anti-detect browser (Camoufox) against the actual sign-in page, auto-fills your saved credentials, and streams it live in an admin-UI modal — you only need to solve the captcha if one appears. Once signed in, it captures the session automatically and caches the OAuth credentials; no manual token pasting needed.
+  - Sling gates its login form with invisible hCaptcha Enterprise, which reliably challenges automated browsers regardless of fingerprint spoofing, so signing in still needs a human to solve the captcha when one is shown. Save your email/password in the source config, then click **Sign in to Sling**: FastChannels launches a real anti-detect browser (Camoufox) against the actual sign-in page, auto-fills your saved credentials, and streams it live in an admin-UI modal. You only need to solve the captcha if one appears. Once signed in, it captures the session automatically and caches the OAuth credentials; no manual token pasting needed.
 - **Samsung TV Plus**: EPG covers approximately the current day. All credit for the data to [Matt Huisman](https://github.com/matthuisman/samsung-tvplus-for-channels).
 - **DirecTV Stream / Sling**: both source cards have an **Exclude FAST channels** toggle to leave out free, ad-supported channels. Saving a change to this toggle on an enabled source queues a full scrape. That scrape marks excluded channels inactive without waiting for the normal miss-threshold grace period, while retaining their saved settings.
 - **DirecTV Stream**: resolves Gracenote IDs from its own API first (the `externalListingId` DirecTV attaches to each channel), with community-map fallback; an HD channel with no ID of its own falls back to its SD twin's. Filters out non-streamable satellite-only lineup entries.
 - **DirecTV Stream — Use DirecTV channel numbers**: off by default. On, DirecTV channels are numbered in M3U output exactly as DirecTV numbers them (ESPN 206, CNN 202, ...) instead of getting an app-assigned number, so a DVR guide matches the DirecTV guide. Feeds that share one DirecTV number get subchannel suffixes: the main feed keeps the bare number, "... Alternate" feeds get sequential `.1`, `.2`, and feeds named with their own index ("WNBA on ION 2", "Big Ten Network Overflow 3") get that index (`305.2`, `610.3`). On satellite lineups the SD copy of an HD channel is left out so the pair does not claim the same number. Other sources are automatically numbered around the DirecTV numbers; a channel you have locked (🔒) keeps its number, and any clash shows up as a channel-number overlap warning. Changing the toggle queues a channel refresh.
 
-### TV Everywhere (TVE) sources
+### TV provider (TV Everywhere)
 
-A+E Networks, AMC Networks, Discovery, FOX, FOX One, NBCUniversal, and Warner Bros Discovery all authenticate the same way: through your TV provider (MVPD), not a per-source login. Go to **Settings → TV Everywhere**, pick your provider, and sign in — a real browser session opens in an admin-UI modal for the provider's pairing flow. **Sign in to all** repeats that flow for every TVE-backed network in one pass, with a short pause between each to avoid tripping your provider's rate limiting.
+These sources sign in through your cable or streaming provider (MVPD) rather than a per-source login. Go to **Settings → TV Everywhere**, pick your provider, and sign in, either in a real browser session that opens in an admin-UI modal or by opening a link on your phone. **Sign in to all** repeats that for every TV-provider network in one pass, with a short pause between each to avoid tripping your provider's rate limiting.
 
 If one source should sign in with a different TV provider than the rest, choose **A different sign-in, just for this source** on that source's card. It then signs in each of its networks by a link you open on your phone, independently of the shared login.
 
-The sign-in dropdown lists every provider Adobe Pass supports, but it's only been verified working with **Cox**, **Sling TV**, and **Xfinity/Comcast**. Other providers may fail. All of these channels are DRM-only (Widevine CENC) and play back via the PrismCast browser bridge; NBCUniversal TVE and Warner Bros Discovery TVE are additionally eligible for the FastChannels Player bridge, the others currently are not (see [FastChannels Player](#fastchannels-player)).
+| Source | Channels | Notes |
+|--------|----------|-------|
+| A+E Networks TVE | A&E, Lifetime, History, FYI and sister networks | **Default off.** PrismCast bridge only |
+| AMC Networks TVE | AMC, BBC America, IFC, WE tv | **Default off.** PrismCast bridge only |
+| SundanceTV | SundanceTV (24/7) | **Default off.** Needs a Sundance account as well as your provider. DRM bridge |
+| CNN TVE | CNN, CNN International, HLN | **Default off.** One sign-in covers all three. DRM bridge |
+| C-SPAN TVE | C-SPAN, C-SPAN2, C-SPAN3 (24/7) | **Default off.** Clear HLS, no DRM bridge |
+| DAZN | DAZN 1, Rally TV, Red Bull TV, Unbeaten, Fubo Sports; YES and MSG | **Default off.** The free channels need a free DAZN account (signed in with a phone link); YES and MSG need a provider that carries them. DRM bridge |
+| Discovery TVE | Discovery, HGTV, Food Network, TLC and sister networks | **Default off.** PrismCast bridge only |
+| Disney TVE | Your local ABC station, Freeform, FX, FXX, FXM, Nat Geo, Nat Geo Wild, Disney Channel, Disney Junior, Disney XD; free ABC News Live | **Default off.** Two provider sign-ins (ABC/FX/Nat Geo and the Disney channels). DRM bridge |
+| FOX TVE | FOX broadcast plus FS1/FS2 | **Default off.** PrismCast bridge only |
+| NBCUniversal TVE | Local NBC/Telemundo affiliate (auto-detected by IP, overridable), Bravo, NBC News NOW, NBC Sports Now, Telemundo and Universo channels | **Default off.** DRM bridge |
+| Versant TVE | USA, E!, Syfy, Oxygen (East and West), CNBC, MS NOW, Golf Channel | **Default off.** One sign-in covers all 11. DRM bridge |
+| Warner Bros. Discovery TVE | TBS, TNT, truTV, TCM | **Default off.** DRM bridge |
+| Univision TVE | Univision, UniMás, Galavisión, TUDN; free N+ Univision 24/7, Zona TUDN, Canal ViX | **Default off.** Clear HLS, no DRM bridge |
+| Tennis Channel TVE | Tennis Channel; free Tennis Channel 2 and Pickleball TV | **Default off.** Tennis Channel plays through the DRM bridge; the free channels are clear |
+| NESN TVE (Beta) | NESN, NESN Plus | **Default off.** New England providers only. Needs a NESN account (signed in with an emailed code) as well as your provider. DRM bridge |
+
+"DRM bridge" means PrismCast or [FastChannels Player](#fastchannels-player); "PrismCast bridge only" sources can't use FastChannels Player yet. The sign-in has been verified with **Cox**, **Spectrum**, **Sling TV** and **Xfinity/Comcast**. Adobe Pass lists many more providers, but not every provider carries every network, and some may fail to sign in.
+
+### Local and Custom
+
+| Source | Auth | Notes |
+|--------|------|-------|
+| HDHomeRun | Device address | **Default off.** Your own LAN tuner; optional hardware transcode (EXTEND models). See [HDHomeRun](#hdhomerun) |
+| Custom Channels | None | User-added HLS/M3U8 streams; never auto-scraped. See [Custom Channels](#custom-channels) |
+| Custom Playlists | None | Your own M3U + XMLTV, one source per playlist. See [Custom Playlists](#custom-playlists) |
 
 ## Advanced
 
