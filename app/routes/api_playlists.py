@@ -421,7 +421,15 @@ def update_playlist(source_id):
             if group.casefold() in changed_groups:
                 ch.missed_scrapes = 0
 
-    removed = _remove_groups(source, config, _clean_groups(data.get('remove_groups')))
+    remove_groups = _clean_groups(data.get('remove_groups'))
+    if remove_groups and old.get('groups_include') and not (
+            [g for g in (config.get('groups_include') or [])
+             if g.casefold() not in {r.casefold() for r in remove_groups}]):
+        # No groups_include means every group, so removing the last selected
+        # ones would import the whole playlist.
+        return jsonify({'error': 'Removing these groups would leave no groups selected, which imports '
+                                 'the whole playlist. Select at least one group, or delete the playlist.'}), 422
+    removed = _remove_groups(source, config, remove_groups)
 
     source.config = config
     try:

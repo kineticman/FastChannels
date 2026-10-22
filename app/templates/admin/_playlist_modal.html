@@ -251,7 +251,7 @@
       el.className = 'pl-help' + (over ? ' pl-warn' : '');
       const onlyAbsentEvents = _plEditId && picked.size > 0 && [...picked].every(group =>
         Object.entries(_plGroupLifecycle).some(([name, policy]) => name === group && policy.type === 'event'));
-      _plEl('pl-save-btn').disabled = (count === 0 && !onlyAbsentEvents && !removing) || over;
+      _plEl('pl-save-btn').disabled = (count === 0 && !onlyAbsentEvents && !(removing && picked.size)) || over;
       if (!_plEditId && !_plEnterTouched) {
         const want = count <= _plPreview.enable_now_threshold ? 'enable' : 'review';
         document.querySelectorAll('input[name="pl-enter"]').forEach(rb => { rb.checked = rb.value === want; });
