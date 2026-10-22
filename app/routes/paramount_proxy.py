@@ -190,6 +190,11 @@ def paramount_key_proxy(channel_id: str):
             logger.warning('[paramount] key fetch for %s answered HTTP %s', channel.source_channel_id, r.status_code)
             abort(502)
         key = r.content
-        _KEYS[url] = (key, _time.time())
+        now = _time.time()
+        # Every match and key rotation brings a new key URL; drop expired ones
+        # so the cache doesn't grow for the life of the worker.
+        for stale in [u for u, (_k, t) in _KEYS.items() if now - t >= _KEY_TTL]:
+            _KEYS.pop(stale, None)
+        _KEYS[url] = (key, now)
     return Response(key, content_type='application/octet-stream',
                     headers={'Cache-Control': 'no-cache', 'Access-Control-Allow-Origin': '*'})
