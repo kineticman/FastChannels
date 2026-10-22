@@ -1806,6 +1806,8 @@ def _refresh_xml_artifacts() -> None:
     from app.generators.xmltv import write_xmltv
 
     for attempt in range(2):
+        # The feed list below is read now, so the sweep's grace counts from here.
+        pass_started = time.time()
         _settings = AppSettings.get()
         _configured_base_url = (_settings.effective_public_base_url() or '').strip().rstrip('/')
         if not _configured_base_url:
@@ -2044,7 +2046,7 @@ def _refresh_xml_artifacts() -> None:
         # method that's been switched off (GitHub #73).
         try:
             live_keys = {k for k, _w in xml_artifacts} | {k for k, _w in m3u_artifacts}
-            swept, swept_bytes = sweep_unused_artifacts(live_keys)
+            swept, swept_bytes = sweep_unused_artifacts(live_keys, since=pass_started)
             if swept:
                 logger.info('[artifacts] removed %d unused cache file(s), freed %.1f MB',
                             swept, swept_bytes / 1024 / 1024)

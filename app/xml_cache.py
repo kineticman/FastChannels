@@ -159,7 +159,8 @@ def delete_xml_artifact(cache_key: str) -> int:
     return removed
 
 
-def sweep_unused_artifacts(live_keys: set[str], *, min_age_seconds: int = 600) -> tuple[int, int]:
+def sweep_unused_artifacts(live_keys: set[str], *, min_age_seconds: int = 600,
+                           since: float | None = None) -> tuple[int, int]:
     """Delete cached artifacts that no longer belong to any live output.
 
     `live_keys` is every cache key the artifact refresh just produced — anything
@@ -167,6 +168,9 @@ def sweep_unused_artifacts(live_keys: set[str], *, min_age_seconds: int = 600) -
     a bridge method that's switched off, and its route no longer serves it.
     Files modified within `min_age_seconds` are kept so an on-demand write that
     races the refresh (e.g. a DVR import for a just-created feed) survives.
+    `since` is when the caller read the feed list behind `live_keys`; the
+    window counts back from then, so a feed created during a long refresh
+    pass isn't swept before the next pass knows about it.
     Orphaned `.tmp` files from crashed writes are removed once past the lock
     staleness window. Returns `(files_removed, bytes_freed)`.
     """
@@ -176,7 +180,7 @@ def sweep_unused_artifacts(live_keys: set[str], *, min_age_seconds: int = 600) -
     for key in live_keys:
         for ext in ('xml', 'm3u', 'xml.stale', 'xml.lock'):
             live_names.add(_cache_path(key, ext=ext).name)
-    now = time.time()
+    now = time.time() if since is None else min(time.time(), since)
     removed = freed = 0
     for path in _CACHE_ROOT.iterdir():
         name = path.name
