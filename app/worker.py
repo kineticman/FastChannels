@@ -2250,13 +2250,17 @@ def run_playlist_delete(source_id: int):
             filters = dict(feed.filters or {})
             changed = False
             if name in (filters.get('sources') or []):
-                filters['sources'] = [s for s in filters['sources'] if s != name]
-                changed = True
+                scrubbed = _scrubbed_feed_list('sources', filters['sources'], {name})
+                if scrubbed != filters['sources']:
+                    filters['sources'] = scrubbed
+                    changed = True
             for key in ('channel_ids', 'excluded_channel_ids', 'pinned_channel_ids'):
                 ids = filters.get(key)
                 if isinstance(ids, list) and gone.intersection(ids):
-                    filters[key] = [cid for cid in ids if cid not in gone]
-                    changed = True
+                    scrubbed = _scrubbed_feed_list(key, ids, gone)
+                    if scrubbed != ids:
+                        filters[key] = scrubbed
+                        changed = True
             if changed:
                 feed.filters = filters
 
@@ -4029,6 +4033,20 @@ def _rq_ytdlp_upgrade():
     _reload_gunicorn_workers()
 
 
+_FEED_WHITELIST_KEYS = ('channel_ids', 'sources')
+
+
+def _scrubbed_feed_list(key: str, values: list, gone: set) -> list:
+    """values minus gone, except a whitelist key never comes back empty: every
+    reader treats [] as "no filter", so emptying a feed's channel_ids or
+    sources would turn a feed that now matches nothing into the full lineup.
+    Its stale entries are kept instead, which still match nothing."""
+    kept = [v for v in values if v not in gone]
+    if not kept and key in _FEED_WHITELIST_KEYS:
+        return values
+    return kept
+
+
 def _scrub_feed_channel_refs() -> int:
     """Drop feed-filter channel ids whose channel no longer exists.
 
@@ -4064,8 +4082,10 @@ def _scrub_feed_channel_refs() -> int:
         for key in keys:
             ids = filters.get(key)
             if isinstance(ids, list) and gone.intersection(ids):
-                filters[key] = [cid for cid in ids if cid not in gone]
-                changed = True
+                scrubbed = _scrubbed_feed_list(key, ids, gone)
+                if scrubbed != ids:
+                    filters[key] = scrubbed
+                    changed = True
         if changed:
             feed.filters = filters
             changed_feeds += 1
