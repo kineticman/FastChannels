@@ -1024,6 +1024,8 @@ def stop_spectrum_signin() -> None:
 
 # Link-login family -> (browser-login job_id, its stop function). TCM and
 # FOX One have no browser sign-in; AMCN/Discovery reuse the legacy job.
+# The shared job runs one of several families' sign-ins, so the job's function
+# says whose it is — see _browser_login_belongs_to.
 _FAMILY_BROWSER_LOGINS = {
     'legacy': ('mvpd-browser-login', stop_mvpd_browser_login),
     'amcn': ('mvpd-browser-login', stop_mvpd_browser_login),
@@ -1033,7 +1035,32 @@ _FAMILY_BROWSER_LOGINS = {
 }
 
 
-def stop_family_browser_login(family: str) -> bool:
+_SHARED_JOB_FAMILY_FUNCS = {
+    'legacy': 'app.tve.browser_login.mvpd.run_mvpd_browser_login',
+    'amcn': 'app.tve.browser_login.amcn.run_amcn_browser_login',
+    'discovery': 'app.tve.browser_login.discovery.run_discovery_browser_login',
+}
+
+
+def _browser_login_belongs_to(q: Queue, job_id: str, family: str, requestor_id: str | None) -> bool:
+    """Whether the active job_id is this family's sign-in. Only the shared
+    mvpd-browser-login job needs the check; it also runs FOX One. A legacy
+    sign-in is per network, so with a requestor_id it must be that network's."""
+    func = _SHARED_JOB_FAMILY_FUNCS.get(family)
+    if not func:
+        return True
+    try:
+        job = Job.fetch(job_id, connection=q.connection)
+    except Exception:
+        return False
+    if job.func_name != func:
+        return False
+    if family == 'legacy' and requestor_id:
+        return bool(job.args) and str(job.args[0]).upper() == requestor_id.upper()
+    return True
+
+
+def stop_family_browser_login(family: str, requestor_id: str | None = None) -> bool:
     """Stop a network family's browser sign-in if one is queued or running.
     For when that sign-in has been abandoned: the source moved to a
     different login, or a phone-link sign-in is starting for it (forum
@@ -1044,7 +1071,10 @@ def stop_family_browser_login(family: str) -> bool:
     if not job_id:
         return False
     try:
-        if not _job_already_active(get_signin_queue(), job_id):
+        q = get_signin_queue()
+        if not _job_already_active(q, job_id):
+            return False
+        if not _browser_login_belongs_to(q, job_id, family, requestor_id):
             return False
     except Exception as e:
         logger.warning(f'Could not check sign-in job {job_id}: {e}')

@@ -119,8 +119,9 @@ def source_tve_signin(source_id):
         clear_signin_state(source, leaving if leaving is not own or mode == 'shared' else None)
         # A browser sign-in still running for the old login is abandoned now.
         from .tasks import stop_family_browser_login
-        for family in {row.get('family') for row in _source_status_rows(source.name)}:
-            stop_family_browser_login(family or '')
+        for family, requestor_id in {(row.get('family'), row.get('requestor_id'))
+                                     for row in _source_status_rows(source.name)}:
+            stop_family_browser_login(family or '', requestor_id)
         logger.info('[tve] %s now signs in with %s', source.name,
                     'its own TV provider login' if mode == 'separate' else 'the shared TV provider login')
     db.session.commit()
@@ -431,7 +432,7 @@ def tve_link_login_start():
     mso_id = tve_account_mso_id(account)
     # Same worker: a browser sign-in left waiting for this network would
     # hold the link job in the queue for up to 30 minutes.
-    stop_family_browser_login(family)
+    stop_family_browser_login(family, requestor_id)
     run_id = uuid.uuid4().hex
     status = {'run_id': run_id, 'family': family, 'requestor_id': requestor_id, 'mso_id': mso_id,
               'state': 'starting', 'message': 'Getting a sign-in link…', 'steps': []}
