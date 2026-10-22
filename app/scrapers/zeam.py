@@ -154,8 +154,18 @@ class ZeamScraper(BaseScraper):
         done = 0
 
         def _one(channel_id: str, url: str) -> list[ProgramData]:
-            r = self.get(url)
-            if not r:
+            # A few stations list a schedule file CloudFront no longer serves
+            # (403/404); that just means no guide for them, not a failed scrape.
+            try:
+                r = self.session.get(url, timeout=30)
+            except Exception as exc:
+                logger.warning('[%s] schedule fetch failed for %s: %s', self.source_name, channel_id, exc)
+                return []
+            if r.status_code in (403, 404):
+                logger.debug('[%s] no schedule for %s (HTTP %s)', self.source_name, channel_id, r.status_code)
+                return []
+            if not r.ok:
+                logger.warning('[%s] schedule fetch for %s returned HTTP %s', self.source_name, channel_id, r.status_code)
                 return []
             try:
                 rows = r.json().get('schedule') or []
@@ -164,7 +174,10 @@ class ZeamScraper(BaseScraper):
                 return []
             replay = channel_id in looped
             parsed = [p for row in rows for p in self._parse_program(channel_id, row, replay)]
-            return self._drop_overlaps(parsed)
+            # Some stations' schedule files stopped updating months ago; skip rows
+            # that are already over rather than handing them to the worker.
+            now = datetime.now(timezone.utc)
+            return self._drop_overlaps([p for p in parsed if p.end_time > now])
 
         with ThreadPoolExecutor(max_workers=self._EPG_WORKERS) as pool:
             futures = [pool.submit(_one, cid, url) for cid, url in wanted]
