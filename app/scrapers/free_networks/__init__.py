@@ -6,6 +6,10 @@ from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
 from urllib.parse import quote, unquote
 
+import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
+
 from ..base import BaseScraper, ChannelData, ConfigField, ProgramData
 from ...gracenote_map import resolve_gracenote
 from ._common import UA, NetChannel
@@ -36,6 +40,50 @@ _SLOW_NETWORK_SECS = 5.0
 # usually fine. Past _LAST_GOOD_MAX_AGE an empty network is taken at its word.
 _LAST_GOOD_CACHE_KEY = 'free_networks_last_good_channels'
 _LAST_GOOD_MAX_AGE = 3 * 86400
+
+
+# Per-network time limits. Networks run one after another inside one phase
+# timeout, so a single host that never answers would otherwise starve every
+# network queued behind it. Normal: channel listings take under ~5s; Outside
+# TV's guide takes 65-85s.
+_CHANNELS_BUDGET_SECS = 60
+_GUIDE_BUDGET_SECS = 180
+
+
+class NetworkBudgetExceeded(requests.exceptions.Timeout):
+    """A network used up its time limit. A Timeout, so the networks' own
+    request-error handling treats it like any other timed-out request."""
+
+
+class _BudgetAdapter(HTTPAdapter):
+    """Caps every request's timeout at the running network's remaining time,
+    and fails it at once when none is left."""
+
+    def __init__(self, scraper, **kwargs):
+        self._scraper = scraper
+        super().__init__(**kwargs)
+
+    def send(self, request, timeout=None, **kwargs):
+        return super().send(request, timeout=self._scraper.budget_timeout(timeout), **kwargs)
+
+
+class _BudgetedSession:
+    """The curl_cffi session with the same per-network time limit."""
+
+    def __init__(self, scraper, session):
+        self._scraper = scraper
+        self._session = session
+
+    def get(self, url, **kwargs):
+        kwargs['timeout'] = self._scraper.budget_timeout(kwargs.get('timeout', 30))
+        return self._session.get(url, **kwargs)
+
+    def post(self, url, **kwargs):
+        kwargs['timeout'] = self._scraper.budget_timeout(kwargs.get('timeout', 30))
+        return self._session.post(url, **kwargs)
+
+    def __getattr__(self, name):
+        return getattr(self._session, name)
 
 
 def _reraise_if_phase_timeout(exc: Exception) -> None:
@@ -102,8 +150,58 @@ class FreeNetworksScraper(BaseScraper):
         bot protection (Bloomberg's PerimeterX, CBS News)."""
         if self._imp_session is None:
             from curl_cffi import requests as cffi_requests
-            self._imp_session = cffi_requests.Session(impersonate='chrome')
+            self._imp_session = _BudgetedSession(self, cffi_requests.Session(impersonate='chrome'))
         return self._imp_session
+
+    # ── Per-network time limit ───────────────────────────────
+
+    _net_deadline: float | None = None
+
+    def _retry_config(self) -> Retry:
+        # One retry, not the base three: urllib3 retries inside a single send,
+        # each attempt with the full (capped) timeout, so more retries would
+        # let one request run several times past its network's limit.
+        return Retry(total=2, connect=1, read=1, status=1, backoff_factor=1.0,
+                     status_forcelist=(429, 500, 502, 503, 504), allowed_methods=None,
+                     raise_on_status=False)
+
+    def _configure_session(self, session) -> None:
+        adapter = _BudgetAdapter(self, max_retries=self._retry_config())
+        session.mount('https://', adapter)
+        session.mount('http://', adapter)
+
+    def budget_timeout(self, timeout):
+        """timeout capped at what the running network has left. Raises
+        NetworkBudgetExceeded once it has none. Unchanged outside a scrape
+        (play-time resolve)."""
+        if self._net_deadline is None:
+            return timeout
+        remaining = self._net_deadline - time.monotonic()
+        if remaining <= 0:
+            raise NetworkBudgetExceeded('network time limit reached')
+        if timeout is None:
+            return remaining
+        if isinstance(timeout, tuple):
+            return tuple(min(t, remaining) if t is not None else remaining for t in timeout)
+        return min(timeout, remaining)
+
+    def get(self, url: str, **kwargs):
+        # Past the limit, skip quietly: _run_network logs the cut-off once,
+        # where BaseScraper.get would log an ERROR for every skipped request.
+        if self._net_deadline is not None and time.monotonic() >= self._net_deadline:
+            return None
+        return super().get(url, **kwargs)
+
+    def _run_network(self, net, budget: int, fn, *args):
+        """fn(*args) under the network's time limit."""
+        self._net_deadline = time.monotonic() + budget
+        try:
+            return fn(*args)
+        finally:
+            over = time.monotonic() >= self._net_deadline
+            self._net_deadline = None
+            if over:
+                logger.warning('[%s] %s hit its %ds time limit — cut short', self.source_name, net.name, budget)
 
     def memo(self, key, fn):
         """Per-run memo so channels() and programs() can share one fetch."""
@@ -126,7 +224,7 @@ class FreeNetworksScraper(BaseScraper):
                 continue
             t0 = time.monotonic()
             try:
-                chans = net.channels(self)
+                chans = self._run_network(net, _CHANNELS_BUDGET_SECS, net.channels, self)
             except Exception as exc:
                 _reraise_if_phase_timeout(exc)
                 logger.warning('[%s] %s channels failed: %s', self.source_name, net.name, exc)
@@ -181,7 +279,7 @@ class FreeNetworksScraper(BaseScraper):
             t0 = time.monotonic()
             skipped = False
             try:
-                progs = net.programs(self, [nc for _, nc in pairs])
+                progs = self._run_network(net, _GUIDE_BUDGET_SECS, net.programs, self, [nc for _, nc in pairs])
             except Exception as exc:
                 _reraise_if_phase_timeout(exc)
                 logger.warning('[%s] %s guide failed: %s — keeping stored guide', self.source_name, net.name, exc)
