@@ -506,6 +506,10 @@ def get_source_config(source_id):
         extra['nfl'] = _nfl_signin_info(saved)
     if source.name == 'cbs_sports':
         extra['cbs_sports'] = _cbs_sports_signin_info(saved)
+    if source.name == 'nesn_tve':
+        login = saved.get('nesn_account') or {}
+        extra['nesn'] = {'signed_in': bool(login.get('refresh_token')), 'email': login.get('email'),
+                         'signed_in_at': login.get('signed_in_at')}
     from ..tve.accounts import SEPARATE_SIGNIN_SOURCES
     if source.name in SEPARATE_SIGNIN_SOURCES:
         from .api_tve import _source_signin_payload
@@ -1533,6 +1537,53 @@ def philo_login_verify(source_id):
     r.delete(f'philo:login:ctx:{source_id}')
     config_complete = bool(is_source_config_complete('philo', registry.get('philo'), cfg))
     return jsonify({'status': 'signed_in', 'config_complete': config_complete})
+
+
+@sources_bp.route('/sources/<int:source_id>/nesn-login/send-code', methods=['POST'])
+def nesn_login_send_code(source_id):
+    """Step 1 of the NESN account sign-in (passwordless, like Philo's): NESN
+    emails a code. The TV-provider sign-in is linked to this account."""
+    import redis as _redis
+    from ..scrapers.nesn_tve import NesnTVEScraper
+
+    source = Source.query.get_or_404(source_id)
+    if source.name != 'nesn_tve':
+        return jsonify({'error': 'not a nesn_tve source'}), 400
+    data = request.get_json() or {}
+    email = (data.get('email') or '').strip() or ((source.config or {}).get('email') or '').strip()
+    try:
+        ctx = NesnTVEScraper.request_login_code(email)
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    _redis.from_url(current_app.config['REDIS_URL']).setex(f'nesn:login:ctx:{source_id}', 900, json.dumps(ctx))
+    return jsonify({'status': 'sent', 'email': email})
+
+
+@sources_bp.route('/sources/<int:source_id>/nesn-login/verify', methods=['POST'])
+def nesn_login_verify(source_id):
+    """Step 2: the emailed code → the NESN account login, kept on the source."""
+    import redis as _redis
+    from ..scrapers.nesn_tve import NesnTVEScraper
+
+    source = Source.query.get_or_404(source_id)
+    if source.name != 'nesn_tve':
+        return jsonify({'error': 'not a nesn_tve source'}), 400
+    code = ((request.get_json() or {}).get('code') or '').strip()
+    r = _redis.from_url(current_app.config['REDIS_URL'])
+    raw = r.get(f'nesn:login:ctx:{source_id}')
+    if not raw:
+        return jsonify({'error': 'Sign-in session expired — request a new code.'}), 400
+    try:
+        login = NesnTVEScraper.verify_login_code(json.loads(raw), code)
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    cfg = dict(source.config or {})
+    cfg['nesn_account'] = login
+    cfg['email'] = login['email']
+    source.config = cfg
+    db.session.commit()
+    r.delete(f'nesn:login:ctx:{source_id}')
+    return jsonify({'status': 'signed_in'})
 
 
 # ── ESPN TV activation code ──────────────────────────────────────────────────

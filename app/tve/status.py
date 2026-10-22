@@ -253,6 +253,20 @@ def tve_network_status(account) -> list[dict]:
         'needs_signin': _needs_signin('cnn', cnn_last_signed_in_at, _errors('cnn_tve')),
     })
 
+    nesn_last_signed_in_at = (_cfg('nesn_tve').get('nesn_mvpd_auth') or {}).get('captured_at')
+    nesn_error_message, nesn_error_at = _last_error('nesn', nesn_last_signed_in_at, _errors('nesn_tve'))
+    entries.append({
+        'source': 'nesn_tve',
+        'label': 'NESN TVE (NESN, NESN+)',
+        'last_signed_in_at': nesn_last_signed_in_at,
+        'note': 'Sign in with a link on your phone or computer. Plays only for TV provider accounts in the NESN market.',
+        'family': 'nesn',
+        'requestor_id': None,
+        'last_error_message': nesn_error_message,
+        'last_error_at': nesn_error_at,
+        'needs_signin': _needs_signin('nesn', nesn_last_signed_in_at, _errors('nesn_tve')),
+    })
+
     fox_last_signed_in_at = _cfg('fox_tve').get('fox_sports_access_token_captured_at')
     fox_error_message, fox_error_at = _last_error('fox', fox_last_signed_in_at, _errors('fox_tve'))
     entries.append({

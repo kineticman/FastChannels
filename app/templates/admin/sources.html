@@ -3599,6 +3599,86 @@
     }
     // ── end Philo sign-in ─────────────────────────────────────────────────────
 
+    // ── NESN: NESN account (email → code), then the TV provider ──────────────
+    function renderNesnConfig(sourceId, schema, values, cfg) {
+      const info = (cfg && cfg.nesn) || {};
+      const email = String(info.email || values.email || '');
+      const tveSignin = cfg && cfg.tve_signin ? renderTveSigninSection(sourceId, cfg.tve_signin) : '';
+      return `
+        <div class="config-title">NESN Settings</div>
+        <div class="config-subtitle" style="font-weight:600">1. NESN account</div>
+        <div class="config-note">
+          ${info.signed_in
+            ? `Signed in to NESN as ${escapeHtml(email)}. The sign-in renews itself.`
+            : 'NESN links your TV provider to a free NESN account. Enter its email (or a new one at watch.nesn.com) and NESN emails you a code. There is no password.'}
+        </div>
+        <div class="amazon-autologin-panel" id="nesn-login-${sourceId}">
+          <div class="amazon-autologin-header">
+            <input type="text" id="nesn-email-${sourceId}" class="philo-ident-input"
+                   value="${escapeHtml(email)}" placeholder="NESN account email" autocomplete="username"
+                   onkeydown="if(event.key==='Enter') nesnSendCode(${sourceId})">
+            <button class="btn btn-run" type="button" id="nesn-send-btn-${sourceId}"
+                    onclick="nesnSendCode(${sourceId})">${info.signed_in ? 'Sign in again' : 'Send code'}</button>
+          </div>
+          <span class="amazon-status-text" id="nesn-status-${sourceId}">
+            ${info.signed_in ? '<span style="color:var(--success-soft)">&#10003; Signed in</span>' : ''}
+          </span>
+          <div class="amazon-otp-row" id="nesn-code-${sourceId}" style="display:none">
+            <label for="nesn-code-input-${sourceId}">Code:</label>
+            <input type="text" id="nesn-code-input-${sourceId}" placeholder="123456"
+                   maxlength="8" autocomplete="one-time-code" inputmode="numeric"
+                   onkeydown="if(event.key==='Enter') nesnVerifyCode(${sourceId})">
+            <button class="btn btn-run btn-sm" type="button" onclick="nesnVerifyCode(${sourceId})">Verify</button>
+            <button class="btn btn-cancel btn-sm" type="button" onclick="nesnSendCode(${sourceId})">Resend</button>
+          </div>
+        </div>
+        <div class="config-subtitle" style="font-weight:600">2. TV provider</div>
+        <div class="config-note">NESN plays only for TV provider accounts billed to an address in NESN's New England market.</div>
+        ${tveSignin}`;
+    }
+
+    async function nesnSendCode(sourceId) {
+      const btn      = document.getElementById(`nesn-send-btn-${sourceId}`);
+      const statusEl = document.getElementById(`nesn-status-${sourceId}`);
+      const email = (document.getElementById(`nesn-email-${sourceId}`)?.value || '').trim();
+      if (!email) { statusEl.innerHTML = '<span style="color:var(--warning-soft)">Enter your NESN account email.</span>'; return; }
+      btn.disabled = true;
+      statusEl.innerHTML = '<span style="color:var(--text-muted)">Sending code…</span>';
+      try {
+        const r = await fetch(`/api/sources/${sourceId}/nesn-login/send-code`, {
+          method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({email}),
+        });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok) { statusEl.innerHTML = `<span style="color:var(--danger-soft)">${escapeHtml(d.error || 'Could not send code.')}</span>`; return; }
+        statusEl.innerHTML = `<span style="color:var(--success-soft)">Code sent to ${escapeHtml(d.email || email)}. Enter it below.</span>`;
+        document.getElementById(`nesn-code-${sourceId}`).style.display = 'flex';
+        document.getElementById(`nesn-code-input-${sourceId}`)?.focus();
+      } catch (e) {
+        statusEl.innerHTML = '<span style="color:var(--danger-soft)">Network error sending code.</span>';
+      } finally {
+        btn.disabled = false;
+      }
+    }
+
+    async function nesnVerifyCode(sourceId) {
+      const statusEl = document.getElementById(`nesn-status-${sourceId}`);
+      const code = (document.getElementById(`nesn-code-input-${sourceId}`)?.value || '').trim();
+      if (!code) return;
+      statusEl.innerHTML = '<span style="color:var(--text-muted)">Verifying…</span>';
+      try {
+        const r = await fetch(`/api/sources/${sourceId}/nesn-login/verify`, {
+          method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({code}),
+        });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok) { statusEl.innerHTML = `<span style="color:var(--danger-soft)">${escapeHtml(d.error || 'Verification failed.')}</span>`; return; }
+        statusEl.innerHTML = '<span style="color:var(--success-soft)">&#10003; Signed in</span>';
+        setTimeout(() => loadSourceConfig(sourceId, 'nesn_tve'), 600);
+      } catch (e) {
+        statusEl.innerHTML = '<span style="color:var(--danger-soft)">Network error verifying code.</span>';
+      }
+    }
+    // ── end NESN sign-in ──────────────────────────────────────────────────────
+
     // ── ESPN activation-code sign-in (same flow as ESPN's TV apps) ───────────
     const _espnPollTimers = {};
 
@@ -5690,6 +5770,8 @@
         return renderDirectvConfig(sourceId, schema, values, cfg);
       } else if (sourceName === 'philo') {
         return renderPhiloConfig(sourceId, schema, values);
+      } else if (sourceName === 'nesn_tve') {
+        return renderNesnConfig(sourceId, schema, values, cfg);
       } else if (sourceName === 'espn') {
         return renderEspnConfig(sourceId, schema, values, cfg);
       } else if (sourceName === 'nfl') {
