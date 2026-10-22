@@ -27,7 +27,7 @@ from ..hls import inspect_hls_drm, parse_stream_info
 from ..models import Channel, Source
 from ..url import public_base_url
 from ..scrapers import registry
-from ..scrapers.playlist import is_playlist_source
+from ..scrapers.playlist import is_playlist_source, redact_url as _redact_url
 from .custom_proxy import (
     _absolutize_hls_manifest,
     _custom_proxy_headers,
@@ -386,12 +386,12 @@ def _check_manifest(url: str, session) -> tuple[str | None, dict | None]:
                     break
 
         if '#EXT-X-PLAYLIST-TYPE:VOD' in text and '#EXT-X-ENDLIST' in text:
-            logger.info('[play] finished VOD playlist in manifest: %s', url[:80])
+            logger.info('[play] finished VOD playlist in manifest: %s', _redact_url(url))
             return 'VOD', stream_info
 
         drm = inspect_hls_drm(text)
         if drm:
-            logger.info('[play] DRM detected (%s) in manifest: %s', drm['drm_type'], url[:80])
+            logger.info('[play] DRM detected (%s) in manifest: %s', drm['drm_type'], _redact_url(url))
             return 'DRM', stream_info
     except Exception as e:
         logger.debug('[play] manifest check fetch failed (ignoring): %s', e)
