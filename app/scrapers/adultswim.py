@@ -105,6 +105,7 @@ class AdultSwimScraper(BaseScraper):
                     assets[video_id] = asset_url
 
         channels: list[ChannelData] = []
+        no_asset: list[str] = []
         for number, row in enumerate(valid_rows, start=1):
             slug = self._clean(row["id"])
             title = self._clean(row["title"])
@@ -112,7 +113,7 @@ class AdultSwimScraper(BaseScraper):
             marathon_id = self._clean(row["vod_to_live_id"])
             asset_url = assets.get(video_id)
             if not asset_url:
-                logger.warning("[%s] No stable HLS asset for %s; skipping", self.source_name, title)
+                no_asset.append(title)
                 continue
 
             channels.append(
@@ -137,6 +138,10 @@ class AdultSwimScraper(BaseScraper):
             )
 
         logger.info("[%s] %d channels fetched", self.source_name, len(channels))
+        if no_asset:
+            # Usually a stream that's been off the air for months, not a fault.
+            logger.info("[%s] skipped %d with no stable HLS asset: %s",
+                        self.source_name, len(no_asset), ", ".join(no_asset))
         return channels
 
     def fetch_epg(self, channels: list[ChannelData], **kwargs) -> list[ProgramData]:
