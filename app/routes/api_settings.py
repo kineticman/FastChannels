@@ -347,6 +347,8 @@ def app_settings():
             row.dvr_epg_auto_refresh = bool(data['dvr_epg_auto_refresh'])
         if 'image_proxy_enabled' in data:
             row.image_proxy_enabled = bool(data['image_proxy_enabled'])
+        if 'event_guide_filler' in data:
+            row.event_guide_filler = bool(data['event_guide_filler'])
         if 'm3u_rewrite_timestamps' in data:
             row.m3u_rewrite_timestamps = bool(data['m3u_rewrite_timestamps'])
         if 'fc_player_enabled' in data:
@@ -409,6 +411,7 @@ def app_settings():
         'gracenote_auto_fill': row.gracenote_auto_fill if row.gracenote_auto_fill is not None else True,
         'dvr_epg_auto_refresh': row.dvr_epg_auto_refresh if row.dvr_epg_auto_refresh is not None else True,
         'image_proxy_enabled': row.image_proxy_enabled if row.image_proxy_enabled is not None else True,
+        'event_guide_filler': row.event_guide_filler if row.event_guide_filler is not None else True,
         'm3u_rewrite_timestamps': bool(row.m3u_rewrite_timestamps),
         'gracenote_map_url': row.gracenote_map_url or '',
         'gracenote_contribution_url': row.gracenote_contribution_url or '',

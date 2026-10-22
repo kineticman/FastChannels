@@ -878,6 +878,15 @@ const MVPD_LOGIN_FAMILIES = {
   amcn:      { base: '/api/settings/tve/amcn/browser-login', needsRequestor: false },
   discovery: { base: '/api/settings/tve/discovery/browser-login', needsRequestor: false },
   tcm:       { base: '/api/settings/tve/link-login', needsRequestor: false },
+  versant:   { base: '/api/settings/tve/link-login', needsRequestor: false },
+  univision: { base: '/api/settings/tve/link-login', needsRequestor: false },
+  disney:    { base: '/api/settings/tve/link-login', needsRequestor: false },
+  tennis:    { base: '/api/settings/tve/link-login', needsRequestor: false },
+  dazn:      { base: '/api/settings/tve/link-login', needsRequestor: false },
+  cspan:     { base: '/api/settings/tve/link-login', needsRequestor: false },
+  sundance:  { base: '/api/settings/tve/link-login', needsRequestor: false },
+  cnn:       { base: '/api/settings/tve/link-login', needsRequestor: false },
+  nesn:      { base: '/api/settings/tve/link-login', needsRequestor: false },
   google:    { base: '/api/settings/tve/google/browser-login', needsRequestor: false },
 };
 // Phone-link sign-in (app/tve/link_login.py): the families whose provider
@@ -885,7 +894,9 @@ const MVPD_LOGIN_FAMILIES = {
 // Discovery uses a typed code on its own page (the status carries it); the
 // Google step isn't a network sign-in, so it stays browser-only.
 MVPD_LOGIN_FAMILIES.link = { base: '/api/settings/tve/link-login', needsRequestor: false };
-const TVE_LINK_FAMILIES = new Set(['legacy', 'nbc', 'tcm', 'fox', 'amcn', 'discovery']);
+const TVE_LINK_FAMILIES = new Set(['legacy', 'nbc', 'tcm', 'fox', 'amcn', 'discovery', 'versant', 'univision', 'disney', 'tennis', 'dazn', 'cspan', 'sundance', 'cnn', 'nesn']);
+// Families with no browser sign-in at all: always the phone link.
+const TVE_LINK_ONLY_FAMILIES = new Set(['tcm', 'versant', 'univision', 'disney', 'tennis', 'dazn', 'cspan', 'sundance', 'cnn', 'nesn']);
 let _mvpdLoginActive = false;
 let _mvpdLoginDone = false;
 let _mvpdLoginPollTimer = null;
@@ -1017,7 +1028,7 @@ async function loadTveNetworkStatus() {
 // that login signs in; everything else follows the page's choice.
 function openMvpdLoginModal(family, requestorId, method) {
   family = family || 'legacy';
-  if ((family === 'tcm' || (method || _tveSigninMethod()) === 'phone') && TVE_LINK_FAMILIES.has(family)) {
+  if ((TVE_LINK_ONLY_FAMILIES.has(family) || (method || _tveSigninMethod()) === 'phone') && TVE_LINK_FAMILIES.has(family)) {
     openTveLinkModal(family, requestorId);
     return;
   }
@@ -1358,8 +1369,8 @@ async function signInToAllTve() {
     _mvpdLoginFamily = n.family;  // so a mid-batch cancel/force-stop hits the right endpoint
     steps[i].state = 'running';
     _renderMvpdLoginSteps(steps);
-    const result = n.family === 'tcm'
-      ? await _tveLinkRunOne('tcm', null, status, null)
+    const result = TVE_LINK_ONLY_FAMILIES.has(n.family)
+      ? await _tveLinkRunOne(n.family, null, status, null)
       : await _mvpdLoginRunOneForBatch(MVPD_LOGIN_FAMILIES[n.family], n.requestor_id, n.label, status, hintEl);
     if (!_mvpdLoginActive) return;
     steps[i].state = result.ok ? 'done' : 'failed';
@@ -2737,10 +2748,10 @@ function _tveLinkRunOne(family, requestorId, status, onSteps) {
             _showTveLink(label, d.url, d.code);
           } else if (d.state === 'waiting') {
             status.textContent = `Checking ${label}…`;
-          } else if (d.state === 'starting' && Date.now() - startedAt > 10000) {
+          } else if (d.state === 'starting' && (d.queue_notice || Date.now() - startedAt > 10000)) {
             // Sign-ins share the maintenance worker; a nightly job or a bulk
-            // channel update can hold it for a bit.
-            status.textContent = 'Waiting for the background worker to pick this up…';
+            // channel update can hold it for a bit. The server names it.
+            status.textContent = d.queue_notice || 'Waiting for the background worker to pick this up…';
           }
           if (d.state === 'success' || d.state === 'error') {
             document.getElementById('mvpd-link-panel').style.display = 'none';

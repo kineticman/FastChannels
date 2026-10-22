@@ -277,6 +277,10 @@ def ensure_runtime_schema() -> None:
                 conn.execute(text(
                     "ALTER TABLE app_settings ADD COLUMN image_proxy_enabled BOOLEAN NOT NULL DEFAULT 1"
                 ))
+            if "event_guide_filler" not in cols:
+                conn.execute(text(
+                    "ALTER TABLE app_settings ADD COLUMN event_guide_filler BOOLEAN NOT NULL DEFAULT 1"
+                ))
             if "m3u_rewrite_timestamps" not in cols:
                 # Experimental Channels DVR directive. Default off because it changes
                 # recording-time stream handling and may affect in-progress playback.
@@ -1013,6 +1017,11 @@ def ensure_runtime_schema() -> None:
         # a perpetually overdue next-scrape date and false "at risk" channel flags.
         conn.execute(
             text("UPDATE sources SET last_scraped_at = NULL WHERE scrape_interval = 0")
+        )
+        # cbs_sports carries the local CBS station 24/7 since 2026-10-18; it's
+        # shown as "CBS" now. Only the untouched old label is renamed.
+        conn.execute(
+            text("UPDATE sources SET display_name = 'CBS' WHERE name = 'cbs_sports' AND display_name = 'CBS Sports'")
         )
         conn.execute(
             text(

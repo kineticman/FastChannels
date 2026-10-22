@@ -17,9 +17,11 @@ from __future__ import annotations
 import logging
 import os
 import tempfile
+import time
+from collections import Counter
 import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta, timezone
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import urlsplit
 
 import requests
 
@@ -51,6 +53,15 @@ MAX_XMLTV_DOWNLOAD_BYTES = 400 * 1024 * 1024   # as served (usually gzipped)
 # they would have no guide when approved, until the next scheduled refresh.
 # Bigger playlists import the guide for enabled channels only, to bound rows.
 GUIDE_ALL_CHANNELS_MAX = 500
+
+# Playlist hosts often rate-limit per account. A 429 gets one retry after the
+# host's Retry-After, capped so a scrape never stalls for long.
+RATE_LIMIT_DEFAULT_WAIT = 10
+RATE_LIMIT_MAX_WAIT = 30
+
+# source_cache key: what the last scrape saw in the playlist, so the edit
+# dialog can open without fetching it again.
+SNAPSHOT_CACHE_KEY = 'playlist_snapshot'
 
 EPG_PAST_HOURS = 2
 EPG_FUTURE_DAYS = 7
@@ -99,16 +110,20 @@ def linear_group_miss_limit(config: dict, group: str | None) -> int:
 
 
 def redact_url(url: str | None) -> str:
-    """URL safe to log or show in last_error: no credentials, no query string.
-    Playlist URLs routinely carry a username and password in the query."""
+    """URL safe to log or show in last_error: scheme and host only. Playlist
+    URLs carry credentials in the query (username/password) or the path
+    (a per-user key, e.g. https://host/w/<key>), so both are elided."""
     try:
         parts = urlsplit(url or '')
     except ValueError:
         return '(invalid URL)'
     host = parts.hostname or ''
+    if not parts.scheme or not host:
+        return '(invalid URL)'
     if parts.port:
         host = f'{host}:{parts.port}'
-    return urlunsplit((parts.scheme, host, parts.path, '…' if parts.query else '', ''))
+    elided = '/…' if parts.path.strip('/') or parts.query else ''
+    return f'{parts.scheme}://{host}{elided}'
 
 
 def validate_url(url: str | None, label: str) -> str:
@@ -122,13 +137,40 @@ def validate_url(url: str | None, label: str) -> str:
     return url
 
 
+def _retry_after_seconds(value: str | None) -> int | None:
+    """Seconds to wait per a Retry-After header (delta-seconds form only), or
+    None when the host asks for longer than RATE_LIMIT_MAX_WAIT: retrying
+    sooner than asked only earns another 429 and holds the scraper worker."""
+    try:
+        wait = int((value or '').strip())
+    except ValueError:
+        wait = RATE_LIMIT_DEFAULT_WAIT
+    if wait > RATE_LIMIT_MAX_WAIT:
+        return None
+    return max(1, wait)
+
+
 def _download(session: requests.Session, url: str, label: str, limit: int,
-              user_agent: str | None = None, dest=None) -> bytes | None:
+              user_agent: str | None = None, dest=None, retry_rate_limit: bool = True) -> bytes | None:
     """GET `url` with a hard size cap. Returns the body, or writes it to `dest`
-    (a binary file object) and returns None. Errors never include the full URL."""
+    (a binary file object) and returns None. Errors never include the full URL.
+    retry_rate_limit=False fails a 429 at once, for callers a person is waiting on."""
     headers = {'User-Agent': user_agent} if user_agent else {}
     try:
-        with session.get(url, headers=headers, stream=True, timeout=(15, 120)) as r:
+        for attempt in range(2):
+            r = session.get(url, headers=headers, stream=True, timeout=(15, 120))
+            if r.status_code != 429 or attempt or not retry_rate_limit:
+                break
+            wait = _retry_after_seconds(r.headers.get('Retry-After'))
+            if wait is None:
+                break
+            r.close()
+            logger.info('%s rate-limited (HTTP 429) by %s; retrying in %ds', label, redact_url(url), wait)
+            time.sleep(wait)
+        with r:
+            if r.status_code == 429:
+                raise PlaylistError(f'{label} request failed: {urlsplit(url).hostname} is rate-limiting requests '
+                                    '(HTTP 429). Try again in a minute.')
             if r.status_code >= 400:
                 raise PlaylistError(f'{label} request failed: HTTP {r.status_code} from {redact_url(url)}')
             # raw + decode_content: honour Content-Encoding, but count the
@@ -158,9 +200,10 @@ def _download(session: requests.Session, url: str, label: str, limit: int,
         ) from None
 
 
-def fetch_playlist(session: requests.Session, url: str, user_agent: str | None = None) -> M3UPlaylist:
+def fetch_playlist(session: requests.Session, url: str, user_agent: str | None = None,
+                   retry_rate_limit: bool = True) -> M3UPlaylist:
     url = validate_url(url, 'Playlist URL')
-    body = _download(session, url, 'Playlist', MAX_M3U_BYTES, user_agent)
+    body = _download(session, url, 'Playlist', MAX_M3U_BYTES, user_agent, retry_rate_limit=retry_rate_limit)
     text = decode_m3u(body)
     if '#EXTINF' not in text.upper():
         raise PlaylistError('That URL did not return an M3U playlist (no #EXTINF entries found)')
@@ -168,6 +211,24 @@ def fetch_playlist(session: requests.Session, url: str, user_agent: str | None =
     if not playlist.entries:
         raise PlaylistError('The playlist has no entries with a usable http(s) stream URL')
     return playlist
+
+
+def playlist_summary(playlist: M3UPlaylist) -> dict:
+    """What the playlist dialog shows about a playlist: its groups with
+    channel counts, and how many entries carry ids, headers or DRM."""
+    entries = playlist.entries
+    groups = Counter(e.group for e in entries)
+    return {
+        'channel_count':  len(entries),
+        'skipped':        playlist.skipped,
+        'groups':         [{'name': name, 'count': count}
+                           for name, count in sorted(groups.items(), key=lambda kv: (kv[0] == '', kv[0].casefold()))],
+        'with_tvg_id':    sum(1 for e in entries if e.attr('tvg-id')),
+        'with_gracenote': sum(1 for e in entries if e.attr('tvc-guide-stationid')),
+        'with_headers':   sum(1 for e in entries if e.headers),
+        'with_drm':       sum(1 for e in entries if e.has_drm_props),
+        'guide_url_detected': playlist.guide_url or '',
+    }
 
 
 def _as_list(value) -> list[str]:
@@ -350,6 +411,11 @@ class PlaylistScraper(BaseScraper):
         # to the reconcile step.
         self.allow_suspicious_channel_collapse = False
         playlist = fetch_playlist(self.session, self.config.get('m3u_url'), self._user_agent())
+        self._update_cache(SNAPSHOT_CACHE_KEY, {
+            **playlist_summary(playlist),
+            'm3u_url': self.config.get('m3u_url'),
+            'checked_at': datetime.now(timezone.utc).isoformat(),
+        })
         entries = filter_entries(playlist.entries, self.config)
         if not entries:
             selected = self.config.get('groups_include') or []

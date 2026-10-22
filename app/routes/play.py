@@ -7,6 +7,8 @@ is automatically marked is_active=False so it drops out of M3U/EPG output.
 It remains visible in the admin channels page so users can see what was
 disabled and manually re-enable if desired.
 """
+import hashlib
+import hmac
 import json
 import logging
 import re
@@ -17,6 +19,7 @@ from datetime import datetime, timedelta, timezone
 from urllib.parse import quote as _url_quote, urljoin, urlsplit, urlunsplit, parse_qs as _parse_qs
 
 import requests as _requests
+from werkzeug.exceptions import HTTPException
 
 from flask import Blueprint, redirect, abort, request, Response, render_template, g, stream_with_context, current_app, jsonify
 from app.config_store import persist_source_config_updates, persist_source_cache_updates, load_source_cache
@@ -24,7 +27,7 @@ from ..hls import inspect_hls_drm, parse_stream_info
 from ..models import Channel, Source
 from ..url import public_base_url
 from ..scrapers import registry
-from ..scrapers.playlist import is_playlist_source
+from ..scrapers.playlist import is_playlist_source, redact_url as _redact_url
 from .custom_proxy import (
     _absolutize_hls_manifest,
     _custom_proxy_headers,
@@ -51,6 +54,7 @@ from .fox_tve_proxy import (
     configure_fox_tve_proxy,
     fox_tve_proxy_bp,
 )
+from .paramount_proxy import configure_paramount_proxy, paramount_proxy_bp
 
 
 from ..scrapers.cspan import (
@@ -336,6 +340,13 @@ configure_fox_tve_proxy(
     refresh_stream_info_async=_refresh_stream_info_async,
 )
 play_bp.register_blueprint(fox_tve_proxy_bp)
+configure_paramount_proxy(
+    unavailable_response=_unavailable_response,
+    gone_response=_gone_response,
+    refresh_stream_info_async=_refresh_stream_info_async,
+    channel_is_retired=_channel_is_retired,
+)
+play_bp.register_blueprint(paramount_proxy_bp)
 
 
 def _check_manifest(url: str, session) -> tuple[str | None, dict | None]:
@@ -375,12 +386,12 @@ def _check_manifest(url: str, session) -> tuple[str | None, dict | None]:
                     break
 
         if '#EXT-X-PLAYLIST-TYPE:VOD' in text and '#EXT-X-ENDLIST' in text:
-            logger.info('[play] finished VOD playlist in manifest: %s', url[:80])
+            logger.info('[play] finished VOD playlist in manifest: %s', _redact_url(url))
             return 'VOD', stream_info
 
         drm = inspect_hls_drm(text)
         if drm:
-            logger.info('[play] DRM detected (%s) in manifest: %s', drm['drm_type'], url[:80])
+            logger.info('[play] DRM detected (%s) in manifest: %s', drm['drm_type'], _redact_url(url))
             return 'DRM', stream_info
     except Exception as e:
         logger.debug('[play] manifest check fetch failed (ignoring): %s', e)
@@ -1760,6 +1771,262 @@ def spectrum_dash_proxy(channel_id: str):
     return redirect(mpd_url, code=302)
 
 
+@play_bp.route('/play/versant_tve/<channel_id>/dash.mpd')
+def versant_tve_dash(channel_id: str):
+    """The play proxy under a .mpd name, for the same reason as spectrum_dash_proxy:
+    FastChannels Player picks its parser from the URL extension, and on the
+    generic .m3u8 URL it parsed Versant's DASH manifest as HLS and failed
+    (confirmed on a Fire TV 2026-10-17). The manifest needs no rewriting — its
+    BaseURLs are absolute and MediaTailor allows CORS — so this is the ordinary
+    resolve + 302, error handling included."""
+    from urllib.parse import unquote as _unquote
+    return play('versant_tve', _unquote(channel_id))
+
+
+@play_bp.route('/play/nesn_tve/<channel_id>/dash.mpd')
+def nesn_tve_dash(channel_id: str):
+    """NESN under a .mpd name for FastChannels Player, like versant_tve_dash
+    (same ViewLift platform)."""
+    from urllib.parse import unquote as _unquote
+    return play('nesn_tve', _unquote(channel_id))
+
+
+@play_bp.route('/play/vix/<channel_id>/dash.mpd')
+def vix_dash(channel_id: str):
+    """ViX under a .mpd name for FastChannels Player, like versant_tve_dash.
+    Lura's manifests carry absolute segment URLs, so it's the ordinary
+    resolve + 302."""
+    from urllib.parse import unquote as _unquote
+    return play('vix', _unquote(channel_id))
+
+
+# Lura's segment hosts (live-N.vix.com) send CORS to https://vix.com only, so a
+# browser on any other origin gets the manifest and keys but no segments.
+# FastChannels Player doesn't enforce CORS and keeps vix_dash's plain 302; the
+# admin/watch players get vix_browser_dash, which relays every segment.
+_VIX_SEG_ATTR_RE = re.compile(r'\b(sourceURL|media|initialization)="(https?://[^"]+)"')
+_VIX_LOCATION_RE = re.compile(r'<Location>([^<]*)</Location>')
+
+
+def _vix_sig(url: str) -> str:
+    key = (current_app.secret_key or 'fastchannels').encode()
+    return hmac.new(key, url.encode(), hashlib.sha256).hexdigest()[:32]
+
+
+@play_bp.route('/play/vix/<channel_id>/browser.mpd')
+def vix_browser_dash(channel_id: str):
+    """ViX's manifest for a browser player, with every segment URL pointed at
+    vix_segment. The manifest's <Location> (Lura's session URL, which the player
+    refreshes from every few seconds) is pointed back here with that URL as ?s=,
+    so a refresh fetches the same Lura session instead of starting a new tune."""
+    import html as _html
+    from urllib.parse import unquote as _unquote, quote as _quote
+
+    raw_id = _unquote(channel_id)
+    session_url = request.args.get('s') or ''
+    if session_url and (not hmac.compare_digest(request.args.get('sig') or '', _vix_sig(session_url))
+                        or not (urlsplit(session_url).hostname or '').endswith('.lura.live')):
+        abort(403)
+    r = None
+    if session_url:
+        try:
+            r = _requests.get(session_url, timeout=(5, 15))
+        except Exception as e:
+            logger.warning('[vix-browser] session refresh failed for %s: %s', raw_id, e)
+        if r is not None and r.status_code != 200:
+            logger.info('[vix-browser] session HTTP %s for %s; re-tuning', r.status_code, raw_id)
+            r = None
+    if r is None:
+        channel = (Channel.query.join(Source)
+                   .filter(Source.name == 'vix', Channel.source_channel_id == raw_id).first())
+        scraper_cls = registry.get('vix')
+        if not channel or not scraper_cls:
+            abort(404)
+        try:
+            scraper = scraper_cls(config={**(channel.source.config or {}), **load_source_cache(channel.source.id)})
+            mpd_url = scraper.resolve(channel.stream_url)
+            if scraper._pending_cache_updates:
+                persist_source_cache_updates(channel.source.id, scraper._pending_cache_updates)
+            r = _requests.get(mpd_url, timeout=(5, 15))
+        except Exception as e:
+            logger.warning('[vix-browser] resolve failed for %s: %s', raw_id, e)
+            return _unavailable_response()
+        if r.status_code != 200:
+            logger.warning('[vix-browser] manifest HTTP %s for %s', r.status_code, raw_id)
+            return _unavailable_response()
+
+    base = request.host_url.rstrip('/') + f'/play/vix/{_quote(raw_id, safe="")}'
+
+    def _seg(m):
+        url = _html.unescape(m.group(2))
+        relayed = f'{base}/seg?u={_quote(url, safe="")}&sig={_vix_sig(url)}'
+        return f'{m.group(1)}="{_html.escape(relayed)}"'
+
+    def _location(m):
+        url = _html.unescape(m.group(1))
+        here = f'{base}/browser.mpd?s={_quote(url, safe="")}&sig={_vix_sig(url)}'
+        return f'<Location>{_html.escape(here, quote=False)}</Location>'
+
+    mpd = _VIX_SEG_ATTR_RE.sub(_seg, r.text)
+    mpd = _VIX_LOCATION_RE.sub(_location, mpd)
+    return Response(mpd, mimetype='application/dash+xml',
+                    headers={'Cache-Control': 'no-cache', 'Access-Control-Allow-Origin': '*'})
+
+
+@play_bp.route('/play/vix/<channel_id>/seg')
+def vix_segment(channel_id: str):
+    """One segment named by a manifest vix_browser_dash served — signed, so this
+    relays nothing else."""
+    url = request.args.get('u') or ''
+    host = urlsplit(url).hostname or ''
+    if (not url.startswith('https://')
+            or not (host.endswith('.vix.com') or host.endswith('.lura.live'))
+            or not hmac.compare_digest(request.args.get('sig') or '', _vix_sig(url))):
+        abort(403)
+    try:
+        r = _requests.get(url, timeout=(5, 30), stream=True)
+    except Exception as e:
+        logger.warning('[vix-seg] fetch failed for %s: %s', url[:80], e)
+        abort(502)
+    if r.status_code != 200:
+        status = r.status_code
+        r.close()
+        logger.warning('[vix-seg] HTTP %s for %s', status, url[:80])
+        abort(502 if status >= 500 else status)
+    return _stream_upstream_response(
+        r, content_type=r.headers.get('Content-Type', 'application/octet-stream'),
+        headers={'Access-Control-Allow-Origin': '*'}, label='vix-seg')
+
+
+@play_bp.route('/play/tennis_tve/<channel_id>/dash.mpd')
+def tennis_tve_dash(channel_id: str):
+    """Tennis Channel under a .mpd name for FastChannels Player, like vix_dash.
+    Its Akamai manifest carries absolute BaseURLs, so it's the ordinary
+    resolve + 302."""
+    from urllib.parse import unquote as _unquote
+    return play('tennis_tve', _unquote(channel_id))
+
+
+@play_bp.route('/play/cnn_tve/<channel_id>/dash.mpd')
+def cnn_tve_dash(channel_id: str):
+    """CNN under a .mpd name for FastChannels Player, like vix_dash. Bolt's
+    manifest and segments send ACAO * and the segment URLs are relative to the
+    tokenized manifest URL, so it's the ordinary resolve + 302."""
+    from urllib.parse import unquote as _unquote
+    return play('cnn_tve', _unquote(channel_id))
+
+
+def _dazn_stream(channel_id: str):
+    """(source, scraper, resolved stream) for a DAZN channel; the stream's
+    cache entry is persisted so the segment relay and license proxy see it."""
+    channel = (
+        Channel.query.join(Source)
+        .filter(Source.name == 'dazn_tve', Channel.source_channel_id == channel_id)
+        .first()
+    )
+    if not channel:
+        abort(404)
+    scraper_cls = registry.get('dazn_tve')
+    if not scraper_cls:
+        abort(404)
+    cfg = {**(channel.source.config or {}), **load_source_cache(channel.source_id)}
+    scraper = scraper_cls(config=cfg)
+    try:
+        stream = scraper.resolve_stream(channel.stream_url)
+    finally:
+        if getattr(scraper, '_pending_cache_updates', None):
+            try:
+                persist_source_cache_updates(channel.source_id, scraper._pending_cache_updates)
+            except Exception:
+                pass
+    return channel, stream
+
+
+@play_bp.route('/play/dazn_tve/<channel_id>/dash.mpd')
+def dazn_tve_dash(channel_id: str):
+    """DAZN's manifest, relayed. Its CDN token is bound to the user agent that
+    asked for it (dazn_tve.UA) and its segment URLs are relative, so the
+    manifest is fetched here and pointed at dazn_tve_segment, which fetches
+    each segment with that user agent and the token. Segments stay encrypted;
+    the player gets keys through the license proxy as usual."""
+    from urllib.parse import unquote as _unquote, quote as _quote
+    from ..scrapers.dazn_tve import UA as _DAZN_UA
+
+    raw_id = _unquote(channel_id)
+    try:
+        _, stream = _dazn_stream(raw_id)
+    except HTTPException:
+        raise  # an unknown channel is a 404, not a retryable 503
+    except Exception as e:
+        logger.warning('[dazn-dash] resolve failed for %s: %s', raw_id[:40], e)
+        return _unavailable_response()
+    try:
+        r = _requests.get(stream['manifest'], headers={'User-Agent': _DAZN_UA}, timeout=(5, 15))
+    except Exception as e:
+        logger.warning('[dazn-dash] manifest fetch failed for %s: %s', raw_id[:40], e)
+        return _unavailable_response()
+    if r.status_code != 200:
+        logger.warning('[dazn-dash] manifest HTTP %s for %s', r.status_code, raw_id[:40])
+        return _unavailable_response()
+    mpd = r.text
+    # Some channels (Unbeaten) redirect to a partner's ad-insertion server
+    # whose manifest has absolute BaseURLs on segment hosts that aren't
+    # user-agent bound and send CORS, so it's served untouched. Only DAZN's
+    # own CDN needs the relay.
+    if not re.search(r'<BaseURL[^>]*>\s*https?://', mpd):
+        if urlsplit(r.url).netloc != urlsplit(stream['manifest']).netloc:
+            base = r.url.split('?', 1)[0].rsplit('/', 1)[0] + '/'
+        else:
+            base = request.host_url.rstrip('/') + f'/play/dazn_tve/{_quote(raw_id, safe="")}/seg/'
+        mpd = re.sub(r'<BaseURL>[^<]*</BaseURL>\s*', '', mpd)
+        mpd = mpd.replace('<Period', f'<BaseURL>{base}</BaseURL>\n  <Period', 1)
+    return Response(mpd, mimetype='application/dash+xml',
+                    headers={'Cache-Control': 'no-cache', 'Access-Control-Allow-Origin': '*'})
+
+
+@play_bp.route('/play/dazn_tve/<channel_id>/seg/<path:segment>')
+def dazn_tve_segment(channel_id: str, segment: str):
+    """One DAZN segment from the CDN directory of the channel's cached
+    manifest — never any other host — with the token and user agent it's
+    bound to (see dazn_tve_dash)."""
+    from urllib.parse import unquote as _unquote
+    from ..scrapers.dazn_tve import UA as _DAZN_UA
+
+    raw_id = _unquote(channel_id)
+    if '..' in segment or segment.startswith('/'):
+        abort(400)
+    source = Source.query.filter_by(name='dazn_tve').first()
+    if not source:
+        abort(404)
+    stream = ((load_source_cache(source.id).get('dazn_streams') or {}).get(raw_id)) or {}
+    if not stream.get('manifest'):
+        # Dropped from the cache (a sign-in change, or another channel's
+        # write racing this one's): resolve it again rather than stall.
+        try:
+            _, stream = _dazn_stream(raw_id)
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.warning('[dazn-seg] re-resolve failed for %s: %s', raw_id[:40], e)
+            abort(503)
+    cdn_dir = stream['manifest'].split('?', 1)[0].rsplit('/', 1)[0]
+    query = request.query_string.decode()
+    url = f'{cdn_dir}/{segment}?' + (f'{query}&' if query else '') + (stream.get('token_param') or '')
+    try:
+        r = _requests.get(url, headers={'User-Agent': _DAZN_UA}, timeout=(5, 30), stream=True)
+    except Exception as e:
+        logger.warning('[dazn-seg] fetch failed for %s: %s', segment[:60], e)
+        abort(502)
+    if r.status_code != 200:
+        status = r.status_code
+        r.close()
+        logger.warning('[dazn-seg] HTTP %s for %s', status, segment[:60])
+        abort(502 if status >= 500 else status)
+    return _stream_upstream_response(
+        r, content_type=r.headers.get('Content-Type', 'application/octet-stream'),
+        headers={'Access-Control-Allow-Origin': '*'}, label='dazn-seg')
+
+
 _FUBO_MPD_SEG_ATTR_RE = re.compile(r'(initialization|media)="([^"]+)"')
 
 
@@ -2781,6 +3048,16 @@ def play(source_name: str, channel_id: str):
             302,
         )
 
+    # Paramount+ matches: the AES-128 key needs the account's token, so the
+    # playlists go through the proxy that routes key requests through us.
+    if source_name == 'paramount':
+        from urllib.parse import quote as _quote
+        encoded_id = _quote(channel.source_channel_id, safe='')
+        return redirect(
+            f"{request.host_url.rstrip('/')}/play/paramount/{encoded_id}/proxy.m3u8",
+            302,
+        )
+
     scraper_cls = registry.get(source_name)
     scraper = None
     # Distinguish a confirmed-dead channel (permanent — being auto-disabled) from
@@ -3018,8 +3295,9 @@ def play(source_name: str, channel_id: str):
     # list: a VOD or DRM entry in it is theirs to keep or remove, not ours to
     # auto-disable.
     _is_playlist = is_playlist_source(source_name)
+    _manifest_check = getattr(scraper_cls, 'play_manifest_check', True) if scraper_cls else True
     if (channel.is_active and resolved_url and resolved_url.startswith('http')
-            and not _is_muxed and not _is_playlist):
+            and not _is_muxed and not _is_playlist and _manifest_check):
         from flask import current_app
         _app = current_app._get_current_object()
         _channel_id = channel.id
@@ -3344,7 +3622,7 @@ def watch(channel_id):
         from urllib.parse import urlencode as _urlencode
         return redirect(f'{request.path}?{_urlencode(qs)}', 302)
     channel = Channel.query.get_or_404(channel_id)
-    info = _get_playback_info(channel, fast_mode=False)
+    info = _get_playback_info(channel, fast_mode=False, browser=True)
     settings = AppSettings.get()
     max_height = int(settings.prismcast_max_height or 0)
     play_url = info.get('preview_url') or info.get('play_url') or ''

@@ -500,8 +500,20 @@ def get_source_config(source_id):
     if source.name == 'espn':
         extra['espn'] = {'signed_in': bool(saved.get('refresh_token')),
                          'signed_in_at': saved.get('signed_in_at'),
-                         'event_filter': saved.get('event_filter') or {'sport_mode': 'all', 'sports': {}},
+                         'event_filter': _espn_event_filter(saved) or {'sport_mode': 'all', 'sports': {}, 'teams': []},
                          **_espn_tve_info(saved)}
+    if source.name == 'nfl':
+        extra['nfl'] = _nfl_signin_info(saved)
+    if source.name == 'cbs_sports':
+        extra['cbs_sports'] = _cbs_sports_signin_info(saved)
+    if source.name == 'paramount':
+        extra['paramount'] = {'signed_in': bool((saved.get('cookies') or {}).get('CBS_COM')),
+                              'account_status': saved.get('account_status'),
+                              'signin_error': saved.get('signin_error')}
+    if source.name == 'nesn_tve':
+        login = saved.get('nesn_account') or {}
+        extra['nesn'] = {'signed_in': bool(login.get('refresh_token')), 'email': login.get('email'),
+                         'signed_in_at': login.get('signed_in_at')}
     from ..tve.accounts import SEPARATE_SIGNIN_SOURCES
     if source.name in SEPARATE_SIGNIN_SOURCES:
         from .api_tve import _source_signin_payload
@@ -509,6 +521,13 @@ def get_source_config(source_id):
     if source.name == 'directv':
         from ..scrapers import directv_device_auth
         extra['directv'] = {'code_signed_in': directv_device_auth.is_device_session(saved)}
+    if source.name == 'free_networks':
+        # Channel count per network for the checklist labels.
+        counts: dict[str, int] = {}
+        for (scid,) in source.channels.with_entities(Channel.source_channel_id):
+            key = (scid or '').split('.', 1)[0]
+            counts[key] = counts.get(key, 0) + 1
+        extra['option_counts'] = {'disabled_networks': counts}
     return jsonify({'schema': schema, 'values': values, 'config_complete': config_complete,
                     'config_status': config_status,
                     'oauth_token_time': saved.get('oauth_token_time'),
@@ -528,12 +547,21 @@ def espn_event_preview(source_id):
     if source.name != 'espn':
         return jsonify({'error': 'Not an ESPN source'}), 404
     from ..config_store import load_source_cache, persist_source_cache_updates
-    from ..scrapers.espn import (EVENT_END_GRACE_SECONDS, EVENT_PREVIEW_CACHE_KEY, ESPNScraper,
+    from ..scrapers.espn import (EVENT_END_GRACE_SECONDS, EVENT_PREVIEW_CACHE_KEY, EVENT_TEAMS_CACHE_KEY,
+                                 ESPNScraper, attach_event_teams, event_playable,
                                  event_preview_summary)
-    summary = load_source_cache(source.id).get(EVENT_PREVIEW_CACHE_KEY)
-    if not isinstance(summary, dict) or _time.time() - float(summary.get('fetched_at') or 0) > 12 * 3600:
+    cache = load_source_cache(source.id)
+    summary = cache.get(EVENT_PREVIEW_CACHE_KEY)
+    # Summaries saved before team filtering have no teams for the team picker.
+    if (not isinstance(summary, dict) or _time.time() - float(summary.get('fetched_at') or 0) > 12 * 3600
+            or any('teams' not in e for e in summary.get('events') or [])):
         try:
-            summary = event_preview_summary(ESPNScraper(config=source.config or {})._candidate_event_airings())
+            airings = [a for a in ESPNScraper(config=source.config or {})._candidate_event_airings()
+                       if event_playable(a, source.config or {})]
+            # Teams the last scrape looked up; new events fall back to their
+            # titles rather than making the picker wait on hundreds of lookups.
+            attach_event_teams(airings, cache.get(EVENT_TEAMS_CACHE_KEY), fetch=False)
+            summary = event_preview_summary(airings)
         except Exception:
             logger.exception('[espn] event lineup preview failed')
             return jsonify({'error': 'Could not load the ESPN event schedule'}), 502
@@ -552,6 +580,16 @@ def _espn_tv_provider() -> tuple[str, str]:
     cfg = (account.config or {}) if account else {}
     mso_id = (cfg.get('yt_dlp_mso_id') or cfg.get('selected_mso_id') or '').strip()
     return mso_id, (cfg.get('selected_mso_name') or mso_id).strip()
+
+
+def _espn_event_filter(cfg: dict) -> dict | None:
+    """A saved event filter in its normalized form, so filters saved before a
+    field was added compare equal to the same filter saved after."""
+    from ..scrapers.espn import clean_event_filter
+    try:
+        return clean_event_filter(cfg.get('event_filter'))
+    except ValueError:
+        return None
 
 
 def _espn_tve_info(saved: dict) -> dict:
@@ -698,8 +736,7 @@ def save_source_config(source_id):
     espn_event_keys = ('include_espn_plus_events', 'include_acc_extra_events', 'include_sec_plus_events')
     espn_events_changed = source.name == 'espn' and (
         any(_toggle_enabled(old, key) != _toggle_enabled(current, key) for key in espn_event_keys)
-        or (old.get('event_filter') or {'sport_mode': 'all', 'sports': {}})
-           != (current.get('event_filter') or {'sport_mode': 'all', 'sports': {}})
+        or _espn_event_filter(old) != _espn_event_filter(current)
     )
     espn_any_events = any(_toggle_enabled(current, key) for key in espn_event_keys)
     if source.name == 'espn' and espn_any_events and not hasattr(Channel, 'retire_at'):
@@ -770,13 +807,40 @@ def save_source_config(source_id):
                         db.session.delete(ch)
                         pbs_deleted += 1
 
-    espn_deleted = 0
+    event_deleted = 0
     if espn_events_changed and not espn_any_events:
         from ..models import FeedChannelNumber
         for ch in source.channels.filter(Channel.source_channel_id.like('airing:%')).all():
             FeedChannelNumber.query.filter_by(channel_id=ch.id).delete(synchronize_session=False)
             db.session.delete(ch)
-            espn_deleted += 1
+            event_deleted += 1
+    # NFL and CBS Sports game channels: turning them off removes them now.
+    game_toggle, game_prefix = {'nfl': ('include_games', 'game:'),
+                                'cbs_sports': ('include_events', 'event:')}.get(source.name, (None, None))
+    games_changed = bool(game_toggle) and (
+        _toggle_enabled(old, game_toggle) != _toggle_enabled(current, game_toggle))
+    if games_changed and not _toggle_enabled(current, game_toggle):
+        from ..models import FeedChannelNumber
+        for ch in source.channels.filter(Channel.source_channel_id.like(f'{game_prefix}%')).all():
+            FeedChannelNumber.query.filter_by(channel_id=ch.id).delete(synchronize_session=False)
+            db.session.delete(ch)
+            event_deleted += 1
+
+    # Free Networks: an unticked network's channels go now, not after the
+    # reconcile grace period (same reasoning as PBS above); ticking one back on
+    # queues a full scrape below to bring them back.
+    networks_reenabled = False
+    if source.name == 'free_networks':
+        from ..models import FeedChannelNumber
+        from ..scrapers.free_networks import FreeNetworksScraper
+        old_off = FreeNetworksScraper.disabled_networks(old)
+        new_off = FreeNetworksScraper.disabled_networks(current)
+        networks_reenabled = bool(old_off - new_off)
+        for key in new_off - old_off:
+            for ch in source.channels.filter(Channel.source_channel_id.like(f'{key}.%')).all():
+                FeedChannelNumber.query.filter_by(channel_id=ch.id).delete(synchronize_session=False)
+                db.session.delete(ch)
+                event_deleted += 1
 
     source.config = current
     auto_enabled = False
@@ -789,7 +853,7 @@ def save_source_config(source_id):
         source.is_enabled = True
         auto_enabled = True
     db.session.commit()
-    if pbs_deleted or espn_deleted:
+    if pbs_deleted or event_deleted:
         _invalidate_and_refresh_xml()
     full_scrape_queued = False
     if source.name == 'sling' and (creds_changed or sling_lineup_changed) and source.is_enabled:
@@ -805,6 +869,12 @@ def save_source_config(source_id):
         full_scrape_queued = True
     elif espn_events_changed and source.is_enabled and espn_any_events:
         trigger_scrape('espn', force_full=True)
+        full_scrape_queued = True
+    elif networks_reenabled and source.is_enabled:
+        trigger_scrape(source.name, force_full=True)
+        full_scrape_queued = True
+    elif games_changed and source.is_enabled and _toggle_enabled(current, game_toggle):
+        trigger_scrape(source.name, force_full=True)
         full_scrape_queued = True
     elif source.name == 'pbs' and old != current and source.is_enabled:
         # Any PBS config change (curated toggle, ZIP codes, or hand-editing
@@ -825,7 +895,7 @@ def save_source_config(source_id):
         'is_enabled': source.is_enabled,
         'auto_enabled': auto_enabled,
         'full_scrape_queued': full_scrape_queued,
-        'deleted_channels': pbs_deleted + espn_deleted,
+        'deleted_channels': pbs_deleted + event_deleted,
         'config_complete': config_complete,
         'config_status': config_status,
     })
@@ -1028,6 +1098,11 @@ def sling_browser_login_state(source_id):
     if source.name != 'sling':
         return jsonify({'error': 'not a sling source'}), 400
     r = _redis.from_url(current_app.config['REDIS_URL'])
+    from .tasks import signin_queue_notice
+    notice = signin_queue_notice(job_id='sling-browser-login')
+    if notice:
+        # Not started yet, so any saved status/screenshot is a previous run's.
+        return jsonify({'state': 'queued', 'message': notice, 'queue_notice': notice})
     raw_status = r.get('sling:browser-login:status')
     result = json.loads(raw_status) if raw_status else {'state': 'idle'}
     shot = r.get('sling:browser-login:screenshot')
@@ -1089,6 +1164,15 @@ def spectrum_browser_login_start(source_id):
     if source.name != 'spectrum':
         return jsonify({'error': 'not a spectrum source'}), 400
     started = trigger_spectrum_signin()
+    if not started:
+        # The person is now watching whatever sign-in is running, including
+        # an unattended re-login — see SPECTRUM_SIGNIN_ATTENDED_KEY.
+        import redis as _redis
+        try:
+            r = _redis.from_url(current_app.config['REDIS_URL'])
+            r.setex('spectrum:browser-login:attended', 630, '1')
+        except Exception as exc:
+            logger.warning('[spectrum-auth] could not mark the running sign-in attended: %s', exc)
     return jsonify({'status': 'started' if started else 'already_running'})
 
 
@@ -1101,6 +1185,11 @@ def spectrum_browser_login_state(source_id):
     if source.name != 'spectrum':
         return jsonify({'error': 'not a spectrum source'}), 400
     r = _redis.from_url(current_app.config['REDIS_URL'])
+    from .tasks import signin_queue_notice
+    notice = signin_queue_notice(job_id='spectrum-signin')
+    if notice:
+        # Not started yet, so any saved status/screenshot is a previous run's.
+        return jsonify({'state': 'queued', 'message': notice, 'queue_notice': notice})
     raw_status = r.get('spectrum:browser-login:status')
     result = json.loads(raw_status) if raw_status else {'state': 'idle'}
     shot = r.get('spectrum:browser-login:screenshot')
@@ -1150,10 +1239,11 @@ def spectrum_browser_login_stop(source_id):
 @sources_bp.route('/sources/<int:source_id>/spectrum-auth', methods=['DELETE'])
 def clear_spectrum_auth(source_id):
     """Forget everything Spectrum sign-in captured — tokens, device id, and the
-    opportunistically-harvested cox.com cookie jar. Unlike Amazon's equivalent,
-    there's no separate saved username/password to preserve — Spectrum's login
-    is entirely browser-driven (see app.tve.browser_login.spectrum), so a full
-    wipe is the only meaningful "clear creds" here.
+    opportunistically-harvested cox.com cookie jar — AND the saved
+    username/password, which only feed the browser sign-in's autofill; they
+    have to be re-entered (or typed into the relayed browser) afterwards.
+    The only config kept is foreign_cookies_scrubbed (a fact about the
+    browser profile, not the session — see below).
 
     Sets force_fresh_signin on the (otherwise emptied) config rather than
     leaving it truly blank: this route only clears DB-side bookkeeping
@@ -1169,19 +1259,34 @@ def clear_spectrum_auth(source_id):
     session would silently paper over."""
     import redis as _redis
 
+    from .tasks import _job_already_active, get_signin_queue, stop_spectrum_signin
+
     source = Source.query.get_or_404(source_id)
     if source.name != 'spectrum':
         return jsonify({'error': 'not a spectrum source'}), 400
 
-    source.config = {'force_fresh_signin': True}
+    # A sign-in still running (an unattended re-login, say) would save its
+    # tokens back into the config cleared below. Stopping kills the shared
+    # MVPD browser, so only when Spectrum's own job is the one running.
+    try:
+        if _job_already_active(get_signin_queue(), 'spectrum-signin'):
+            stop_spectrum_signin()
+    except Exception as exc:
+        logger.warning('[spectrum-auth] could not check for a running sign-in: %s', exc)
+    cfg = {'force_fresh_signin': True}
+    # About the browser profile, not the session: its one-time foreign-cookie
+    # and recaptcha.net storage scrub stays done, or every clear reruns it
+    # (and wipes reCAPTCHA's history in the profile for nothing).
+    if (source.config or {}).get('foreign_cookies_scrubbed'):
+        cfg['foreign_cookies_scrubbed'] = True
+    source.config = cfg
     db.session.commit()
 
     try:
         r = _redis.from_url(current_app.config['REDIS_URL'])
         r.delete(
             'spectrum:browser-login:status', 'spectrum:browser-login:screenshot',
-            'spectrum:browser-login:input', 'spectrum:browser-login:stop',
-            'spectrum:browser-login:hint',
+            'spectrum:browser-login:input', 'spectrum:browser-login:hint',
         )
     except Exception as exc:
         logger.warning('[spectrum-auth] unable to clear Redis state for source_id=%s: %s',
@@ -1336,15 +1441,19 @@ def amazon_auto_login(source_id):
     cfg = source.config or {}
     email = (cfg.get('amazon_email') or '').strip()
     password = (cfg.get('amazon_password') or '').strip()
-    if not email or not password:
-        return jsonify({'error': 'amazon_email and amazon_password must be saved first'}), 400
+    # A blank password means sign in with a code Amazon texts to the phone.
+    if not email:
+        return jsonify({'error': 'amazon_email must be saved first'}), 400
 
     redis_url = current_app.config['REDIS_URL']
     storage_state_json = cfg.get('browser_storage_state') or None
+    # Read here: the sign-in thread runs without an app context.
+    from ..debug_flag import debug_logging_enabled
+    debug = debug_logging_enabled()
 
     t = threading.Thread(
         target=run_amazon_auth,
-        args=(redis_url, source_id, email, password, storage_state_json),
+        args=(redis_url, source_id, email, password, storage_state_json, debug),
         daemon=True,
     )
     t.start()
@@ -1452,6 +1561,53 @@ def philo_login_verify(source_id):
     return jsonify({'status': 'signed_in', 'config_complete': config_complete})
 
 
+@sources_bp.route('/sources/<int:source_id>/nesn-login/send-code', methods=['POST'])
+def nesn_login_send_code(source_id):
+    """Step 1 of the NESN account sign-in (passwordless, like Philo's): NESN
+    emails a code. The TV-provider sign-in is linked to this account."""
+    import redis as _redis
+    from ..scrapers.nesn_tve import NesnTVEScraper
+
+    source = Source.query.get_or_404(source_id)
+    if source.name != 'nesn_tve':
+        return jsonify({'error': 'not a nesn_tve source'}), 400
+    data = request.get_json() or {}
+    email = (data.get('email') or '').strip() or ((source.config or {}).get('email') or '').strip()
+    try:
+        ctx = NesnTVEScraper.request_login_code(email)
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    _redis.from_url(current_app.config['REDIS_URL']).setex(f'nesn:login:ctx:{source_id}', 900, json.dumps(ctx))
+    return jsonify({'status': 'sent', 'email': email})
+
+
+@sources_bp.route('/sources/<int:source_id>/nesn-login/verify', methods=['POST'])
+def nesn_login_verify(source_id):
+    """Step 2: the emailed code → the NESN account login, kept on the source."""
+    import redis as _redis
+    from ..scrapers.nesn_tve import NesnTVEScraper
+
+    source = Source.query.get_or_404(source_id)
+    if source.name != 'nesn_tve':
+        return jsonify({'error': 'not a nesn_tve source'}), 400
+    code = ((request.get_json() or {}).get('code') or '').strip()
+    r = _redis.from_url(current_app.config['REDIS_URL'])
+    raw = r.get(f'nesn:login:ctx:{source_id}')
+    if not raw:
+        return jsonify({'error': 'Sign-in session expired — request a new code.'}), 400
+    try:
+        login = NesnTVEScraper.verify_login_code(json.loads(raw), code)
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    cfg = dict(source.config or {})
+    cfg['nesn_account'] = login
+    cfg['email'] = login['email']
+    source.config = cfg
+    db.session.commit()
+    r.delete(f'nesn:login:ctx:{source_id}')
+    return jsonify({'status': 'signed_in'})
+
+
 # ── ESPN TV activation code ──────────────────────────────────────────────────
 # ESPN's password login is reCAPTCHA-gated, so sign-in uses the same code flow
 # as ESPN's TV apps: show a code, the user enters it at espn.com/activate, and a
@@ -1479,6 +1635,17 @@ def espn_activation_start(source_id):
     return jsonify({'status': 'waiting', 'code': plate['pairingCode'], 'url': ACTIVATE_URL})
 
 
+def _with_code_queue_notice(status: dict, func_name: str) -> dict:
+    """A code/link sign-in's code is on screen before its job runs; if that
+    job is still queued, say what it's behind (the code still works)."""
+    if status.get('state') == 'waiting':
+        from .tasks import SIGNIN_CODE_STILL_USABLE, signin_queue_notice
+        notice = signin_queue_notice(func_name=func_name, tail=SIGNIN_CODE_STILL_USABLE)
+        if notice:
+            status['queue_notice'] = notice
+    return status
+
+
 @sources_bp.route('/sources/<int:source_id>/espn-activation/state')
 def espn_activation_state(source_id):
     import redis as _redis
@@ -1488,7 +1655,8 @@ def espn_activation_state(source_id):
     if source.name != 'espn':
         return jsonify({'error': 'not an espn source'}), 400
     raw = _redis.from_url(current_app.config['REDIS_URL']).get(ACTIVATION_STATUS_KEY)
-    return jsonify(json.loads(raw) if raw else {'state': 'idle'})
+    return jsonify(_with_code_queue_notice(json.loads(raw) if raw else {'state': 'idle'},
+                                           'app.scrapers.espn.run_activation'))
 
 
 @sources_bp.route('/sources/<int:source_id>/espn-activation/stop', methods=['POST'])
@@ -1513,6 +1681,269 @@ def clear_espn_auth(source_id):
         cfg.pop(key, None)
     source.config = cfg
     db.session.commit()
+    return jsonify({'status': 'cleared'})
+
+
+# ── NFL activation code (TV provider or NFL account) ────────────────────────
+# Both sign-ins are NFL's own activation code entered at nfl.com/activate; a
+# sign-in-queue job polls NFL's keystore for the result — see app.scrapers.nfl.
+
+def _nfl_source_or_400(source_id):
+    source = Source.query.get_or_404(source_id)
+    if source.name != 'nfl':
+        return None, (jsonify({'error': 'not an nfl source'}), 400)
+    return source, None
+
+
+@sources_bp.route('/sources/<int:source_id>/nfl-link/start', methods=['POST'])
+def nfl_link_start(source_id):
+    import redis as _redis
+    import requests as _requests
+    import uuid as _uuid
+    from ..scrapers.nfl import LINK_KINDS, LINK_STATUS_KEY, NFLAuthError, link_status, start_link
+    from .tasks import get_signin_queue
+
+    source, err = _nfl_source_or_400(source_id)
+    if err:
+        return err
+    kind = ((request.get_json(silent=True) or {}).get('kind') or '').strip()
+    if kind not in LINK_KINDS:
+        return jsonify({'error': 'Unknown sign-in type'}), 400
+    cfg = dict(source.config or {})
+    if not cfg.get('device_id'):
+        cfg['device_id'] = str(_uuid.uuid4())
+        source.config = cfg
+        db.session.commit()
+    try:
+        ctx = start_link(kind, cfg['device_id'])
+    except (NFLAuthError, _requests.RequestException) as e:
+        return jsonify({'error': str(e)}), 502
+    # Overwriting the status with the new code is also what retires any job
+    # still waiting on an older code (run_link watches this key).
+    status = link_status(ctx, 'waiting')
+    _redis.from_url(current_app.config['REDIS_URL']).setex(LINK_STATUS_KEY, 720, json.dumps(status))
+    get_signin_queue().enqueue('app.scrapers.nfl.run_link', ctx, job_timeout=660)
+    return jsonify(status)
+
+
+@sources_bp.route('/sources/<int:source_id>/nfl-link/state')
+def nfl_link_state(source_id):
+    import redis as _redis
+    from ..scrapers.nfl import LINK_STATUS_KEY
+
+    _, err = _nfl_source_or_400(source_id)
+    if err:
+        return err
+    raw = _redis.from_url(current_app.config['REDIS_URL']).get(LINK_STATUS_KEY)
+    return jsonify(_with_code_queue_notice(json.loads(raw) if raw else {'state': 'idle'},
+                                           'app.scrapers.nfl.run_link'))
+
+
+@sources_bp.route('/sources/<int:source_id>/nfl-link/stop', methods=['POST'])
+def nfl_link_stop(source_id):
+    import redis as _redis
+    from ..scrapers.nfl import LINK_STATUS_KEY
+
+    _, err = _nfl_source_or_400(source_id)
+    if err:
+        return err
+    _redis.from_url(current_app.config['REDIS_URL']).delete(LINK_STATUS_KEY)
+    return jsonify({'status': 'stopped'})
+
+
+@sources_bp.route('/sources/<int:source_id>/nfl-auth/<kind>', methods=['DELETE'])
+def clear_nfl_auth(source_id, kind):
+    from ..scrapers.nfl import LINK_CONFIG_KEYS, TOKEN_CONFIG_KEYS
+
+    source, err = _nfl_source_or_400(source_id)
+    if err:
+        return err
+    if kind not in LINK_CONFIG_KEYS:
+        return jsonify({'error': 'Unknown sign-in type'}), 400
+    cfg = dict(source.config or {})
+    # Tokens carry the sign-in's claims, so they go too.
+    for key in LINK_CONFIG_KEYS[kind] + TOKEN_CONFIG_KEYS:
+        cfg.pop(key, None)
+    source.config = cfg
+    db.session.commit()
+    if source.is_enabled:
+        trigger_scrape('nfl', force_full=True)
+    return jsonify({'status': 'cleared'})
+
+
+def _nfl_signin_info(saved: dict) -> dict:
+    """What the NFL card shows about its sign-ins and what they unlock."""
+    from ..scrapers.nfl import active_plans, jwt_claims
+    claims = jwt_claims(saved.get('phone_access_token'))
+    return {'tve_signed_in': bool(saved.get('mvpd_user_id')),
+            'tve_provider': saved.get('mvpd_name') or saved.get('mvpd_idp'),
+            'account_signed_in': bool(saved.get('nfl_uid')),
+            'account_email': saved.get('nfl_email'),
+            'plans': sorted(p for p in active_plans(claims) if p != 'FREE'),
+            'networks': sorted((claims.get('networks') or {}).keys())}
+
+
+# ── CBS Sports TV-provider sign-in (short code at cbssports.com/androidtv/activate)
+# The provider sign-in lives at Adobe (requestor CBS_SPORTS) keyed by the
+# source's device id; a sign-in-queue job polls for it — see app.scrapers.cbs_sports.
+
+def _cbs_sports_source_or_400(source_id):
+    source = Source.query.get_or_404(source_id)
+    if source.name != 'cbs_sports':
+        return None, (jsonify({'error': 'not a cbs_sports source'}), 400)
+    return source, None
+
+
+@sources_bp.route('/sources/<int:source_id>/cbs-sports-link/start', methods=['POST'])
+def cbs_sports_link_start(source_id):
+    import redis as _redis
+    import requests as _requests
+    import uuid as _uuid
+    from ..scrapers.cbs_sports import LINK_STATUS_KEY, CBSAuthError, link_status, start_link
+    from .tasks import get_signin_queue
+
+    source, err = _cbs_sports_source_or_400(source_id)
+    if err:
+        return err
+    # A fresh device id per sign-in: Adobe keys the sign-in to it, so a new
+    # one can't pick up a previous account's.
+    try:
+        ctx = start_link(str(_uuid.uuid4()))
+    except (CBSAuthError, _requests.RequestException) as e:
+        return jsonify({'error': str(e)}), 502
+    status = link_status(ctx, 'waiting')
+    _redis.from_url(current_app.config['REDIS_URL']).setex(LINK_STATUS_KEY, 720, json.dumps(status))
+    get_signin_queue().enqueue('app.scrapers.cbs_sports.run_link', ctx, job_timeout=660)
+    return jsonify(status)
+
+
+@sources_bp.route('/sources/<int:source_id>/cbs-sports-link/state')
+def cbs_sports_link_state(source_id):
+    import redis as _redis
+    from ..scrapers.cbs_sports import LINK_STATUS_KEY
+
+    _, err = _cbs_sports_source_or_400(source_id)
+    if err:
+        return err
+    raw = _redis.from_url(current_app.config['REDIS_URL']).get(LINK_STATUS_KEY)
+    return jsonify(_with_code_queue_notice(json.loads(raw) if raw else {'state': 'idle'},
+                                           'app.scrapers.cbs_sports.run_link'))
+
+
+@sources_bp.route('/sources/<int:source_id>/cbs-sports-link/stop', methods=['POST'])
+def cbs_sports_link_stop(source_id):
+    import redis as _redis
+    from ..scrapers.cbs_sports import LINK_STATUS_KEY
+
+    _, err = _cbs_sports_source_or_400(source_id)
+    if err:
+        return err
+    _redis.from_url(current_app.config['REDIS_URL']).delete(LINK_STATUS_KEY)
+    return jsonify({'status': 'stopped'})
+
+
+@sources_bp.route('/sources/<int:source_id>/cbs-sports-auth/<kind>', methods=['DELETE'])
+def clear_cbs_sports_auth(source_id, kind):
+    from ..scrapers.cbs_sports import SIGNIN_CONFIG_KEYS, adobe_logout
+
+    source, err = _cbs_sports_source_or_400(source_id)
+    if err:
+        return err
+    cfg = dict(source.config or {})
+    if cfg.get('device_id') and cfg.get('adobe_user_id'):
+        try:
+            adobe_logout(cfg['device_id'])
+        except Exception:  # noqa: BLE001 — signing out locally still counts
+            logger.warning('[cbs_sports] Adobe logout failed', exc_info=True)
+    for key in SIGNIN_CONFIG_KEYS + ('signin_error',):
+        cfg.pop(key, None)
+    source.config = cfg
+    db.session.commit()
+    if source.is_enabled:
+        trigger_scrape('cbs_sports', force_full=True)
+    return jsonify({'status': 'cleared'})
+
+
+def _cbs_sports_signin_info(saved: dict) -> dict:
+    authz = saved.get('authz') or {}
+    return {'signed_in': bool(saved.get('adobe_user_id')),
+            'provider': saved.get('adobe_mvpd'),
+            'signin_error': saved.get('signin_error'),
+            'cbs': bool((authz.get('CBS_ENTERTAINMENT') or {}).get('ok')),
+            'cbssn': bool((authz.get('CBS_SPORTS_NETWORK') or {}).get('ok'))}
+
+
+# ── Paramount+ sign-in (activation code at paramountplus.com/activate/androidtv)
+# The user enters the code with a Paramount+ account or a TV provider; a
+# sign-in-queue job polls for it and saves the session — see app.scrapers.paramount.
+
+def _paramount_source_or_400(source_id):
+    source = Source.query.get_or_404(source_id)
+    if source.name != 'paramount':
+        return None, (jsonify({'error': 'not a paramount source'}), 400)
+    return source, None
+
+
+@sources_bp.route('/sources/<int:source_id>/paramount-link/start', methods=['POST'])
+def paramount_link_start(source_id):
+    import redis as _redis
+    import requests as _requests
+    import uuid as _uuid
+    from ..scrapers.paramount import LINK_STATUS_KEY, ParamountAuthError, link_status, start_link
+    from .tasks import get_signin_queue
+
+    _, err = _paramount_source_or_400(source_id)
+    if err:
+        return err
+    try:
+        ctx = start_link(str(_uuid.uuid4()))
+    except (ParamountAuthError, _requests.RequestException) as e:
+        return jsonify({'error': str(e)}), 502
+    status = link_status(ctx, 'waiting')
+    _redis.from_url(current_app.config['REDIS_URL']).setex(LINK_STATUS_KEY, 720, json.dumps(status))
+    get_signin_queue().enqueue('app.scrapers.paramount.run_link', ctx, job_timeout=660)
+    return jsonify(status)
+
+
+@sources_bp.route('/sources/<int:source_id>/paramount-link/state')
+def paramount_link_state(source_id):
+    import redis as _redis
+    from ..scrapers.paramount import LINK_STATUS_KEY
+
+    _, err = _paramount_source_or_400(source_id)
+    if err:
+        return err
+    raw = _redis.from_url(current_app.config['REDIS_URL']).get(LINK_STATUS_KEY)
+    return jsonify(_with_code_queue_notice(json.loads(raw) if raw else {'state': 'idle'},
+                                           'app.scrapers.paramount.run_link'))
+
+
+@sources_bp.route('/sources/<int:source_id>/paramount-link/stop', methods=['POST'])
+def paramount_link_stop(source_id):
+    import redis as _redis
+    from ..scrapers.paramount import LINK_STATUS_KEY
+
+    _, err = _paramount_source_or_400(source_id)
+    if err:
+        return err
+    _redis.from_url(current_app.config['REDIS_URL']).delete(LINK_STATUS_KEY)
+    return jsonify({'status': 'stopped'})
+
+
+@sources_bp.route('/sources/<int:source_id>/paramount-auth/<kind>', methods=['DELETE'])
+def clear_paramount_auth(source_id, kind):
+    from ..scrapers.paramount import SIGNIN_CONFIG_KEYS
+
+    source, err = _paramount_source_or_400(source_id)
+    if err:
+        return err
+    cfg = dict(source.config or {})
+    for key in SIGNIN_CONFIG_KEYS + ('signin_error',):
+        cfg.pop(key, None)
+    source.config = cfg
+    db.session.commit()
+    if source.is_enabled:
+        trigger_scrape('paramount', force_full=True)
     return jsonify({'status': 'cleared'})
 
 
@@ -1562,7 +1993,8 @@ def espn_tve_state(source_id):
     if source.name != 'espn':
         return jsonify({'error': 'not an espn source'}), 400
     raw = _redis.from_url(current_app.config['REDIS_URL']).get(ADOBE_STATUS_KEY)
-    return jsonify(json.loads(raw) if raw else {'state': 'idle'})
+    return jsonify(_with_code_queue_notice(json.loads(raw) if raw else {'state': 'idle'},
+                                           'app.scrapers.espn.run_adobe_signin'))
 
 
 @sources_bp.route('/sources/<int:source_id>/espn-tve/stop', methods=['POST'])

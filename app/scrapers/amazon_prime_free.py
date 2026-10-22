@@ -9,7 +9,7 @@ import re
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Any
 
 from .base import BaseScraper, ChannelData, ConfigField, ProgramData, infer_language_from_metadata
@@ -39,7 +39,7 @@ class AmazonPrimeFreeScraper(BaseScraper):
     config_required = True
 
     stream_audit_enabled = True
-    source_category = 'drm'
+    source_category = 'account'
     # Every Amazon Free channel uses the CENC/Widevine bridge path.
     all_channels_require_drm_bridge = True
     audit_requires_config = ['cookie_header']
@@ -70,7 +70,7 @@ class AmazonPrimeFreeScraper(BaseScraper):
             "Amazon Password",
             field_type="password",
             secret=True,
-            help_text="Your Amazon account password. Stored securely alongside other source credentials.",
+            help_text="Your Amazon account password. Leave blank to sign in with a code Amazon texts to your phone.",
         ),
         ConfigField(
             "cookie_header",
@@ -527,8 +527,12 @@ class AmazonPrimeFreeScraper(BaseScraper):
             if not station:
                 continue
 
+            # Amazon sends releaseYear on nearly every airing (local news
+            # included), so only a movie channel's is a film's release year.
+            movie_channel = "movie" in (getattr(channel, "category", None) or "").casefold()
             for airing in station.get("schedule", []):
-                program = self._program_from_schedule(channel.source_channel_id, airing)
+                program = self._program_from_schedule(channel.source_channel_id, airing,
+                                                      movie_channel=movie_channel)
                 if not program:
                     continue
 
@@ -1026,7 +1030,8 @@ class AmazonPrimeFreeScraper(BaseScraper):
             gracenote_id=resolve_gracenote('amazon_prime_free', lookup_key=station_id),
         )
 
-    def _program_from_schedule(self, source_channel_id: str, airing: dict[str, Any]) -> ProgramData | None:
+    def _program_from_schedule(self, source_channel_id: str, airing: dict[str, Any],
+                               movie_channel: bool = False) -> ProgramData | None:
         try:
             start_ms = int(airing["start"])
             end_ms = int(airing["end"])
@@ -1047,6 +1052,9 @@ class AmazonPrimeFreeScraper(BaseScraper):
         description = synopsis
         if release_year:
             description = f"{synopsis} ({release_year})" if synopsis else str(release_year)
+        original_air_date = None
+        if movie_channel and str(release_year or "").isdigit() and 1900 <= int(release_year) <= datetime.now(timezone.utc).year + 1:
+            original_air_date = date(int(release_year), 1, 1)
 
         return ProgramData(
             source_channel_id=source_channel_id,
@@ -1058,6 +1066,7 @@ class AmazonPrimeFreeScraper(BaseScraper):
             category=self._guess_program_category(metadata),
             rating=rating,
             episode_title=episode_title,
+            original_air_date=original_air_date,
         )
 
     @staticmethod

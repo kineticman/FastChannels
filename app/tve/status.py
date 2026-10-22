@@ -133,6 +133,140 @@ def tve_network_status(account) -> list[dict]:
         'needs_signin': _needs_signin('tcm', tcm_last_signed_in_at, _errors('warner_tve')),
     })
 
+    versant = _cfg('versant_tve').get('versant_mvpd_auth') or {}
+    versant_last_signed_in_at = versant.get('captured_at')
+    versant_error_message, versant_error_at = _last_error('versant', versant_last_signed_in_at, _errors('versant_tve'))
+    entries.append({
+        'source': 'versant_tve',
+        'label': 'Versant TVE (USA, E!, Syfy, Oxygen, CNBC, MS NOW, Golf)',
+        'last_signed_in_at': versant_last_signed_in_at,
+        'note': 'Sign in with a link on your phone or computer.',
+        'family': 'versant',
+        'requestor_id': None,
+        'last_error_message': versant_error_message,
+        'last_error_at': versant_error_at,
+        'needs_signin': _needs_signin('versant', versant_last_signed_in_at, _errors('versant_tve')),
+    })
+
+    univision = _cfg('univision_tve').get('univision_mvpd_auth') or {}
+    univision_last_signed_in_at = univision.get('captured_at')
+    univision_error_message, univision_error_at = _last_error('univision', univision_last_signed_in_at,
+                                                              _errors('univision_tve'))
+    entries.append({
+        'source': 'univision_tve',
+        'label': 'Univision TVE (Univision, UniMás, Galavisión, TUDN)',
+        'last_signed_in_at': univision_last_signed_in_at,
+        'note': 'Sign in with a link on your phone or computer. N+ 24/7, Zona TUDN and Canal ViX play without it.',
+        'family': 'univision',
+        'requestor_id': None,
+        'last_error_message': univision_error_message,
+        'last_error_at': univision_error_at,
+        'needs_signin': _needs_signin('univision', univision_last_signed_in_at, _errors('univision_tve')),
+    })
+
+    disney = _cfg('disney_tve').get('disney_mvpd_auth') or {}
+    disney_signed_in = [a.get('captured_at') for a in disney.values() if a.get('captured_at')]
+    disney_last_signed_in_at = min(disney_signed_in) if disney_signed_in else None
+    disney_error_message, disney_error_at = _last_error('disney', disney_last_signed_in_at, _errors('disney_tve'))
+    entries.append({
+        'source': 'disney_tve',
+        'label': 'Disney TVE (ABC, Freeform, FX, Nat Geo, Disney Channel)',
+        'last_signed_in_at': disney_last_signed_in_at,
+        'note': 'Two links, one after the other: abc.com, then DisneyNOW. ABC News Live and ABC local news play without it.',
+        'family': 'disney',
+        'requestor_id': None,
+        'last_error_message': disney_error_message,
+        'last_error_at': disney_error_at,
+        'needs_signin': _needs_signin('disney', disney_last_signed_in_at, _errors('disney_tve')),
+    })
+
+    tennis_last_signed_in_at = (_cfg('tennis_tve').get('tennis_mvpd_auth') or {}).get('captured_at')
+    tennis_error_message, tennis_error_at = _last_error('tennis', tennis_last_signed_in_at, _errors('tennis_tve'))
+    entries.append({
+        'source': 'tennis_tve',
+        'label': 'Tennis Channel TVE',
+        'last_signed_in_at': tennis_last_signed_in_at,
+        'note': 'Sign in with a link on your phone or computer.',
+        'family': 'tennis',
+        'requestor_id': None,
+        'last_error_message': tennis_error_message,
+        'last_error_at': tennis_error_at,
+        'needs_signin': _needs_signin('tennis', tennis_last_signed_in_at, _errors('tennis_tve')),
+    })
+
+    dazn_last_signed_in_at = (_cfg('dazn_tve').get('dazn_auth') or {}).get('captured_at')
+    dazn_error_message, dazn_error_at = _last_error('dazn', dazn_last_signed_in_at, _errors('dazn_tve'))
+    entries.append({
+        'source': 'dazn_tve',
+        'label': 'DAZN (YES, MSG and DAZN\'s free channels)',
+        'last_signed_in_at': dazn_last_signed_in_at,
+        'note': 'Two links, one after the other: your DAZN account (open it where you\'re signed in to DAZN; '
+                'a free account works), then your TV provider for YES and MSG.',
+        'family': 'dazn',
+        'requestor_id': None,
+        'last_error_message': dazn_error_message,
+        'last_error_at': dazn_error_at,
+        'needs_signin': _needs_signin('dazn', dazn_last_signed_in_at, _errors('dazn_tve')),
+    })
+
+    cspan_last_signed_in_at = (_cfg('cspan_tve').get('cspan_mvpd_auth') or {}).get('captured_at')
+    cspan_error_message, cspan_error_at = _last_error('cspan', cspan_last_signed_in_at, _errors('cspan_tve'))
+    entries.append({
+        'source': 'cspan_tve',
+        'label': 'C-SPAN TVE (C-SPAN, C-SPAN2, C-SPAN3)',
+        'last_signed_in_at': cspan_last_signed_in_at,
+        'note': 'Sign in with a link on your phone or computer.',
+        'family': 'cspan',
+        'requestor_id': None,
+        'last_error_message': cspan_error_message,
+        'last_error_at': cspan_error_at,
+        'needs_signin': _needs_signin('cspan', cspan_last_signed_in_at, _errors('cspan_tve')),
+    })
+
+    sundance_last_signed_in_at = (_cfg('sundance_tve').get('sundance_auth') or {}).get('captured_at')
+    sundance_error_message, sundance_error_at = _last_error('sundance', sundance_last_signed_in_at,
+                                                            _errors('sundance_tve'))
+    entries.append({
+        'source': 'sundance_tve',
+        'label': 'SundanceTV (AMC Networks)',
+        'last_signed_in_at': sundance_last_signed_in_at,
+        'note': 'Enter your Sundance email and password in the SundanceTV source settings, then sign in to your '
+                'TV provider with a link on your phone or computer.',
+        'family': 'sundance',
+        'requestor_id': None,
+        'last_error_message': sundance_error_message,
+        'last_error_at': sundance_error_at,
+        'needs_signin': _needs_signin('sundance', sundance_last_signed_in_at, _errors('sundance_tve')),
+    })
+
+    cnn_last_signed_in_at = (_cfg('cnn_tve').get('cnn_mvpd_auth') or {}).get('captured_at')
+    cnn_error_message, cnn_error_at = _last_error('cnn', cnn_last_signed_in_at, _errors('cnn_tve'))
+    entries.append({
+        'source': 'cnn_tve',
+        'label': 'CNN TVE (CNN, CNN International, HLN)',
+        'last_signed_in_at': cnn_last_signed_in_at,
+        'note': 'Sign in with a link on your phone or computer.',
+        'family': 'cnn',
+        'requestor_id': None,
+        'last_error_message': cnn_error_message,
+        'last_error_at': cnn_error_at,
+        'needs_signin': _needs_signin('cnn', cnn_last_signed_in_at, _errors('cnn_tve')),
+    })
+
+    nesn_last_signed_in_at = (_cfg('nesn_tve').get('nesn_mvpd_auth') or {}).get('captured_at')
+    nesn_error_message, nesn_error_at = _last_error('nesn', nesn_last_signed_in_at, _errors('nesn_tve'))
+    entries.append({
+        'source': 'nesn_tve',
+        'label': 'NESN TVE (NESN, NESN+)',
+        'last_signed_in_at': nesn_last_signed_in_at,
+        'note': 'Sign in with a link on your phone or computer. Plays only for TV provider accounts in the NESN market.',
+        'family': 'nesn',
+        'requestor_id': None,
+        'last_error_message': nesn_error_message,
+        'last_error_at': nesn_error_at,
+        'needs_signin': _needs_signin('nesn', nesn_last_signed_in_at, _errors('nesn_tve')),
+    })
+
     fox_last_signed_in_at = _cfg('fox_tve').get('fox_sports_access_token_captured_at')
     fox_error_message, fox_error_at = _last_error('fox', fox_last_signed_in_at, _errors('fox_tve'))
     entries.append({

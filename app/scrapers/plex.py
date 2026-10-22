@@ -210,6 +210,18 @@ def _parse_date(value: str | None) -> date | None:
         return None
 
 
+def _parse_year(value: str | None) -> date | None:
+    """Plex movie airings carry ``year`` but rarely ``originalAvailableAt``;
+    turn it into Jan 1 of that year, the same fallback Pluto uses."""
+    raw = str(value or "").strip()
+    if not raw.isdigit():
+        return None
+    year = int(raw)
+    if not 1900 <= year <= datetime.now(timezone.utc).year + 1:
+        return None
+    return datetime(year, 1, 1).date()
+
+
 def _normalize_plex_id(raw: str | None) -> str | None:
     """Strip the rotating server prefix from a compound Plex channel ID."""
     if not raw:
@@ -768,7 +780,10 @@ class PlexScraper(BaseScraper):
                 season            = int(video.attrib["parentIndex"]) if video.attrib.get("parentIndex", "").isdigit() else None,
                 episode           = int(video.attrib["index"]) if video.attrib.get("index", "").isdigit() else None,
                 episode_title     = ep_title,
-                original_air_date = _parse_date(video.attrib.get("originalAvailableAt")),
+                original_air_date = (
+                    _parse_date(video.attrib.get("originalAvailableAt"))
+                    or (_parse_year(video.attrib.get("year")) if program_type == "movie" else None)
+                ),
                 program_type      = program_type,
             ))
 

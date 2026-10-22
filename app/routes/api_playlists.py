@@ -4,17 +4,20 @@ see app/scrapers/playlist.py."""
 import logging
 import os
 import tempfile
+from datetime import datetime, timezone
 from collections import Counter
 
 import requests
 from flask import Blueprint, abort, jsonify, request
 
 from ..extensions import db
-from ..models import Source, Channel
+from ..event_lifecycle import delete_event
+from ..config_store import load_source_cache
+from ..models import Source, Channel, Feed, Program
 from ..scrapers.m3u_import import slugify
 from ..scrapers.playlist import (
     DEFAULT_MAX_CHANNELS, MAX_SLUG_LEN, SOURCE_PREFIX, PlaylistError, PlaylistScraper,
-    _download, fetch_playlist, is_playlist_source, validate_url,
+    SNAPSHOT_CACHE_KEY, _download, fetch_playlist, is_playlist_source, playlist_summary, validate_url,
 )
 from ..scrapers.xmltv_import import iter_xmltv
 from .api_shared import _invalidate_and_refresh_xml
@@ -85,7 +88,8 @@ def _guide_channel_ids(session: requests.Session, epg_url: str, user_agent: str 
     try:
         with os.fdopen(fd, 'wb') as fp:
             try:
-                _download(session, epg_url, 'Guide', _PREVIEW_GUIDE_BYTES, user_agent, dest=fp)
+                _download(session, epg_url, 'Guide', _PREVIEW_GUIDE_BYTES, user_agent, dest=fp,
+                          retry_rate_limit=False)
             except PlaylistError as exc:
                 if 'larger than' in str(exc):
                     return None
@@ -108,15 +112,44 @@ def _guide_channel_ids(session: requests.Session, epg_url: str, user_agent: str 
             pass
 
 
+def _imported_guide_stats(source: Source) -> dict:
+    """Guide coverage from what the last import stored, instead of
+    downloading the guide again."""
+    active = db.session.query(Channel.id).filter(
+        Channel.source_id == source.id, Channel.is_active == True)
+    with_programs = (db.session.query(db.func.count(db.distinct(Program.channel_id)))
+                     .filter(Program.channel_id.in_(active.scalar_subquery()),
+                             Program.end_time > datetime.now(timezone.utc)).scalar())
+    return {'checked': True, 'matched': with_programs or 0, 'total': active.count(),
+            'from_import': True, 'error': None, 'url_detected': ''}
+
+
+def _preview_response(summary: dict, guide: dict, saved_groups, checked_at: str | None = None):
+    return jsonify({
+        **{k: v for k, v in summary.items() if k not in ('guide_url_detected', 'm3u_url', 'checked_at')},
+        'saved_groups':   saved_groups,
+        'guide':          guide,
+        'checked_at':     checked_at,
+        'max_channels':   DEFAULT_MAX_CHANNELS,
+        'enable_now_threshold': ENABLE_NOW_THRESHOLD,
+    })
+
+
 @playlists_bp.route('/playlists/preview', methods=['POST'])
 def preview_playlist():
-    """Fetch and parse a playlist without saving anything. Drives the add/edit
-    dialog: group checkboxes, counts, and the guide match rate."""
+    """Drives the add/edit dialog: group checkboxes, counts, and the guide
+    match rate. Saves nothing.
+
+    stored=true (edit mode) answers from what the last scrape recorded and
+    contacts nothing; 404 when there is no record yet. A live check of a saved
+    playlist reuses the imported guide coverage unless the guide URL changed,
+    so it costs one playlist download rather than two."""
     data = request.get_json() or {}
     m3u_url = (data.get('m3u_url') or '').strip()
     epg_url = (data.get('epg_url') or '').strip()
     user_agent = None
     saved_groups = None
+    source = None
 
     # Edit mode: fall back to what's saved, so the dialog never has to be sent
     # (or re-send) the stored URLs.
@@ -128,21 +161,26 @@ def preview_playlist():
             epg_url = cfg.get('epg_url') or ''
         user_agent = (cfg.get('user_agent') or '').strip() or None
         saved_groups = cfg.get('groups_include') or []
+        if data.get('stored'):
+            snapshot = load_source_cache(source.id).get(SNAPSHOT_CACHE_KEY)
+            if not snapshot or snapshot.get('m3u_url') != cfg.get('m3u_url'):
+                return jsonify({'error': 'No stored playlist data yet'}), 404
+            guide = (_imported_guide_stats(source) if cfg.get('epg_url')
+                     else {'checked': False, 'matched': None, 'error': None})
+            guide['url_detected'] = snapshot.get('guide_url_detected') or ''
+            return _preview_response(snapshot, guide, saved_groups, snapshot.get('checked_at'))
 
     session = _session()
     try:
-        playlist = fetch_playlist(session, m3u_url, user_agent)
+        playlist = fetch_playlist(session, m3u_url, user_agent, retry_rate_limit=False)
         entries = playlist.entries
-
-        groups = Counter(e.group for e in entries)
-        group_rows = [
-            {'name': name, 'count': count}
-            for name, count in sorted(groups.items(), key=lambda kv: (kv[0] == '', kv[0].casefold()))
-        ]
+        summary = playlist_summary(playlist)
 
         guide_url = epg_url or playlist.guide_url or ''
         guide = {'url_detected': playlist.guide_url or '', 'checked': False, 'matched': None, 'error': None}
-        if guide_url:
+        if source is not None and guide_url and guide_url == (source.config or {}).get('epg_url'):
+            guide = {**_imported_guide_stats(source), 'url_detected': playlist.guide_url or ''}
+        elif guide_url:
             try:
                 declared = _guide_channel_ids(session, validate_url(guide_url, 'Guide URL'), user_agent)
                 if declared is not None:
@@ -160,19 +198,7 @@ def preview_playlist():
     except PlaylistError as exc:
         return jsonify({'error': str(exc)}), 422
 
-    return jsonify({
-        'channel_count':  len(entries),
-        'skipped':        playlist.skipped,
-        'groups':         group_rows,
-        'saved_groups':   saved_groups,
-        'with_tvg_id':    sum(1 for e in entries if e.attr('tvg-id')),
-        'with_gracenote': sum(1 for e in entries if e.attr('tvc-guide-stationid')),
-        'with_headers':   sum(1 for e in entries if e.headers),
-        'with_drm':       sum(1 for e in entries if e.has_drm_props),
-        'guide':          guide,
-        'max_channels':   DEFAULT_MAX_CHANNELS,
-        'enable_now_threshold': ENABLE_NOW_THRESHOLD,
-    })
+    return _preview_response(summary, guide, saved_groups)
 
 
 def _unique_source_name(display_name: str) -> str:
@@ -226,7 +252,26 @@ def _apply_dialog_fields(config: dict, data: dict) -> dict:
     return config
 
 
-def _playlist_dict(source: Source) -> dict:
+def _stored_groups(source: Source) -> list[dict]:
+    """Groups this playlist's stored channels belong to, with channel counts.
+
+    The dialog lists groups from a live check of the playlist, so a group that
+    has dropped out upstream would vanish from it while its channels are still
+    here. These let the dialog keep showing it, so a rule can still be set."""
+    counts: Counter = Counter()
+    active: Counter = Counter()
+    rows = (db.session.query(Channel.playlist_group, Channel.tags, Channel.is_active)
+            .filter(Channel.source_id == source.id).all())
+    for group, tags, is_active in rows:
+        if group is None:
+            group = (tags or '').split(',', 1)[0]
+        counts[group] += 1
+        if is_active:
+            active[group] += 1
+    return [{'name': name, 'count': n, 'active': active[name]} for name, n in sorted(counts.items())]
+
+
+def _playlist_dict(source: Source, include_stored_groups: bool = False) -> dict:
     cfg = source.config or {}
     d = source.to_dict()
     d.update({
@@ -238,6 +283,8 @@ def _playlist_dict(source: Source) -> dict:
         'default_language': cfg.get('default_language') or 'en',
         'default_country':  cfg.get('default_country') or 'US',
     })
+    if include_stored_groups:
+        d['stored_groups'] = _stored_groups(source)
     return d
 
 
@@ -292,7 +339,53 @@ def create_playlist():
 
 @playlists_bp.route('/playlists/<int:source_id>', methods=['GET'])
 def get_playlist(source_id):
-    return jsonify(_playlist_dict(_playlist_source_or_404(source_id)))
+    return jsonify(_playlist_dict(_playlist_source_or_404(source_id), include_stored_groups=True))
+
+
+def _remove_groups(source: Source, config: dict, groups: list[str]) -> int:
+    """Forget groups the user removed in the dialog: drop their selection and
+    rule from `config` (in place) and delete their stored channels. Returns the
+    number of channels deleted. A group that later reappears upstream imports
+    as new channels."""
+    gone = {g.casefold() for g in groups}
+    if not gone:
+        return 0
+    if config.get('groups_include'):
+        kept = [g for g in config['groups_include'] if g.casefold() not in gone]
+        if kept:
+            config['groups_include'] = kept
+        else:
+            config.pop('groups_include', None)
+    if config.get('group_lifecycle'):
+        kept = {g: p for g, p in config['group_lifecycle'].items() if g.casefold() not in gone}
+        if kept:
+            config['group_lifecycle'] = kept
+        else:
+            config.pop('group_lifecycle', None)
+
+    deleted_ids = set()
+    for ch in Channel.query.filter_by(source_id=source.id).all():
+        group = ch.playlist_group
+        if group is None:
+            group = (ch.tags or '').split(',', 1)[0]
+        if group.casefold() in gone:
+            deleted_ids.add(ch.id)
+            delete_event(ch)
+    if deleted_ids:
+        # Feeds can hold channel ids directly; SQLite may reuse a deleted id.
+        for feed in Feed.query.all():
+            filters = dict(feed.filters or {})
+            changed = False
+            for key in ('channel_ids', 'excluded_channel_ids', 'pinned_channel_ids'):
+                ids = filters.get(key)
+                if isinstance(ids, list) and deleted_ids.intersection(ids):
+                    filters[key] = [cid for cid in ids if cid not in deleted_ids]
+                    changed = True
+            if changed:
+                feed.filters = filters
+        logger.info('[%s] removed groups %s: deleted %d channels',
+                    source.name, sorted(groups), len(deleted_ids))
+    return len(deleted_ids)
 
 
 @playlists_bp.route('/playlists/<int:source_id>', methods=['PUT'])
@@ -329,6 +422,16 @@ def update_playlist(source_id):
             if group.casefold() in changed_groups:
                 ch.missed_scrapes = 0
 
+    remove_groups = _clean_groups(data.get('remove_groups'))
+    if remove_groups and old.get('groups_include') and not (
+            [g for g in (config.get('groups_include') or [])
+             if g.casefold() not in {r.casefold() for r in remove_groups}]):
+        # No groups_include means every group, so removing the last selected
+        # ones would import the whole playlist.
+        return jsonify({'error': 'Removing these groups would leave no groups selected, which imports '
+                                 'the whole playlist. Select at least one group, or delete the playlist.'}), 422
+    removed = _remove_groups(source, config, remove_groups)
+
     source.config = config
     try:
         db.session.commit()
@@ -346,8 +449,11 @@ def update_playlist(source_id):
         trigger_scrape(source.name, force_full=True)
     elif old.get('fill_missing_epg', True) != config.get('fill_missing_epg', True):
         _invalidate_and_refresh_xml()
+    if removed:
+        _invalidate_and_refresh_xml()
     d = _playlist_dict(source)
     d['scrape_queued'] = rescrape
+    d['removed_channels'] = removed
     return jsonify(d)
 
 

@@ -1423,6 +1423,7 @@ _NAME_OVERRIDES: dict[str, str] = {
     'ice road truckers':                    'Reality TV',
     'ink master':                           'Reality TV',
     'perform by lifetime':                  'Reality TV',
+    'perform':                              'Reality TV',  # Lifetime's dance-reality FAST channel, not sports
     'real housewives vault':                'Reality TV',
     'ice pilots nwt (en español)':          'Reality TV',
     'la fiebre del jade':                   'Reality TV',
@@ -1486,7 +1487,6 @@ _NAME_OVERRIDES: dict[str, str] = {
     'motogp tv':                            'Sports',
     'mtrspt1':                              'Sports',
     'victory plus national':                'Sports',
-    'perform':                              'Sports',
     'acc digital network':                  'Sports',
     'acc network':                          'Sports',
     'big 12 studios':                       'Sports',
@@ -1566,7 +1566,7 @@ _NAME_OVERRIDES: dict[str, str] = {
     'bkfctv':                               'Sports',
     'bkfc tv espanol':                      'Sports',
     'dp tour':                              'Sports',
-    'hersphere':                            'Sports',
+    'hersphere':                            'Drama',    # Lionsgate movies + dramedies, not sports
     'msg national':                         'Sports',
     'msgsn national':                       'Sports',
     'for the fans':                         'Sports',
@@ -1703,7 +1703,7 @@ _NAME_OVERRIDES: dict[str, str] = {
     'cw presents wwe nxt':                  'Sports',
     'dp world tour':                        'Sports',
     'hbcugo':                               'Sports',
-    'hersphere by lionsgate':               'Sports',
+    'hersphere by lionsgate':               'Drama',
     'motorvision – deutsch':                'Automotive',
     'motorvision – english':                'Automotive',
     'nba':                                  'Sports',
@@ -1918,6 +1918,24 @@ _NAME_OVERRIDES: dict[str, str] = {
 }
 
 
+# Philo's guide omits genres for these channels. Keep these corrections scoped
+# to Philo so a custom playlist entry with the same name is never reclassified.
+_PHILO_NAME_OVERRIDES: dict[str, str] = {
+    'halloween plus':        'Horror',
+    'strangely addicting':   'Reality TV',
+    'hbo':                   'Movies',
+    'hbo hits':              'Movies',
+    'hbo latino hd':         'Latino',
+    'reelz':                 'Entertainment',
+    'shudder tv':            'Horror',
+    'starz encore action':   'Action & Adventure',
+    'starz encore black':    'Movies',
+    'starz encore classic':  'Movies',
+    'starz encore español':  'Latino',
+    'starz encore suspense': 'Movies',
+}
+
+
 _NATIONAL_NETWORK_NEWS = {
     'abc news live',
     'cbs news 24/7',
@@ -1972,17 +1990,25 @@ def _local_news_rule(name_lower: str, name: str) -> str | None:
     return None
 
 
+def _western_is_a_place(name_lower: str) -> bool:
+    """"Western" as geography, not the genre: "WGGB Western Mass News",
+    "Spectrum News NECN Central & Western MA", "NCAA Football - Western
+    Michigan vs. ..."."""
+    return 'news' in name_lower or ' vs' in name_lower or name_lower.startswith('ncaa ')
+
+
 def category_for_channel(name: str, raw_category: str | None, source_name: str | None = None) -> str | None:
     """Return the canonical category for a channel, applying hard overrides first.
 
     Priority order:
-      1. Exact name match in _NAME_OVERRIDES (scraper-proof corrections)
+      1. Source-specific or global exact name override
       2. Pattern checks for reliable name-based signals (XITE, K-Drama, Very Local)
       3. normalize_category(raw_category) — scraper-provided value after mapping
 
     This ensures that re-scraping never undoes manual category corrections.
 
-    `source_name` is optional. Sources in `_CALLSIGN_GENRE_TRUSTED_SOURCES`
+    `source_name` is optional. Philo-only overrides require it; sources in
+    `_CALLSIGN_GENRE_TRUSTED_SOURCES`
     (e.g. HDHomeRun OTA tuners, whose channels are real broadcast call signs
     spanning genres) skip the bare call-sign → Local News guess, so their
     scraper-provided category (a real genre, or 'Broadcast') is honoured.
@@ -1992,6 +2018,8 @@ def category_for_channel(name: str, raw_category: str | None, source_name: str |
     name_lower = name_clean.lower()
 
     # 1. Exact override
+    if source_name == 'philo' and name_lower in _PHILO_NAME_OVERRIDES:
+        return _PHILO_NAME_OVERRIDES[name_lower]
     override = _NAME_OVERRIDES.get(name_lower)
     if override:
         return override
@@ -2008,7 +2036,7 @@ def category_for_channel(name: str, raw_category: str | None, source_name: str |
         return 'Drama'
     if name_lower.endswith(' westerns') or name_lower.endswith(' western'):
         return 'Westerns'
-    if name_lower.startswith('western ') or ' western ' in name_lower:
+    if (name_lower.startswith('western ') or ' western ' in name_lower) and not _western_is_a_place(name_lower):
         return 'Westerns'
 
     # Local News patterns
@@ -2079,6 +2107,12 @@ def explain_category(name: str, raw_category: str | None, source_name: str | Non
     name_lower = name_clean.lower()
 
     # 1. Exact override
+    if source_name == 'philo' and name_lower in _PHILO_NAME_OVERRIDES:
+        return {
+            'source': 'override',
+            'rule': 'philo_name_override',
+            'detail': 'Matched a Philo channel name with no genre in its guide.',
+        }
     if name_lower in _NAME_OVERRIDES:
         return {
             'source': 'override',
@@ -2094,7 +2128,8 @@ def explain_category(name: str, raw_category: str | None, source_name: str | Non
     if 'k-drama' in name_lower or 'kdrama' in name_lower:
         return {'source': 'name_pattern', 'rule': 'kdrama', 'detail': 'Name contains "K-Drama" or "KDrama" → Drama.'}
     if (name_lower.endswith(' westerns') or name_lower.endswith(' western')
-            or name_lower.startswith('western ') or ' western ' in name_lower):
+            or ((name_lower.startswith('western ') or ' western ' in name_lower)
+                and not _western_is_a_place(name_lower))):
         return {'source': 'name_pattern', 'rule': 'western', 'detail': 'Name contains "Western" → Westerns.'}
     local_rule = _local_news_rule(name_lower, name_clean)
     if local_rule:

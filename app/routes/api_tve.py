@@ -117,6 +117,11 @@ def source_tve_signin(source_id):
 
     if changed:
         clear_signin_state(source, leaving if leaving is not own or mode == 'shared' else None)
+        # A browser sign-in still running for the old login is abandoned now.
+        from .tasks import stop_family_browser_login
+        for family, requestor_id in {(row.get('family'), row.get('requestor_id'))
+                                     for row in _source_status_rows(source.name)}:
+            stop_family_browser_login(family or '', requestor_id)
         logger.info('[tve] %s now signs in with %s', source.name,
                     'its own TV provider login' if mode == 'separate' else 'the shared TV provider login')
     db.session.commit()
@@ -159,7 +164,9 @@ def tve_network_status_route():
 
 # Sources whose auth identity is TVE/Adobe-Pass-tied. Kept as one list so
 # reset and any future TVE-wide admin action stay in sync automatically.
-_TVE_SOURCE_NAMES = ('aenetworks_tve', 'fox_tve', 'discovery_tve', 'amcn_tve', 'warner_tve', 'nbc_tve')
+_TVE_SOURCE_NAMES = ('aenetworks_tve', 'fox_tve', 'discovery_tve', 'amcn_tve', 'warner_tve', 'nbc_tve',
+                     'versant_tve', 'univision_tve', 'disney_tve', 'tennis_tve', 'dazn_tve', 'cspan_tve',
+                     'sundance_tve', 'cnn_tve', 'nesn_tve')
 
 # FOX One is a Premium source with its own settings (sign-in method,
 # separate login, home ZIP); a TVE reset only drops the sign-in it got from
@@ -217,7 +224,16 @@ def tve_reset():
             SourceCache.source_id.in_(source_ids),
             db.or_(
                 SourceCache.cache_key.like('adobe_auth:%'),
-                SourceCache.cache_key.in_(('discovery_tve_session', 'nbc_entitlements', 'nbc_playback')),
+                SourceCache.cache_key.in_(('discovery_tve_session', 'nbc_entitlements', 'nbc_playback',
+                                            'versant_session', 'versant_playback',
+                                            'univision_user', 'univision_qpat_user',
+                                            'univision_media_tokens', 'disney_adobe_tokens',
+                                            'disney_streams', 'tennis_client', 'tennis_streams',
+                                            'dazn_session', 'dazn_streams',
+                                            'cspan_tve_client', 'cspan_tve_authz',
+                                            'sundance_session', 'sundance_streams',
+                                            'cnn_tve_client', 'cnn_tve_authz', 'cnn_streams', 'cnn_bolt',
+                                            'nesn_session', 'nesn_playback')),
             ),
         ).delete(synchronize_session=False)
 
@@ -327,6 +343,11 @@ def mvpd_browser_login_state():
     import redis as _redis
 
     r = _redis.from_url(current_app.config['REDIS_URL'])
+    from .tasks import signin_queue_notice
+    notice = signin_queue_notice(job_id='mvpd-browser-login')
+    if notice:
+        # Not started yet, so any saved status/screenshot is a previous run's.
+        return jsonify({'state': 'queued', 'message': notice, 'queue_notice': notice})
     raw_status = r.get('mvpd:browser-login:status')
     result = json.loads(raw_status) if raw_status else {'state': 'idle'}
     shot = r.get('mvpd:browser-login:screenshot')
@@ -396,7 +417,7 @@ def tve_link_login_start():
     import redis as _redis
     from ..tve.link_login import LINK_FAMILIES, STATUS_KEY, job_timeout
     from ..tve.providers import tve_account_mso_id
-    from .tasks import get_signin_queue
+    from .tasks import get_signin_queue, stop_family_browser_login
 
     data = request.get_json(force=True) or {}
     family = (data.get('family') or '').strip()
@@ -409,6 +430,9 @@ def tve_link_login_start():
     if not account or not account.is_usable():
         return jsonify({'error': 'Enter and save your TV provider username and password first.'}), 400
     mso_id = tve_account_mso_id(account)
+    # Same worker: a browser sign-in left waiting for this network would
+    # hold the link job in the queue for up to 30 minutes.
+    stop_family_browser_login(family, requestor_id)
     run_id = uuid.uuid4().hex
     status = {'run_id': run_id, 'family': family, 'requestor_id': requestor_id, 'mso_id': mso_id,
               'state': 'starting', 'message': 'Getting a sign-in link…', 'steps': []}
@@ -423,8 +447,16 @@ def tve_link_login_start():
 def tve_link_login_state():
     import redis as _redis
     from ..tve.link_login import STATUS_KEY
+    from .tasks import signin_queue_notice
     raw = _redis.from_url(current_app.config['REDIS_URL']).get(STATUS_KEY)
-    return jsonify(json.loads(raw) if raw else {'state': 'idle'})
+    result = json.loads(raw) if raw else {'state': 'idle'}
+    if result.get('state') == 'starting' and result.get('run_id'):
+        # run_link_login(family, requestor_id, mso_id, run_id, ...)
+        notice = signin_queue_notice(func_name='app.tve.link_login.run_link_login',
+                                     arg=(3, result['run_id']))
+        if notice:
+            result['message'] = result['queue_notice'] = notice
+    return jsonify(result)
 
 
 @tve_bp.route('/settings/tve/link-login/stop', methods=['POST'])
@@ -511,6 +543,11 @@ def google_signin_state():
     import redis as _redis
 
     r = _redis.from_url(current_app.config['REDIS_URL'])
+    from .tasks import signin_queue_notice
+    notice = signin_queue_notice(job_id='google-signin')
+    if notice:
+        # Not started yet, so any saved status/screenshot is a previous run's.
+        return jsonify({'state': 'queued', 'message': notice, 'queue_notice': notice})
     raw_status = r.get('google-signin:browser-login:status')
     result = json.loads(raw_status) if raw_status else {'state': 'idle'}
     shot = r.get('google-signin:browser-login:screenshot')
@@ -584,6 +621,11 @@ def nbc_browser_login_state():
     import redis as _redis
 
     r = _redis.from_url(current_app.config['REDIS_URL'])
+    from .tasks import signin_queue_notice
+    notice = signin_queue_notice(job_id='nbc-mvpd-browser-login')
+    if notice:
+        # Not started yet, so any saved status/screenshot is a previous run's.
+        return jsonify({'state': 'queued', 'message': notice, 'queue_notice': notice})
     raw_status = r.get('nbc-mvpd:browser-login:status')
     result = json.loads(raw_status) if raw_status else {'state': 'idle'}
     shot = r.get('nbc-mvpd:browser-login:screenshot')
@@ -656,6 +698,11 @@ def fox_browser_login_state():
     import redis as _redis
 
     r = _redis.from_url(current_app.config['REDIS_URL'])
+    from .tasks import signin_queue_notice
+    notice = signin_queue_notice(job_id='fox-mvpd-browser-login')
+    if notice:
+        # Not started yet, so any saved status/screenshot is a previous run's.
+        return jsonify({'state': 'queued', 'message': notice, 'queue_notice': notice})
     raw_status = r.get('fox-mvpd:browser-login:status')
     result = json.loads(raw_status) if raw_status else {'state': 'idle'}
     shot = r.get('fox-mvpd:browser-login:screenshot')

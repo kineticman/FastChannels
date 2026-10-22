@@ -33,14 +33,14 @@ from .adobe_pass import TVEAuthError, TVENotAuthorizedError, TVEPendingAuthError
 logger = logging.getLogger(__name__)
 
 STATUS_KEY = 'tve:link-login:status'
-LINK_FAMILIES = ('legacy', 'nbc', 'tcm', 'fox', 'amcn', 'discovery')
+LINK_FAMILIES = ('legacy', 'nbc', 'tcm', 'fox', 'amcn', 'discovery', 'versant', 'univision', 'disney', 'tennis', 'dazn', 'cspan', 'sundance', 'cnn', 'nesn')
 _PER_TARGET_TIMEOUT = 10 * 60
 _POLL_SECONDS = 3.0
 _POLL_MAX_SECONDS = 15.0
 
 
 def job_timeout(family: str) -> int:
-    targets = 4 if family == 'amcn' else 1
+    targets = {'amcn': 4, 'disney': 2, 'dazn': 2}.get(family, 1)
     return targets * _PER_TARGET_TIMEOUT + 300
 
 
@@ -235,6 +235,697 @@ class _Tcm:
         self.account.config = cfg
         db.session.commit()
         return 'authorized'
+
+
+class _Versant:
+    """Versant (USA, E!, Syfy, Oxygen, CNBC, MS NOW, Golf) — one Adobe v2
+    sign-in under usanetwork.com's `sparkmedia` requestor covers all of them.
+    A re-sign-in reuses the saved client + device fingerprint, so Adobe may
+    answer "already signed in" with nothing to open."""
+    error_key = 'versant'
+
+    def __init__(self, account, mso_id: str, requestor_id: str | None):
+        from ..models import Source
+        from ..scrapers.versant_tve import VersantTVEScraper
+        self.account, self.mso_id = account, mso_id
+        self.source = Source.query.filter_by(name='versant_tve').first()
+        if not self.source or not self.source.is_enabled:
+            raise TVEAuthError('Enable the Versant TVE source before signing in to it.')
+        self.scraper = VersantTVEScraper(config=dict(self.source.config or {}))
+
+    def targets(self):
+        return ['Versant']
+
+    def start(self, label):
+        from ..scrapers.versant_tve import ADOBE_BASE, DOMAIN_NAME, REDIRECT_URL, REQUESTOR_ID
+        page = self.scraper._page_config()
+        saved = (self.account.config or {}).get('versant_mvpd_auth') or {}
+        if saved.get('mso_id') != self.mso_id:
+            saved = {}
+        auth = {'device_fingerprint': saved.get('device_fingerprint') or str(uuid.uuid4()),
+                **{k: saved.get(k) for k in ('client_id', 'client_secret', 'access_token')}}
+        client = self.scraper.adobe_client(page['software_statement'], auth)
+        if client.client_id and client.client_secret:
+            client.refresh_access_token()
+        else:
+            client._client_creds = None
+            client._register_client()
+        data = client._post(
+            f'{ADOBE_BASE}/api/v2/{REQUESTOR_ID}/sessions',
+            data={'mvpd': self.mso_id, 'redirectUrl': REDIRECT_URL, 'domainName': DOMAIN_NAME},
+            headers={**client._bearer_headers(), 'Content-Type': 'application/x-www-form-urlencoded'},
+        ).json()
+        ctx = {'client': client, 'page': page, 'fingerprint': auth['device_fingerprint'],
+               'profile_url': f'{ADOBE_BASE}/api/v2/{REQUESTOR_ID}/profiles/{self.mso_id}'}
+        if data.get('reasonType') == 'authenticated':
+            return None, ctx
+        if not data.get('url'):
+            raise TVEAuthError('Versant: Adobe did not return a sign-in URL.')
+        return ADOBE_BASE + data['url'], ctx
+
+    def poll(self, ctx):
+        client = ctx['client']
+        r = client.session.get(ctx['profile_url'], headers=client._bearer_headers(), timeout=20)
+        if r.status_code == 401:
+            client.refresh_access_token()
+            return None
+        if not r.ok:
+            return None
+        return ((r.json() or {}).get('profiles') or {}).get(self.mso_id) or None
+
+    def save(self, ctx, profile):
+        from ..config_store import persist_source_cache_updates
+        from ..extensions import db
+
+        client = ctx['client']
+        # Raises TVENotAuthorizedError when the package has none of the brands.
+        session = self.scraper.sign_in_viewlift(client, self.mso_id, profile, ctx['page'])
+        session['adobe_client_id'] = client.client_id
+        cfg = dict(self.account.config or {})
+        cfg['versant_mvpd_auth'] = {
+            'mso_id': self.mso_id, 'client_id': client.client_id, 'client_secret': client.client_secret,
+            'access_token': client.access_token, 'device_fingerprint': ctx['fingerprint'],
+            'captured_at': int(time.time()),
+        }
+        self.account.config = cfg
+        db.session.commit()
+        self.scraper._update_cache('versant_session', session)
+        self.scraper._update_cache('versant_playback', {})
+        persist_source_cache_updates(self.source.id, self.scraper._pending_cache_updates)
+        self.scraper._pending_cache_updates = {}
+        denied = sorted(res for res, ok in session['decisions'].items() if not ok)
+        if denied:
+            return 'authorized (your package doesn\'t include: ' + ', '.join(denied) + ')'
+        return 'authorized'
+
+
+class _Nesn(_Versant):
+    """NESN and NESN Plus — one Adobe v2 sign-in under watch.nesn.com's
+    `NESNGO` requestor, linked to the user's NESN account (see nesn_tve.py),
+    so the NESN account sign-in on the source has to come first."""
+    error_key = 'nesn'
+
+    def __init__(self, account, mso_id: str, requestor_id: str | None):
+        from ..models import Source
+        from ..scrapers.nesn_tve import NesnTVEScraper
+        self.account, self.mso_id = account, mso_id
+        self.source = Source.query.filter_by(name='nesn_tve').first()
+        if not self.source or not self.source.is_enabled:
+            raise TVEAuthError('Enable the NESN TVE source before signing in to it.')
+        if not (self.source.config or {}).get('nesn_account'):
+            raise TVEAuthError('Sign in to your NESN account first (Sources → NESN TVE → Sign in to NESN).')
+        self.scraper = NesnTVEScraper(config=dict(self.source.config or {}))
+
+    def targets(self):
+        return ['NESN']
+
+    def start(self, label):
+        from ..scrapers.nesn_tve import ADOBE_BASE, DOMAIN_NAME, REDIRECT_URL, REQUESTOR_ID
+        page = self.scraper._page_config()
+        saved = (self.account.config or {}).get('nesn_mvpd_auth') or {}
+        if saved.get('mso_id') != self.mso_id:
+            saved = {}
+        auth = {'device_fingerprint': saved.get('device_fingerprint') or str(uuid.uuid4()),
+                **{k: saved.get(k) for k in ('client_id', 'client_secret', 'access_token')}}
+        client = self.scraper.adobe_client(page['software_statement'], auth)
+        if client.client_id and client.client_secret:
+            client.refresh_access_token()
+        else:
+            client._client_creds = None
+            client._register_client()
+        data = client._post(
+            f'{ADOBE_BASE}/api/v2/{REQUESTOR_ID}/sessions',
+            data={'mvpd': self.mso_id, 'redirectUrl': REDIRECT_URL, 'domainName': DOMAIN_NAME},
+            headers={**client._bearer_headers(), 'Content-Type': 'application/x-www-form-urlencoded'},
+        ).json()
+        ctx = {'client': client, 'page': page, 'fingerprint': auth['device_fingerprint'],
+               'profile_url': f'{ADOBE_BASE}/api/v2/{REQUESTOR_ID}/profiles/{self.mso_id}'}
+        if data.get('reasonType') == 'authenticated':
+            return None, ctx
+        if not data.get('url'):
+            raise TVEAuthError('NESN: Adobe did not return a sign-in URL.')
+        return ADOBE_BASE + data['url'], ctx
+
+    def save(self, ctx, profile):
+        from ..config_store import persist_source_cache_updates
+        from ..extensions import db
+
+        client = ctx['client']
+        # Keep the Adobe sign-in even if linking it to the NESN account fails
+        # below: playback re-links from it, so the user needn't sign in again.
+        cfg = dict(self.account.config or {})
+        cfg['nesn_mvpd_auth'] = {
+            'mso_id': self.mso_id, 'client_id': client.client_id, 'client_secret': client.client_secret,
+            'access_token': client.access_token, 'device_fingerprint': ctx['fingerprint'],
+            'captured_at': int(time.time()),
+        }
+        self.account.config = cfg
+        db.session.commit()
+        try:
+            # Raises TVENotAuthorizedError when Adobe says the package has no NESN.
+            session = self.scraper.sign_in_viewlift(client, self.mso_id, profile, ctx['page'])
+            session['adobe_client_id'] = client.client_id
+            self.scraper._update_cache('nesn_session', session)
+            self.scraper._update_cache('nesn_playback', {})
+        finally:
+            persist_source_cache_updates(self.source.id, self.scraper._pending_cache_updates)
+            self.scraper._pending_cache_updates = {}
+        return 'authorized'
+
+
+
+class _Univision:
+    """Univision Now TVE (Univision, UniMás, Galavisión, TUDN) — one Adobe v2
+    sign-in under tv.univision.com's `univision` requestor; Univision's own
+    access token is then minted from the Adobe profile's userID at tune time."""
+    error_key = 'univision'
+
+    def __init__(self, account, mso_id: str, requestor_id: str | None):
+        from ..models import Source
+        from ..scrapers.univision_tve import UnivisionTVEScraper
+        self.account, self.mso_id = account, mso_id
+        self.source = Source.query.filter_by(name='univision_tve').first()
+        if not self.source or not self.source.is_enabled:
+            raise TVEAuthError('Enable the Univision TVE source before signing in to it.')
+        self.scraper = UnivisionTVEScraper(config=dict(self.source.config or {}))
+
+    def targets(self):
+        return ['Univision']
+
+    def start(self, label):
+        from ..scrapers.univision_tve import ADOBE_BASE, REDIRECT_URL, REQUESTOR_ID
+        statement = self.scraper._config()['software_statement']
+        saved = (self.account.config or {}).get('univision_mvpd_auth') or {}
+        if saved.get('mso_id') != self.mso_id:
+            saved = {}
+        auth = {'device_fingerprint': saved.get('device_fingerprint') or str(uuid.uuid4()),
+                **{k: saved.get(k) for k in ('client_id', 'client_secret', 'access_token')}}
+        client = self.scraper.adobe_client(statement, auth)
+        if client.client_id and client.client_secret:
+            client.refresh_access_token()
+        else:
+            client._client_creds = None
+            client._register_client()
+        data = client._post(
+            f'{ADOBE_BASE}/api/v2/{REQUESTOR_ID}/sessions',
+            data={'mvpd': self.mso_id, 'redirectUrl': REDIRECT_URL, 'domainName': REDIRECT_URL},
+            headers={**client._bearer_headers(), 'Content-Type': 'application/x-www-form-urlencoded'},
+        ).json()
+        ctx = {'client': client, 'fingerprint': auth['device_fingerprint'],
+               'profile_url': f'{ADOBE_BASE}/api/v2/{REQUESTOR_ID}/profiles/{self.mso_id}'}
+        if data.get('reasonType') == 'authenticated':
+            return None, ctx
+        if not data.get('url'):
+            raise TVEAuthError('Univision: Adobe did not return a sign-in URL.')
+        return ADOBE_BASE + data['url'], ctx
+
+    def poll(self, ctx):
+        client = ctx['client']
+        r = client.session.get(ctx['profile_url'], headers=client._bearer_headers(), timeout=20)
+        if r.status_code == 401:
+            client.refresh_access_token()
+            return None
+        if not r.ok:
+            return None
+        return ((r.json() or {}).get('profiles') or {}).get(self.mso_id) or None
+
+    def save(self, ctx, profile):
+        from ..config_store import persist_source_cache_updates
+        from ..extensions import db
+
+        client = ctx['client']
+        # Raises TVENotAuthorizedError when the package has none of the three.
+        user = self.scraper.user_from_profile(client, self.mso_id, profile)
+        cfg = dict(self.account.config or {})
+        cfg['univision_mvpd_auth'] = {
+            'mso_id': self.mso_id, 'client_id': client.client_id, 'client_secret': client.client_secret,
+            'access_token': client.access_token, 'device_fingerprint': ctx['fingerprint'],
+            'captured_at': int(time.time()),
+        }
+        self.account.config = cfg
+        db.session.commit()
+        self.scraper._update_cache('univision_user', user)
+        self.scraper._update_cache('univision_qpat_user', {})
+        self.scraper._update_cache('univision_media_tokens', {})
+        persist_source_cache_updates(self.source.id, self.scraper._pending_cache_updates)
+        self.scraper._pending_cache_updates = {}
+        denied = sorted(res for res, ok in user['decisions'].items() if not ok)
+        if denied:
+            return 'authorized (your package doesn\'t include: ' + ', '.join(denied) + ')'
+        return 'authorized'
+
+
+class _Disney:
+    """Disney TVE — two Adobe v2 sign-ins, one link each: abc.com's `dtci`
+    requestor (ABC, Freeform, FX, Nat Geo) and disneynow.com's
+    `DisneyChannels` (Disney Channel, Junior, XD). Each requestor's software
+    statement is found on its own site."""
+    error_key = 'disney'
+    _RESOURCES = {'dtci': ('ABC', 'ABCFamily', 'fx', 'fxx', 'fxm', 'ngc', 'ngw'),
+                  'DisneyChannels': ('Disney', 'DisneyJunior', 'DisneyXD')}
+
+    def __init__(self, account, mso_id: str, requestor_id: str | None):
+        from ..models import Source
+        from ..scrapers.disney_tve import REQUESTORS, DisneyTVEScraper
+        self.account, self.mso_id = account, mso_id
+        self.source = Source.query.filter_by(name='disney_tve').first()
+        if not self.source or not self.source.is_enabled:
+            raise TVEAuthError('Enable the Disney TVE source before signing in to it.')
+        self.scraper = DisneyTVEScraper(config=dict(self.source.config or {}))
+        self.requestors = {info['label']: requestor for requestor, info in REQUESTORS.items()}
+
+    def targets(self):
+        return list(self.requestors)
+
+    def start(self, label):
+        from ..scrapers.disney_tve import ADOBE_BASE, REQUESTORS, software_statements
+        from ..scrapers.nbc_tve import AdobePassV2Client
+        requestor = self.requestors[label]
+        site = REQUESTORS[requestor]
+        saved = ((self.account.config or {}).get('disney_mvpd_auth') or {}).get(requestor) or {}
+        if saved.get('mso_id') != self.mso_id:
+            saved = {}
+        fingerprint = saved.get('device_fingerprint') or str(uuid.uuid4())
+        client = AdobePassV2Client(requestor, '', site['redirect'], fingerprint,
+                                   origin=site['redirect'].rstrip('/'))
+
+        def open_session():
+            return client.session.post(
+                f'{ADOBE_BASE}/api/v2/{requestor}/sessions',
+                data={'mvpd': self.mso_id, 'redirectUrl': site['redirect'], 'domainName': site['domain']},
+                headers={**client._bearer_headers(), 'Content-Type': 'application/x-www-form-urlencoded'},
+                timeout=30)
+
+        r = None
+        if saved.get('client_id') and saved.get('client_secret'):
+            client.client_id, client.client_secret = saved['client_id'], saved['client_secret']
+            client.refresh_access_token()
+            r = open_session()
+        if r is None or r.status_code == 401:
+            # A site carries one statement per brand; only one is this requestor's.
+            for statement in software_statements(requestor):
+                client.software_statement, client._client_creds = statement, None
+                try:
+                    client._register_client()
+                except TVEAuthError:
+                    continue
+                r = open_session()
+                if r.status_code != 401:
+                    break
+            else:
+                raise TVEAuthError(f'Disney: none of the settings on {site["domain"]} were accepted — '
+                                   'Disney may have changed its site.')
+        data = r.json() if r.ok else {}
+        ctx = {'client': client, 'requestor': requestor, 'fingerprint': fingerprint,
+               'profile_url': f'{ADOBE_BASE}/api/v2/{requestor}/profiles/{self.mso_id}'}
+        if data.get('reasonType') == 'authenticated':
+            return None, ctx
+        if not data.get('url'):
+            raise TVEAuthError(f'Disney: Adobe did not return a sign-in URL (HTTP {r.status_code}).')
+        return ADOBE_BASE + data['url'], ctx
+
+    def poll(self, ctx):
+        client = ctx['client']
+        r = client.session.get(ctx['profile_url'], headers=client._bearer_headers(), timeout=20)
+        if r.status_code == 401:
+            client.refresh_access_token()
+            return None
+        if not r.ok:
+            return None
+        return ((r.json() or {}).get('profiles') or {}).get(self.mso_id) or None
+
+    def save(self, ctx, profile):
+        from ..config_store import persist_source_cache_updates
+        from ..extensions import db
+        from ..scrapers.disney_tve import ADOBE_BASE
+
+        client, requestor = ctx['client'], ctx['requestor']
+        r = client._post(
+            f'{ADOBE_BASE}/api/v2/{requestor}/decisions/preauthorize/{self.mso_id}',
+            json={'resources': list(self._RESOURCES[requestor])},
+            headers={**client._bearer_headers(), 'Content-Type': 'application/json'},
+        )
+        decisions = {d.get('resource'): bool(d.get('authorized')) for d in (r.json() or {}).get('decisions') or []}
+        cfg = dict(self.account.config or {})
+        auth = dict(cfg.get('disney_mvpd_auth') or {})
+        auth[requestor] = {
+            'mso_id': self.mso_id, 'client_id': client.client_id, 'client_secret': client.client_secret,
+            'access_token': client.access_token, 'device_fingerprint': ctx['fingerprint'],
+            'captured_at': int(time.time()),
+        }
+        cfg['disney_mvpd_auth'] = auth
+        self.account.config = cfg
+        db.session.commit()
+        self.scraper._update_cache('disney_adobe_tokens', {})
+        self.scraper._update_cache('disney_streams', {})
+        persist_source_cache_updates(self.source.id, self.scraper._pending_cache_updates)
+        self.scraper._pending_cache_updates = {}
+        if decisions and not any(decisions.values()):
+            raise TVENotAuthorizedError(f'your package doesn\'t include {ctx["requestor"]} channels')
+        denied = sorted(res for res, ok in decisions.items() if not ok)
+        if denied:
+            return 'authorized (your package doesn\'t include: ' + ', '.join(denied) + ')'
+        return 'authorized'
+
+
+class _Tennis:
+    """Tennis Channel — one Adobe v2 sign-in under tennischannel.com's
+    `tceverywhere` requestor. The site registers the Adobe client for us and
+    hands out the device identifier the sign-in is bound to."""
+    error_key = 'tennis'
+
+    def __init__(self, account, mso_id: str, requestor_id: str | None):
+        from ..models import Source
+        from ..scrapers.tennis_tve import TennisTVEScraper
+        self.account, self.mso_id = account, mso_id
+        self.source = Source.query.filter_by(name='tennis_tve').first()
+        if not self.source or not self.source.is_enabled:
+            raise TVEAuthError('Enable the Tennis Channel TVE source before signing in to it.')
+        self.scraper = TennisTVEScraper(config=dict(self.source.config or {}))
+
+    def targets(self):
+        return ['Tennis Channel']
+
+    def start(self, label):
+        from ..scrapers.tennis_tve import (ADOBE_BASE, DOMAIN_NAME, REDIRECT_URL, REQUESTOR_ID,
+                                           adobe_headers, register_client)
+        saved = (self.account.config or {}).get('tennis_mvpd_auth') or {}
+        device = saved.get('device_identifier') if saved.get('mso_id') == self.mso_id else None
+        client = register_client(device)
+        device = client['deviceIdentifier']
+        headers = adobe_headers(client['accessToken'], device)
+        r = requests.post(f'{ADOBE_BASE}/api/v2/{REQUESTOR_ID}/sessions', timeout=30, headers=headers,
+                          data={'mvpd': self.mso_id, 'domainName': DOMAIN_NAME, 'redirectUrl': REDIRECT_URL})
+        data = r.json() if r.ok else {}
+        ctx = {'device': device, 'headers': headers,
+               'profile_url': f'{ADOBE_BASE}/api/v2/{REQUESTOR_ID}/profiles/{self.mso_id}'}
+        if data.get('reasonType') == 'authenticated':
+            return None, ctx
+        if not data.get('url'):
+            raise TVEAuthError(f'Tennis Channel: Adobe did not return a sign-in URL (HTTP {r.status_code}).')
+        return ADOBE_BASE + data['url'], ctx
+
+    def poll(self, ctx):
+        r = requests.get(ctx['profile_url'], headers=ctx['headers'], timeout=20)
+        if not r.ok:
+            return None
+        return ((r.json() or {}).get('profiles') or {}).get(self.mso_id) or None
+
+    def save(self, ctx, profile):
+        from ..config_store import persist_source_cache_updates
+        from ..extensions import db
+        from ..scrapers.tennis_tve import ADOBE_BASE, REQUESTOR_ID, RESOURCE
+
+        r = requests.post(f'{ADOBE_BASE}/api/v2/{REQUESTOR_ID}/decisions/preauthorize/{self.mso_id}', timeout=20,
+                          json={'resources': [RESOURCE]},
+                          headers={**ctx['headers'], 'Content-Type': 'application/json'})
+        decisions = (r.json() or {}).get('decisions') or [] if r.ok else []
+        cfg = dict(self.account.config or {})
+        cfg['tennis_mvpd_auth'] = {'mso_id': self.mso_id, 'device_identifier': ctx['device'],
+                                   'captured_at': int(time.time())}
+        self.account.config = cfg
+        db.session.commit()
+        self.scraper._update_cache('tennis_client', {})
+        self.scraper._update_cache('tennis_streams', {})
+        persist_source_cache_updates(self.source.id, self.scraper._pending_cache_updates)
+        self.scraper._pending_cache_updates = {}
+        if decisions and not any(d.get('authorized') for d in decisions):
+            raise TVENotAuthorizedError('your package doesn\'t include Tennis Channel')
+        return 'authorized'
+
+
+class _Cspan:
+    """C-SPAN — Adobe's v1 regcode sign-in under the `C-SPAN` requestor (v2
+    isn't enabled for it), one sign-in for all three networks. The sign-in is
+    bound to the Adobe client and device it was made with, so both are saved
+    with it."""
+    error_key = 'cspan'
+
+    def __init__(self, account, mso_id: str, requestor_id: str | None):
+        from ..models import Source
+        from ..scrapers.cspan_tve import CSpanTVEScraper
+        self.account, self.mso_id = account, mso_id
+        self.source = Source.query.filter_by(name='cspan_tve').first()
+        if not self.source or not self.source.is_enabled:
+            raise TVEAuthError('Enable the C-SPAN TVE source before signing in to it.')
+        self.scraper = CSpanTVEScraper(config=dict(self.source.config or {}))
+
+    def targets(self):
+        return ['C-SPAN']
+
+    def start(self, label):
+        from ..scrapers.cspan_tve import adobe_client
+        client = adobe_client(self.scraper.software_statement())
+        client.setup_client()
+        client.register_device()
+        client.create_regcode()
+        return client.authenticate_redirect_url(self.mso_id), client
+
+    def poll(self, client):
+        try:
+            client.fetch_session_token()
+        except TVEPendingAuthError:
+            return None
+        return client.ctx.authn_token
+
+    def save(self, client, authn_token):
+        from ..config_store import persist_source_cache_updates
+        from ..extensions import db
+        from ..scrapers.cspan_tve import _resource
+
+        cfg = dict(self.account.config or {})
+        cfg['cspan_mvpd_auth'] = {
+            'mso_id': self.mso_id, 'fingerprint': client._device_fingerprint, 'authn_token': authn_token,
+            'client_id': client.ctx.client_id, 'client_secret': client.ctx.client_secret,
+            'access_token': client.ctx.access_token, 'captured_at': int(time.time()),
+        }
+        self.account.config = cfg
+        db.session.commit()
+        for key in ('cspan_tve_client', 'cspan_tve_authz'):
+            self.scraper._update_cache(key, {})
+        persist_source_cache_updates(self.source.id, self.scraper._pending_cache_updates)
+        self.scraper._pending_cache_updates = {}
+        client.resource = _resource('cspan')
+        try:
+            client.authorize()
+        except TVENotAuthorizedError:
+            raise TVENotAuthorizedError('your package doesn\'t include C-SPAN')
+        return 'authorized'
+
+
+class _Cnn:
+    """CNN — Adobe's v1 regcode sign-in under the `CNN` requestor, one
+    sign-in for CNN, CNN International and HLN. Like C-SPAN, the sign-in is
+    bound to the Adobe client and device it was made with, so both are saved
+    with it."""
+    error_key = 'cnn'
+
+    def __init__(self, account, mso_id: str, requestor_id: str | None):
+        from ..models import Source
+        from ..scrapers.cnn_tve import CNNTVEScraper
+        self.account, self.mso_id = account, mso_id
+        self.source = Source.query.filter_by(name='cnn_tve').first()
+        if not self.source or not self.source.is_enabled:
+            raise TVEAuthError('Enable the CNN TVE source before signing in to it.')
+        self.scraper = CNNTVEScraper(config=dict(self.source.config or {}))
+
+    def targets(self):
+        return ['CNN']
+
+    def start(self, label):
+        from ..scrapers.cnn_tve import adobe_client
+        client = adobe_client(self.scraper.software_statement())
+        client.setup_client()
+        client.register_device()
+        client.create_regcode()
+        return client.authenticate_redirect_url(self.mso_id), client
+
+    def poll(self, client):
+        try:
+            client.fetch_session_token()
+        except TVEPendingAuthError:
+            return None
+        return client.ctx.authn_token
+
+    def save(self, client, authn_token):
+        from ..config_store import persist_source_cache_updates
+        from ..extensions import db
+
+        cfg = dict(self.account.config or {})
+        cfg['cnn_mvpd_auth'] = {
+            'mso_id': self.mso_id, 'fingerprint': client._device_fingerprint, 'authn_token': authn_token,
+            'client_id': client.ctx.client_id, 'client_secret': client.ctx.client_secret,
+            'access_token': client.ctx.access_token, 'captured_at': int(time.time()),
+        }
+        self.account.config = cfg
+        db.session.commit()
+        for key in ('cnn_tve_client', 'cnn_tve_authz', 'cnn_streams'):
+            self.scraper._update_cache(key, {})
+        persist_source_cache_updates(self.source.id, self.scraper._pending_cache_updates)
+        self.scraper._pending_cache_updates = {}
+        try:
+            client.authorize()
+        except TVENotAuthorizedError:
+            raise TVENotAuthorizedError('your package doesn\'t include CNN')
+        return 'authorized'
+
+
+class _Sundance:
+    """SundanceTV — Adobe v1 under the SUNDANCE requestor, driven by DICE:
+    log in to the Sundance account (email/password from the source
+    settings), have Sundance issue the regcode, then trade the finished
+    sign-in for a Sundance session that carries the TV-provider licence."""
+    error_key = 'sundance'
+
+    def __init__(self, account, mso_id: str, requestor_id: str | None):
+        from ..models import Source
+        self.account, self.mso_id = account, mso_id
+        self.source = Source.query.filter_by(name='sundance_tve').first()
+        if not self.source or not self.source.is_enabled:
+            raise TVEAuthError('Enable the SundanceTV source before signing in to it.')
+        cfg = self.source.config or {}
+        self.email, self.password = cfg.get('email') or '', cfg.get('password') or ''
+        if not self.email or not self.password:
+            raise TVEAuthError('Enter your Sundance email and password in the SundanceTV source settings first.')
+
+    def targets(self):
+        return ['SundanceTV']
+
+    def start(self, label):
+        from ..scrapers import sundance_tve as sd
+        user = sd.login(self.email, self.password)
+        client = sd.register_adobe_client()
+        reg = sd.request_regcode(user['authorisationToken'], client)
+        pro = (sd.claims(user['authorisationToken']).get('pro') or {}).get('id') or ''
+        ctx = {'user': user['authorisationToken'], 'client': client, 'access_token': reg['accessToken'],
+               'device': pro, 'next_exchange': 0.0}
+        return sd.authenticate_url(reg['code'], self.mso_id), ctx
+
+    def poll(self, ctx):
+        from ..scrapers import sundance_tve as sd
+        signed_in = sd.adobe_signed_in(ctx['access_token'], ctx['device']) if ctx['device'] else None
+        if signed_in is False:
+            return None
+        # Adobe said yes, or gave no usable answer: ask Sundance, but not
+        # more than every 15s on the no-answer path (it rate-limits).
+        if signed_in is None and time.monotonic() < ctx['next_exchange']:
+            return None
+        ctx['next_exchange'] = time.monotonic() + 15
+        return sd.exchange_adobe(ctx['user'], ctx['client'], ctx['access_token'], self.mso_id)
+
+    def save(self, ctx, session):
+        from ..extensions import db
+        from ..scrapers import sundance_tve as sd
+
+        if not sd.has_tv_provider(session['authorisationToken']):
+            raise TVENotAuthorizedError('your package doesn\'t include SundanceTV')
+        captured_at = int(time.time())
+        cfg = dict(self.account.config or {})
+        cfg['sundance_auth'] = {'mso_id': self.mso_id, 'refresh_token': session['refreshToken'],
+                                'client_id': ctx['client']['client_id'],
+                                'client_secret': ctx['client']['client_secret'], 'captured_at': captured_at}
+        self.account.config = cfg
+        db.session.commit()
+        scraper = sd.SundanceTVEScraper(config=dict(self.source.config or {}))
+        scraper._save_session({'auth': session['authorisationToken'], 'refresh': session['refreshToken'],
+                               'signed_in_at': captured_at})
+        return 'authorized'
+
+
+class _Dazn:
+    """DAZN — two links, one after the other: DAZN's own "sign in with your
+    phone" pairing (dazn.com/signin/device/<id>, opened where the user is
+    signed in to DAZN), then the TV provider under the Gotham requestor,
+    which DAZN binds to that same DAZN device. A saved DAZN sign-in that still
+    renews skips the first link."""
+    error_key = 'dazn'
+    _ACCOUNT, _PROVIDER = 'DAZN account', 'TV provider (YES, MSG)'
+
+    def __init__(self, account, mso_id: str, requestor_id: str | None):
+        from ..models import Source
+        from ..scrapers.dazn_tve import DaznTVEScraper
+        self.account, self.mso_id = account, mso_id
+        self.source = Source.query.filter_by(name='dazn_tve').first()
+        if not self.source or not self.source.is_enabled:
+            raise TVEAuthError('Enable the DAZN source before signing in to it.')
+        self.scraper = DaznTVEScraper(config=dict(self.source.config or {}))
+
+    def targets(self):
+        return [self._ACCOUNT, self._PROVIDER]
+
+    def _saved(self) -> dict:
+        from ..extensions import db
+        db.session.refresh(self.account)
+        return (self.account.config or {}).get('dazn_auth') or {}
+
+    def start(self, label):
+        from ..scrapers import dazn_tve as dz
+        if label == self._ACCOUNT:
+            saved = self._saved()
+            if saved.get('token') and saved.get('device_id'):
+                try:
+                    token = dz.refresh_token(saved['token'], saved['device_id'])
+                    return None, {'step': 'account', 'token': token, 'device_id': saved['device_id'], 'reused': True}
+                except TVEAuthError:
+                    pass
+            device_id = dz.new_device_id()
+            link = dz.request_device_link(device_id)
+            return link['url'], {'step': 'account', 'device_id': device_id, 'second_screen_id': link['second_screen_id']}
+
+        saved = self._saved()
+        if not saved.get('token'):
+            raise TVEAuthError('DAZN: sign in to your DAZN account first.')
+        client = dz.register_adobe_client(saved['token'])
+        headers = dz.adobe_headers(client['access_token'], saved['device_id'])
+        r = requests.post(f'{dz.ADOBE_BASE}/api/v2/{dz.REQUESTOR_ID}/sessions', timeout=30, headers=headers,
+                          data={'mvpd': self.mso_id, 'domainName': dz.DOMAIN_NAME, 'redirectUrl': dz.REDIRECT_URL})
+        data = r.json() if r.ok else {}
+        ctx = {'step': 'provider', 'client': client, 'headers': headers, 'device_id': saved['device_id'],
+               'profile_url': f'{dz.ADOBE_BASE}/api/v2/{dz.REQUESTOR_ID}/profiles/{self.mso_id}'}
+        if data.get('reasonType') == 'authenticated':
+            return None, ctx
+        if not data.get('url'):
+            raise TVEAuthError(f'DAZN: Adobe did not return a sign-in URL (HTTP {r.status_code}).')
+        return dz.ADOBE_BASE + data['url'], ctx
+
+    def poll(self, ctx):
+        from ..scrapers import dazn_tve as dz
+        if ctx['step'] == 'account':
+            return ctx.get('token') or dz.poll_device_link(ctx['second_screen_id'])
+        r = requests.get(ctx['profile_url'], headers=ctx['headers'], timeout=20)
+        if not r.ok:
+            return None
+        return ((r.json() or {}).get('profiles') or {}).get(self.mso_id) or None
+
+    def save(self, ctx, result):
+        from ..config_store import persist_source_cache_updates
+        from ..extensions import db
+        from ..scrapers import dazn_tve as dz
+
+        cfg = dict(self.account.config or {})
+        auth = dict(cfg.get('dazn_auth') or {})
+        if ctx['step'] == 'account':
+            if ctx.get('reused'):
+                auth['token'] = result
+                message = 'already signed in'
+            else:
+                auth = {'token': result, 'device_id': ctx['device_id'], 'captured_at': int(time.time())}
+                message = 'signed in'
+        else:
+            token = dz.link_tv_provider(auth['token'], ctx['device_id'], ctx['client'], self.mso_id, result)
+            auth.update({'token': token, 'mso_id': self.mso_id, 'linked_at': int(time.time()),
+                         'captured_at': int(time.time())})
+            message = 'authorized' if dz.rsn_status(token) == 'ActivePaid' else None
+        cfg['dazn_auth'] = auth
+        self.account.config = cfg
+        db.session.commit()
+        self.scraper._update_cache('dazn_session', {})
+        self.scraper._update_cache('dazn_streams', {})
+        persist_source_cache_updates(self.source.id, self.scraper._pending_cache_updates)
+        self.scraper._pending_cache_updates = {}
+        if message is None:
+            raise TVENotAuthorizedError(f'your TV provider ({self.mso_id}) doesn\'t include YES or MSG on DAZN')
+        return message
 
 
 class _Fox:
@@ -502,7 +1193,9 @@ class _Discovery:
 
 
 _ADAPTERS = {'legacy': _Legacy, 'nbc': _Nbc, 'tcm': _Tcm, 'fox': _Fox, 'amcn': _Amcn, 'foxone': _FoxOne,
-             'discovery': _Discovery}
+             'discovery': _Discovery, 'versant': _Versant, 'univision': _Univision,
+             'disney': _Disney, 'tennis': _Tennis, 'dazn': _Dazn, 'cspan': _Cspan,
+             'sundance': _Sundance, 'cnn': _Cnn, 'nesn': _Nesn}
 
 
 # ── job ──────────────────────────────────────────────────────────────────────

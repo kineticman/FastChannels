@@ -29,6 +29,46 @@ def _ensure_sqlite_parent_dir(database_uri: str | None) -> None:
         os.makedirs(parent, exist_ok=True)
 
 
+_SECRET_KEY_PATH = os.environ.get('FASTCHANNELS_SECRET_KEY_FILE', '/data/.secret_key')
+
+
+def _stored_secret_key() -> str | None:
+    """A random key kept in /data, made on first boot. The 'dev-secret' default
+    is public, and the key signs URLs that play routes relay (ViX segments), so
+    a guessable key turns those routes into an open proxy. Every gunicorn and
+    RQ process calls this at once on boot: the key is written to a temp file and
+    hard-linked into place, so exactly one process creates it and none reads a
+    half-written file."""
+    try:
+        with open(_SECRET_KEY_PATH) as f:
+            key = f.read().strip()
+        if key:
+            return key
+    except FileNotFoundError:
+        pass
+    except OSError:
+        return None
+    tmp = f'{_SECRET_KEY_PATH}.{os.getpid()}.tmp'
+    try:
+        os.makedirs(os.path.dirname(_SECRET_KEY_PATH), exist_ok=True)
+        with open(tmp, 'w') as f:
+            f.write(secrets.token_hex(32))
+        os.chmod(tmp, 0o600)
+        try:
+            os.link(tmp, _SECRET_KEY_PATH)
+        except FileExistsError:
+            pass
+        with open(_SECRET_KEY_PATH) as f:
+            return f.read().strip() or None
+    except OSError:
+        return None
+    finally:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+
+
 def create_app(config_class=Config):
     logfile.setup()
     app = Flask(__name__)
@@ -82,6 +122,8 @@ def create_app(config_class=Config):
     # appended to generated URLs when the proxy forwards X-Forwarded-Port.
     app.wsgi_app = ProxyFix(app.wsgi_app, x_proto=1, x_host=1, x_port=1)
     app.config.from_object(config_class)
+    if app.config.get('SECRET_KEY') == 'dev-secret':
+        app.config['SECRET_KEY'] = _stored_secret_key() or secrets.token_hex(32)
     _ensure_sqlite_parent_dir(app.config.get("SQLALCHEMY_DATABASE_URI"))
 
     @app.context_processor

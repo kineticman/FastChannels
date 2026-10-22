@@ -1,0 +1,28 @@
+  <!-- Event Channel Guide card -->
+  <div class="source-card">
+    <div class="source-header" style="cursor:default">
+      <div class="source-title">
+        <div class="source-icon">🏟️</div>
+        <div>
+          <div class="source-name">Event Channels</div>
+          <div class="source-meta">Guide data around one-off event channels such as ESPN+ games</div>
+        </div>
+      </div>
+    </div>
+    <div class="source-body open">
+      <div class="toggle-row">
+        <div class="toggle-row-text">
+          <div class="toggle-row-label">Fill the guide before and after events</div>
+          <div class="toggle-row-help">When enabled (default), an event channel's guide shows hourly <em>Event Not Started</em> blocks with its start time until the event begins, and <em>Event Ended</em> blocks for 24 hours after it. Without them, Channels DVR and other clients show an empty row, or fill it with placeholders named after the channel, which can look like the game is already on. The filler blocks have no categories, so they stay out of Sports and other genre filters.</div>
+        </div>
+        <div class="toggle-row-control">
+          <label class="toggle-switch">
+            <input type="checkbox" id="event-guide-filler" {% if event_guide_filler %}checked{% endif %}
+                   onchange="saveSettings({event_guide_filler: this.checked}, 'event-guide-filler-status')">
+            <span class="toggle-slider"></span>
+          </label>
+          <span class="save-status" id="event-guide-filler-status"></span>
+        </div>
+      </div>
+    </div>
+  </div>

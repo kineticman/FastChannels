@@ -59,6 +59,7 @@ import json
 import logging
 import re
 import time
+import unicodedata
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
@@ -143,8 +144,8 @@ _ACTIVATION_TIMEOUT = 600
 
 _Q_AIRINGS = '''query($day:String!,$tz:String!){ airings(countryCode:"us", deviceType:SETTOP, tz:$tz, day:$day, limit:3000){
   id name shortName type startDateTime endDateTime description isReAir
-  network{ id } sport{ name } league{ name } category{ name } subcategory{ name }
-  program{ isStudio }
+  network{ id adobeResource } authTypes sport{ name } league{ name sportwareSlug } category{ name } subcategory{ name }
+  program{ isStudio } eventId
   image{ url } source{ playbackId }
   packages{ name } feedName feedType language } }'''
 
@@ -161,6 +162,17 @@ def event_services(airing: dict) -> set[str]:
     return services
 
 
+def event_playable(airing: dict, config: dict) -> bool:
+    """Whether a current sign-in can play this event. ESPN+ events are
+    authTypes ["DIRECT"] — an ESPN account only; ACC Extra and SEC Plus are
+    ["MVPD"], which a TV-provider sign-in also plays (checked 2026-10-16).
+    With an ESPN account everything is listed and its plan decides at play
+    time; the audit drops what it doesn't cover."""
+    if config.get('refresh_token'):
+        return True
+    return 'MVPD' in (airing.get('authTypes') or []) and bool(config.get('adobe_client_id'))
+
+
 def event_sport(airing: dict) -> str:
     return ((airing.get('sport') or {}).get('name') or '').strip() or EVENT_UNCATEGORIZED
 
@@ -175,23 +187,204 @@ def event_is_likely_show(airing: dict) -> bool:
 
 
 EVENT_PREVIEW_CACHE_KEY = 'espn_event_preview'
+EVENT_TEAMS_CACHE_KEY = 'espn_event_teams'
+
+# ── Event teams ──
+# The watch graph has no team data (its Competition type is only an id), so
+# teams come from ESPN's public site API, one summary per eventId, with stable
+# team IDs. The path is the sport name plus the league's sportwareSlug, e.g.
+# volleyball/womens-college-volleyball. That covered 726 of 751 events with an
+# eventId over five days (2026-10-15); water polo, jai-alai, 3. Liga, NJCAA
+# and high school answer without competitors. A game's teams never change,
+# so a lookup is cached for good; a failed one is retried after a day.
+#
+# Everything else falls back to the title, which is less reliable as an
+# identity: the English and Spanish feeds of one LaLiga match spell its teams
+# differently ("Málaga" / "Malaga CF"), so the API's teams always win.
+_SITE_API = 'https://site.api.espn.com/apis/site/v2/sports'
+_TEAM_LOOKUP_RETRY = 24 * 3600
+_TEAM_CACHE_MAX_AGE = 10 * 24 * 3600
+_TEAM_LOOKUP_WORKERS = 8
+# Only " vs. " separates teams: every " at " title in the sample was a
+# non-game ("SEC Halftime Band Performances at Georgia").
+_TITLE_TEAM_SEP = re.compile(r'\s+vs\.?\s+', re.IGNORECASE)
+_TITLE_FEED_PREFIX = re.compile(r'^en español\s*-\s*', re.IGNORECASE)
+_TITLE_RANK = re.compile(r'^#\d+\s+')
+# Notes ESPN appends to a team; real names keep theirs, e.g. "Miami (OH)".
+_TITLE_TEAM_NOTE = re.compile(r'\s*\((?:exhibition|matchday\b[^)]*|round\b[^)]*|game\s*\d+[^)]*)\)$',
+                              re.IGNORECASE)
+
+
+def _fold(value) -> str:
+    """Case- and accent-insensitive form of a team name."""
+    text = unicodedata.normalize('NFKD', str(value or '').strip())
+    return ''.join(c for c in text if not unicodedata.combining(c)).casefold()
+
+
+def title_teams(airing: dict) -> list[dict]:
+    """Teams from an "A vs. B" title, or [] when the title isn't one game.
+
+    Rejects show and tournament titles that happen to contain "vs.", like
+    "The Pulse: Texas A&M Football vs. Missouri - Episode 11" or
+    "2026 Reyes Cup, Day 1 (Team Rest of the World vs. Team Asia)".
+    """
+    if event_is_likely_show(airing):
+        return []
+    parts = _TITLE_TEAM_SEP.split(_TITLE_FEED_PREFIX.sub('', (airing.get('name') or '').strip()))
+    if len(parts) != 2:
+        return []
+    teams = []
+    for part in parts:
+        name = _TITLE_TEAM_NOTE.sub('', _TITLE_RANK.sub('', part.strip())).strip()
+        if (not name or len(name) > 100 or ':' in name or ' - ' in name
+                or name.count('(') != name.count(')') or name[:1].isdigit()):
+            return []
+        teams.append({'id': '', 'name': name, 'location': ''})
+    return teams
+
+
+def event_teams(airing: dict) -> list[dict]:
+    """The event's teams: the site API's when looked up, else the title's."""
+    looked_up = airing.get('_teams')
+    return looked_up if looked_up else title_teams(airing)
+
+
+def _summary_path(airing: dict) -> str | None:
+    sport = re.sub(r'\s+', '-', ((airing.get('sport') or {}).get('name') or '').strip().lower())
+    league = ((airing.get('league') or {}).get('sportwareSlug') or '').strip()
+    if not sport or not league or not airing.get('eventId') or '/' in sport + league:
+        return None
+    return f'{sport}/{league}'
+
+
+def _lookup_event_teams(path: str, event_id: str) -> list[dict]:
+    """Teams of one event from the site API; [] when it has none or fails."""
+    try:
+        r = requests.get(f'{_SITE_API}/{path}/summary', params={'event': event_id},
+                         headers={'User-Agent': _UA}, timeout=10)
+        if r.status_code != 200:
+            return []
+        competitors = r.json()['header']['competitions'][0]['competitors']
+    except Exception:  # noqa: BLE001 — a missing team list just means title fallback
+        return []
+    teams = []
+    for competitor in competitors or []:
+        team = (competitor or {}).get('team') or {}
+        if team.get('id') and team.get('displayName'):
+            teams.append({'id': str(team['id']), 'name': team['displayName'],
+                          'location': team.get('location') or ''})
+    return teams if len(teams) == 2 else []
+
+
+def attach_event_teams(airings: list[dict], cache: dict | None, fetch: bool) -> dict:
+    """Set each airing's '_teams' from the team cache, looking up new events
+    when fetch is set. Returns the cache to save (pruned of old entries)."""
+    now = time.time()
+    cache = {key: entry for key, entry in (cache or {}).items()
+             if isinstance(entry, dict) and now - float(entry.get('at') or 0) < _TEAM_CACHE_MAX_AGE}
+    if fetch:
+        wanted = {}
+        for airing in airings:
+            path = _summary_path(airing)
+            key = str(airing.get('eventId') or '')
+            entry = cache.get(key)
+            if path and key not in wanted and (
+                    entry is None or (not entry.get('teams') and now - entry['at'] >= _TEAM_LOOKUP_RETRY)):
+                wanted[key] = path
+        if wanted:
+            with ThreadPoolExecutor(max_workers=_TEAM_LOOKUP_WORKERS) as pool:
+                results = pool.map(lambda item: _lookup_event_teams(item[1], item[0]), wanted.items())
+                for key, teams in zip(wanted, results):
+                    cache[key] = {'teams': teams, 'at': int(now)}
+            logger.info('[espn] looked up teams for %d events (%d found)', len(wanted),
+                        sum(1 for key in wanted if cache[key]['teams']))
+    for airing in airings:
+        entry = cache.get(str(airing.get('eventId') or ''))
+        airing['_teams'] = (entry or {}).get('teams') or []
+    return cache
 
 
 def event_preview_summary(airings: list[dict]) -> dict:
-    """What the sport/league picker needs from a schedule fetch."""
+    """What the sport/league/team picker needs from a schedule fetch."""
     events = []
     for a in airings:
         end = _parse_time(a.get('endDateTime'))
         events.append({'services': sorted(event_services(a)), 'sport': event_sport(a),
                        'league': event_league(a), 'likely_show': event_is_likely_show(a),
+                       'teams': event_teams(a),
                        'end': int(end.timestamp()) if end else None})
     return {'fetched_at': int(time.time()), 'events': events}
+
+
+def _clean_team_rules(value) -> list[dict]:
+    """Per-league team rules. A rule with no teams filters nothing, so it's dropped."""
+    if not isinstance(value, list):
+        raise ValueError('Invalid team rules')
+    if len(value) > 200:
+        raise ValueError('Too many team rules')
+    rules = {}
+    for rule in value:
+        if not isinstance(rule, dict):
+            raise ValueError('Invalid team rule')
+        sport, league = rule.get('sport'), rule.get('league')
+        if any(not isinstance(v, str) or not v.strip() or len(v) > 100 for v in (sport, league)):
+            raise ValueError('Invalid team rule sport or league')
+        if rule.get('mode') not in ('include', 'exclude'):
+            raise ValueError('Team rules must be Only or Hide')
+        include_unassigned = rule.get('include_unassigned', True)
+        if not isinstance(include_unassigned, bool):
+            raise ValueError('Invalid team rule option')
+        raw_teams = rule.get('teams', [])
+        if not isinstance(raw_teams, list) or len(raw_teams) > 500:
+            raise ValueError('Too many teams in one rule')
+        teams = {}
+        for team in raw_teams:
+            if not isinstance(team, dict):
+                raise ValueError('Invalid team')
+            team_id, name, location = (team.get(k, '') for k in ('id', 'name', 'location'))
+            if (any(not isinstance(v, str) or len(v) > 100 for v in (team_id, name, location))
+                    or not name.strip()):
+                raise ValueError('Invalid team')
+            clean = {'id': team_id.strip(), 'name': name.strip(), 'location': location.strip()}
+            teams[clean['id'] or _fold(clean['name'])] = clean
+        if teams:
+            rules[(_fold(sport), _fold(league))] = {
+                'sport': sport.strip(), 'league': league.strip(), 'mode': rule['mode'],
+                'include_unassigned': include_unassigned, 'teams': list(teams.values())}
+    return list(rules.values())
+
+
+def _team_names(team: dict) -> set[str]:
+    return {_fold(team.get('name')), _fold(team.get('location'))} - {''}
+
+
+def _same_team(a: dict, b: dict) -> bool:
+    """IDs decide when both sides have one; title-only teams match by name.
+    Full names only — never nicknames, which repeat across schools."""
+    if a.get('id') and b.get('id'):
+        return a['id'] == b['id']
+    return bool(_team_names(a) & _team_names(b))
+
+
+def event_passes_team_rules(airing: dict, team_rules: list[dict]) -> bool:
+    """Apply the rule for the event's own sport and league, if there is one.
+    'include' keeps games with any picked team, 'exclude' drops them; events
+    with no identified teams follow include_unassigned."""
+    sport, league = _fold(event_sport(airing)), _fold(event_league(airing))
+    rule = next((r for r in team_rules if _fold(r['sport']) == sport and _fold(r['league']) == league), None)
+    if not rule:
+        return True
+    teams = event_teams(airing)
+    if not teams:
+        return rule['include_unassigned']
+    picked = any(_same_team(team, chosen) for team in teams for chosen in rule['teams'])
+    return picked if rule['mode'] == 'include' else not picked
 
 
 def clean_event_filter(value) -> dict:
     """Validate the saved filter; 'all' includes categories added in the future."""
     if value is None:
-        return {'sport_mode': 'all', 'sports': {}, 'hide_likely_shows': False}
+        return {'sport_mode': 'all', 'sports': {}, 'hide_likely_shows': False, 'teams': []}
     if not isinstance(value, dict) or value.get('sport_mode') not in ('all', 'selected'):
         raise ValueError('Event sports must be All or Only selected')
     hide_likely_shows = value.get('hide_likely_shows', False)
@@ -214,22 +407,25 @@ def clean_event_filter(value) -> dict:
             raise ValueError('Invalid event league')
         sports[name.strip()] = {'league_mode': mode, 'leagues': list(dict.fromkeys(league.strip() for league in leagues))}
     return {'sport_mode': value['sport_mode'], 'sports': sports,
-            'hide_likely_shows': hide_likely_shows}
+            'hide_likely_shows': hide_likely_shows,
+            'teams': _clean_team_rules(value.get('teams', []))}
 
 
 def event_matches_filter(airing: dict, config: dict) -> bool:
     policy = clean_event_filter((config or {}).get('event_filter'))
     if policy['hide_likely_shows'] and event_is_likely_show(airing):
         return False
-    if policy['sport_mode'] == 'all':
-        return True
-    sport = event_sport(airing).casefold()
-    rule = next((rule for name, rule in policy['sports'].items() if name.casefold() == sport), None)
-    if not rule:
-        return False
-    return rule['league_mode'] == 'all' or event_league(airing).casefold() in {
-        league.casefold() for league in rule['leagues']
-    }
+    if policy['sport_mode'] == 'selected':
+        sport = event_sport(airing).casefold()
+        rule = next((rule for name, rule in policy['sports'].items() if name.casefold() == sport), None)
+        if not rule:
+            return False
+        if rule['league_mode'] != 'all' and event_league(airing).casefold() not in {
+            league.casefold() for league in rule['leagues']
+        }:
+            return False
+    # Team rules only narrow a league that is already included.
+    return event_passes_team_rules(airing, policy['teams'])
 
 
 class ESPNAuthError(RuntimeError):
@@ -769,6 +965,10 @@ class ESPNScraper(BaseScraper):
     def _fetch_event_airings(self) -> list[dict]:
         enabled = self._enabled_event_services()
         candidates = self._candidate_event_airings()
+        # Events no current sign-in can play would only ever show a black screen.
+        candidates = [a for a in candidates if event_playable(a, self.config)]
+        self._update_cache(EVENT_TEAMS_CACHE_KEY,
+                           attach_event_teams(candidates, self.cache.get(EVENT_TEAMS_CACHE_KEY), fetch=True))
         # The source card's sport/league picker reads this instead of
         # fetching the schedule again (see /api/sources/<id>/espn-event-preview).
         self._update_cache(EVENT_PREVIEW_CACHE_KEY, event_preview_summary(candidates))
@@ -812,11 +1012,13 @@ class ESPNScraper(BaseScraper):
                 title=a.get('name') or a.get('shortName') or 'ESPN+ Event',
                 start_time=start,
                 end_time=end,
-                description=a.get('description') or None,
+                description=a.get('description') or _event_description(a),
                 poster_url=(a.get('image') or {}).get('url'),
                 category=_event_epg_categories(a),
                 episode_title=(a.get('feedName') or (a.get('league') or {}).get('name')),
-                is_live=a.get('type') == 'LIVE' and not a.get('isReAir'),
+                # Upcoming events are type UPCOMING until they start, but a
+                # first airing is still live; only re-airs are not.
+                is_live=not a.get('isReAir'),
                 episode_id=a['id'],
             ))
         for offset in range(-1, _EPG_DAYS):
@@ -902,18 +1104,40 @@ class ESPNScraper(BaseScraper):
             return cached['manifest_url']
         r = self.session.post(_WATCH_API, params={'apiKey': _WATCH_API_KEY, 'features': 'pbov7'},
                               headers={'User-Agent': _UA, 'Origin': 'https://www.espn.com'},
-                              json={'query': 'query($id:ID!){ airing(id:$id, countryCode:"us", deviceType:SETTOP, tz:"UTC"){ source{ playbackId } } }',
+                              json={'query': 'query($id:ID!){ airing(id:$id, countryCode:"us", deviceType:SETTOP, tz:"UTC"){ id name authTypes network{ adobeResource } source{ playbackId } } }',
                                     'variables': {'id': airing_id}}, timeout=20)
-        pid = ((((r.json().get('data') or {}).get('airing') or {}).get('source')) or {}).get('playbackId')
+        airing = (r.json().get('data') or {}).get('airing') or {}
+        pid = (airing.get('source') or {}).get('playbackId')
         if not pid:
             raise RuntimeError(f'ESPN: no playbackId for airing {airing_id}')
         # Events use the non-channel license route; /channel/ 400s with
         # content-key.invalid-linear-key for them (confirmed 2026-09-26).
-        entry = self._mint_playback(pid, f'airing {airing_id}')
+        entry = self._mint_event(pid, airing)
         entry['license_url'] = _EVENT_LICENSE_URL
         streams[EVENT_CHANNEL_PREFIX + airing_id] = entry
         self._update_cache('espn_streams', streams)
         return entry['manifest_url']
+
+    def _mint_event(self, playback_id: str, airing: dict) -> dict:
+        """Like _mint: the ESPN account first, then the TV-provider sign-in for
+        MVPD events (ACC Extra, SEC Plus), minted against the event network's
+        Adobe resource ('acc'/'sec')."""
+        resource = (airing.get('network') or {}).get('adobeResource')
+        tve = (bool(self.config.get('adobe_client_id')) and bool(resource)
+               and 'MVPD' in (airing.get('authTypes') or []))
+        if self.config.get('refresh_token'):
+            try:
+                return self._mint_playback(playback_id, f'airing {airing.get("id")}')
+            except (TVENotAuthorizedError, ESPNAuthError):
+                if not tve:
+                    raise
+        if tve:
+            return self._mint_tve(playback_id, airing, resource)
+        if self.config.get('adobe_client_id'):
+            # Not-authorized rather than signed-out, so the audit drops it.
+            raise TVENotAuthorizedError('ESPN: this event needs an ESPN+ account; '
+                                        'a TV-provider sign-in doesn\'t include it')
+        raise ESPNAuthError('ESPN is not signed in — use the Sources page to sign in.')
 
     @classmethod
     def get_license_url(cls, config: dict, channel_id: str | None = None) -> str | None:
@@ -1063,6 +1287,25 @@ def _parse_time(value: str | None) -> datetime | None:
         return datetime.fromisoformat(value.replace('Z', '+00:00'))
     except ValueError:
         return None
+
+
+def _event_description(airing: dict) -> str:
+    """ESPN rarely describes an event; say what it is and where it streams."""
+    league = ((airing.get('league') or {}).get('name') or '').strip()
+    sport = ((airing.get('sport') or {}).get('name') or '').strip()
+    # "NCAA Football" already names its sport; "CWHOC" doesn't.
+    label = league if sport and sport.casefold() in league.casefold() else ' '.join(x for x in (league, sport) if x)
+    name = airing.get('name') or airing.get('shortName') or 'ESPN event'
+    services = event_services(airing)
+    service = ', '.join(EVENT_SERVICE_LABELS[k].removesuffix(' Events') for k in ('espn_plus', 'acc_extra', 'sec_plus') if k in services)
+    parts = [f'{label}: {name}' if label else name]
+    if airing.get('feedName'):
+        parts.append(f'{airing["feedName"].strip()} feed')
+    if airing.get('isReAir'):
+        parts.append('Re-air')
+    if service:
+        parts.append(f'Streaming on {service}')
+    return '. '.join(parts) + '.'
 
 
 def _event_epg_categories(airing: dict) -> str:

@@ -319,6 +319,9 @@ class ConfigField:
         self.key         = key          # key in source.config JSON
         self.label       = label        # human label in UI
         self.field_type  = field_type   # 'text' | 'password' | 'select' | 'toggle' | 'number'
+                                        # | 'checklist' (one checkbox per option, all on by default;
+                                        #   the value stores the UNCHECKED options, comma-separated,
+                                        #   so options added later start out on)
         self.required    = required
         self.secret      = secret       # never echo back in API responses
         self.placeholder = placeholder
@@ -574,6 +577,11 @@ class BaseScraper(ABC):
     min_scrape_interval: int = 30
     max_scrape_interval: int = 10080
     stream_audit_enabled: bool = False  # opt-in; enable Stream Audit (health + DRM scan) for this source
+    # The play proxy re-fetches the resolved manifest in the background after
+    # its 302 (DRM/dead check + resolution badge). Off for upstreams that hand
+    # the playback session to whoever fetched the manifest last (Zeam), where
+    # that second fetch would break the client's stream.
+    play_manifest_check: bool = True
     # 'full' = descriptions + posters + episode metadata; 'basic' = titles + times only.
     # Used by the resolve-duplicates priority key to prefer richer EPG when breaking ties.
     epg_quality: str = 'full'
@@ -584,8 +592,9 @@ class BaseScraper(ABC):
     license_url: str = None  # DRM license server URL; enables /play/<source>/license proxy endpoint
     config_required: bool = False      # True if source won't return useful channels without user configuration
     is_premium: bool = False           # True for paid/subscription services — shown as a badge in the admin UI
-    source_category: str = 'fast'     # 'fast' | 'premium' | 'tve' | 'specialty' | 'drm'
+    source_category: str = 'fast'     # 'fast' (free) | 'account' (free with an account) | 'premium' (subscription) | 'tve' | 'local' (antenna tuner)
     under_development: bool = False  # shown in the admin UI; source remains opt-in
+    is_beta: bool = False            # "Beta" badge: built, but not yet confirmed by real users
     channel_refresh_hours: int = 0   # 0 = refresh channels every run; >0 = only refresh channels after N hours
     channel_miss_threshold: int = 3  # missed scrapes before is_active=False; override per scraper
     # Reset/populate per fetch_channels() with upstream IDs intentionally

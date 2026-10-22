@@ -141,15 +141,13 @@ LIVE_PAGE_URL = 'https://www.nbc.com/live'
 GEOLOCATION_URL = 'https://geolocation.digitalsvc.apps.nbcuni.com/geolocation/live/'
 GRAPHQL_URL = 'https://friendship.nbc.com/v3/graphql'
 # Apollo persisted-query hash for the componentsForPlaceholders(_cached) guide
-# query. NBC rotates this on deploy — the API returns a 200 with
-# {"errors":[{"code":"PERSISTED_QUERY_NOT_FOUND"}]} rather than a 4xx when it's
-# stale, which _fetch_guide() below can't distinguish from "no channels in the
-# response" on its own. Re-discovered 2026-08-28 via a real headless-browser
-# capture of nbc.com/live's network traffic (the value lives in a webpack
-# chunk, module id varies per bundle build — search a fresh generetic.*.js
-# bundle for the literal 'componentsForPlaceholders' export mapping to find it
-# again if this goes stale).
-GUIDE_QUERY_HASH = 'ce452fadd8c890b99a3bced155078c5d07db87f5f39be430ef3e5be5d4bb2e33'
+# query. NBC rotates this on deploy (went stale 2026-08-28 and again
+# 2026-10-14) — the API returns a 200 with
+# {"errors":[{"code":"PERSISTED_QUERY_NOT_FOUND"}]} rather than a 4xx. This is
+# only the fallback: on that error _fetch_guide() re-discovers the current hash
+# from nbc.com/live's generetic.*.js bundles (_find_guide_query_hash) and caches
+# it as 'nbc_guide_query'.
+GUIDE_QUERY_HASH = '3ae37d05dd19d4223c9e139f7360704837b59a5251777a01f699df96a3157f61'
 # base64 of {"type":"TvGuide","implementation":"liveGuideTvGuide","name":"","app":""} — fixed constant.
 GUIDE_COMPONENT_CONFIG_B64 = 'eyJ0eXBlIjoiVHZHdWlkZSIsImltcGxlbWVudGF0aW9uIjoibGl2ZUd1aWRlVHZHdWlkZSIsIm5hbWUiOiIiLCJhcHAiOiIifQ=='
 LEMONADE_LINEAR_URL = 'https://lemonade.nbc.com/v2/linear/'
@@ -265,6 +263,37 @@ def _find_software_statement(html: str, session: requests.Session) -> str | None
         m = re.search(r'"v2":\{"softwareStatement":"([^"]+)"', r.text)
         if m:
             return m.group(1)
+    return None
+
+
+def _is_persisted_query_not_found(data: dict) -> bool:
+    return any(((e or {}).get('extensions') or {}).get('code') == 'PERSISTED_QUERY_NOT_FOUND'
+               for e in (data.get('errors') or []))
+
+
+def _find_guide_query_hash(html: str, session: requests.Session) -> str | None:
+    """Pull the componentsForPlaceholders persisted-query hash out of the
+    page's webpack bundles. The query-hash registry imports it as
+    `_componentsForPlaceholders = _interopRequireDefault(__webpack_require__(<id>))`,
+    and module <id> is just `exports["default"] = '<sha256 hex>'`."""
+    bundle_paths = re.findall(r'(?:href|src)="(/generetic/generated/generetic\.[a-f0-9]+\.js)"', html)
+    for path in dict.fromkeys(bundle_paths):
+        try:
+            r = session.get(f'https://www.nbc.com{path}', timeout=20)
+        except requests.RequestException:
+            continue
+        if not r.ok:
+            continue
+        js = r.text
+        ref = re.search(r'_componentsForPlaceholders\s*=\s*_interopRequireDefault\(__webpack_require__\((\d+)\)\)', js)
+        if not ref:
+            continue
+        module = re.search(
+            rf'(?<![\w.]){ref.group(1)}:\s*(?:/\*+/\s*)?\(?function[\s\S]{{0,400}}?[\'"]([0-9a-f]{{64}})[\'"]',
+            js,
+        )
+        if module:
+            return module.group(1)
     return None
 
 
@@ -584,16 +613,19 @@ class NbcTveScraper(MvpdCooldownMixin, BaseScraper):
             'componentConfigs': [GUIDE_COMPONENT_CONFIG_B64],
             'queryName': 'componentsForPlaceholders_cached',
         }
-        extensions = {'persistedQuery': {'version': 1, 'sha256Hash': GUIDE_QUERY_HASH}}
-        r = self.session.get(
-            GRAPHQL_URL,
-            params={'variables': json.dumps(variables, separators=(',', ':')),
-                    'extensions': json.dumps(extensions, separators=(',', ':'))},
-            headers={'Referer': 'https://www.nbc.com/', 'User-Agent': UA},
-            timeout=30,
-        )
-        r.raise_for_status()
-        data = r.json()
+        query_hash = (self.cache.get('nbc_guide_query') or {}).get('hash') or GUIDE_QUERY_HASH
+        data = self._guide_request(variables, query_hash)
+        if _is_persisted_query_not_found(data):
+            fresh_hash = self._discover_guide_query_hash()
+            if fresh_hash and fresh_hash != query_hash:
+                logger.warning('[nbc_tve] guide query hash %s… is stale; retrying with re-discovered %s…',
+                               query_hash[:12], fresh_hash[:12])
+                data = self._guide_request(variables, fresh_hash)
+            if _is_persisted_query_not_found(data):
+                logger.warning('[nbc_tve] guide query hash rejected by NBC (PERSISTED_QUERY_NOT_FOUND) and '
+                               'no newer one found in the nbc.com/live bundles')
+            else:
+                self._update_cache('nbc_guide_query', {'hash': fresh_hash, 'cached_at': time.time()})
         components = (((data.get('data') or {}).get('componentsForPlaceholders') or {}).get('components')) or []
         guide = next((c.get('data') or {} for c in components if c.get('component') == 'Guide'), {})
         schedules = guide.get('schedules') or []
@@ -629,6 +661,10 @@ class NbcTveScraper(MvpdCooldownMixin, BaseScraper):
 
         if not entries:
             if cached.get('entries'):
+                # Stream identifiers in a stale guide still play, so resolve()
+                # keeps working — fetch_epg() refuses it once every program has ended.
+                logger.warning('[nbc_tve] guide fetch returned no recognized channels; reusing the guide saved %s',
+                               datetime.fromtimestamp(float(cached.get('cached_at', 0)), timezone.utc).isoformat(timespec='minutes'))
                 return {k: NbcGuideEntry(**v) for k, v in cached['entries'].items()}
             raise RuntimeError('NBC TVE: guide fetch returned no recognized national channels.')
 
@@ -637,6 +673,27 @@ class NbcTveScraper(MvpdCooldownMixin, BaseScraper):
             'cached_at': time.time(),
         })
         return entries
+
+    def _guide_request(self, variables: dict, query_hash: str) -> dict:
+        extensions = {'persistedQuery': {'version': 1, 'sha256Hash': query_hash}}
+        r = self.session.get(
+            GRAPHQL_URL,
+            params={'variables': json.dumps(variables, separators=(',', ':')),
+                    'extensions': json.dumps(extensions, separators=(',', ':'))},
+            headers={'Referer': 'https://www.nbc.com/', 'User-Agent': UA},
+            timeout=30,
+        )
+        r.raise_for_status()
+        return r.json()
+
+    def _discover_guide_query_hash(self) -> str | None:
+        try:
+            r = self.session.get(LIVE_PAGE_URL, headers={'User-Agent': UA}, timeout=20)
+            r.raise_for_status()
+        except requests.RequestException as exc:
+            logger.warning('[nbc_tve] could not load %s to re-discover the guide query hash: %s', LIVE_PAGE_URL, exc)
+            return None
+        return _find_guide_query_hash(r.text, self.session)
 
     def fetch_channels(self) -> list[ChannelData]:
         guide = self._fetch_guide()
@@ -708,6 +765,13 @@ class NbcTveScraper(MvpdCooldownMixin, BaseScraper):
                     episode_id=gp.get('tmsId') or None,
                     is_live=True,
                 ))
+        # _fetch_guide() falls back to the saved guide when NBC's answer is
+        # unusable; once that has fully aired, fail the scrape instead of
+        # re-saving past programs as if nothing were wrong.
+        now = datetime.now(timezone.utc)
+        if programs and all(p.end_time <= now for p in programs):
+            raise RuntimeError('NBC TVE: guide is out of date (every program has already ended) — '
+                               "NBC's guide request is failing; see the [nbc_tve] warnings in the log.")
         return programs
 
     # ── Adobe Pass Cox authorization ─────────────────────────────────────────

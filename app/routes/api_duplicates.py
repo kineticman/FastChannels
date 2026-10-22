@@ -68,9 +68,17 @@ def channel_duplicates(channel_id):
         .all()
     )
 
+    # The number each copy currently shows in the default lineup (on copies only).
+    from .admin import _default_feed_chnum_map_full
+    from ..channel_transfer import shown_number
+    lineup = _default_feed_chnum_map_full() if any(
+        c.is_enabled for c in [ch, *strict, *soft, *gn_matches]) else {}
+
     def _fmt(c):
         si = c.stream_info or {}
+        app_number = lineup.get(c.id) if c.is_enabled else None
         return {
+            'lineup_number':  shown_number(c, app_number) if app_number is not None else None,
             'id':             c.id,
             'name':           c.name,
             'source':         c.source.display_name,
@@ -213,7 +221,7 @@ def duplicate_summary():
             'names': names,
             'channel_count': enabled_count,
             'sources': sorted({ch.source.display_name for ch in channels}),
-            'match_reason': 'Matched after soft brand normalization (TV/Channel/Network).',
+            'match_reason': 'Names differ only by TV, Channel or Network.',
         })
     soft_group_payload.sort(key=lambda item: (-item['channel_count'], item['names'][0].casefold()))
 
@@ -367,3 +375,50 @@ def resolve_duplicates():
     })
 
 
+
+
+@duplicates_bp.route('/channels/<int:channel_id>/transfer', methods=['POST'])
+def transfer_channel_route(channel_id):
+    """Switch a channel to the same channel on another source, keeping its
+    numbers, feeds and guide mapping. Body: {to_channel_id, dry_run}.
+
+    dry_run makes every change, reports the resulting numbers, then rolls back.
+    """
+    import time as _time
+    from sqlalchemy.exc import OperationalError
+    from ..channel_transfer import TransferError, transfer_channel
+    from .api_shared import _invalidate_and_refresh_xml
+
+    data = request.get_json(silent=True) or {}
+    to_id = data.get('to_channel_id')
+    if isinstance(to_id, bool) or not isinstance(to_id, int):
+        return jsonify({'error': 'to_channel_id must be a channel ID'}), 400
+    dry_run = bool(data.get('dry_run'))
+
+    for attempt in range(3):
+        old = db.session.get(Channel, channel_id)
+        new = db.session.get(Channel, to_id)
+        if old is None or new is None:
+            return jsonify({'error': 'Channel not found'}), 404
+        try:
+            result = transfer_channel(old, new)
+            if dry_run:
+                db.session.rollback()
+            else:
+                db.session.commit()
+            break
+        except TransferError as exc:
+            db.session.rollback()
+            return jsonify({'error': str(exc)}), 422
+        except OperationalError as exc:
+            db.session.rollback()
+            if 'database is locked' not in str(exc) or attempt == 2:
+                raise
+            _time.sleep(1)
+
+    if not dry_run:
+        logger.info('Transferred channel %s -> %s (%s)', channel_id, to_id,
+                    'all numbers kept' if result['all_numbers_kept'] else 'some numbers changed')
+        _invalidate_and_refresh_xml()
+    result['dry_run'] = dry_run
+    return jsonify(result)

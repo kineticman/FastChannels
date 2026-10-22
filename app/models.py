@@ -87,6 +87,7 @@ class Source(db.Model):
             'last_audited_at': self.last_audited_at.isoformat() if self.last_audited_at else None,
             'last_error':     self.last_error,
             'channel_count':  self.channels.filter_by(is_active=True).count(),
+            'enabled_channel_count': self.channels.filter_by(is_active=True, is_enabled=True).count(),
             'drm_bridge_count': self.channels.filter_by(requires_drm_bridge=True).count(),
             'chnum_start':    self.chnum_start,
             'epg_only':       self.epg_only,
@@ -450,6 +451,7 @@ class AppSettings(db.Model):
     gracenote_auto_fill  = db.Column(db.Boolean, nullable=False, default=True, server_default=db.text('1'))  # scrapers auto-assign Gracenote IDs
     dvr_epg_auto_refresh = db.Column(db.Boolean, nullable=False, default=True, server_default=db.text('1'))  # hourly PUT to Channels DVR lineups
     image_proxy_enabled  = db.Column(db.Boolean, nullable=False, default=True, server_default=db.text('1'))  # proxy/cache logos and posters in output
+    event_guide_filler   = db.Column(db.Boolean, nullable=False, default=True, server_default=db.text('1'))  # XMLTV: "Event Not Started"/"Event Ended" blocks around event channels' programmes
     m3u_rewrite_timestamps = db.Column(db.Boolean, nullable=False, default=False, server_default=db.text('0'))  # experimental: add Channels DVR timestamp-rewrite directive to M3U entries
     gracenote_map_url          = db.Column(db.Text, nullable=True)      # remote community CSV URL (defaults to built-in Gist)
     gracenote_exclusions_url   = db.Column(db.Text, nullable=True)      # remote known-bad-ID CSV URL (defaults to built-in Gist)

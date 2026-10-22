@@ -109,7 +109,7 @@
       background: color-mix(in srgb, var(--bg) 40%, transparent);
     }
     .dashboard-table tbody tr.dash-row.disabled {
-      opacity: 0.55;
+      opacity: 0.6;
     }
     .dashboard-table tbody tr.dash-row.scraping td:first-child {
       border-left: 3px solid var(--accent);
@@ -158,7 +158,11 @@
       --cat-color: var(--info-soft, #7eb8f7);
       --cat-border: var(--info-border, #2a5080);
     }
-    .source-category-header.cat-specialty {
+    .source-category-header.cat-account {
+      --cat-color: var(--success-soft);
+      --cat-border: var(--success-fill);
+    }
+    .source-category-header.cat-local {
       --cat-color: var(--warning-soft);
       --cat-border: var(--warning-strong);
     }
@@ -166,17 +170,13 @@
       --cat-color: var(--accent-soft);
       --cat-border: var(--accent-border);
     }
-    .source-category-header.cat-drm {
-      --cat-color: var(--danger-soft);
-      --cat-border: var(--danger-border);
-    }
     .source-category-header.cat-retired {
       --cat-color: var(--text-muted);
       --cat-border: var(--border);
     }
     .cat-header-action { float: right; text-transform: none; letter-spacing: normal; margin: -0.2rem 0; }
     .cat-chevron { display: inline-block; width: 0.9em; margin-right: 0.3em; }
-    .cat-count { font-weight: 600; opacity: 0.75; margin-left: 0.3em; letter-spacing: normal; }
+    .cat-count { font-weight: 600; opacity: 0.75; margin-left: 0.6em; letter-spacing: normal; text-transform: none; }
 
     /* Quick access bar: filter + category jump chips */
     .sources-quicknav {
@@ -224,6 +224,99 @@
     .meta-ok { color: var(--success-soft); }
     .meta-stale { color: var(--danger); font-weight: 600; }
     .meta-pending { color: var(--text-soft); font-style: italic; }
+
+    /* ── Row health: one status line + a channel bar; quiet when all is well ── */
+    .row-health {
+      display: flex; flex-wrap: wrap; align-items: center; gap: 0.3rem 1.1rem;
+      margin-top: 0.3rem; font-size: 0.78rem; color: var(--text-soft);
+    }
+    .health-line { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 0.2rem 0.45rem; min-width: 0; cursor: default; }
+    .health-line .audit-last-result, .health-link { white-space: nowrap; }
+    .health-dot {
+      width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
+      background: var(--health-color); box-shadow: 0 0 0 3px color-mix(in srgb, var(--health-color) 18%, transparent);
+    }
+    .health-line .health-text { color: var(--health-text, var(--text-soft)); }
+    .health-ok      { --health-color: var(--success-soft); }
+    .health-pending { --health-color: var(--text-muted); --health-text: var(--text-muted); }
+    .health-info    { --health-color: var(--accent-soft); --health-text: var(--text-muted); }
+    .health-warn    { --health-color: var(--warning); --health-text: var(--warning-soft); }
+    .health-setup   { --health-color: var(--warning); --health-text: var(--warning-soft); }
+    .health-error   { --health-color: var(--danger); --health-text: var(--danger-soft, var(--danger)); }
+    .health-error .health-dot, .health-warn .health-dot, .health-setup .health-dot { animation: health-pulse 2.4s ease-in-out infinite; }
+    @keyframes health-pulse {
+      0%, 100% { box-shadow: 0 0 0 3px color-mix(in srgb, var(--health-color) 18%, transparent); }
+      50%      { box-shadow: 0 0 0 5px color-mix(in srgb, var(--health-color) 8%, transparent); }
+    }
+    @media (prefers-reduced-motion: reduce) { .health-dot { animation: none !important; } }
+    .health-line .audit-last-result { font-size: inherit; color: var(--text-muted); margin: 0; }
+    .health-line .audit-last-result .aud-dead { color: var(--danger-soft, var(--danger)); }
+
+    /* Channel bar: plays anywhere | needs FastChannels Player | off */
+    .ch-mix {
+      display: inline-flex; align-items: center; gap: 0.5rem; text-decoration: none;
+      color: var(--text-muted); white-space: nowrap; border-radius: 6px;
+    }
+    .ch-mix:hover { color: var(--text); }
+    .ch-mix:hover .ch-mix-bar { outline: 1px solid var(--text-muted); outline-offset: 2px; }
+    .ch-mix-count { font-variant-numeric: tabular-nums; }
+    .ch-mix-bar {
+      display: flex; gap: 2px; width: 7.5rem; height: 6px; border-radius: 999px; overflow: hidden;
+      background: var(--border);
+    }
+    .ch-mix-bar .seg { flex-basis: 0; min-width: 3px; }
+    .ch-mix-bar .seg-play { background: var(--success-soft); }
+    .ch-mix-bar .seg-drm  { background: #a78bfa; }
+    .ch-mix-bar .seg-off  { background: color-mix(in srgb, var(--text-muted) 45%, transparent); }
+
+    .custom-note { flex-basis: 100%; color: var(--text-muted); cursor: default; }
+    .health-link { color: var(--accent-soft); font-weight: 600; text-decoration: none; white-space: nowrap; }
+    .health-link:hover { text-decoration: underline; }
+
+    /* Heads-up when a DRM source is turned on with no DRM bridge ready. */
+    .drm-heads-up {
+      display: flex; align-items: flex-start; gap: 0.55rem; margin-top: 0.5rem; max-width: 40rem;
+      padding: 0.55rem 0.7rem; border-radius: 8px; font-size: 0.8rem; line-height: 1.45; color: var(--text);
+      background: color-mix(in srgb, var(--warning-bg) 55%, transparent);
+      border: 1px solid var(--warning-border);
+      animation: heads-up-in 0.25s ease-out;
+    }
+    .drm-heads-up[hidden] { display: none; }
+    .drm-heads-up a { color: var(--warning-soft); font-weight: 600; white-space: nowrap; }
+    .drm-heads-up-icon {
+      flex-shrink: 0; width: 1.15rem; height: 1.15rem; border-radius: 50%; display: grid; place-items: center;
+      font-size: 0.72rem; font-weight: 800; color: var(--bg); background: var(--warning);
+    }
+    .drm-heads-up-close {
+      margin-left: auto; background: none; border: none; color: var(--text-muted); font-size: 1rem;
+      line-height: 1; cursor: pointer; padding: 0 0.15rem;
+    }
+    .drm-heads-up-close:hover { color: var(--text); }
+    @keyframes heads-up-in { from { opacity: 0; transform: translateY(-3px); } to { opacity: 1; transform: none; } }
+    @media (prefers-reduced-motion: reduce) { .drm-heads-up { animation: none; } }
+
+    /* Badges that never need you stay hidden; their elements remain for loadSourceConfig(). */
+    .source-name-wrap .config-badge[id^="config-badge-"].configured,
+    .source-name-wrap .config-badge[id^="config-badge-"].anon,
+    .source-name-wrap .config-badge[id^="config-badge-"].auto { display: none; }
+    .config-badge.user-defined { font-style: italic; text-transform: none; letter-spacing: normal; }
+
+    /* While a scrape or audit runs, its live progress takes the status line's place. */
+    .dash-row.scraping .health-line,
+    .dash-row:has(.audit-status:not(:empty)) .health-line { display: none; }
+
+    /* Off rows: one quiet line, no status, bar or actions. */
+    .off-note { display: none; font-size: 0.78rem; color: var(--text-muted); font-weight: 500; }
+    .dashboard-table tbody tr.dash-row.disabled td { padding-top: 0.45rem; padding-bottom: 0.45rem; }
+    .dash-row.disabled .off-note { display: inline; }
+    .dash-row.disabled .row-health,
+    .dash-row.disabled .dash-actions,
+    .dash-row.disabled .source-name-wrap .config-badge:not(.retired):not(.needs-config):not(.drm):not(.some-drm) { display: none; }
+    .dash-row.disabled .source-name { font-size: 0.88rem; font-weight: 500; }
+    /* The off-note already says Off; keep the toggle, drop its label, and slim the button. */
+    .dash-row.disabled .toggle-label { display: none; }
+    .dash-row.disabled .configure-btn-display { padding-top: 0.25rem; padding-bottom: 0.25rem; font-size: 0.72rem; }
+    .dash-row.disabled .mobile-toggle-wrap { margin-top: 0.25rem; }
 
     /* Inactive-channel nudge pill on the cleanup button */
     .inactive-pill {
@@ -277,6 +370,17 @@
       color: var(--danger-soft, var(--danger));
       border-color: color-mix(in srgb, var(--danger) 30%, transparent);
     }
+    /* Playback: DRM channels play only through FastChannels Player. */
+    .config-badge.drm, .config-badge.some-drm {
+      background: color-mix(in srgb, var(--danger) 10%, transparent);
+      color: var(--danger-soft, var(--danger));
+      border-color: color-mix(in srgb, var(--danger) 30%, transparent);
+    }
+    .config-badge.some-drm { background: transparent; border-style: dashed; }
+    .quicknav-playback { display: flex; gap: 0.4rem; flex-wrap: wrap; margin-left: auto; }
+    .quicknav-chip.chip-attention { color: var(--warning-soft); border-color: var(--warning-border); }
+    .quicknav-chip.active { color: var(--text); border-color: var(--accent-strong);
+      background: color-mix(in srgb, var(--accent-strong) 14%, var(--bg)); }
 
     /* Scrape / audit status in dashboard row */
     .scrape-status { font-size: 0.75rem; margin-top: 0.2rem; display: flex; align-items: center; gap: 0.35rem; min-height: 0; }
@@ -411,6 +515,16 @@
       margin-bottom: 0.3rem; text-transform: uppercase; letter-spacing: 0.04em;
     }
     .field label .req { color: var(--danger); margin-left: 2px; }
+    .config-checklist {
+      display: grid; grid-template-columns: repeat(auto-fill, minmax(13rem, 1fr)); gap: 0.15rem 1rem;
+      padding: 0.5rem 0.7rem; background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
+    }
+    .field label.config-checklist-item {
+      display: flex; align-items: center; gap: 0.45rem; margin: 0; padding: 0.2rem 0; cursor: pointer;
+      font-size: 0.84rem; font-weight: 400; color: var(--text); text-transform: none; letter-spacing: normal;
+    }
+    .config-checklist-item input { margin: 0; flex: none; }
+    .config-checklist-count { color: var(--text-muted); font-size: 0.75rem; }
     .field input[type=text],
     .field input[type=password],
     .field input[type=number] {
@@ -545,6 +659,25 @@
     .espn-sport.is-open .espn-leagues { display: flex; }
     .espn-leagues label { display: flex; align-items: center; gap: 0.4rem; font-size: 0.78rem; color: var(--text-soft); cursor: pointer; }
     .espn-list-note { padding: 0.6rem 0.15rem; font-size: 0.8rem; color: var(--text-muted); }
+    .espn-teams { margin-top: 0.9rem; padding-top: 0.8rem; border-top: 1px solid var(--border); }
+    .espn-teams .config-note { margin: 0.2rem 0 0.55rem; }
+    .espn-team-league, .espn-team-search {
+      width: 100%; max-width: 360px; padding: 0.45rem 0.7rem; font-size: 0.84rem; outline: none;
+      background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 6px;
+    }
+    .espn-team-league:focus, .espn-team-search:focus { border-color: var(--focus-accent); }
+    .espn-team-panel { margin-top: 0.65rem; }
+    .espn-team-search { display: block; margin-top: 0.6rem; }
+    .espn-team-list {
+      margin-top: 0.5rem; max-height: 260px; overflow-y: auto; border-top: 1px solid var(--border);
+      display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 0.1rem 1rem; padding-top: 0.4rem;
+    }
+    .espn-team-list label { display: flex; align-items: center; gap: 0.45rem; padding: 0.2rem 0.15rem; font-size: 0.8rem; color: var(--text); cursor: pointer; min-width: 0; }
+    .espn-team-list label > span:first-of-type { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .espn-team-list .espn-list-note { grid-column: 1 / -1; }
+    .espn-picked .espn-chip-btn { background: none; border: 0; padding: 0 0 0 0.3rem; color: var(--text-muted); cursor: pointer; font-size: 0.85rem; }
+    .espn-picked .espn-chip-btn:hover { color: var(--text); }
+    .espn-picked .espn-chip-link { background: none; border: 0; padding: 0; color: inherit; font: inherit; cursor: pointer; text-align: left; }
     .amazon-account-details {
       margin-top: 0.9rem; border-top: 1px solid var(--border); padding-top: 0.75rem;
     }
@@ -839,8 +972,8 @@
     </div>
     {% endif %}
 
-    {% set _CAT_LABELS = {'fast': 'FAST Sources', 'premium': 'Premium Sources', 'tve': 'TVE Sources', 'specialty': 'Specialty Sources', 'custom': 'Custom Sources', 'drm': 'DRM Sources', 'retired': 'Retired Sources'} %}
-    {% set _CAT_ORDER = ['fast', 'premium', 'tve', 'specialty', 'custom', 'drm', 'retired'] %}
+    {% set _CAT_LABELS = source_category_labels %}
+    {% set _CAT_ORDER = source_category_order %}
     <div class="sources-quicknav">
       <input type="text" id="source-filter-input" class="source-filter-input"
              placeholder="Filter sources by name…" oninput="filterSources(this.value)">
@@ -852,6 +985,21 @@
           </button>
           {% endif %}
         {% endfor %}
+      </div>
+      <div class="quicknav-playback" role="group" aria-label="Filter by playback">
+        {% if issue_count %}
+        <button type="button" class="quicknav-chip chip-attention" data-playback-filter="issues"
+                title="Sources with an error, a stale guide, an overdue scrape, or missing setup"
+                onclick="setPlaybackFilter('issues')">Needs attention <span class="quicknav-chip-count">{{ issue_count }}</span></button>
+        {% endif %}
+        <button type="button" class="quicknav-chip active" data-playback-filter=""
+                onclick="setPlaybackFilter('')">All</button>
+        <button type="button" class="quicknav-chip" data-playback-filter="clear"
+                title="Sources whose channels play in any player: no DRM"
+                onclick="setPlaybackFilter('clear')">Any player</button>
+        <button type="button" class="quicknav-chip" data-playback-filter="drm"
+                title="Sources with DRM channels, which play only through FastChannels Player"
+                onclick="setPlaybackFilter('drm')">Needs FastChannels Player</button>
       </div>
     </div>
 
@@ -873,12 +1021,14 @@
           {% set is_custom = source.name == 'custom' %}
           {% set is_playlist = source.name.startswith('m3u_') %}
           {% set this_cat = source_categories.get(source.name, 'fast') if not is_custom else 'custom' %}
+          {% set mix = source_mix.get(source.id, {}) %}
+          {% set status = source_status.get(source.id) %}
           {% if this_cat != ns.last_cat %}
             {% set ns.last_cat = this_cat %}
             <tr class="source-category-header cat-{{ this_cat }}" id="cat-header-{{ this_cat }}"
                 data-cat="{{ this_cat }}" onclick="toggleCategoryCollapse('{{ this_cat }}')">
               <td colspan="4">
-                <span class="cat-chevron" id="cat-chevron-{{ this_cat }}">▾</span>{{ _CAT_LABELS.get(this_cat, this_cat | title) }}<span class="cat-count">{{ category_counts.get(this_cat, 0) }}</span>
+                <span class="cat-chevron" id="cat-chevron-{{ this_cat }}">▾</span>{{ _CAT_LABELS.get(this_cat, this_cat | title) }}<span class="cat-count"><span class="cat-on-count" id="cat-on-count-{{ this_cat }}">{{ category_on_counts.get(this_cat, 0) }}</span> on of {{ category_counts.get(this_cat, 0) }}</span>
                 {% if this_cat == 'custom' %}
                 <button type="button" class="btn btn-run btn-sm cat-header-action"
                         onclick="event.stopPropagation(); openPlaylistModal()"
@@ -890,22 +1040,33 @@
 
           <tr class="dash-row {% if not source.is_enabled %}disabled{% endif %}" id="dash-row-{{ source.id }}"
               data-cat="{{ this_cat }}" data-search="{{ (source.display_name ~ ' ' ~ source.name) | lower }}"
+              data-playback="{{ mix.get('kind', 'clear') }}"
+              data-fc-player="{{ 'true' if mix.get('fc_player') else 'false' }}"
+              {% if mix.get('kind') in ('drm', 'some') and not bridge_ready.get(source.id) %}data-bridge-missing="true"{% endif %}
+              {% if status and status.state in ('error', 'warn', 'setup') %}data-issue="true"{% endif %}
               {% if is_custom %}data-custom="true"{% endif %}
               {% if is_custom or is_playlist %}data-keeps-channels="true"{% endif %}>
             <td class="col-source">
               <div class="source-name-wrap">
                 <span class="source-name">{{ source.display_name }}</span>
                 {% if not is_custom %}
-                  {% if source.last_error %}<span class="err-pip" title="{{ source.last_error }}">⚠</span>{% endif %}
-                  {% if premium_sources.get(source.name) %}
-                    <span class="config-badge premium">Premium</span>
+                  {% if mix.get('kind') in ('drm', 'some') %}
+                    {% set _via = 'FastChannels Player' if mix.fc_player else 'PrismCast (not yet tested with FastChannels Player)' %}
+                    {% set _ready = ' A DRM bridge is set up.' if bridge_ready.get(source.id) else ' No DRM bridge is set up yet.' %}
+                    {% if mix.kind == 'drm' %}
+                    <span class="config-badge drm" title="DRM: these channels play only through {{ _via }}.{{ _ready }}">DRM{% if not mix.fc_player %} · PrismCast only{% endif %}</span>
+                    {% else %}
+                    <span class="config-badge some-drm" title="Some channels are DRM and play only through {{ _via }}; the rest play in any player.{{ _ready }}">Some DRM{% if not mix.fc_player %} · PrismCast only{% endif %}</span>
+                    {% endif %}
                   {% endif %}
-                  {% if this_cat == 'tve' %}
-                    <span class="config-badge beta" title="TVE authentication is newer and less battle-tested than our other sources">Beta</span>
+                  {% if beta_sources.get(source.name) %}
+                    <span class="config-badge beta" title="Newly built and not yet confirmed working by users">Beta</span>
                   {% endif %}
                   {% if under_development.get(source.name) %}
                     <span class="config-badge development" title="This source is under development and disabled by default">Under development</span>
                   {% endif %}
+                  {# Only states that need you show; Configured/Optional/Auto stay hidden (CSS) but
+                     keep their element, which loadSourceConfig() updates after a save. #}
                   {% if is_playlist %}
                     <span class="config-badge auto" style="font-style:italic">User-defined</span>
                   {% elif retired %}
@@ -914,49 +1075,43 @@
                   {% elif cfg_status == 'configured' %}
                     <span class="config-badge configured" id="config-badge-{{ source.id }}">Configured</span>
                   {% elif cfg_status == 'required' %}
-                    <span class="config-badge needs-config" id="config-badge-{{ source.id }}">⚠ Needs Config</span>
+                    <span class="config-badge needs-config" id="config-badge-{{ source.id }}">Needs setup</span>
                   {% elif cfg_status == 'optional' %}
                     <span class="config-badge anon" id="config-badge-{{ source.id }}">Optional</span>
                   {% else %}
                     <span class="config-badge auto" id="config-badge-{{ source.id }}">Auto</span>
                   {% endif %}
-                {% else %}
-                  <span class="config-badge auto" style="font-style:italic">User-defined</span>
                 {% endif %}
-                {% set _sd = source.to_dict() %}
-                <span class="config-badge auto"><span id="ch-count-{{ source.id }}">{{ _sd.channel_count }}</span> channels</span>
-                {% if _sd.drm_bridge_count %}<a class="config-badge auto" href="/admin/channels?source={{ source.name }}&drm=bridge" title="DRM channels bridged via PrismCast Capture or hardware capture — click to view"><span id="bridge-count-{{ source.id }}">🌉 {{ _sd.drm_bridge_count }}</span> bridged</a>{% endif %}
+                {# Off rows collapse to this one quiet note (CSS, so the toggle can flip it live). #}
+                <span class="off-note"{% if source.last_scraped_at and not is_custom %} title="Last scraped {{ source.last_scraped_at | localtime }}"{% endif %}>Off{% if source.last_scraped_at and not is_custom %} · last on {{ source.last_scraped_at.strftime('%b ') ~ source.last_scraped_at.day }}{% endif %}</span>
               </div>
-              <div class="source-meta" id="source-meta-{{ source.id }}">
-                {% if not is_custom %}
-                <span class="meta-item meta-sched" id="scrape-schedule-part-{{ source.id }}">{% if source.scrape_cron %}Clock-aligned{% else %}Every <span id="scrape-interval-display-{{ source.id }}">{{ source.scrape_interval }}</span> min{% endif %}</span>
-                <span class="meta-item" title="Last scrape run (stamped after the channel list is committed, before the guide is fetched).">Scraped {{ source.last_scraped_at | localtime }}</span>
-                {% set cfm = channel_fetch_meta.get(source.id) %}
-                {% if cfm %}
-                  {% if cfm.pending %}
-                    <span class="meta-item meta-pending" title="Channel list will be refreshed on the next scrape.">Channels pending</span>
-                  {% elif cfm.stale %}
-                    <span class="meta-item meta-stale" title="Channel list hasn't been refreshed in over 2× the {{ cfm.refresh_hours }}h window — last refresh {{ source.last_channel_fetch_at | localtime }}. EPG may be advancing without channel refresh.">⚠ Channels stale</span>
-                  {% else %}
-                    <span class="meta-item meta-ok" title="Channels last fully refreshed {{ source.last_channel_fetch_at | localtime }} (full fetch runs every {{ cfm.refresh_hours }}h; EPG refreshes more often).">✓ Channels</span>
+              <div class="row-health">
+                {% if status %}
+                <span class="health-line health-{{ status.state }}" title="{{ status.title }}">
+                  <span class="health-dot"></span>
+                  <span class="health-text">{% if status.ts %}<span class="rel-time" data-ts="{{ status.ts.replace(tzinfo=none).isoformat() }}Z">{{ status.text.split(' · ')[0] }}</span>{% for part in status.text.split(' · ')[1:] %} · {{ part }}{% endfor %}{% else %}{{ status.text }}{% endif %}</span>
+                  {% if status.link %}<a class="health-link" href="{{ status.link[0] }}">{{ status.link[1] }}</a>{% endif %}
+                  <span class="audit-last-result" id="audit-last-result-{{ source.id }}"></span>
+                </span>
+                {% elif is_custom %}
+                <span class="custom-note" title="Paste a link and FastChannels works out the stream; channels play straight from it, with nothing to scrape. For a whole M3U playlist, use + Add Playlist above.">Channels you add one at a time from a link — YouTube, Twitch, a web player, or a direct HLS, DASH or MPEG-TS stream</span>
+                {% endif %}
+                {% set total = mix.get('total', 0) %}
+                <a class="ch-mix" href="/admin/channels?source={{ source.name }}" title="{{ mix_title(mix) if mix else '' }}">
+                  <span class="ch-mix-count">{% if total %}<span id="ch-count-{{ source.id }}">{{ mix.play + mix.drm }}</span> of {{ total }} on{% else %}<span id="ch-count-{{ source.id }}" hidden>0</span>No channels yet{% endif %}</span>
+                  {% if total %}
+                  <span class="ch-mix-bar" aria-hidden="true">
+                    {% if mix.play %}<span class="seg seg-play" style="flex-grow: {{ mix.play }}"></span>{% endif %}
+                    {% if mix.drm %}<span class="seg seg-drm" style="flex-grow: {{ mix.drm }}"></span>{% endif %}
+                    {% if mix.off %}<span class="seg seg-off" style="flex-grow: {{ mix.off }}"></span>{% endif %}
+                  </span>
                   {% endif %}
-                {% endif %}
-                {% set em = epg_meta.get(source.id) %}
-                {% if em %}
-                  {% if em.pending %}
-                    <span class="meta-item meta-pending" title="Guide (EPG) will be refreshed on the next scrape.">Guide pending</span>
-                  {% elif em.stale %}
-                    <span class="meta-item meta-stale" title="No successful guide refresh in over 2× the scrape interval — last good {{ source.last_epg_success_at | localtime }}. Channels may be refreshing while the EPG phase silently fails or hangs.">⚠ Guide stale</span>
-                  {% else %}
-                    <span class="meta-item meta-ok" title="Guide (EPG) last refreshed {{ source.last_epg_success_at | localtime }}. Distinct from Scraped, which is stamped before the EPG phase runs.">✓ Guide</span>
-                  {% endif %}
-                {% endif %}
-                {% endif %}
+                </a>
               </div>
+              <div class="drm-heads-up" id="drm-heads-up-{{ source.id }}" hidden></div>
               {% if not is_custom %}
               <div class="scrape-status" id="scrape-status-{{ source.id }}"></div>
               <div class="audit-status" id="audit-status-{{ source.id }}"></div>
-              <div class="audit-last-result" id="audit-last-result-{{ source.id }}"></div>
               {% endif %}
               <div class="mobile-toggle-wrap">
                 <label class="toggle" id="mobile-toggle-{{ source.id }}">
@@ -988,14 +1143,14 @@
             <td class="col-actions">
               {% if not is_custom %}
               <div class="dash-actions">
-                <button class="btn btn-run btn-sm" data-label="Scrape<br>Now" onclick="run({{ source.id }}, this)"
+                <button class="btn btn-run btn-sm" data-label="Scrape" onclick="run({{ source.id }}, this)"
                         {% if not source.is_enabled %}disabled{% endif %}
-                        title="Fetch the latest channel list and guide data now.">Scrape<br>Now</button>
+                        title="Fetch the latest channel list and guide data now.">Scrape</button>
                 {% if audit_enabled.get(source.name) %}
-                <button class="btn btn-audit btn-sm" data-label="Stream<br>Audit"
+                <button class="btn btn-audit btn-sm" data-label="Audit"
                         onclick='openAuditModal({{ source.id }}, {{ source.display_name | tojson }})'
                         {% if not source.is_enabled %}disabled{% endif %}
-                        title="Check linear stream health and DRM. You can include scheduled events in the audit modal.">Stream<br>Audit</button>
+                        title="Check linear stream health and DRM. You can include scheduled events in the audit modal.">Audit</button>
                 {% endif %}
               </div>
               {% endif %}
@@ -1061,7 +1216,7 @@
                 <div class="config-note">This source authenticates with your TV-provider account under <a href="/admin/settings#settings-card-tve">Settings → Credentials</a> — nothing to configure here.</div>
                 {% endif %}
                 {% if source.name == 'fox_tve' %}
-                <div class="config-note">If your TV provider works with FOX One (under Premium Sources), use that instead: it carries more channels, including your local FOX station. Keep FOX TVE if FOX One won't sign in with your provider.</div>
+                <div class="config-note">If your TV provider works with FOX One (under Subscription Sources), use that instead: it carries more channels, including your local FOX station. Keep FOX TVE if FOX One won't sign in with your provider.</div>
                 {% endif %}
 
                 {% set interval_meta = source_interval_meta.get(source.name, {'recommended': source.scrape_interval, 'min': 30, 'max': 10080}) %}
@@ -1432,7 +1587,10 @@
       if (!row) return;
       const isOpen = row.style.display !== 'none';
       row.style.display = isOpen ? 'none' : '';
-      if (isOpen) espnAbandon(sourceId);  // no-op unless an ESPN sign-in is waiting here
+      if (isOpen) {  // no-ops unless a sign-in is waiting here
+        espnAbandon(sourceId);
+        codeLinkAbandon(sourceId);
+      }
       document.querySelectorAll(`.configure-btn-display[data-source-id="${sourceId}"]`).forEach(btn => {
         btn.textContent = isOpen ? 'Configure ▾' : 'Configure ▴';
         btn.classList.toggle('open', !isOpen);
@@ -1841,6 +1999,7 @@
         mobileLabelEl.className = `toggle-label ${enabled ? 'on' : 'off'}`;
       }
       if (dashRow) dashRow.classList.toggle('disabled', !enabled);
+      if (dashRow) _refreshCategoryOnCount(dashRow.dataset.cat);
       runBtns.forEach(btn => { btn.disabled = !enabled; });
       if (auditBtn) auditBtn.disabled = !enabled;
       if (dashRow?.dataset.custom === 'true') {
@@ -1921,6 +2080,7 @@
         if (!enabled && !keepsChannels) document.getElementById(`ch-count-${sourceId}`).textContent = '0';
         applySourceEnabledState(sourceId, enabled);
         if (enabled) maybeOfferReviewHold(sourceId);
+        _showDrmHeadsUp(sourceId, enabled);
 
       } catch (e) {
         applySourceEnabledState(sourceId, !enabled);
@@ -1947,11 +2107,11 @@
           _startPolling(id, btn);
         } else {
           btn.textContent = 'Error';
-          setTimeout(() => { btn.innerHTML = 'Scrape<br>Now'; btn.disabled = false; }, 3000);
+          setTimeout(() => { btn.innerHTML = 'Scrape'; btn.disabled = false; }, 3000);
         }
       } catch (e) {
         btn.textContent = 'Error';
-        setTimeout(() => { btn.innerHTML = 'Scrape<br>Now'; btn.disabled = false; }, 3000);
+        setTimeout(() => { btn.innerHTML = 'Scrape'; btn.disabled = false; }, 3000);
       }
     }
 
@@ -2268,7 +2428,7 @@
       delete _scrapeStart[sourceId];
       document.getElementById(`dash-row-${sourceId}`)?.classList.remove('scraping');
       const btn = _scrapeBtn[sourceId];
-      if (btn) { btn.innerHTML = btn.dataset.label || 'Scrape<br>Now'; btn.disabled = false; delete _scrapeBtn[sourceId]; }
+      if (btn) { btn.innerHTML = btn.dataset.label || 'Scrape'; btn.disabled = false; delete _scrapeBtn[sourceId]; }
       const statusEl = document.getElementById(`scrape-status-${sourceId}`);
       if (!statusEl) return;
       if (lastError) {
@@ -2309,7 +2469,7 @@
             const countEl = document.getElementById(`ch-count-${sourceId}`);
             if (countEl) fetch('/api/sources').then(r => r.json()).then(ss => {
               const s = ss.find(x => x.id === sourceId);
-              if (s) countEl.textContent = s.channel_count;
+              if (s) countEl.textContent = s.enabled_channel_count;
             }).catch(() => {});
             _showResult(sourceId, d.last_error || null);
           } else {
@@ -2321,7 +2481,7 @@
               const countEl = document.getElementById(`ch-count-${sourceId}`);
               if (countEl) fetch('/api/sources').then(r => r.json()).then(ss => {
                 const s = ss.find(x => x.id === sourceId);
-                if (s) countEl.textContent = s.channel_count;
+                if (s) countEl.textContent = s.enabled_channel_count;
               }).catch(() => {});
               _showResult(sourceId, d.last_error || null);
             } else if (Date.now() - start < 30000) {
@@ -2334,7 +2494,7 @@
         } catch (e) {
           delete _pollTimers[sourceId];
           const b = _scrapeBtn[sourceId];
-          if (b) { b.innerHTML = 'Scrape<br>Now'; b.disabled = false; delete _scrapeBtn[sourceId]; }
+          if (b) { b.innerHTML = 'Scrape'; b.disabled = false; delete _scrapeBtn[sourceId]; }
         }
       }
       poll();
@@ -2362,13 +2522,28 @@
       return null;
     }
 
+    // Short relative time for a past moment: 'just now', '7m ago', '3h ago', '5d ago'.
+    function _relAgo(ms) {
+      const secs = Math.max(0, (Date.now() - ms) / 1000);
+      if (secs < 90) return 'just now';
+      if (secs < 3600) return `${Math.floor(secs / 60)}m ago`;
+      if (secs < 86400) return `${Math.floor(secs / 3600)}h ago`;
+      if (secs < 604800) return `${Math.floor(secs / 86400)}d ago`;
+      return new Date(ms).toLocaleDateString(undefined, {month: 'short', day: 'numeric'});
+    }
+
+    // The last audit rides on the status line as "· audited 3d ago" (plus dead
+    // channels, the one result worth seeing without hovering); the full
+    // breakdown is its hover text and the Stream Audit window.
     function _renderLastAuditResult(sourceId, r) {
       const el = document.getElementById(`audit-last-result-${sourceId}`);
       if (!el || !r) return;
       const ok    = (r.checked || 0) - (r.flagged || 0) - (r.vod || 0) - (r.bridged || 0);
-      const ts    = r.ts ? new Date(r.ts).toLocaleString() : '';
+      const when  = r.ts ? _relAgo(new Date(r.ts).getTime()) : '';
+      const full  = r.ts ? new Date(r.ts).toLocaleString() : '';
       if (r.skipped_reason) {
-        el.innerHTML = `Last audit: <span class="aud-partial">skipped — ${escapeHtml(r.skipped_reason)}</span>${ts ? ' <span style="opacity:.5">· ' + ts + '</span>' : ''}`;
+        el.textContent = ` · audit skipped${when ? ' ' + when : ''}`;
+        el.title = `Last audit skipped: ${r.skipped_reason}${full ? ' (' + full + ')' : ''}`;
         return;
       }
       const bits  = [];
@@ -2376,18 +2551,29 @@
                                 + (r.not_in_output ? ` (${r.not_in_output} not in output)` : ''));
       if (r.scope)            bits.push(r.scope === 'all' ? 'all channels' : 'linear only');
       if (r.skipped_events)   bits.push(`${r.skipped_events} events skipped`);
-      if (r.checked != null)  bits.push(`<span class="aud-ok">${ok} ok</span>`);
-      if (r.dead)             bits.push(`<span class="aud-dead">${r.dead} dead</span>`);
-      if (r.vod)              bits.push(`<span class="aud-vod">${r.vod} VOD</span>`);
-      if (r.not_authorized)   bits.push(`<span class="aud-auth">${r.not_authorized} not authorized</span>`);
-      if (r.flagged)          bits.push(`<span class="aud-drm">${r.flagged} DRM</span>`);
-      if (r.bridged)          bits.push(`<span class="aud-bridge">${r.bridged} bridged (DRM)</span>`);
-      if (r.skipped_403)      bits.push(`<span class="aud-403">${r.skipped_403} blocked</span>`);
+      if (r.checked != null)  bits.push(`${ok} ok`);
+      if (r.dead)             bits.push(`${r.dead} dead`);
+      if (r.vod)              bits.push(`${r.vod} VOD`);
+      if (r.not_authorized)   bits.push(`${r.not_authorized} not authorized`);
+      if (r.flagged)          bits.push(`${r.flagged} DRM`);
+      if (r.bridged)          bits.push(`${r.bridged} bridged (DRM)`);
+      if (r.skipped_403)      bits.push(`${r.skipped_403} blocked`);
       if (r.errors)           bits.push(`${r.errors} errors`);
-      const tag   = r.aborted_reason ? ` <span class="aud-partial">(aborted — ${escapeHtml(r.aborted_reason)})</span>`
-                  : r.partial ? ' <span class="aud-partial">(partial)</span>' : '';
-      el.innerHTML = `Last audit: ${bits.join(' · ')}${tag}${ts ? ' <span style="opacity:.5">· ' + ts + '</span>' : ''}`;
+      const tag = r.aborted_reason ? ` (aborted — ${r.aborted_reason})` : r.partial ? ' (partial)' : '';
+      el.innerHTML = ` · audited ${escapeHtml(when || '')}`
+        + (r.dead ? ` · <span class="aud-dead">${r.dead} dead</span>` : '')
+        + (tag ? escapeHtml(tag) : '');
+      el.title = `Last audit${full ? ' ' + full : ''}: ${bits.join(' · ')}${tag}`;
     }
+
+    // Keep "Updated 2h ago" honest while the page stays open.
+    function _refreshRelTimes() {
+      document.querySelectorAll('.rel-time[data-ts]').forEach(el => {
+        const ms = Date.parse(el.dataset.ts);
+        if (!isNaN(ms)) el.textContent = `Updated ${_relAgo(ms)}`;
+      });
+    }
+    setInterval(_refreshRelTimes, 60000);
 
     function _renderAuditStatus(sourceId, data) {
       const el = document.getElementById(`audit-status-${sourceId}`);
@@ -3035,8 +3221,8 @@
           return;
         }
 
-        // ESPN's visible settings are rendered separately from its hidden schema.
-        if (!schema.length && sourceName !== 'espn' && !cfg.tve_signin) {
+        // ESPN's and Paramount+'s visible settings are rendered separately from their hidden schemas.
+        if (!schema.length && sourceName !== 'espn' && sourceName !== 'paramount' && !cfg.tve_signin) {
           if (badge) {
             badge.textContent = 'Auto';
             badge.className = 'config-badge auto';
@@ -3054,7 +3240,7 @@
             badge.className = 'config-badge configured';
             badge.style.display = '';
           } else if (isRequired) {
-            badge.textContent = '⚠ Needs Config';
+            badge.textContent = 'Needs setup';
             badge.className = 'config-badge needs-config';
             badge.style.display = '';
           } else {
@@ -3082,9 +3268,8 @@
     let _amazonPollTimer = null;
 
     function renderAmazonConfig(sourceId, schema, values) {
-      const hasCreds = !!(
-        (values.amazon_email || '').trim() && (values.amazon_password || '').trim()
-      );
+      // Password is optional: left blank, sign-in uses a code texted to the phone.
+      const hasCreds = !!(values.amazon_email || '').trim();
       const hasCookie = !!(values.cookie_header || '').trim();
       const hasSession = hasCookie || !!(values.browser_storage_state || '').trim();
       return `
@@ -3123,7 +3308,7 @@
           <summary>Account settings</summary>
           <div class="fields-grid" style="margin-top:0.75rem;">
             <div class="field">
-              <label for="cfg-${sourceId}-amazon_email">Amazon Email</label>
+              <label for="cfg-${sourceId}-amazon_email">Amazon Email or Mobile Number</label>
               <input type="text" id="cfg-${sourceId}-amazon_email" data-key="amazon_email" data-secret="false"
                      value="${escapeHtml(String(values.amazon_email || ''))}"
                      placeholder="you@example.com" autocomplete="off">
@@ -3132,6 +3317,7 @@
               <label for="cfg-${sourceId}-amazon_password">Amazon Password</label>
               <input type="password" id="cfg-${sourceId}-amazon_password" data-key="amazon_password" data-secret="true"
                      value="${escapeHtml(String(values.amazon_password || ''))}" autocomplete="off">
+              <div class="help">Leave blank to sign in with a code Amazon texts to your phone.</div>
             </div>
           </div>
           <div class="config-actions">
@@ -3567,6 +3753,86 @@
     }
     // ── end Philo sign-in ─────────────────────────────────────────────────────
 
+    // ── NESN: NESN account (email → code), then the TV provider ──────────────
+    function renderNesnConfig(sourceId, schema, values, cfg) {
+      const info = (cfg && cfg.nesn) || {};
+      const email = String(info.email || values.email || '');
+      const tveSignin = cfg && cfg.tve_signin ? renderTveSigninSection(sourceId, cfg.tve_signin) : '';
+      return `
+        <div class="config-title">NESN Settings</div>
+        <div class="config-subtitle" style="font-weight:600">1. NESN account</div>
+        <div class="config-note">
+          ${info.signed_in
+            ? `Signed in to NESN as ${escapeHtml(email)}. The sign-in renews itself.`
+            : 'NESN links your TV provider to a free NESN account. Enter its email (or a new one at watch.nesn.com) and NESN emails you a code. There is no password.'}
+        </div>
+        <div class="amazon-autologin-panel" id="nesn-login-${sourceId}">
+          <div class="amazon-autologin-header">
+            <input type="text" id="nesn-email-${sourceId}" class="philo-ident-input"
+                   value="${escapeHtml(email)}" placeholder="NESN account email" autocomplete="username"
+                   onkeydown="if(event.key==='Enter') nesnSendCode(${sourceId})">
+            <button class="btn btn-run" type="button" id="nesn-send-btn-${sourceId}"
+                    onclick="nesnSendCode(${sourceId})">${info.signed_in ? 'Sign in again' : 'Send code'}</button>
+          </div>
+          <span class="amazon-status-text" id="nesn-status-${sourceId}">
+            ${info.signed_in ? '<span style="color:var(--success-soft)">&#10003; Signed in</span>' : ''}
+          </span>
+          <div class="amazon-otp-row" id="nesn-code-${sourceId}" style="display:none">
+            <label for="nesn-code-input-${sourceId}">Code:</label>
+            <input type="text" id="nesn-code-input-${sourceId}" placeholder="123456"
+                   maxlength="8" autocomplete="one-time-code" inputmode="numeric"
+                   onkeydown="if(event.key==='Enter') nesnVerifyCode(${sourceId})">
+            <button class="btn btn-run btn-sm" type="button" onclick="nesnVerifyCode(${sourceId})">Verify</button>
+            <button class="btn btn-cancel btn-sm" type="button" onclick="nesnSendCode(${sourceId})">Resend</button>
+          </div>
+        </div>
+        <div class="config-subtitle" style="font-weight:600">2. TV provider</div>
+        <div class="config-note">NESN plays only for TV provider accounts billed to an address in NESN's New England market.</div>
+        ${tveSignin}`;
+    }
+
+    async function nesnSendCode(sourceId) {
+      const btn      = document.getElementById(`nesn-send-btn-${sourceId}`);
+      const statusEl = document.getElementById(`nesn-status-${sourceId}`);
+      const email = (document.getElementById(`nesn-email-${sourceId}`)?.value || '').trim();
+      if (!email) { statusEl.innerHTML = '<span style="color:var(--warning-soft)">Enter your NESN account email.</span>'; return; }
+      btn.disabled = true;
+      statusEl.innerHTML = '<span style="color:var(--text-muted)">Sending code…</span>';
+      try {
+        const r = await fetch(`/api/sources/${sourceId}/nesn-login/send-code`, {
+          method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({email}),
+        });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok) { statusEl.innerHTML = `<span style="color:var(--danger-soft)">${escapeHtml(d.error || 'Could not send code.')}</span>`; return; }
+        statusEl.innerHTML = `<span style="color:var(--success-soft)">Code sent to ${escapeHtml(d.email || email)}. Enter it below.</span>`;
+        document.getElementById(`nesn-code-${sourceId}`).style.display = 'flex';
+        document.getElementById(`nesn-code-input-${sourceId}`)?.focus();
+      } catch (e) {
+        statusEl.innerHTML = '<span style="color:var(--danger-soft)">Network error sending code.</span>';
+      } finally {
+        btn.disabled = false;
+      }
+    }
+
+    async function nesnVerifyCode(sourceId) {
+      const statusEl = document.getElementById(`nesn-status-${sourceId}`);
+      const code = (document.getElementById(`nesn-code-input-${sourceId}`)?.value || '').trim();
+      if (!code) return;
+      statusEl.innerHTML = '<span style="color:var(--text-muted)">Verifying…</span>';
+      try {
+        const r = await fetch(`/api/sources/${sourceId}/nesn-login/verify`, {
+          method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({code}),
+        });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok) { statusEl.innerHTML = `<span style="color:var(--danger-soft)">${escapeHtml(d.error || 'Verification failed.')}</span>`; return; }
+        statusEl.innerHTML = '<span style="color:var(--success-soft)">&#10003; Signed in</span>';
+        setTimeout(() => loadSourceConfig(sourceId, 'nesn_tve'), 600);
+      } catch (e) {
+        statusEl.innerHTML = '<span style="color:var(--danger-soft)">Network error verifying code.</span>';
+      }
+    }
+    // ── end NESN sign-in ──────────────────────────────────────────────────────
+
     // ── ESPN activation-code sign-in (same flow as ESPN's TV apps) ───────────
     const _espnPollTimers = {};
 
@@ -3617,6 +3883,8 @@
     function renderEspnConfig(sourceId, schema, values, cfg) {
       const info = (cfg && cfg.espn) || {};
       _espnEventPolicy[sourceId] = JSON.parse(JSON.stringify(info.event_filter || {sport_mode: 'all', sports: {}}));
+      _espnEventPolicy[sourceId].teams ||= [];
+      _espnTeamLeague[sourceId] = null;
       const tveProvider = info.tve_mvpd_name || info.settings_mvpd_name;
       const defaultMvpd = info.tve_mvpd_id || info.settings_mvpd_id;
       const provOpts = ['<option value="">Choose your TV provider…</option>'].concat(
@@ -3678,8 +3946,9 @@
             <span class="espn-match" id="espn-match-${sourceId}" aria-live="polite"></span>
           </div>
           <div class="config-note">
-            Adds upcoming events as temporary channels with guide data. Availability depends on your
-            ESPN account. Channels retire two hours after their scheduled end and are deleted a day later.
+            Adds upcoming events as temporary channels with guide data. ESPN+ events need an ESPN account;
+            ACC Extra and SEC Plus events also play with a TV provider. Only events your sign-in can play are listed.
+            Channels retire two hours after their scheduled end and are deleted a day later.
           </div>
           <div class="espn-services">
             <label><input type="checkbox" data-key="include_espn_plus_events"
@@ -3708,6 +3977,30 @@
             </div>
             <div class="espn-picked" id="espn-picked-${sourceId}"></div>
             <div class="espn-sport-list" id="espn-sports-${sourceId}" hidden></div>
+            <div class="espn-teams">
+              <div class="espn-mode-label">Teams</div>
+              <div class="config-note">Narrow a league to the teams you follow, or hide teams you don't. Other leagues aren't affected.</div>
+              <select class="espn-team-league" id="espn-team-league-${sourceId}" aria-label="League"
+                      onchange="espnTeamSelectLeague(${sourceId}, this.value)"></select>
+              <div class="espn-team-panel" id="espn-team-panel-${sourceId}" hidden>
+                <div class="espn-mode" role="radiogroup" aria-label="Teams in this league">
+                  <label><input type="radio" name="espn-team-mode-${sourceId}" value="all"
+                         onchange="espnTeamSetMode(${sourceId}, this.value)">All teams</label>
+                  <label><input type="radio" name="espn-team-mode-${sourceId}" value="include"
+                         onchange="espnTeamSetMode(${sourceId}, this.value)">Only teams I pick</label>
+                  <label><input type="radio" name="espn-team-mode-${sourceId}" value="exclude"
+                         onchange="espnTeamSetMode(${sourceId}, this.value)">Hide teams I pick</label>
+                </div>
+                <div class="espn-hide-shows" id="espn-team-unassigned-row-${sourceId}">
+                  <label><input type="checkbox" id="espn-team-unassigned-${sourceId}"
+                         onchange="espnTeamSetUnassigned(${sourceId}, this.checked)">Keep this league's events without two teams (shows, tournaments)</label>
+                </div>
+                <input type="search" class="espn-team-search" id="espn-team-search-${sourceId}"
+                       placeholder="Search teams…" aria-label="Search teams" oninput="espnTeamRenderList(${sourceId})">
+                <div class="espn-team-list" id="espn-team-list-${sourceId}"></div>
+              </div>
+              <div class="espn-picked" id="espn-team-rules-${sourceId}"></div>
+            </div>
           </div>
         </div>
         <div class="config-actions">
@@ -3742,12 +4035,226 @@
       return key === undefined ? null : policy.sports[key];
     }
 
+    function _espnLeagueIncluded(policy, sport, league) {
+      if (policy.sport_mode === 'all') return true;
+      const rule = _espnRule(policy, sport);
+      return !!rule && (rule.league_mode === 'all' || rule.leagues.some(name =>
+        name.toLocaleLowerCase() === league.toLocaleLowerCase()));
+    }
+
     function _espnEventIncluded(event, policy) {
       if (policy.hide_likely_shows && event.likely_show) return false;
-      if (policy.sport_mode === 'all') return true;
-      const rule = _espnRule(policy, event.sport);
-      return !!rule && (rule.league_mode === 'all' || rule.leagues.some(league =>
-        league.toLocaleLowerCase() === event.league.toLocaleLowerCase()));
+      return _espnLeagueIncluded(policy, event.sport, event.league) && _espnTeamsAllow(event, policy);
+    }
+
+    // ── Team rules ──
+    // Mirrors espn.py: policy.teams = [{sport, league, mode: 'include'|'exclude',
+    // include_unassigned, teams: [{id, name, location}]}], one per league.
+    // IDs decide when both sides have one; title-only teams match by full name.
+    // A rule with no teams filters nothing (the server drops it on save).
+    const _espnTeamLeague = {};   // sourceId → {sport, league} being edited
+    const _espnTeamLeagues = {};  // sourceId → league options in the select
+    const _espnTeamCatalog = {};  // sourceId → teams listed for that league
+
+    function _espnFold(value) {
+      return String(value || '').normalize('NFKD').replace(/[̀-ͯ]/g, '').trim().toLocaleLowerCase();
+    }
+
+    function _espnTeamNames(team) {
+      return new Set([_espnFold(team.name), _espnFold(team.location)].filter(Boolean));
+    }
+
+    function _espnSameTeam(a, b) {
+      if (a.id && b.id) return a.id === b.id;
+      const names = _espnTeamNames(b);
+      return [..._espnTeamNames(a)].some(name => names.has(name));
+    }
+
+    function _espnTeamRule(policy, sport, league) {
+      return (policy.teams || []).find(rule => _espnFold(rule.sport) === _espnFold(sport)
+        && _espnFold(rule.league) === _espnFold(league)) || null;
+    }
+
+    function _espnTeamsAllow(event, policy) {
+      const rule = _espnTeamRule(policy, event.sport, event.league);
+      if (!rule || !rule.teams.length) return true;
+      const teams = event.teams || [];
+      if (!teams.length) return rule.include_unassigned;
+      const picked = teams.some(team => rule.teams.some(chosen => _espnSameTeam(team, chosen)));
+      return rule.mode === 'include' ? picked : !picked;
+    }
+
+    function _espnSameLeague(a, sport, league) {
+      return _espnFold(a.sport) === _espnFold(sport) && _espnFold(a.league) === _espnFold(league);
+    }
+
+    // Leagues worth a team rule: included ones whose events have teams,
+    // plus any with a saved rule (kept while out of season or switched off).
+    function _espnSyncTeamLeagues(sourceId) {
+      const policy = _espnEventPolicy[sourceId];
+      const select = document.getElementById(`espn-team-league-${sourceId}`);
+      if (!select) return;
+      const {events} = _espnCatalog(sourceId);
+      const leagues = new Map();
+      for (const e of events) {
+        if (!(e.teams || []).length || !_espnLeagueIncluded(policy, e.sport, e.league)) continue;
+        const key = `${_espnFold(e.sport)}|${_espnFold(e.league)}`;
+        if (!leagues.has(key)) leagues.set(key, {sport: e.sport, league: e.league, count: 0});
+        leagues.get(key).count += 1;
+      }
+      for (const rule of policy.teams || []) {
+        const key = `${_espnFold(rule.sport)}|${_espnFold(rule.league)}`;
+        if (!leagues.has(key)) leagues.set(key, {sport: rule.sport, league: rule.league, count: 0});
+      }
+      const list = [...leagues.values()].sort((a, b) => a.league.localeCompare(b.league));
+      _espnTeamLeagues[sourceId] = list;
+      const current = _espnTeamLeague[sourceId];
+      const index = current ? list.findIndex(l => _espnSameLeague(l, current.sport, current.league)) : -1;
+      select.innerHTML = `<option value="">${list.length ? 'Choose a league…' : 'No leagues with teams right now'}</option>`
+        + list.map((l, i) => {
+          const rule = _espnTeamRule(policy, l.sport, l.league);
+          const note = rule && rule.teams.length ? (rule.mode === 'include' ? ' · only picked teams' : ' · hiding picked teams') : '';
+          return `<option value="${i}" ${i === index ? 'selected' : ''}>${escapeHtml(l.league)} (${escapeHtml(l.sport)}) — ${l.count} event${l.count === 1 ? "" : "s"}${note}</option>`;
+        }).join('');
+      if (index < 0 && current) {
+        _espnTeamLeague[sourceId] = null;
+        _espnSyncTeamPanel(sourceId);
+      }
+      _espnSyncTeamRules(sourceId);
+    }
+
+    function espnTeamSelectLeague(sourceId, value) {
+      const league = value === '' ? null : _espnTeamLeagues[sourceId][Number(value)];
+      _espnTeamLeague[sourceId] = league ? {sport: league.sport, league: league.league} : null;
+      const search = document.getElementById(`espn-team-search-${sourceId}`);
+      if (search) search.value = '';
+      _espnSyncTeamPanel(sourceId);
+    }
+
+    // Teams in the league being edited, with event counts; saved teams stay at 0.
+    function _espnBuildTeamCatalog(sourceId) {
+      const current = _espnTeamLeague[sourceId];
+      const teams = new Map();
+      if (!current) return (_espnTeamCatalog[sourceId] = []);
+      const {events} = _espnCatalog(sourceId);
+      const leagueEvents = events.filter(e => _espnSameLeague(e, current.sport, current.league));
+      const add = (team, n) => {
+        // Title-only names fold into a looked-up team with the same name.
+        const found = [...teams.values()].find(t => _espnSameTeam(t, team));
+        if (found) { found.count += n; if (!found.id && team.id) Object.assign(found, team, {count: found.count}); return; }
+        teams.set(team.id ? `id:${team.id}` : `name:${_espnFold(team.name)}`, {...team, count: n});
+      };
+      // Looked-up teams first, so title-only names can join them.
+      for (const e of leagueEvents) for (const t of e.teams || []) if (t.id) add(t, 1);
+      for (const e of leagueEvents) for (const t of e.teams || []) if (!t.id) add(t, 1);
+      const rule = _espnTeamRule(_espnEventPolicy[sourceId], current.sport, current.league);
+      for (const t of rule?.teams || []) add(t, 0);
+      return (_espnTeamCatalog[sourceId] = [...teams.values()].sort((a, b) => a.name.localeCompare(b.name)));
+    }
+
+    function _espnSyncTeamPanel(sourceId) {
+      const panel = document.getElementById(`espn-team-panel-${sourceId}`);
+      if (!panel) return;
+      const current = _espnTeamLeague[sourceId];
+      panel.hidden = !current;
+      if (!current) return;
+      const rule = _espnTeamRule(_espnEventPolicy[sourceId], current.sport, current.league);
+      const mode = rule ? rule.mode : 'all';
+      panel.querySelectorAll(`input[name="espn-team-mode-${sourceId}"]`).forEach(r => { r.checked = r.value === mode; });
+      document.getElementById(`espn-team-unassigned-row-${sourceId}`).hidden = mode === 'all';
+      document.getElementById(`espn-team-unassigned-${sourceId}`).checked = rule ? rule.include_unassigned : true;
+      _espnBuildTeamCatalog(sourceId);
+      espnTeamRenderList(sourceId);
+    }
+
+    function espnTeamRenderList(sourceId) {
+      const list = document.getElementById(`espn-team-list-${sourceId}`);
+      const current = _espnTeamLeague[sourceId];
+      if (!list || !current) return;
+      const rule = _espnTeamRule(_espnEventPolicy[sourceId], current.sport, current.league);
+      const query = _espnFold(document.getElementById(`espn-team-search-${sourceId}`)?.value);
+      const catalog = _espnTeamCatalog[sourceId] || [];
+      const rows = catalog.map((team, i) => ({team, i}))
+        .filter(({team}) => !query || _espnFold(team.name).includes(query) || _espnFold(team.location).includes(query));
+      const scroll = list.scrollTop;
+      list.innerHTML = rows.length ? rows.map(({team, i}) => `
+        <label title="${escapeHtml(team.name)}"><input type="checkbox" ${rule?.teams.some(t => _espnSameTeam(t, team)) ? 'checked' : ''}
+               onchange="espnTeamToggle(${sourceId}, ${i}, this.checked)"><span>${escapeHtml(team.name)}</span>
+          <span class="espn-count">${team.count}</span></label>`).join('')
+        : `<div class="espn-list-note">${catalog.length ? 'No teams match.' : 'No teams in this league\'s upcoming events.'}</div>`;
+      list.scrollTop = scroll;
+    }
+
+    function _espnEnsureTeamRule(sourceId, mode) {
+      const policy = _espnEventPolicy[sourceId];
+      const current = _espnTeamLeague[sourceId];
+      policy.teams ||= [];
+      let rule = _espnTeamRule(policy, current.sport, current.league);
+      if (!rule) {
+        rule = {sport: current.sport, league: current.league, mode, include_unassigned: true, teams: []};
+        policy.teams.push(rule);
+      }
+      return rule;
+    }
+
+    function _espnDropTeamRule(sourceId, sport, league) {
+      const policy = _espnEventPolicy[sourceId];
+      policy.teams = (policy.teams || []).filter(rule => !_espnSameLeague(rule, sport, league));
+    }
+
+    function espnTeamSetMode(sourceId, mode) {
+      const current = _espnTeamLeague[sourceId];
+      if (mode === 'all') _espnDropTeamRule(sourceId, current.sport, current.league);
+      else _espnEnsureTeamRule(sourceId, mode).mode = mode;
+      _espnSyncTeamPanel(sourceId);
+      _espnSyncSummary(sourceId);
+    }
+
+    function espnTeamSetUnassigned(sourceId, checked) {
+      _espnEnsureTeamRule(sourceId, 'include').include_unassigned = checked;
+      _espnSyncSummary(sourceId);
+    }
+
+    function espnTeamToggle(sourceId, index, checked) {
+      const team = _espnTeamCatalog[sourceId][index];
+      const current = _espnTeamLeague[sourceId];
+      const existing = _espnTeamRule(_espnEventPolicy[sourceId], current.sport, current.league);
+      // Picking a team while the league shows all teams means "only these".
+      const rule = _espnEnsureTeamRule(sourceId, 'include');
+      rule.teams = rule.teams.filter(t => !_espnSameTeam(t, team));
+      if (checked) rule.teams.push({id: team.id || '', name: team.name, location: team.location || ''});
+      if (!existing) _espnSyncTeamPanel(sourceId);
+      _espnSyncSummary(sourceId);
+    }
+
+    function espnTeamRemoveRule(sourceId, index) {
+      const rule = (_espnEventPolicy[sourceId].teams || [])[index];
+      if (!rule) return;
+      _espnDropTeamRule(sourceId, rule.sport, rule.league);
+      const current = _espnTeamLeague[sourceId];
+      if (current && _espnSameLeague(rule, current.sport, current.league)) _espnSyncTeamPanel(sourceId);
+      _espnSyncSummary(sourceId);
+    }
+
+    function espnTeamEditRule(sourceId, index) {
+      const rule = (_espnEventPolicy[sourceId].teams || [])[index];
+      if (!rule) return;
+      _espnTeamLeague[sourceId] = {sport: rule.sport, league: rule.league};
+      _espnSyncTeamLeagues(sourceId);
+      _espnSyncTeamPanel(sourceId);
+    }
+
+    function _espnSyncTeamRules(sourceId) {
+      const box = document.getElementById(`espn-team-rules-${sourceId}`);
+      if (!box) return;
+      const rules = (_espnEventPolicy[sourceId].teams || []).map((rule, i) => ({rule, i})).filter(({rule}) => rule.teams.length);
+      box.innerHTML = rules.length
+        ? rules.map(({rule, i}) => `<span class="espn-chip"><button type="button" class="espn-chip-link"
+              onclick="espnTeamEditRule(${sourceId}, ${i})">${escapeHtml(rule.league)}
+              <small>· ${rule.mode === 'include' ? 'only' : 'hiding'} ${escapeHtml(rule.teams.map(t => t.name).join(', '))}</small></button><button
+              type="button" class="espn-chip-btn" aria-label="Remove the ${escapeHtml(rule.league)} team rule"
+              onclick="espnTeamRemoveRule(${sourceId}, ${i})">&times;</button></span>`).join('')
+        : 'Every team in every included league.';
     }
 
     // Events in the selected services, and their sports/leagues with counts.
@@ -3866,6 +4373,7 @@
           ? sports.map(([name, rule]) => `<span class="espn-chip">${escapeHtml(name)}${rule.league_mode === 'selected'
               ? ` <small>· ${escapeHtml(rule.leagues.join(', '))}</small>` : ''}</span>`).join('')
           : 'No sports picked — no event channels will be added.';
+      _espnSyncTeamLeagues(sourceId);
       const preview = _espnEventPreview[sourceId];
       if (!match || !preview) {
         if (match && preview === undefined) match.textContent = 'Counting events…';
@@ -3972,6 +4480,22 @@
       renderQrCode(statusEl.querySelector('.espn-tve-qr'), url);
     }
 
+    // A code/link sign-in's job can sit queued behind other maintenance-worker
+    // work while its code is already on screen; show what it's waiting on
+    // under the code, and drop the line once the job starts.
+    function _setQueueNotice(statusEl, notice) {
+      let el = statusEl.querySelector('.signin-queue-notice');
+      if (!notice) { if (el) el.remove(); return; }
+      if (!el) {
+        el = document.createElement('div');
+        el.className = 'signin-queue-notice';
+        el.style.color = 'var(--text-muted)';
+        el.style.marginTop = '0.3rem';
+        statusEl.appendChild(el);
+      }
+      el.textContent = notice;
+    }
+
     // Same helper as settings.js's (vendored qrcode-generator, drawn in the page).
     function renderQrCode(el, text) {
       if (!el) return;
@@ -4002,6 +4526,7 @@
           return;
         }
         if (d.state === 'waiting') {
+          _setQueueNotice(statusEl, d.queue_notice);
           espnTvePoll(sourceId);
           return;
         }
@@ -4065,6 +4590,7 @@
           return;
         }
         if (d.state === 'waiting') {
+          _setQueueNotice(statusEl, d.queue_notice);
           espnPoll(sourceId);
           return;
         }
@@ -4084,6 +4610,206 @@
       loadSourceConfig(sourceId, 'espn');
     }
     // ── end ESPN sign-in ──────────────────────────────────────────────────────
+
+    // ── Activation-code sign-ins (NFL, CBS Sports, Paramount+) ──────────────────────────
+    // The card shows a code to enter on the provider's activate page while a
+    // sign-in job waits for it. One code per source at a time: a new one
+    // retires the previous wait. `slug` is the route prefix (/api/sources/<id>/<slug>-link/…).
+    const _codeLinkTimers = {};
+    const _codeLinkActive = {};   // sourceId → slug
+
+    function _codeLinkStop(sourceId) {
+      clearTimeout(_codeLinkTimers[sourceId]);
+      const slug = _codeLinkActive[sourceId];
+      if (!slug) return;
+      delete _codeLinkActive[sourceId];
+      fetch(`/api/sources/${sourceId}/${slug}-link/stop`, { method: 'POST' }).catch(() => {});
+    }
+
+    // Closing the card abandons any wait on it (called by toggleConfigPanel).
+    function codeLinkAbandon(sourceId) { _codeLinkStop(sourceId); }
+
+    window.addEventListener('pagehide', () => {
+      for (const [sourceId, slug] of Object.entries(_codeLinkActive)) {
+        navigator.sendBeacon(`/api/sources/${sourceId}/${slug}-link/stop`);
+      }
+    });
+
+    // One sign-in option: a collapsible row with its state, a Get-code button and Sign out.
+    function codeLinkOption(sourceId, slug, sourceName, kind, title, sub, signedIn, detail, note) {
+      return `
+          <details class="espn-auth-option">
+            <summary>
+              <span class="espn-auth-label"><strong>${title}</strong><small>${sub}</small></span>
+              <span class="espn-auth-state ${signedIn ? 'signed-in' : ''}">${signedIn ? '&#10003; Signed in' : 'Not signed in'}</span>
+            </summary>
+            <div class="espn-auth-body">
+              <div class="config-note">${note}</div>
+              <div class="amazon-autologin-panel">
+                <div class="amazon-autologin-header">
+                  <button class="btn btn-run" type="button" id="${slug}-${kind}-btn-${sourceId}"
+                          onclick="codeLinkStart(${sourceId}, '${slug}', '${sourceName}', '${kind}')">${signedIn ? 'Sign in again' : 'Get code'}</button>
+                  ${signedIn ? `<button class="btn btn-cancel btn-sm" type="button"
+                          onclick="codeLinkClear(${sourceId}, '${slug}', '${sourceName}', '${kind}', '${escapeHtml(title)}')">Sign out</button>` : ''}
+                </div>
+                <span class="amazon-status-text" id="${slug}-${kind}-status-${sourceId}">${escapeHtml(detail || '')}</span>
+              </div>
+            </div>
+          </details>`;
+    }
+
+    async function codeLinkStart(sourceId, slug, sourceName, kind) {
+      const btn      = document.getElementById(`${slug}-${kind}-btn-${sourceId}`);
+      const statusEl = document.getElementById(`${slug}-${kind}-status-${sourceId}`);
+      if (_codeLinkActive[sourceId]) {
+        document.querySelectorAll(`[id^="${slug}-"][id$="-status-${sourceId}"]`).forEach(el => { el.innerHTML = ''; });
+      }
+      btn.disabled = true;
+      statusEl.innerHTML = '<span style="color:var(--text-muted)">Getting a code…</span>';
+      try {
+        const r = await fetch(`/api/sources/${sourceId}/${slug}-link/start`, {
+          method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({kind}),
+        });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok) {
+          statusEl.innerHTML = `<span style="color:var(--danger-soft)">${escapeHtml(d.error || 'Could not get a code.')}</span>`;
+          return;
+        }
+        _codeLinkActive[sourceId] = slug;
+        const row = document.getElementById(`config-panel-row-${sourceId}`);
+        if (!row || row.style.display === 'none') { _codeLinkStop(sourceId); return; }  // closed meanwhile
+        statusEl.innerHTML = `
+          Go to <a href="${escapeHtml(d.url)}" target="_blank" rel="noopener">${escapeHtml(d.url.replace(/^https?:\/\/(www\.)?/, '').replace(/\/$/, ''))}</a>
+          and enter <b style="font-size:1.4em;letter-spacing:.15em;font-family:monospace">${escapeHtml(d.code)}</b>
+          <span style="color:var(--text-muted)">— waiting…</span>
+          <button class="btn btn-cancel btn-sm" type="button" onclick="codeLinkCancel(${sourceId}, '${slug}', '${kind}')">Cancel</button>`;
+        _codeLinkPoll(sourceId, slug, sourceName, kind);
+      } catch (e) {
+        statusEl.innerHTML = '<span style="color:var(--danger-soft)">Network error getting a code.</span>';
+      } finally {
+        btn.disabled = false;
+      }
+    }
+
+    function codeLinkCancel(sourceId, slug, kind) {
+      _codeLinkStop(sourceId);
+      const statusEl = document.getElementById(`${slug}-${kind}-status-${sourceId}`);
+      if (statusEl) statusEl.innerHTML = '<span style="color:var(--text-muted)">Cancelled.</span>';
+    }
+
+    function _codeLinkPoll(sourceId, slug, sourceName, kind) {
+      clearTimeout(_codeLinkTimers[sourceId]);
+      _codeLinkTimers[sourceId] = setTimeout(async () => {
+        const statusEl = document.getElementById(`${slug}-${kind}-status-${sourceId}`);
+        if (!statusEl) { _codeLinkStop(sourceId); return; }  // panel gone
+        let d = {};
+        try {
+          d = await (await fetch(`/api/sources/${sourceId}/${slug}-link/state`)).json();
+        } catch (e) {
+          _codeLinkPoll(sourceId, slug, sourceName, kind);
+          return;
+        }
+        if (d.state === 'waiting') {
+          _setQueueNotice(statusEl, d.queue_notice);
+          _codeLinkPoll(sourceId, slug, sourceName, kind);
+          return;
+        }
+        delete _codeLinkActive[sourceId];
+        if (d.state === 'success') {
+          statusEl.innerHTML = '<span style="color:var(--success-soft)">&#10003; Signed in — updating channels…</span>';
+          setTimeout(() => loadSourceConfig(sourceId, sourceName), 1500);
+        } else if (d.state === 'expired' || d.state === 'error') {
+          statusEl.innerHTML = `<span style="color:var(--danger-soft)">${escapeHtml(d.message || 'Sign-in failed.')} Get a new code to try again.</span>`;
+        }
+      }, 3000);
+    }
+
+    async function codeLinkClear(sourceId, slug, sourceName, kind, title) {
+      if (!confirm(`Sign out of ${title}? Channels that need it stop playing.`)) return;
+      await fetch(`/api/sources/${sourceId}/${slug}-auth/${kind}`, { method: 'DELETE' }).catch(() => {});
+      loadSourceConfig(sourceId, sourceName);
+    }
+
+    function _eventToggle(key, label, values) {
+      return `<div class="espn-services">
+          <label><input type="checkbox" data-key="${key}"
+                 ${String(values[key] || 'false').toLowerCase() === 'true' ? 'checked' : ''}>${label}</label>
+        </div>`;
+    }
+
+    function _saveRow(sourceId) {
+      return `<div class="config-actions">
+          <span class="config-status" id="config-status-${sourceId}"></span>
+          <button class="btn btn-run" type="button" onclick="saveSourceConfig(${sourceId})">Save settings</button>
+        </div>`;
+    }
+
+    function renderNflConfig(sourceId, schema, values, cfg) {
+      const info = (cfg && cfg.nfl) || {};
+      const unlocks = [];
+      if ((info.networks || []).includes('NFLN') || (info.plans || []).length) unlocks.push('NFL Network');
+      if ((info.networks || []).includes('NFLRZ') || (info.plans || []).some(p => p !== 'NFL_PLUS')) unlocks.push('RedZone');
+      return `
+        <div class="config-title">NFL Settings</div>
+        <div class="config-subtitle" style="font-weight:600">Sign in</div>
+        <div class="config-note">NFL Channel plays without signing in. Sign in with a TV provider, an NFL account, or both,
+          to add NFL Network, RedZone and live games.${unlocks.length ? ` This sign-in includes ${unlocks.join(' and ')}.` : ''}</div>
+        <div class="espn-auth-options">
+          ${codeLinkOption(sourceId, 'nfl', 'nfl', 'tve', 'TV provider', 'NFL Network, RedZone and in-market games your TV package includes',
+                   info.tve_signed_in, info.tve_signed_in ? `Signed in with ${info.tve_provider || 'your TV provider'}` : '',
+                   'Get a code, enter it at nfl.com/activate on your phone or computer, then pick your TV provider and sign in.')}
+          ${codeLinkOption(sourceId, 'nfl', 'nfl', 'account', 'NFL account', 'NFL+ subscriptions',
+                   info.account_signed_in, info.account_signed_in ? `Signed in${info.account_email ? ' as ' + info.account_email : ''}` : '',
+                   'Get a code and enter it at nfl.com/activate while signed in to your NFL account. NFL+ adds NFL Network and in-market games; NFL+ Premium adds RedZone.')}
+        </div>
+        <div class="config-subtitle" style="margin-top:0.8rem">Game channels</div>
+        <div class="config-note">Adds each game in the next two days that your sign-in can play as a temporary channel.
+          Games on NFL Network stay on that channel. Channels retire two hours after the scheduled end and are deleted a day later.</div>
+        ${_eventToggle('include_games', 'Include live game channels', values)}
+        ${_saveRow(sourceId)}`;
+    }
+
+    function renderCbsSportsConfig(sourceId, schema, values, cfg) {
+      const info = (cfg && cfg.cbs_sports) || {};
+      const nets = [info.cbs && 'CBS games', info.cbssn && 'CBS Sports Network'].filter(Boolean);
+      const detail = info.signed_in
+        ? `Signed in with ${info.provider || 'your TV provider'}` + (nets.length ? ` — includes ${nets.join(' and ')}` : ' — your package includes neither CBS nor CBS Sports Network')
+        : (info.signin_error || '');
+      return `
+        <div class="config-title">CBS Sports Settings</div>
+        <div class="config-subtitle" style="font-weight:600">Sign in</div>
+        <div class="config-note">CBS Sports HQ, Golazo and the Champions League channel play without signing in.
+          A TV-provider sign-in adds CBS Sports Network and CBS games from your local CBS station, if your package includes them.</div>
+        <div class="espn-auth-options">
+          ${codeLinkOption(sourceId, 'cbs-sports', 'cbs_sports', 'tve', 'TV provider', 'CBS Sports Network and CBS games',
+                   info.signed_in, detail,
+                   'Get a code, enter it at cbssports.com/androidtv/activate on your phone or computer, then pick your TV provider and sign in. The sign-in lasts about 90 days.')}
+        </div>
+        <div class="config-subtitle" style="margin-top:0.8rem">Game channels</div>
+        <div class="config-note">Adds each CBS game in the next two days as a temporary channel (the CBS Sports app only carries
+          your local CBS station during games). CBS Sports Network games stay on that channel.
+          Channels retire two hours after the scheduled end and are deleted a day later.</div>
+        ${_eventToggle('include_events', 'Include game channels', values)}
+        ${_saveRow(sourceId)}`;
+    }
+    function renderParamountConfig(sourceId, schema, values, cfg) {
+      const info = (cfg && cfg.paramount) || {};
+      const detail = info.signed_in ? 'Signed in' : (info.signin_error || '');
+      return `
+        <div class="config-title">Paramount+ Settings</div>
+        <div class="config-subtitle" style="font-weight:600">Sign in</div>
+        <div class="config-note">Adds Paramount+ live sports — UEFA, Serie A, EFL, UFC, rugby and more — as temporary
+          channels, one per match in the next two days. Needs a Paramount+ subscription, or a TV provider that includes Paramount+.
+          If you get Paramount+ through your TV provider, first connect the provider to your Paramount+ account
+          at paramountplus.com → Account → TV Provider.</div>
+        <div class="espn-auth-options">
+          ${codeLinkOption(sourceId, 'paramount', 'paramount', 'account', 'Paramount+', 'Paramount+ account',
+                   info.signed_in, detail,
+                   'Get a code, enter it at paramountplus.com/activate/androidtv on your phone or computer, then sign in with your Paramount+ email and password.')}
+        </div>
+        <div class="config-note" style="margin-top:0.8rem">Match channels retire an hour after the stream window ends and are deleted a day later.</div>`;
+    }
+    // ── end activation-code sign-ins ──────────────────────────────────────────
 
     function renderFuboConfig(sourceId, schema, values) {
       const fastOnly = values.fast_only !== 'false';
@@ -4399,8 +5125,8 @@
                 renderQrCode(document.getElementById('foxone-link-qr'), d.url);
               }
               panel.style.display = 'block';
-            } else if (d.state === 'starting' && Date.now() - startedAt > 10000) {
-              status.textContent = 'Waiting for the background worker to pick this up…';
+            } else if (d.state === 'starting' && (d.queue_notice || Date.now() - startedAt > 10000)) {
+              status.textContent = d.queue_notice || 'Waiting for the background worker to pick this up…';
             } else if (d.state === 'success' || d.state === 'error') {
               _foxOneLoginDone = true;
               panel.style.display = 'none';
@@ -5133,6 +5859,8 @@
             el('link-code-row').style.display = d.code ? '' : 'none';
             el('link-code').textContent = d.code || '';
             el('link-body').style.display = '';
+          } else if (d.state === 'starting' && d.queue_notice) {
+            status.textContent = `${prefix}${d.queue_notice}`;
           } else if (d.state === 'success' || d.state === 'error') {
             return { ok: d.state === 'success', message: d.message || (d.state === 'success' ? 'Signed in.' : 'Sign-in failed.') };
           }
@@ -5213,8 +5941,16 @@
         return renderDirectvConfig(sourceId, schema, values, cfg);
       } else if (sourceName === 'philo') {
         return renderPhiloConfig(sourceId, schema, values);
+      } else if (sourceName === 'nesn_tve') {
+        return renderNesnConfig(sourceId, schema, values, cfg);
       } else if (sourceName === 'espn') {
         return renderEspnConfig(sourceId, schema, values, cfg);
+      } else if (sourceName === 'nfl') {
+        return renderNflConfig(sourceId, schema, values, cfg);
+      } else if (sourceName === 'cbs_sports') {
+        return renderCbsSportsConfig(sourceId, schema, values, cfg);
+      } else if (sourceName === 'paramount') {
+        return renderParamountConfig(sourceId, schema, values, cfg);
       } else if (sourceName === 'sling') {
         return renderSlingConfig(sourceId, schema, values, cfg);
       } else if (sourceName === 'spectrum') {
@@ -5239,6 +5975,25 @@
           const multiple = f.multiple ? ' multiple' : '';
           const size = f.multiple ? ` size="${Math.min(Math.max(f.options.length, 4), 8)}"` : '';
           control = `<select id="cfg-${sourceId}-${f.key}" data-key="${f.key}"${multiple}${size}>${opts}</select>`;
+        } else if (f.field_type === 'checklist' && Array.isArray(f.options) && f.options.length) {
+          // Checked = on. The saved value lists the unchecked options.
+          const off = new Set(String(val).split(',').map(v => v.trim()).filter(Boolean));
+          const counts = (cfg && cfg.option_counts && cfg.option_counts[f.key]) || {};
+          const items = f.options.map(o => {
+            const v = String(o.value);
+            const n = counts[v];
+            return `
+              <label class="config-checklist-item">
+                <input type="checkbox" data-key="${f.key}" data-checklist="true" value="${escapeHtml(v)}"${off.has(v) ? '' : ' checked'}>
+                <span>${escapeHtml(o.label)}${n ? ` <span class="config-checklist-count">${n}</span>` : ''}</span>
+              </label>`;
+          }).join('');
+          return `
+            <div class="field field-full">
+              <label>${escapeHtml(f.label)}${req}</label>
+              <div class="config-checklist">${items}</div>
+              ${help}
+            </div>`;
         } else if (f.field_type === 'toggle') {
           const checked = ['1', 'true', 'yes', 'on'].includes(String(val).trim().toLowerCase()) ? ' checked' : '';
           return `
@@ -5342,6 +6097,10 @@
           payload[key] = [...new Set([...selected, ...custom])].join(',');
           return;
         }
+        if (keyFields[0].dataset.checklist === 'true') {
+          payload[key] = keyFields.filter(el => !el.checked).map(el => el.value).join(',');
+          return;
+        }
         if (keyFields[0].type === 'checkbox') {
           payload[key] = keyFields[0].checked ? 'true' : 'false';
           return;
@@ -5399,6 +6158,8 @@
       document.querySelectorAll(`#source-config-${sourceId} input[data-key], #source-config-${sourceId} select[data-key]`).forEach(field => {
         if (field.tagName === 'SELECT' && field.multiple) {
           [...field.options].forEach(opt => { opt.selected = false; });
+        } else if (field.dataset.checklist === 'true') {
+          field.checked = true;  // a checklist's default is everything on
         } else if (field.type === 'checkbox') {
           field.checked = false;
         } else {
@@ -5437,6 +6198,12 @@
     function _saveCollapsedCats(set) {
       localStorage.setItem(SOURCES_COLLAPSE_KEY, JSON.stringify([...set]));
     }
+    // "6 on of 22" in a group header, recounted when a source is switched on or off.
+    function _refreshCategoryOnCount(cat) {
+      const el = document.getElementById(`cat-on-count-${cat}`);
+      if (el) el.textContent = document.querySelectorAll(`tr.dash-row[data-cat="${cat}"]:not(.disabled)`).length;
+    }
+
     function _applyCategoryCollapse(cat, collapsed) {
       document.querySelectorAll(`tr.dash-row[data-cat="${cat}"], tr.config-panel-row[data-cat="${cat}"]`)
         .forEach(row => row.classList.toggle('cat-collapsed', collapsed));
@@ -5465,14 +6232,54 @@
       if (header) header.scrollIntoView({ behavior: 'smooth', block: 'start' });
     }
 
+    // Turning on a DRM source with no DRM bridge ready: say so on the row
+    // before the user finds out from a channel that won't play.
+    function _showDrmHeadsUp(sourceId, enabled) {
+      const row = document.getElementById(`dash-row-${sourceId}`);
+      const box = document.getElementById(`drm-heads-up-${sourceId}`);
+      if (!row || !box) return;
+      if (!enabled || row.dataset.bridgeMissing !== 'true') { box.hidden = true; return; }
+      const all = row.dataset.playback === 'drm';
+      const via = row.dataset.fcPlayer === 'true' ? 'FastChannels Player (or PrismCast)' : 'PrismCast';
+      box.innerHTML = `<span class="drm-heads-up-icon" aria-hidden="true">!</span>
+        <span>${all
+          ? `Every channel here is DRM, so none will play until a DRM bridge is set up. They play through ${via}.`
+          : `Some channels here are DRM and won't play until a DRM bridge is set up; the rest work now. DRM ones play through ${via}.`}
+          <a href="/admin/bridge">Set up the Bridge →</a></span>
+        <button type="button" class="drm-heads-up-close" aria-label="Dismiss"
+                onclick="this.parentElement.hidden = true">×</button>`;
+      box.hidden = false;
+    }
+
+    // Playback filter: '' all, 'clear' plays in any player, 'drm' has DRM
+    // channels (all or some), which need FastChannels Player.
+    let _playbackFilter = '';
+
+    function setPlaybackFilter(kind) {
+      _playbackFilter = kind;
+      document.querySelectorAll('[data-playback-filter]').forEach(chip =>
+        chip.classList.toggle('active', chip.dataset.playbackFilter === kind));
+      filterSources(document.getElementById('source-filter-input')?.value || '');
+    }
+
+    function _matchesPlayback(row) {
+      if (!_playbackFilter) return true;
+      if (_playbackFilter === 'issues') return row.dataset.issue === 'true' && !row.classList.contains('disabled');
+      const kind = row.dataset.playback || 'clear';
+      if (_playbackFilter === 'clear') return kind === 'clear';
+      // DRM sources not yet tested with FastChannels Player are PrismCast only.
+      return kind !== 'clear' && row.dataset.fcPlayer === 'true';
+    }
+
     function filterSources(rawQuery) {
       const query = rawQuery.trim().toLowerCase();
+      const filtering = !!query || !!_playbackFilter;
       const collapsedCats = _loadCollapsedCats();
       const catHasMatch = {};
 
       document.querySelectorAll('tr.dash-row').forEach(row => {
         const cat = row.dataset.cat;
-        const matches = !query || (row.dataset.search || '').includes(query);
+        const matches = (!query || (row.dataset.search || '').includes(query)) && _matchesPlayback(row);
         if (matches) catHasMatch[cat] = true;
         row.classList.toggle('filter-hidden', !matches);
         const sourceId = row.id.replace('dash-row-', '');
@@ -5488,13 +6295,13 @@
         header.classList.toggle('filter-hidden', !hasMatch);
         // While filtering, force-expand categories with matches; restore the
         // user's persisted collapse choice once the query is cleared.
-        _applyCategoryCollapse(cat, query ? false : collapsedCats.has(cat));
+        _applyCategoryCollapse(cat, filtering ? false : collapsedCats.has(cat));
       });
 
       const noResultsRow = document.getElementById('no-sources-match-row');
       if (noResultsRow) {
-        noResultsRow.style.display = (query && !anyMatch) ? '' : 'none';
-        document.getElementById('no-sources-match-query').textContent = rawQuery;
+        noResultsRow.style.display = (filtering && !anyMatch) ? '' : 'none';
+        document.getElementById('no-sources-match-query').textContent = rawQuery || 'this filter';
       }
     }
 
@@ -5618,7 +6425,7 @@
         const row = document.getElementById(`dash-row-${srcId}`);
         if (row && row.dataset.custom === 'true') {
           fetch(`/api/sources/${srcId}`).then(r => r.json()).then(d => {
-            if (d.channel_count !== undefined) el.textContent = d.channel_count;
+            if (d.enabled_channel_count !== undefined) el.textContent = d.enabled_channel_count;
           }).catch(() => {});
         }
       });

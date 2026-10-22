@@ -90,12 +90,21 @@ _SUCCESS_SUPPRESS_PATTERNS = (
     'GET /api/channels?feed_eligible=1',   # channel picker list
     'GET /api/stats?source=',              # per-source counts shown in the editor
 )
-_SUCCESS_SUPPRESS_RE = re.compile(r'(?:GET|HEAD) /play/directv/browser-asset\?url=')
-_DASH_RE = re.compile(r'(?:GET|HEAD) /play/(amazon_prime_free|cox|philo|sling|pbs|vidaa|fubo)/[^/]+/dash\.mpd')
+# DAZN's segments are relayed (the CDN token is bound to our user agent): one
+# audio and one video segment every ~2s per viewer. ViX's browser preview relays
+# its segments too (CORS is vix.com-only) and refreshes its manifest every ~5s
+# through browser.mpd?s=; the first browser.mpd (the tune) still logs.
+# Paramount+ matches refresh their media playlist through the proxy every ~6s
+# per viewer, plus a key fetch at tune; proxy.m3u8 (the tune) still logs.
+_SUCCESS_SUPPRESS_RE = re.compile(
+    r'(?:GET|HEAD) /play/directv/browser-asset\?url=|(?:GET|HEAD) /play/dazn_tve/[^/]+/seg/'
+    r'|(?:GET|HEAD) /play/vix/[^/]+/(?:seg\?|browser\.mpd\?s=)'
+    r'|(?:GET|HEAD) /play/paramount/[^/]+/(?:variant\.m3u8|key)\?url=')
+_DASH_RE = re.compile(r'(?:GET|HEAD) /play/(amazon_prime_free|cox|philo|sling|pbs|vidaa|fubo|dazn_tve)/[^/]+/dash\.mpd')
 # DirecTV/cox use path-form license URLs (/license/<id>), while vidaa/fubo/sling use
 # query-form URLs (/license?channel_id=<id>) — matched via the separator below. Sling's
 # fire on every tune, block-boundary swap, and FC Player ad-gap rejoin.
-_LICENSE_RE = re.compile(r'POST /play/(directv|cox|vidaa|fubo|sling|espn)/license(?:/|\?channel_id=)')
+_LICENSE_RE = re.compile(r'POST /play/(directv|cox|vidaa|fubo|sling|espn|dazn_tve|vix|cnn_tve)/license(?:/|\?channel_id=)')
 _PLUTO_VARIANT_QUERY_RE = re.compile(r'("(?:GET|HEAD) /play/pluto/variant)\?[^ ]+')
 
 

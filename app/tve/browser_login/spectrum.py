@@ -53,6 +53,7 @@ import json
 import logging
 import re
 import time
+from urllib.parse import urlsplit
 
 import redis
 
@@ -78,9 +79,70 @@ SPECTRUM_SIGNIN_SHOT_KEY = 'spectrum:browser-login:screenshot'
 SPECTRUM_SIGNIN_INPUT_KEY = 'spectrum:browser-login:input'
 SPECTRUM_SIGNIN_STOP_KEY = 'spectrum:browser-login:stop'
 SPECTRUM_SIGNIN_HINT_KEY = 'spectrum:browser-login:hint'
+# Set when someone clicks "Sign in to Spectrum" while a sign-in is already
+# running: an unattended re-login then has a person at the relay after all,
+# so it offers the IDID-4004 account-portal fallback like a manual one.
+SPECTRUM_SIGNIN_ATTENDED_KEY = 'spectrum:browser-login:attended'
 _SPECTRUM_SIGNIN_TIMEOUT_SECONDS = 600
 
 _START_URL = 'https://watch.spectrum.net/guide'
+# Spectrum page-script errors seen on every sign-in that don't affect it;
+# logged at DEBUG instead of WARNING (see _log_page_error).
+_BENIGN_PAGE_ERRORS = (
+    'angular.element(...).injector() is undefined',
+)
+# The My Spectrum account portal's own sign-in. Unlike watch.spectrum.net —
+# which bounces an unauthenticated session to the id.spectrum.net video-client
+# login that ThreatMetrix rejects outright (IDID-4004) with no step-up — the
+# account portal offers a device verification ("phone link") for an untrusted/
+# off-home device, and once that's completed the *.spectrum.net device trust
+# carries into watch.spectrum.net by SSO (a user confirmed exactly this by
+# hand, 2026-10-20). Used only as the IDID-4004 fallback, see
+# _run_account_portal_fallback.
+_ACCOUNT_PORTAL_URL = 'https://www.spectrum.net/login'
+# The portal's OAuth redirect_uri (client_id=consumer_portal), seen in a real
+# away-from-home capture 2026-10-20: id.spectrum.net sends the browser here
+# with the auth code once sign-in (and any MFA step) has passed.
+_PORTAL_SIGNIN_REDIRECT_PATH = '/sign-in-redirect'
+# How long to let /sign-in-redirect finish its code exchange before bridging
+# anyway, if the portal never navigates on from it.
+_PORTAL_REDIRECT_SETTLE_SECONDS = 10.0
+
+
+class _PortalSigninTracker:
+    """Decides when the account-portal sign-in has really finished.
+
+    "Any www.spectrum.net page without /login" isn't enough: the portal's
+    login page is a JavaScript app that routes through public, signed-out
+    pages (the home page among them) before reaching id.spectrum.net, and
+    bridging to watch from one of those burns the fallback's only attempt.
+    Done means: the browser reached id.spectrum.net, then came back to
+    www.spectrum.net/sign-in-redirect, then either moved on to another
+    www.spectrum.net page or sat on the redirect page long enough for its
+    code exchange. Fed every main-frame navigation, since polling page.url
+    can miss a fast hop through id.spectrum.net."""
+
+    def __init__(self):
+        self.seen_idm = False
+        self.redirect_at: float | None = None
+        self.left_redirect = False
+
+    def observe(self, url: str, now: float) -> None:
+        parts = urlsplit(url or '')
+        host, path = (parts.hostname or '').lower(), parts.path or ''
+        if host == 'id.spectrum.net':
+            self.seen_idm = True
+        elif host == 'www.spectrum.net' and self.seen_idm:
+            if path.startswith(_PORTAL_SIGNIN_REDIRECT_PATH):
+                if self.redirect_at is None:
+                    self.redirect_at = now
+            elif self.redirect_at is not None:
+                self.left_redirect = True
+
+    def is_complete(self, now: float) -> bool:
+        if self.redirect_at is None:
+            return False
+        return self.left_redirect or now - self.redirect_at >= _PORTAL_REDIRECT_SETTLE_SECONDS
 
 # Suffix match (not a fixed list of subdomains) so any current or future
 # spectrum.net-owned host (watch./id./apis./bare) counts as "ours" without
@@ -179,7 +241,13 @@ def _dismiss_spectrum_tos_welcome(page) -> bool:
         return False
 
 
-def run_spectrum_signin():
+def run_spectrum_signin(unattended: bool = False):
+    # unattended=True when fired by the scraper's re-login watchdog rather
+    # than a human clicking "Sign in to Spectrum". No one is watching the
+    # relay then, so the IDID-4004 account-portal fallback (which needs a
+    # person to complete the phone/text verification) is skipped unless
+    # someone clicks the button while it runs — see the 4004 branch below.
+    # Everything else is identical.
     _ctx = flask_app.app_context()
     _ctx.push()
     _ctx_popped = {'v': False}
@@ -365,6 +433,12 @@ def run_spectrum_signin():
         _ctx_popped['v'] = True
         deadline = time.monotonic() + _SPECTRUM_SIGNIN_TIMEOUT_SECONDS
         captured: dict = {}
+        # Set while _run_account_portal_fallback drives the spectrum.net
+        # portal: its own consumer_portal OAuth exchange can hand the browser
+        # an access_token too, which is no use for playback (lantern, the
+        # license server and the stva-ovp refresh grant all want a watch
+        # token) — and validateSession may not care which client issued it.
+        _portal_fallback_active: dict = {'v': False}
         _rejected: set = set()  # access_token values already proven dead — never re-try one
         _last_mismatch: dict = {}  # {'account': str} — last valid-but-wrong-account
         # identity seen, so a final timeout can say WHY instead of a generic
@@ -426,6 +500,12 @@ def run_spectrum_signin():
                     and response.ok
                     and 'json' in (response.headers.get('content-type') or '')
                 ):
+                    try:
+                        post_body = response.request.post_data or ''
+                    except Exception:  # noqa: BLE001 — undecodable body; don't let it block a watch capture
+                        post_body = ''
+                    if _portal_fallback_active['v'] or 'consumer_portal' in post_body:
+                        return
                     data = response.json()
                     if isinstance(data, dict) and data.get('access_token'):
                         captured['candidate'] = {
@@ -610,17 +690,61 @@ def run_spectrum_signin():
             with Camoufox(
                 headless='virtual', os='windows', persistent_context=True,
                 user_data_dir=profile_dir, window=(1280, 800), block_images=True,
+                # block_images is deliberate (1048c0d, ~2.5x faster unattended
+                # re-login); this only silences Camoufox's LeakWarning about it.
+                i_know_what_im_doing=True,
             ) as context:
+                def _log_page_error(exc) -> None:
+                    msg = str(exc)[:500]
+                    # Spectrum's own page script throws these on every load
+                    # (an Angular injector lookup before the app boots); they
+                    # don't affect sign-in, so keep them out of WARNING.
+                    if any(m in msg for m in _BENIGN_PAGE_ERRORS):
+                        logger.debug('[spectrum-signin] page JS error (known, harmless): %s', msg)
+                    else:
+                        logger.warning('[spectrum-signin] page JS error: %s', msg)
+
+                def _prepare_page(p) -> None:
+                    # Before any navigation: a "You're signing in as" screen for
+                    # another account (e.g. the one tied to this home network)
+                    # must get "Sign in with another account", not the usual auto-Continue.
+                    _set_expected_spectrum_username(p, username)
+                    _watch_spectrum_auth_results(p, 'spectrum-signin')
+                    p.on('crash', lambda p: logger.warning('[spectrum-signin] page CRASH event fired (url was %s)', _safe_page_url(p)))
+                    # After a verified capture, the close is just us shutting the browser down.
+                    p.on('close', lambda p: (logger.info if 'verified' in captured else logger.warning)(
+                        '[spectrum-signin] page CLOSE event fired'))
+                    p.on('pageerror', _log_page_error)
+                    p.on('response', _on_response)
+
                 page = context.pages[0] if context.pages else context.new_page()
-                # Before any navigation: a "You're signing in as" screen for
-                # another account (e.g. the one tied to this home network)
-                # must get "Sign in with another account", not the usual auto-Continue.
-                _set_expected_spectrum_username(page, username)
-                _watch_spectrum_auth_results(page, 'spectrum-signin')
-                page.on('crash', lambda p: logger.warning('[spectrum-signin] page CRASH event fired (url was %s)', _safe_page_url(p)))
-                page.on('close', lambda p: logger.warning('[spectrum-signin] page CLOSE event fired'))
-                page.on('pageerror', lambda exc: logger.warning('[spectrum-signin] page JS error: %s', str(exc)[:500]))
-                page.on('response', _on_response)
+                _prepare_page(page)
+
+                def _goto_start(after: str) -> None:
+                    """Back to the start URL with the page in an unknown state.
+                    After _clear_spectrum_cox_cookies, clearing localStorage
+                    under the running guide app breaks it (forum #3527: angular
+                    injector() undefined, then the page closed and this goto
+                    died with NS_BINDING_ABORTED, failing an unattended
+                    re-login outright). Bridging from the account portal can
+                    land while /sign-in-redirect is still navigating, which
+                    aborts the same way. So a closed page is replaced and an
+                    aborted navigation retried once."""
+                    nonlocal page
+                    for attempt in (1, 2):
+                        if page.is_closed():
+                            logger.info('[spectrum-signin] page closed %s — opening a new one', after)
+                            page = context.new_page()
+                            _prepare_page(page)
+                        try:
+                            page.goto(_START_URL, wait_until='domcontentloaded', timeout=30000)
+                            return
+                        except Exception as exc:  # noqa: BLE001
+                            if attempt == 2 or not (page.is_closed() or 'NS_BINDING_ABORTED' in str(exc)):
+                                raise
+                            logger.info('[spectrum-signin] navigation %s was interrupted (%s) — retrying',
+                                        after, str(exc).splitlines()[0][:200])
+                            time.sleep(1.0)
 
                 def _dismiss_tos_and_autofill() -> None:
                     """Shared between the initial attempt below and the
@@ -642,6 +766,92 @@ def run_spectrum_signin():
                             source_name=None,
                         )
                         set_status('running', 'Sign in below, including any captcha if shown.', page.url)
+
+                def _run_account_portal_fallback() -> bool:
+                    """IDID-4004 (ThreatMetrix) fallback via the account portal.
+
+                    watch.spectrum.net's sign-in rejects an untrusted/off-home
+                    device outright and never offers a step-up; the My Spectrum
+                    account portal DOES offer a device verification, and once
+                    completed the *.spectrum.net trust carries into
+                    watch.spectrum.net by SSO (user-confirmed by hand
+                    2026-10-20). Drive the portal login in the relay so the user
+                    can complete the phone/text verification, then bridge back
+                    to watch.spectrum.net/guide for the normal capture path.
+
+                    Returns True once back on watch.spectrum.net (the main loop
+                    then captures), or False on stop / page death / timeout."""
+                    nonlocal page, wait_started, last_seen_url
+                    logger.info(
+                        '[spectrum-signin] IDID-4004 (ThreatMetrix) — falling back to the '
+                        'spectrum.net account-portal sign-in so the device-verification step is offered')
+                    set_status('running',
+                               'Spectrum needs to verify this device. Signing in through '
+                               'spectrum.net — complete the email/text verification in the '
+                               'browser below.', _safe_page_url(page))
+                    tracker = _PortalSigninTracker()
+
+                    def _on_nav(frame) -> None:
+                        try:
+                            if frame == page.main_frame:
+                                _debug_log('portal fallback navigated: %s', frame.url)
+                                tracker.observe(frame.url, time.monotonic())
+                        except Exception:  # noqa: BLE001
+                            pass
+
+                    page.on('framenavigated', _on_nav)
+                    _portal_fallback_active['v'] = True
+                    try:
+                        try:
+                            page.goto(_ACCOUNT_PORTAL_URL, wait_until='domcontentloaded', timeout=30000)
+                        except Exception as exc:  # noqa: BLE001
+                            logger.warning('[spectrum-signin] could not open the account portal: %s', exc)
+                            return False
+                        _dismiss_tos_and_autofill()
+                        # Cap the verification window so a walked-away session can't
+                        # hold the relay until the whole-job deadline; still bounded
+                        # by the outer deadline too.
+                        portal_deadline = min(deadline, time.monotonic() + 300)
+                        last_relay = 0.0
+                        while time.monotonic() < portal_deadline:
+                            if r.exists(SPECTRUM_SIGNIN_STOP_KEY):
+                                return False
+                            if page.is_closed():
+                                raise _BrowserSessionDied('browser page closed during account-portal verification')
+                            now = time.monotonic()
+                            url = _safe_page_url(page)
+                            tracker.observe(url, now)
+                            if tracker.is_complete(now):
+                                logger.info('[spectrum-signin] account-portal sign-in complete (%s, %s) — '
+                                            'bridging to watch.spectrum.net', url,
+                                            'left sign-in-redirect' if tracker.left_redirect
+                                            else 'sign-in-redirect settled')
+                                set_status('running', 'Verified — opening the TV guide…', url)
+                                # Off before watch loads, so its own stva-ovp token is captured.
+                                _portal_fallback_active['v'] = False
+                                _goto_start('bridging from the account portal')
+                                wait_started = time.monotonic()
+                                last_seen_url = _safe_page_url(page)
+                                return True
+                            if now - last_relay > 0.25:
+                                last_relay = now
+                                if _relay_input_and_screenshot(
+                                    page, r, waiting_since=now,
+                                    stop_key=SPECTRUM_SIGNIN_STOP_KEY, input_key=SPECTRUM_SIGNIN_INPUT_KEY,
+                                    shot_key=SPECTRUM_SIGNIN_SHOT_KEY, hint_key=SPECTRUM_SIGNIN_HINT_KEY,
+                                ):
+                                    return False
+                            page.wait_for_timeout(200)
+                        logger.warning('[spectrum-signin] account-portal verification did not complete '
+                                       'before the deadline (reached id.spectrum.net: %s, reached '
+                                       'sign-in-redirect: %s)', tracker.seen_idm, tracker.redirect_at is not None)
+                        return False
+                    finally:
+                        _portal_fallback_active['v'] = False
+                        try:
+                            page.remove_listener('framenavigated', _on_nav)
+                        except Exception:  # noqa: BLE001
+                            pass
 
                 if not foreign_cookies_scrubbed:
                     # This profile's non-spectrum.net cookies are
@@ -731,7 +941,7 @@ def run_spectrum_signin():
                     _clear_spectrum_cox_cookies(
                         context, page,
                         'force_fresh_signin requested (credentials changed, or "Clear sign-in" was used)')
-                    page.goto(_START_URL, wait_until='domcontentloaded', timeout=30000)
+                    _goto_start('after clearing the saved session')
                     set_status('running', 'Sign in below, including any captcha if shown.', page.url)
                     _clear_force_fresh_flag()
                 else:
@@ -747,7 +957,7 @@ def run_spectrum_signin():
                     if not _try_capture(page) and _rejected:
                         set_status('running', 'Saved session looks stale — starting a fresh sign-in…', page.url)
                         _clear_spectrum_cox_cookies(context, page, 'SSO-carried-over token failed verification')
-                        page.goto(_START_URL, wait_until='domcontentloaded', timeout=30000)
+                        _goto_start('after clearing the saved session')
                         set_status('running', 'Sign in below, including any captcha if shown.', page.url)
 
                 _dismiss_tos_and_autofill()
@@ -757,6 +967,13 @@ def run_spectrum_signin():
                 last_debug_url_log = 0.0
                 last_seen_url = _safe_page_url(page)
                 _idid_retries_remaining = 2  # up to 3 total attempts at this error specifically
+                # IDID-4004 (ThreatMetrix device-risk reject) gets routed to
+                # the account-portal fallback rather than retried in place —
+                # watch.spectrum.net never offers the verification an
+                # untrusted/off-home device needs, so a bare retry there just
+                # re-rejects and nudges the risk score higher. Tried at most
+                # once per sign-in.
+                _account_portal_attempted = False
                 while time.monotonic() < deadline:
                     if r.exists(SPECTRUM_SIGNIN_STOP_KEY):
                         set_status('stopped', 'Cancelled')
@@ -819,6 +1036,58 @@ def run_spectrum_signin():
                                 f'Unavailable... try again from home"). This is Spectrum\'s bot check '
                                 f'(reCAPTCHA), which tends to follow several sign-ins in a short time — '
                                 f'retrying right away makes it worse. Wait a few hours before trying again.')
+                            return
+                        if 'THMX' in auth_name:
+                            # IDID-4004 = AUTH_REJECT_BY_RECAPTCHA_PASS_THMX_REJECT_STATUS:
+                            # reCAPTCHA passed but Spectrum's ThreatMetrix
+                            # device-risk check rejected the device — the
+                            # common off-home case. watch.spectrum.net offers
+                            # no step-up here, so route to the account portal,
+                            # which does (see _run_account_portal_fallback).
+                            # Skipped for an unattended watchdog re-login: no
+                            # one is watching the relay to complete the
+                            # verification, so holding the browser on the
+                            # portal for minutes would just waste the sign-in
+                            # slot — fail fast instead (same end state as
+                            # today, token stays dead until a manual sign-in).
+                            # Unless someone clicked "Sign in to Spectrum"
+                            # while it ran and is watching it now.
+                            attended = not unattended or bool(r.exists(SPECTRUM_SIGNIN_ATTENDED_KEY))
+                            if attended and not _account_portal_attempted:
+                                _account_portal_attempted = True
+                                if _run_account_portal_fallback():
+                                    continue
+                                if r.exists(SPECTRUM_SIGNIN_STOP_KEY):
+                                    set_status('stopped', 'Cancelled')
+                                    return
+                                # Portal fallback timed out or the page died
+                                # without a usable session — fall through to
+                                # the message.
+                            if not attended:
+                                logger.warning(
+                                    '[spectrum-signin] unattended re-login hit IDID-4004 (ThreatMetrix) '
+                                    '(%s) — device no longer trusted, needs a manual sign-in', auth_name)
+                                set_status(
+                                    'error',
+                                    f'Spectrum\'s device-risk check ({idid_code}) rejected the '
+                                    f'unattended re-login — this device is no longer trusted. Click '
+                                    f'"Sign in to Spectrum" and complete any phone/text verification '
+                                    f'to re-establish it.')
+                                return
+                            logger.warning(
+                                '[spectrum-signin] IDID-4004 (ThreatMetrix) not cleared, incl. the '
+                                'account-portal fallback (%s)', auth_name)
+                            set_status(
+                                'error',
+                                f'Spectrum rejected the sign-in ({idid_code}). This is Spectrum\'s '
+                                f'device-risk check (ThreatMetrix): the sign-in itself was accepted, '
+                                f'but the device/network was not trusted. We also tried signing in '
+                                f'through spectrum.net (which can prompt a phone/text verification), '
+                                f'but it didn\'t complete. Spectrum is strict about this off the '
+                                f'account\'s home internet — if you\'re away from the service '
+                                f'address, sign in once from that home connection, or complete the '
+                                f'spectrum.net verification when prompted, to get this device '
+                                f'trusted.')
                             return
                         if _idid_retries_remaining > 0:
                             _idid_retries_remaining -= 1

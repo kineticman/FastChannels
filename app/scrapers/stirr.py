@@ -266,8 +266,31 @@ class StirrScraper(BaseScraper):
                 incomplete = sum(1 for f in futures if not f.done())
                 logger.warning("[%s] EPG fetch timed out after 300s; %d channel(s) incomplete", self.source_name, incomplete)
 
-        logger.info("[%s] %d total programs fetched", self.source_name, len(programs))
-        return programs
+        # Several STIRR channels' upstream schedules stopped updating months ago
+        # (see the 2026-10-13 note above), and a few multi-week feeds carry
+        # entries older than the worker keeps. Drop anything that started over
+        # a week ago here, matching the worker's past bound, so its
+        # out-of-range warning stays for genuinely corrupt timestamps.
+        stale_before = datetime.now(timezone.utc) - timedelta(days=7)
+        names = {ch.source_channel_id: ch.name for ch in channels}
+        kept: list[ProgramData] = []
+        stale: dict[str, int] = {}
+        for prog in programs:
+            start = prog.start_time
+            if start is not None and start.tzinfo is None:
+                start = start.replace(tzinfo=timezone.utc)
+            if start is not None and start < stale_before:
+                name = names.get(prog.source_channel_id, prog.source_channel_id)
+                stale[name] = stale.get(name, 0) + 1
+                continue
+            kept.append(prog)
+
+        logger.info("[%s] %d total programs fetched", self.source_name, len(kept))
+        if stale:
+            logger.info("[%s] dropped %d program(s) more than a week old: %s",
+                        self.source_name, sum(stale.values()),
+                        ", ".join(f"{name} ({count})" for name, count in sorted(stale.items())))
+        return kept
 
     def resolve(self, raw_url: str) -> str:
         if not raw_url.startswith("stirr://"):

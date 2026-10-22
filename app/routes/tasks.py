@@ -48,6 +48,97 @@ def _dequeue_signin(job_id: str) -> None:
         logger.warning(f'Could not dequeue sign-in job {job_id}: {e}')
 
 
+# What a sign-in modal tells the user its job is stuck behind. Anything not
+# listed reads as "another background task".
+_MAINTENANCE_JOB_LABELS = {
+    'app.worker.run_tvtv_cache_refresh': 'the TV guide cache refresh',
+    'app.worker.run_source_channel_purge': 'a source cleanup',
+    'app.worker.run_playlist_delete': 'a playlist delete',
+    'app.worker.run_bulk_channel_update': 'a bulk channel update',
+    'app.worker.run_bulk_channel_review': 'a bulk channel review',
+    'app.worker.run_gracenote_auto_clear': 'a Gracenote cleanup',
+    'app.worker.run_gracenote_clear_all': 'a Gracenote cleanup',
+    'app.worker._rq_prune': 'nightly maintenance',
+    'app.worker._rq_integrity_cleanup': 'nightly maintenance',
+    'app.worker._rq_db_backup': 'the nightly database backup',
+    'app.worker._rq_ytdlp_upgrade': 'a yt-dlp update',
+    'app.worker._rq_weekly_maintenance': 'weekly database maintenance',
+}
+_SIGNIN_FUNC_PREFIXES = (
+    'app.tve.', 'app.scrapers.espn.run_', 'app.scrapers.nfl.run_link', 'app.scrapers.cbs_sports.run_link',
+    'app.scrapers.paramount.run_link',
+)
+
+
+def _describe_maintenance_job(job) -> str:
+    func = job.func_name or ''
+    if func in _MAINTENANCE_JOB_LABELS:
+        return _MAINTENANCE_JOB_LABELS[func]
+    if func.startswith(_SIGNIN_FUNC_PREFIXES):
+        return 'another sign-in'
+    return 'another background task'
+
+
+_SIGNIN_STARTS_AUTOMATICALLY = ' — the sign-in will start automatically.'
+# For code/link flows the code is already on screen; only the "signed in"
+# confirmation waits for the job.
+SIGNIN_CODE_STILL_USABLE = (' — you can still use the code now; this page confirms '
+                            'the sign-in once that finishes.')
+
+
+def signin_queue_notice(job_id: str | None = None, func_name: str | None = None,
+                        arg: tuple[int, object] | None = None,
+                        tail: str = _SIGNIN_STARTS_AUTOMATICALLY) -> str | None:
+    """While a sign-in job is still waiting in the shared queue (not yet
+    started), say what it's waiting on, so its modal doesn't sit on a bare
+    "Signing in…" that looks hung. Match by job_id, or by func_name for the
+    jobs enqueued without one (optionally narrowed by arg=(index, value),
+    e.g. a link login's run_id). None once the job starts, or on any error."""
+    try:
+        q = get_signin_queue()
+        pos = None
+        if job_id is not None:
+            # Ids only: status polls run this a few times a second, and
+            # q.jobs would fetch every queued job to compare one id.
+            try:
+                pos = q.get_job_ids().index(job_id)
+            except ValueError:
+                pass
+        else:
+            for i, job in enumerate(q.jobs):
+                hit = job.func_name == func_name
+                if hit and arg is not None:
+                    idx, value = arg
+                    hit = len(job.args or ()) > idx and job.args[idx] == value
+                if hit:
+                    pos = i
+                    break
+        if pos is None:
+            return None
+        running = None
+        registry = StartedJobRegistry(q.name, connection=q.connection)
+        for jid in registry.get_job_ids():
+            try:
+                job = Job.fetch(jid, connection=q.connection)
+            except Exception:  # noqa: BLE001 — expired between listing and fetch
+                continue
+            if job.started_at:
+                running = job
+                break
+        if running is not None:
+            mins = int((datetime.now(timezone.utc) - _utc_aware(running.started_at)).total_seconds() // 60)
+            ago = 'just now' if mins < 1 else f'{mins} min ago'
+            msg = f'Waiting for {_describe_maintenance_job(running)} to finish (started {ago})'
+        else:
+            msg = 'Waiting for the background worker'
+        if pos:
+            msg += f', with {pos} more task{"s" if pos != 1 else ""} queued ahead'
+        return msg + tail
+    except Exception as e:  # noqa: BLE001 — a notice must never break a status poll
+        logger.debug(f'signin_queue_notice failed: {e}')
+        return None
+
+
 def _utc_aware(dt):
     if dt is None:
         return None
@@ -895,16 +986,21 @@ def stop_google_signin() -> None:
     _force_kill_mvpd_browser()
 
 
-def trigger_spectrum_signin() -> bool:
+def trigger_spectrum_signin(unattended: bool = False) -> bool:
     """Standalone Spectrum sign-in — see app.tve.browser_login.spectrum.run_spectrum_signin's
-    docstring. Returns True if a job was enqueued, False if one is already running."""
+    docstring. Returns True if a job was enqueued, False if one is already running.
+
+    unattended=True is passed by the scraper's re-login watchdog (no human
+    watching the relay) so run_spectrum_signin skips the IDID-4004
+    account-portal fallback, which needs a person to finish the verification."""
     try:
         q = get_signin_queue()
         job_id = 'spectrum-signin'
         if _mvpd_tve_profile_busy(q):
             logger.debug('MVPD browser login already running')  # see trigger_mvpd_browser_login
             return False
-        q.enqueue('app.tve.browser_login.spectrum.run_spectrum_signin', job_timeout=630, job_id=job_id)
+        q.enqueue('app.tve.browser_login.spectrum.run_spectrum_signin',
+                  kwargs={'unattended': unattended}, job_timeout=630, job_id=job_id)
         logger.info('Enqueued Spectrum sign-in')
         return True
     except Exception as e:
@@ -915,7 +1011,8 @@ def trigger_spectrum_signin() -> bool:
         if _mvpd_tve_profile_busy_fallback():
             logger.info('MVPD browser login fallback thread already running')
             return False
-        threading.Thread(target=run_spectrum_signin, daemon=True, name=thread_name).start()
+        threading.Thread(target=run_spectrum_signin, kwargs={'unattended': unattended},
+                         daemon=True, name=thread_name).start()
         return True
 
 
@@ -927,6 +1024,68 @@ def stop_spectrum_signin() -> None:
         logger.warning(f'Failed to signal Spectrum sign-in stop: {e}')
     _dequeue_signin('spectrum-signin')
     _force_kill_mvpd_browser()
+
+
+# Link-login family -> (browser-login job_id, its stop function). TCM and
+# FOX One have no browser sign-in; AMCN/Discovery reuse the legacy job.
+# The shared job runs one of several families' sign-ins, so the job's function
+# says whose it is — see _browser_login_belongs_to.
+_FAMILY_BROWSER_LOGINS = {
+    'legacy': ('mvpd-browser-login', stop_mvpd_browser_login),
+    'amcn': ('mvpd-browser-login', stop_mvpd_browser_login),
+    'discovery': ('mvpd-browser-login', stop_mvpd_browser_login),
+    'nbc': ('nbc-mvpd-browser-login', stop_nbc_browser_login),
+    'fox': ('fox-mvpd-browser-login', stop_fox_browser_login),
+}
+
+
+_SHARED_JOB_FAMILY_FUNCS = {
+    'legacy': 'app.tve.browser_login.mvpd.run_mvpd_browser_login',
+    'amcn': 'app.tve.browser_login.amcn.run_amcn_browser_login',
+    'discovery': 'app.tve.browser_login.discovery.run_discovery_browser_login',
+}
+
+
+def _browser_login_belongs_to(q: Queue, job_id: str, family: str, requestor_id: str | None) -> bool:
+    """Whether the active job_id is this family's sign-in. Only the shared
+    mvpd-browser-login job needs the check; it also runs FOX One. A legacy
+    sign-in is per network, so with a requestor_id it must be that network's."""
+    func = _SHARED_JOB_FAMILY_FUNCS.get(family)
+    if not func:
+        return True
+    try:
+        job = Job.fetch(job_id, connection=q.connection)
+    except Exception:
+        return False
+    if job.func_name != func:
+        return False
+    if family == 'legacy' and requestor_id:
+        return bool(job.args) and str(job.args[0]).upper() == requestor_id.upper()
+    return True
+
+
+def stop_family_browser_login(family: str, requestor_id: str | None = None) -> bool:
+    """Stop a network family's browser sign-in if one is queued or running.
+    For when that sign-in has been abandoned: the source moved to a
+    different login, or a phone-link sign-in is starting for it (forum
+    #3527: an NBC browser login left waiting on a captcha held the one
+    maintenance worker for its full 30 minutes, so the phone link queued
+    behind it never showed up). Returns True if one was stopped."""
+    job_id, stop = _FAMILY_BROWSER_LOGINS.get(family) or (None, None)
+    if not job_id:
+        return False
+    try:
+        q = get_signin_queue()
+        if not _job_already_active(q, job_id):
+            return False
+        if not _browser_login_belongs_to(q, job_id, family, requestor_id):
+            return False
+    except Exception as e:
+        logger.warning(f'Could not check sign-in job {job_id}: {e}')
+        return False
+    logger.info('Stopping abandoned %s browser sign-in (%s)', family, job_id)
+    stop()
+    return True
 
 
 def trigger_tvtv_cache_refresh() -> str:

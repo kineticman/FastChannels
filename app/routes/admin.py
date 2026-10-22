@@ -5,7 +5,7 @@ import re
 import unicodedata
 from urllib.parse import urlsplit
 from flask import Blueprint, current_app, jsonify, render_template, request
-from sqlalchemy import select, case
+from sqlalchemy import select, case, func, or_
 from sqlalchemy.orm import load_only, defer
 from ..extensions import db
 from ..models import Source, Channel, Feed, FeedChannelNumber, AppSettings, Program
@@ -31,7 +31,7 @@ from ..source_config import (
     is_source_config_complete,
     public_base_url_config,
 )
-from ..timezone_utils import timezone_choices, timezone_health
+from ..timezone_utils import format_datetime, timezone_choices, timezone_health
 from ..url import public_base_url, detected_base_url
 from ..tve.accounts import shared_tve_account
 from ..tve.providers import ytdlp_adobe_mso_providers
@@ -470,6 +470,174 @@ def _humanize_age(dt, now):
     return dt.strftime('%b %-d')
 
 
+# Grouped by what it takes to get a source's channels. Whether they play in
+# any player or only through FastChannels Player is a separate per-source
+# badge (_source_channel_mix), since every group has both kinds.
+_SOURCE_CATEGORY_ORDER = ('fast', 'account', 'premium', 'tve', 'local', 'custom', 'retired')
+_SOURCE_CATEGORY_LABELS = {
+    'fast': 'Free Sources', 'account': 'Free with an Account', 'premium': 'Subscription Sources',
+    'tve': 'TV Provider Sources', 'local': 'Local Antenna', 'custom': 'Custom Sources',
+    'retired': 'Retired Sources',
+}
+
+
+def _source_channel_mix(sources, scrapers):
+    """Per source id, what its active channels are: `play` (enabled, plays in
+    any player), `drm` (enabled, FastChannels Player only), `off` (disabled,
+    with `off_reasons` by disable_reason, '' = switched off by hand), plus a
+    playback `kind` for the badge: 'clear', 'drm' or 'some'. Read from the
+    scraper's DRM flags and the channels themselves, so it can't drift from
+    what plays. Audits mark dead and not-authorized channels inactive; they
+    still count here (as off), since the source still lists them."""
+    mix = {}
+    for source_id, enabled, bridge, reason, n in db.session.query(
+        Channel.source_id, Channel.is_enabled, Channel.requires_drm_bridge, Channel.disable_reason,
+        func.count(Channel.id),
+    ).filter(or_(Channel.is_active.is_(True), Channel.disable_reason.in_(('Dead', 'NotAuthorized')))).group_by(
+        Channel.source_id, Channel.is_enabled, Channel.requires_drm_bridge, Channel.disable_reason,
+    ):
+        m = mix.setdefault(source_id, {'play': 0, 'drm': 0, 'off': 0, 'off_reasons': {}, 'bridge': 0})
+        if bridge:
+            m['bridge'] += n
+        if not enabled:
+            m['off'] += n
+            m['off_reasons'][reason or ''] = m['off_reasons'].get(reason or '', 0) + n
+        elif bridge:
+            m['drm'] += n
+        else:
+            m['play'] += n
+    out = {}
+    for s in sources:
+        cls = scrapers.get(s.name)
+        m = mix.get(s.id) or {'play': 0, 'drm': 0, 'off': 0, 'off_reasons': {}, 'bridge': 0}
+        m['total'] = m['play'] + m['drm'] + m['off']
+        # Decided from what the scraper declares, so it shows before the first
+        # scrape or audit, and without a DRM bridge set up (requires_drm_bridge
+        # is only ever set when one is): a scraper that fetches DRM licenses
+        # (license_url) carries DRM channels.
+        if s.name == 'custom' or cls is None:
+            m['kind'] = 'clear'
+        elif getattr(cls, 'all_channels_require_drm_bridge', False) or (m['total'] and m['bridge'] == m['total']):
+            m['kind'] = 'drm'
+            # Without a bridge their flags are cleared, but none of them plays anywhere.
+            m['drm'] += m['play']
+            m['play'] = 0
+        elif getattr(cls, 'license_url', None) or m['bridge']:
+            m['kind'] = 'some'
+        else:
+            m['kind'] = 'clear'
+        # Whether DRM is one question (license_url, above); whether FastChannels
+        # Player can play it is another: only sources tested decrypting through
+        # it are on DRM_BRIDGE_TRUSTED_SOURCES. The rest are PrismCast only.
+        m['fc_player'] = s.name in DRM_BRIDGE_TRUSTED_SOURCES
+        out[s.id] = m
+    return out
+
+
+_OFF_REASON_LABELS = {'': 'switched off', 'Dead': 'off (dead stream)', 'NotAuthorized': 'off (not in your plan)',
+                      'DRM': 'off (DRM)'}
+
+
+def _mix_title(m):
+    """The channel bar's hover text."""
+    parts = []
+    if m['play']:
+        parts.append(f"{m['play']} play{'s' if m['play'] == 1 else ''} in any player")
+    if m['drm']:
+        parts.append(f"{m['drm']} need{'s' if m['drm'] == 1 else ''} FastChannels Player (DRM)")
+    for reason, n in sorted(m['off_reasons'].items(), key=lambda kv: -kv[1]):
+        parts.append(f"{n} {_OFF_REASON_LABELS.get(reason, 'off (' + reason.lower() + ')')}")
+    return ' · '.join(parts) or 'No channels yet'
+
+
+def _humanize_until(dt, now):
+    """Short time until `dt`: 'now', 'in 7m', 'in 3h', 'in 2d'."""
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    secs = (dt - now).total_seconds()
+    if secs < 60:
+        return 'now'
+    if secs < 3600:
+        return f'in {int(secs // 60)}m'
+    if secs < 86400:
+        return f'in {int(secs // 3600)}h'
+    return f'in {int(secs // 86400)}d'
+
+
+def _source_status_line(s, *, cfg_status, epg, cfm, retired, mix, now, tz_name, bridge_ready=True):
+    """The one line under a source: the most important thing about it right
+    now, worst first, and a hover title with the detail. state is the dot's
+    colour: ok | warn | error | setup | pending | info."""
+    def local(dt):
+        return format_datetime(dt, timezone_name=tz_name) if dt else 'never'
+
+    if retired:
+        days = retired['days_left']
+        return {'state': 'info', 'text': f"Shut down upstream · removed from this list in {days} day{'' if days == 1 else 's'}",
+                'title': 'This service no longer exists and its scraper was removed.'}
+    if s.last_error:
+        first = s.last_error.strip().splitlines()[0] if s.last_error.strip() else 'Last scrape failed'
+        return {'state': 'error', 'text': first if len(first) <= 110 else first[:107] + '…', 'title': s.last_error}
+    if cfg_status == 'required':
+        return {'state': 'setup', 'text': 'Needs setup — open Configure to sign in or add details',
+                'title': 'This source needs settings before it can scrape.'}
+    if mix['total'] and mix['off'] == mix['total'] and set(mix['off_reasons']) == {'NotAuthorized'}:
+        return {'state': 'warn', 'text': 'Not included in your TV plan — no channel here can play',
+                'title': 'Every channel answered "not authorized" for the signed-in account.'}
+    if mix['kind'] == 'drm' and not bridge_ready:
+        return {'state': 'warn', 'text': 'Can\'t play yet: every channel here is DRM and no DRM bridge is set up',
+                'title': 'DRM channels play only through a DRM bridge (FastChannels Player or PrismCast).',
+                'link': ('/admin/bridge', 'Set up the Bridge →')}
+    if s.last_scraped_at is None:
+        return {'state': 'pending', 'text': 'Waiting for its first scrape', 'title': ''}
+
+    detail = [f'Scraped {local(s.last_scraped_at)}']
+    if s.last_epg_success_at:
+        detail.append(f'guide {local(s.last_epg_success_at)}')
+    if s.last_channel_fetch_at:
+        detail.append(f'channel list {local(s.last_channel_fetch_at)}')
+    detail.append('clock-aligned schedule' if s.scrape_cron
+                  else (f'every {s.scrape_interval} min' if s.scrape_interval else 'manual only'))
+    title = ' · '.join(detail)
+    if epg and epg.get('stale'):
+        return {'state': 'warn', 'text': f'Guide hasn\'t updated in {_humanize_age(s.last_epg_success_at, now).removesuffix(" ago")}',
+                'title': 'The channel list keeps refreshing but the guide step is failing. ' + title}
+    if cfm and cfm.get('stale'):
+        return {'state': 'warn', 'text': f'Channel list hasn\'t refreshed in {_humanize_age(s.last_channel_fetch_at, now).removesuffix(" ago")}',
+                'title': title}
+    nxt = s.next_scrape_at()
+    if nxt is not None:
+        if nxt.tzinfo is None:
+            nxt = nxt.replace(tzinfo=timezone.utc)
+        if (now - nxt).total_seconds() > 600:
+            return {'state': 'warn', 'text': f'Scrape overdue — was due {_humanize_age(nxt, now)}', 'title': title}
+    when = f'next {_humanize_until(nxt, now)}' if nxt else ('clock-aligned' if s.scrape_cron else 'manual only')
+    pending = ' · guide arrives with the next scrape' if epg and epg.get('pending') else ''
+    return {'state': 'pending' if pending else 'ok', 'text': f'Updated {_humanize_age(s.last_scraped_at, now)} · {when}{pending}',
+            'title': title, 'ts': s.last_scraped_at}
+
+
+def _source_category(source, scrapers):
+    if source.name == 'custom':
+        return 'custom'
+    if source.name not in scrapers and source.scraper_missing_since is not None:
+        return 'retired'
+    return getattr(scrapers[source.name], 'source_category', 'fast') if source.name in scrapers else 'fast'
+
+
+def _group_sources(sources, scrapers):
+    groups = {}
+    for source in sources:
+        category = _source_category(source, scrapers)
+        groups.setdefault(category, []).append(source)
+    order = {category: index for index, category in enumerate(_SOURCE_CATEGORY_ORDER)}
+    return [
+        {'category': category, 'label': _SOURCE_CATEGORY_LABELS.get(category, category.title()),
+         'sources': sorted(items, key=lambda source: source.display_name)}
+        for category, items in sorted(groups.items(), key=lambda item: (order.get(item[0], 99), item[0]))
+    ]
+
+
 @admin_bp.route('/')
 def dashboard():
     sources        = Source.query.order_by(Source.display_name).all()
@@ -552,6 +720,8 @@ def dashboard():
     health_summary = {'attention': attention, 'live': live}
     enabled_sources = [s for s in sources if s.is_enabled]
     disabled_sources = [s for s in sources if not s.is_enabled]
+    enabled_source_groups = _group_sources(enabled_sources, all_scrapers)
+    disabled_source_groups = _group_sources(disabled_sources, all_scrapers)
 
     # Scheduler liveness: the scheduler runs in its own supervised process, so the
     # only way the web app knows it's alive is the heartbeat it stamps each tick.
@@ -578,6 +748,8 @@ def dashboard():
         signins_needed = []
     return render_template('admin/dashboard.html', sources=sources,
                            enabled_sources=enabled_sources, disabled_sources=disabled_sources,
+                           enabled_source_groups=enabled_source_groups,
+                           disabled_source_groups=disabled_source_groups,
                            total_channels=total_channels, base_url=base_url,
                            feeds=feeds, source_output_meta=source_output_meta,
                            epg_meta=epg_meta, source_health=source_health,
@@ -607,12 +779,12 @@ def sources():
         name: getattr(cls, 'config_required', False)
         for name, cls in all_scrapers.items()
     }
-    premium_sources = {
-        name: getattr(cls, 'is_premium', False)
-        for name, cls in all_scrapers.items()
-    }
     under_development = {
         name: getattr(cls, 'under_development', False)
+        for name, cls in all_scrapers.items()
+    }
+    beta_sources = {
+        name: getattr(cls, 'is_beta', False)
         for name, cls in all_scrapers.items()
     }
     source_categories = {
@@ -694,17 +866,35 @@ def sources():
         if source_config_status.get(s.id) == 'required' and s.is_enabled
     ]
 
-    _CAT_ORDER = {'fast': 0, 'premium': 1, 'tve': 2, 'specialty': 3, 'custom': 4, 'drm': 5, 'retired': 6}
+    _CAT_ORDER = {category: index for index, category in enumerate(_SOURCE_CATEGORY_ORDER)}
 
     def _cat_for(s):
-        return source_categories.get(s.name, 'fast') if s.name != 'custom' else 'custom'
+        return _source_category(s, all_scrapers)
 
     sources_list.sort(key=lambda s: (_CAT_ORDER.get(_cat_for(s), 99), s.display_name))
 
     category_counts = {}
+    category_on_counts = {}
     for s in sources_list:
         cat = _cat_for(s)
         category_counts[cat] = category_counts.get(cat, 0) + 1
+        if s.is_enabled:
+            category_on_counts[cat] = category_on_counts.get(cat, 0) + 1
+
+    source_mix = _source_channel_mix(sources_list, all_scrapers)
+    # Whether a DRM channel on each DRM-carrying source can play right now.
+    from ..drm_bridge import drm_bridge_mode_for
+    bridge_ready = {s.id: drm_bridge_mode_for(s.name) for s in sources_list
+                    if source_mix[s.id]['kind'] != 'clear'}
+    _tz_name = AppSettings.get().effective_timezone_name()
+    _epg_meta = _epg_freshness_meta(sources_list, _now)
+    source_status = {
+        s.id: _source_status_line(
+            s, cfg_status=source_config_status.get(s.id), epg=_epg_meta.get(s.id),
+            cfm=channel_fetch_meta.get(s.id), retired=source_retired.get(s.id),
+            mix=source_mix[s.id], now=_now, tz_name=_tz_name, bridge_ready=bridge_ready.get(s.id, True))
+        for s in sources_list if s.is_enabled and s.name != 'custom'
+    }
 
     from ..scrapers.category_utils import CANONICAL_CATEGORIES
     _app_settings = AppSettings.get()
@@ -714,17 +904,25 @@ def sources():
                            chnum_warnings=[],
                            audit_enabled=audit_enabled,
                            config_required=config_required,
-                           premium_sources=premium_sources,
                            under_development=under_development,
+                           beta_sources=beta_sources,
                            source_categories=source_categories,
+                           source_mix=source_mix,
+                           bridge_ready=bridge_ready,
+                           source_status=source_status,
+                           issue_count=sum(1 for st in source_status.values() if st['state'] in ('error', 'warn', 'setup')),
+                           source_category_labels=_SOURCE_CATEGORY_LABELS,
+                           source_category_order=_SOURCE_CATEGORY_ORDER,
                            source_interval_meta=source_interval_meta,
                            source_config_status=source_config_status,
                            source_retired=source_retired,
                            channel_fetch_meta=channel_fetch_meta,
-                           epg_meta=_epg_freshness_meta(sources_list, _now),
+                           epg_meta=_epg_meta,
+                           mix_title=_mix_title,
                            needs_config=needs_config,
                            canonical_categories=CANONICAL_CATEGORIES,
-                           category_counts=category_counts)
+                           category_counts=category_counts,
+                           category_on_counts=category_on_counts)
 
 
 @admin_bp.route('/channels')
@@ -1294,6 +1492,7 @@ def guide_programs():
             Program.title, Program.description, Program.category,
             Program.rating, Program.poster_url, Program.episode_title,
             Program.season, Program.episode, Program.program_type,
+            Program.original_air_date,
         ))
         .filter(
             Program.channel_id.in_(channel_ids),
@@ -1303,6 +1502,39 @@ def guide_programs():
         .order_by(Program.channel_id, Program.start_time)
         .all()
     )
+
+    # Movies show their release year. Most scrapers don't give one, so for a
+    # channel mapped to a Gracenote station borrow it from the tvtv cache.
+    from ..tvtv_cache import movie_year_lookup, MovieYearLookup
+    guide_channels = (
+        Channel.query
+        .options(load_only(Channel.id, Channel.category, Channel.gracenote_id, Channel.slug))
+        .filter(Channel.id.in_(channel_ids))
+        .all()
+    )
+    ch_cat = {ch.id: (ch.category or '') for ch in guide_channels}
+    # Any stored station ID will do, whatever the channel's gracenote_mode: the
+    # lookup also has to match the title.
+    gn_station = {}
+    for ch in guide_channels:
+        gid = (ch.gracenote_id or '').strip()
+        if not gid and '|' in (ch.slug or ''):
+            gid = ch.slug.split('|', 1)[1].strip()
+        if gid:
+            gn_station[ch.id] = gid
+    try:
+        movie_years = movie_year_lookup(gn_station.values(), window_start_utc, window_end_utc)
+    except Exception:
+        current_app.logger.warning('[guide] tvtv movie-year lookup failed', exc_info=True)
+        movie_years = MovieYearLookup([])
+
+    def _movie_year(p):
+        cats = f'{p.category or ""};{ch_cat.get(p.channel_id, "")}'.casefold().split(';')
+        is_movie = p.program_type == 'movie' or any(c.strip() in ('movie', 'movies') for c in cats)
+        if is_movie and p.original_air_date:
+            return p.original_air_date.year
+        # A Gracenote MV match is a movie even when the scraper didn't tag it.
+        return movie_years.year_for(gn_station.get(p.channel_id), p.title, p.start_time) if movie_years else None
 
     def _as_utc(dt):
         return dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt.astimezone(timezone.utc)
@@ -1335,6 +1567,7 @@ def guide_programs():
             'season': p.season,
             'episode': p.episode,
             'program_type': p.program_type or '',
+            'year': _movie_year(p),
         })
     return jsonify(result)
 
@@ -1655,6 +1888,7 @@ def settings():
                            gracenote_auto_fill=app_settings.gracenote_auto_fill if app_settings.gracenote_auto_fill is not None else True,
                            dvr_epg_auto_refresh=app_settings.dvr_epg_auto_refresh if app_settings.dvr_epg_auto_refresh is not None else True,
                            image_proxy_enabled=app_settings.image_proxy_enabled if app_settings.image_proxy_enabled is not None else True,
+                           event_guide_filler=app_settings.event_guide_filler if app_settings.event_guide_filler is not None else True,
                            m3u_rewrite_timestamps=bool(app_settings.m3u_rewrite_timestamps),
                            debug_logging_enabled=bool(app_settings.debug_logging_enabled),
                            prismcast_url=app_settings.effective_prismcast_url() or '',

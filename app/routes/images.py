@@ -391,7 +391,8 @@ def prewarm_logo_cache(urls: list[str], progress_cb=None) -> tuple[int, int]:
     Skips URLs already cached and fresh.  Returns (cached, failed) counts.
     progress_cb(done, total), if provided, is called after each completed fetch.
     """
-    urls = [u for u in urls if u]
+    # Server-relative paths are bundled static assets, served as-is.
+    urls = [u for u in urls if u and not u.startswith('/')]
     if not urls:
         return 0, 0
     # Avoid redundant freshness checks and duplicate fetches when multiple

@@ -51,7 +51,7 @@ from app.channel_tags import (AUTO_EVENT_REASONS, EVENT_RETIRED_REASON, EVENT_MI
                               event_channel_clause)
 from app.event_lifecycle import hide_event, restore_event, delete_event
 from app.tve.adobe_pass import TVENotAuthorizedError
-from app.xml_cache import ensure_xml_artifact, get_artifact, invalidate_xml_cache, write_artifact
+from app.xml_cache import ensure_xml_artifact, get_artifact, invalidate_xml_cache, sweep_unused_artifacts, write_artifact
 from app.routes.images import delete_cached_logo
 
 from app.timezone_utils import make_tz_formatter
@@ -1806,6 +1806,8 @@ def _refresh_xml_artifacts() -> None:
     from app.generators.xmltv import write_xmltv
 
     for attempt in range(2):
+        # The feed list below is read now, so the sweep's grace counts from here.
+        pass_started = time.time()
         _settings = AppSettings.get()
         _configured_base_url = (_settings.effective_public_base_url() or '').strip().rstrip('/')
         if not _configured_base_url:
@@ -2039,6 +2041,17 @@ def _refresh_xml_artifacts() -> None:
         logger.info('[artifacts] refreshed %d XML artifact(s) and %d M3U artifact(s)', rebuilt_xml, rebuilt_m3u)
         if missing_m3u:
             logger.warning('[artifacts] still missing M3U artifact(s) after retry: %s', missing_m3u)
+        # This pass's keys are exactly what the output routes can serve right
+        # now, so anything else on disk is from a deleted feed or a bridge
+        # method that's been switched off (GitHub #73).
+        try:
+            live_keys = {k for k, _w in xml_artifacts} | {k for k, _w in m3u_artifacts}
+            swept, swept_bytes = sweep_unused_artifacts(live_keys, since=pass_started)
+            if swept:
+                logger.info('[artifacts] removed %d unused cache file(s), freed %.1f MB',
+                            swept, swept_bytes / 1024 / 1024)
+        except Exception:
+            logger.exception('[artifacts] unused-artifact sweep failed')
         break
 
 
@@ -2239,13 +2252,17 @@ def run_playlist_delete(source_id: int):
             filters = dict(feed.filters or {})
             changed = False
             if name in (filters.get('sources') or []):
-                filters['sources'] = [s for s in filters['sources'] if s != name]
-                changed = True
+                scrubbed = _scrubbed_feed_list('sources', filters['sources'], {name})
+                if scrubbed != filters['sources']:
+                    filters['sources'] = scrubbed
+                    changed = True
             for key in ('channel_ids', 'excluded_channel_ids', 'pinned_channel_ids'):
                 ids = filters.get(key)
                 if isinstance(ids, list) and gone.intersection(ids):
-                    filters[key] = [cid for cid in ids if cid not in gone]
-                    changed = True
+                    scrubbed = _scrubbed_feed_list(key, ids, gone)
+                    if scrubbed != ids:
+                        filters[key] = scrubbed
+                        changed = True
             if changed:
                 feed.filters = filters
 
@@ -3622,7 +3639,15 @@ def _schedule_due_scrapes():
 def seed_sources():
     with flask_app.app_context():
         scrapers = registry.get_all()
-        default_disabled_sources = {'amazon_prime_free', 'aenetworks_tve', 'fox_tve', 'discovery_tve', 'amcn_tve', 'fox_one', 'nbc_tve', 'warner_tve', 'cspan', 'sling', 'localnow', 'pluto', 'frndlytv', 'fubo', 'hdhomerun', 'freecast', 'vidaa', 'philo', 'directv', 'pbs', 'tubi', 'spectrum', 'espn'}
+        # A DRM source (license_url) the FastChannels Player bridge hasn't been
+        # tested with is PrismCast-only until it's added to the trusted list.
+        from app.drm_bridge import DRM_BRIDGE_TRUSTED_SOURCES
+        untested = sorted({cls.source_name for cls in scrapers.values() if getattr(cls, 'license_url', None)}
+                          - DRM_BRIDGE_TRUSTED_SOURCES)
+        if untested:
+            logger.warning('DRM sources not on DRM_BRIDGE_TRUSTED_SOURCES (PrismCast only until tested with '
+                           'FastChannels Player): %s', ', '.join(untested))
+        default_disabled_sources = {'amazon_prime_free', 'aenetworks_tve', 'fox_tve', 'discovery_tve', 'amcn_tve', 'fox_one', 'nbc_tve', 'warner_tve', 'cspan', 'sling', 'localnow', 'pluto', 'frndlytv', 'fubo', 'hdhomerun', 'freecast', 'vidaa', 'philo', 'directv', 'pbs', 'tubi', 'spectrum', 'espn', 'nfl', 'cbs_sports', 'free_networks', 'versant_tve', 'zeam', 'vix', 'univision_tve', 'disney_tve', 'tennis_tve', 'dazn_tve', 'cspan_tve', 'sundance_tve', 'cnn_tve', 'nesn_tve', 'paramount'}
         # Custom Channels source: always seeded, always enabled, never auto-scraped
         if not Source.query.filter_by(name='custom').first():
             db.session.add(Source(
@@ -4010,13 +4035,81 @@ def _rq_ytdlp_upgrade():
     _reload_gunicorn_workers()
 
 
+_FEED_WHITELIST_KEYS = ('channel_ids', 'sources')
+
+
+def _scrubbed_feed_list(key: str, values: list, gone: set) -> list:
+    """values minus gone, except a whitelist key never comes back empty: every
+    reader treats [] as "no filter", so emptying a feed's channel_ids or
+    sources would turn a feed that now matches nothing into the full lineup.
+    Its stale entries are kept instead, which still match nothing."""
+    kept = [v for v in values if v not in gone]
+    if not kept and key in _FEED_WHITELIST_KEYS:
+        return values
+    return kept
+
+
+def _scrub_feed_channel_refs() -> int:
+    """Drop feed-filter channel ids whose channel no longer exists.
+
+    Only playlist deletion scrubs these inline; channels removed upstream,
+    ended event channels, deleted custom channels and boot-time dedup all
+    leave stale ids behind. channels.id has no AUTOINCREMENT, so SQLite can
+    hand a deleted max id to a new channel and a stale pin/exclude would
+    silently attach to it. Returns the number of feeds changed.
+    """
+    keys = ('channel_ids', 'excluded_channel_ids', 'pinned_channel_ids')
+    feeds = Feed.query.all()
+    referenced = set()
+    for feed in feeds:
+        for key in keys:
+            ids = (feed.filters or {}).get(key)
+            if isinstance(ids, list):
+                referenced.update(i for i in ids if isinstance(i, int))
+    if not referenced:
+        return 0
+
+    existing = {
+        row[0] for row in db.session.query(Channel.id)
+        .filter(Channel.id.in_(referenced)).all()
+    }
+    gone = referenced - existing
+    if not gone:
+        return 0
+
+    changed_feeds = 0
+    for feed in feeds:
+        filters = dict(feed.filters or {})
+        changed = False
+        for key in keys:
+            ids = filters.get(key)
+            if isinstance(ids, list) and gone.intersection(ids):
+                scrubbed = _scrubbed_feed_list(key, ids, gone)
+                if scrubbed != ids:
+                    filters[key] = scrubbed
+                    changed = True
+        if changed:
+            feed.filters = filters
+            changed_feeds += 1
+    db.session.commit()
+    logger.info('[maint] scrubbed %d stale channel id(s) from %d feed(s): %s',
+                len(gone), changed_feeds, sorted(gone))
+    return changed_feeds
+
+
 def _rq_weekly_maintenance():
-    """RQ job target: sanity-prune bogus EPG rows, then VACUUM if the live DB
-    file is heavily fragmented. Runs on the scraper queue so its exclusive
-    VACUUM lock is serialized against scrapes, same as _rq_prune.
+    """RQ job target: sanity-prune bogus EPG rows, scrub stale feed-filter
+    channel ids, then VACUUM if the live DB file is heavily fragmented. Runs
+    on the scraper queue so its exclusive VACUUM lock is serialized against
+    scrapes, same as _rq_prune.
     """
     with flask_app.app_context():
         _prune_bogus_programs()
+        try:
+            _scrub_feed_channel_refs()
+        except Exception as exc:
+            db.session.rollback()
+            logger.warning('[maint] feed channel-id scrub failed: %s', exc)
 
         free = db.session.execute(text('PRAGMA freelist_count')).scalar() or 0
         total = db.session.execute(text('PRAGMA page_count')).scalar() or 1

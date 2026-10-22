@@ -110,7 +110,7 @@ class FreecastScraper(BaseScraper):
     audit_requires_config = ['username', 'password']
     config_required = True
     is_premium = False
-    source_category = 'fast'
+    source_category = 'account'
 
     config_schema = [
         ConfigField('username', 'Username / Email', required=True,

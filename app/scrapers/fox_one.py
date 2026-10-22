@@ -106,16 +106,19 @@ _CHANNEL_OVERRIDES: dict[str, tuple[str, str]] = {
     'FXNB': ('FOX Nation Binge', 'Entertainment'),
     'FXN1': ('FOX Nation 1', 'Entertainment'),
     'FXN2': ('FOX Nation 2', 'Entertainment'),
+    # Was a mislabeled rotating slot ("FOX Movies" airing Masked Singer) and
+    # excluded until 2026-10-17, when it was confirmed as a 24/7 Masked Singer
+    # channel (container art, station brand "Masked", every guide row). Its
+    # Gracenote station_id is still "TBD", so it gets no gracenote_id.
+    'FMSC': ('The Masked Singer', 'Entertainment'),
+    'FMSCFO': ('The Masked Singer', 'Entertainment'),
 }
 
-# FOX's own API gives this call sign no real identity (network: "FOX Digital",
-# station_name: null) — it's a rotating stunt/block channel, not a fixed
-# network. Content rotates independently of the name (confirmed live
-# 2026-08-10: labeled "FOX Movies" here while actually airing a Masked Singer
-# marathon — see community report). No reliable name AND no real Gracenote ID
-# (FOX's API literally returns the placeholder "TBD" for it), so it's dropped
-# rather than guessed at.
-_EXCLUDED_CALL_SIGNS = {'FMSC', 'FMSCFO'}
+# Channels whose networks_info logo is only the generic "FOX Digital" mark;
+# their own station logo is the real one.
+_STATION_LOGO_FIRST = {'FMSC', 'FMSCFO'}
+
+_EXCLUDED_CALL_SIGNS: set[str] = set()
 
 
 def _headers() -> dict[str, str]:
@@ -380,7 +383,8 @@ class FoxOneScraper(MvpdCooldownMixin, BaseScraper):
                 # call sign instead of that unhelpful generic value.
                 name = str(first.get('station_name') or fallback_name)
             logo = (
-                _image(first.get('networks_info', [{}])[0].get('images') if first.get('networks_info') else None, 'primary', 'secondary')
+                (first.get('station_affiliate_logo') if call_sign in _STATION_LOGO_FIRST else None)
+                or _image(first.get('networks_info', [{}])[0].get('images') if first.get('networks_info') else None, 'primary', 'secondary')
                 or first.get('station_affiliate_logo')
                 or _image(detail.get('images'), 'primary')
                 or _image(container.get('images'), 'primary')

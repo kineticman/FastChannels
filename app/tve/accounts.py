@@ -23,7 +23,8 @@ SHARED_DISPLAY_NAME = 'TV Provider'
 # its phone-link sign-in, status rows and scripted renewal all follow its
 # account.
 SEPARATE_SIGNIN_SOURCES = frozenset({
-    'nbc_tve', 'fox_tve', 'warner_tve', 'aenetworks_tve', 'amcn_tve', 'discovery_tve',
+    'nbc_tve', 'fox_tve', 'warner_tve', 'aenetworks_tve', 'amcn_tve', 'discovery_tve', 'versant_tve',
+    'univision_tve', 'disney_tve', 'tennis_tve', 'dazn_tve', 'cspan_tve', 'sundance_tve', 'cnn_tve', 'nesn_tve',
 })
 
 # What a source's sign-in leaves behind outside its account row. All of it is
@@ -44,6 +45,15 @@ SIGNIN_STATE = {
     # FOX and A+E keep everything on the account row itself.
     'fox_tve': {},
     'aenetworks_tve': {},
+    'versant_tve': {'cache': ('versant_session', 'versant_playback'), 'account': ('versant_mvpd_auth',)},
+    'univision_tve': {'cache': ('univision_user', 'univision_qpat_user'), 'account': ('univision_mvpd_auth',)},
+    'disney_tve': {'cache': ('disney_adobe_tokens', 'disney_streams'), 'account': ('disney_mvpd_auth',)},
+    'tennis_tve': {'cache': ('tennis_client', 'tennis_streams'), 'account': ('tennis_mvpd_auth',)},
+    'dazn_tve': {'cache': ('dazn_session', 'dazn_streams'), 'account': ('dazn_auth',)},
+    'cspan_tve': {'cache': ('cspan_tve_client', 'cspan_tve_authz'), 'account': ('cspan_mvpd_auth',)},
+    'sundance_tve': {'cache': ('sundance_session', 'sundance_streams'), 'account': ('sundance_auth',)},
+    'cnn_tve': {'cache': ('cnn_tve_client', 'cnn_tve_authz', 'cnn_streams', 'cnn_bolt'), 'account': ('cnn_mvpd_auth',)},
+    'nesn_tve': {'cache': ('nesn_session', 'nesn_playback'), 'account': ('nesn_mvpd_auth',)},
 }
 
 # The keys sign-in status and errors are recorded under (tve_last_error,
@@ -68,6 +78,15 @@ _NETWORK_KEY_SOURCES = {
     'bbca': 'amcn_tve',
     'ifc': 'amcn_tve',
     'wetv': 'amcn_tve',
+    'versant': 'versant_tve',
+    'univision': 'univision_tve',
+    'disney': 'disney_tve',
+    'tennis': 'tennis_tve',
+    'dazn': 'dazn_tve',
+    'cspan': 'cspan_tve',
+    'sundance': 'sundance_tve',
+    'cnn': 'cnn_tve',
+    'nesn': 'nesn_tve',
 }
 
 

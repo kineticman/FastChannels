@@ -16,9 +16,11 @@ import logging
 from datetime import datetime, timedelta, timezone
 from xml.etree.ElementTree import Element, SubElement, tostring
 
+from ..channel_tags import is_event_channel
 from ..extensions import db
 from ..models import Program, AppSettings
 from ..scrapers.playlist import is_playlist_source
+from ..timezone_utils import current_zoneinfo
 from ..url import proxy_logo_url
 from .m3u import (_selected_channels, _tvg_id, _channel_display_name, _source_multi_country_map,
                   _sanitize, _build_channel_query, _prismcast_capturable, _drm_bridge_query_filters)
@@ -97,6 +99,7 @@ def generate_xmltv_stream(filters: dict = None, base_url: str = None, feed_name:
 
     _s = AppSettings.get()
     _image_proxy = _s.image_proxy_enabled if _s.image_proxy_enabled is not None else True
+    _event_filler_on = _s.event_guide_filler if _s.event_guide_filler is not None else True
 
     # Standard XMLTV excludes Gracenote-backed channels (those belong to the
     # Gracenote M3U source and must not be mixed with XMLTV-backed channels).
@@ -162,6 +165,8 @@ def generate_xmltv_stream(filters: dict = None, base_url: str = None, feed_name:
     # the full channel-id IN list on every page.  A channel's 5-day window is
     # a few hundred rows, so memory stays bounded per query.
     with_programs: set[int] = set()
+    event_ids = {ch.id for ch in channels if is_event_channel(ch)}
+    filler_start = epg_start.replace(minute=0, second=0, microsecond=0)
     for ch_id in channel_id_list:
         programs = (
             db.session.query(Program)
@@ -175,6 +180,18 @@ def generate_xmltv_stream(filters: dict = None, base_url: str = None, feed_name:
         )
         if programs:
             with_programs.add(ch_id)
+
+        # An event channel is listed hours before its one programme, so fill
+        # the lead-in and the hours after with blocks that say so; otherwise
+        # clients show an empty row, or invent their own airings named after
+        # the channel, which read as the game being on.
+        is_event = ch_id in event_ids and programs
+        fill_event = is_event and _event_filler_on
+        if fill_event:
+            first = min(programs, key=lambda p: p.start_time)
+            yield from _event_filler(
+                tvg_map[ch_id], ch_lang_map.get(ch_id, 'en'), filler_start, first.start_time,
+                'Event Not Started', f'{first.title} starts {_local_short(first.start_time)}.')
 
         for prog in programs:
             tvg_id = tvg_map.get(prog.channel_id)
@@ -258,7 +275,16 @@ def generate_xmltv_stream(filters: dict = None, base_url: str = None, feed_name:
             if prog.rating:
                 r = SubElement(el, 'rating', system='MPAA')
                 SubElement(r, 'value').text = prog.rating
+            if is_event and prog.is_live:
+                SubElement(el, 'live')
             yield tostring(el, encoding='unicode') + '\n'
+
+        if fill_event:
+            last = max(programs, key=lambda p: p.end_time)
+            yield from _event_filler(
+                tvg_map[ch_id], ch_lang_map.get(ch_id, 'en'), last.end_time,
+                min(last.end_time + timedelta(hours=24), epg_end),
+                'Event Ended', f'{last.title} ended {_local_short(last.end_time)}.')
 
     # ── Synthetic hourly blocks for custom channels ───────────────────────
     # Custom channels have no scraped Program rows.  Emit repeating 1-hour
@@ -314,6 +340,26 @@ _TMS_ID_RE = _re.compile(r'^(?:SH|EP|MV|SP|NO)\d{10,12}$')
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────
+
+def _event_filler(tvg_id: str, lang: str, start, stop, title: str, desc: str):
+    """Hourly uncategorized blocks, so they stay out of clients' genre filters."""
+    t = start
+    while (stop - t).total_seconds() >= 60:
+        slot_end = min(t + timedelta(hours=1), stop)
+        el = Element('programme', attrib={'start': _dt(t), 'stop': _dt(slot_end), 'channel': tvg_id})
+        SubElement(el, 'title', lang=lang).text = title
+        SubElement(el, 'desc', lang=lang).text = _sanitize(desc)
+        yield tostring(el, encoding='unicode') + '\n'
+        t = slot_end
+
+
+def _local_short(dt) -> str:
+    """e.g. 'Sat 3:00 PM EDT' in the configured timezone."""
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    local = dt.astimezone(current_zoneinfo())
+    return local.strftime('%a ') + local.strftime('%I:%M %p').lstrip('0') + local.strftime(' %Z')
+
 
 def _is_tms_id(value: str) -> bool:
     return bool(_TMS_ID_RE.match(value or ''))

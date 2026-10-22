@@ -59,11 +59,12 @@ def is_source_config_complete(source_name: str, scraper_cls, values: dict | None
     saved = values or {}
 
     # Amazon playback may work with a manually pasted cookie, but the source
-    # should not be presented as fully configured until the account credentials
-    # and the captured session cookie are all present.
+    # should not be presented as fully configured until the account email and
+    # the captured session cookie are present. The password is optional: a
+    # blank one means sign in with a code texted to the phone.
     if source_name == 'amazon_prime_free':
         return all((saved.get(key) or '').strip() for key in (
-            'amazon_email', 'amazon_password', 'cookie_header',
+            'amazon_email', 'cookie_header',
         ))
 
     # DirecTV has two sign-in methods: saved email + password, or a code
@@ -89,6 +90,10 @@ def is_source_config_complete(source_name: str, scraper_cls, values: dict | None
     # provider link — "configured" means either left a session behind.
     if source_name == 'espn':
         return bool(saved.get('refresh_token') or saved.get('adobe_client_id'))
+
+    # Paramount+ — "configured" means the activation-code sign-in saved a session.
+    if source_name == 'paramount':
+        return bool((saved.get('cookies') or {}).get('CBS_COM'))
 
     # FOX One — "configured" means it has signed in at least once (through
     # either sign-in method, or the hidden refresh_token fallback).

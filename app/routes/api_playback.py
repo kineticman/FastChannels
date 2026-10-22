@@ -508,7 +508,7 @@ def inspect_channel(channel_id):
         return jsonify({'status': 'error', 'detail': str(e)})
 
 
-def _get_playback_info(ch, fast_mode=True):
+def _get_playback_info(ch, fast_mode=True, browser=False):
     """
     Resolve playback URLs and mode for a channel.
     Returns dict: stream_type, preview_url, play_url, playback_mode, license_url,
@@ -724,6 +724,27 @@ def _get_playback_info(ch, fast_mode=True):
     if ch.source and ch.source.name == 'spectrum' and ch.source_channel_id:
         from urllib.parse import quote as _quote
         preview_url = f'/play/spectrum/{_quote(ch.source_channel_id, safe="")}/dash.mpd'
+    # Versant: same extension issue (see versant_tve_dash in play.py).
+    if ch.source and ch.source.name == 'versant_tve' and ch.source_channel_id:
+        from urllib.parse import quote as _quote
+        preview_url = f'/play/versant_tve/{_quote(ch.source_channel_id, safe="")}/dash.mpd'
+    if ch.source and ch.source.name == 'nesn_tve' and ch.source_channel_id:
+        from urllib.parse import quote as _quote
+        preview_url = f'/play/nesn_tve/{_quote(ch.source_channel_id, safe="")}/dash.mpd'
+    if ch.source and ch.source.name == 'vix' and ch.source_channel_id:
+        from urllib.parse import quote as _quote
+        # A browser can't fetch ViX's segments (CORS is vix.com-only), so the
+        # admin/watch players get the segment relay; FastChannels Player keeps the 302.
+        preview_url = f'/play/vix/{_quote(ch.source_channel_id, safe="")}/{"browser" if browser else "dash"}.mpd'
+    if ch.source and ch.source.name == 'tennis_tve' and ch.source_channel_id:
+        from urllib.parse import quote as _quote
+        preview_url = f'/play/tennis_tve/{_quote(ch.source_channel_id, safe="")}/dash.mpd'
+    if ch.source and ch.source.name == 'cnn_tve' and ch.source_channel_id:
+        from urllib.parse import quote as _quote
+        preview_url = f'/play/cnn_tve/{_quote(ch.source_channel_id, safe="")}/dash.mpd'
+    if ch.source and ch.source.name == 'dazn_tve' and ch.source_channel_id:
+        from urllib.parse import quote as _quote
+        preview_url = f'/play/dazn_tve/{_quote(ch.source_channel_id, safe="")}/dash.mpd'
 
     # Philo → DASH+Widevine. Philo's MPD CDN locks CORS to philo.com, so the
     # route proxies the manifest body with permissive CORS (segments are CORS-*
@@ -815,7 +836,7 @@ def preview_channel(channel_id):
     ch = Channel.query.get_or_404(channel_id)
     now = datetime.now(timezone.utc)
     fast_mode = request.args.get('detect', '1') == '0'
-    info = _get_playback_info(ch, fast_mode=fast_mode)
+    info = _get_playback_info(ch, fast_mode=fast_mode, browser=True)
     stream_type = info['stream_type']
     preview_url = info['preview_url']
     play_url = info['play_url']
