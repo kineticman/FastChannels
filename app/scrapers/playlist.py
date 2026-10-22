@@ -137,14 +137,17 @@ def validate_url(url: str | None, label: str) -> str:
     return url
 
 
-def _retry_after_seconds(value: str | None) -> int:
-    """Seconds to wait per a Retry-After header (delta-seconds form only),
-    clamped to RATE_LIMIT_MAX_WAIT."""
+def _retry_after_seconds(value: str | None) -> int | None:
+    """Seconds to wait per a Retry-After header (delta-seconds form only), or
+    None when the host asks for longer than RATE_LIMIT_MAX_WAIT: retrying
+    sooner than asked only earns another 429 and holds the scraper worker."""
     try:
         wait = int((value or '').strip())
     except ValueError:
         wait = RATE_LIMIT_DEFAULT_WAIT
-    return max(1, min(wait, RATE_LIMIT_MAX_WAIT))
+    if wait > RATE_LIMIT_MAX_WAIT:
+        return None
+    return max(1, wait)
 
 
 def _download(session: requests.Session, url: str, label: str, limit: int,
@@ -159,6 +162,8 @@ def _download(session: requests.Session, url: str, label: str, limit: int,
             if r.status_code != 429 or attempt or not retry_rate_limit:
                 break
             wait = _retry_after_seconds(r.headers.get('Retry-After'))
+            if wait is None:
+                break
             r.close()
             logger.info('%s rate-limited (HTTP 429) by %s; retrying in %ds', label, redact_url(url), wait)
             time.sleep(wait)
