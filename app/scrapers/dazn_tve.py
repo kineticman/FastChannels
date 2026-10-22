@@ -271,8 +271,9 @@ class DaznTVEScraper(BaseScraper):
 
     # ── channels + guide ─────────────────────────────────────────────────────
 
-    def _tiles(self, token: str) -> list[dict]:
-        """The Live TV rail's tiles this token can play. Each tile names the
+    def _tiles(self, token: str) -> tuple[list[dict], dict[str, list[str]]]:
+        """The Live TV rail's tiles this token can play, plus the titles it
+        can't, grouped by the entitlements they need. Each tile names the
         entitlements it needs (e.g. base_dazn_content for a paid DAZN plan,
         e_r_yes_nt for YES); "a_a" is on every tile and isn't one."""
         r = self.session.get(RAIL_URL, timeout=20, params={
@@ -280,19 +281,20 @@ class DaznTVEScraper(BaseScraper):
             'zones': ','.join(zones(token))})
         r.raise_for_status()
         held = entitlements(token)
-        tiles = []
+        tiles, skipped = [], {}
         for tile in (r.json() or {}).get('Tiles') or []:
             needs = set(tile.get('EntitlementIds') or []) - {'a_a'}
             if needs and not needs & held:
-                logger.info('[dazn_tve] skipping %s — needs %s', tile.get('Title'), ', '.join(sorted(needs)))
+                skipped.setdefault(', '.join(sorted(needs)), []).append(tile.get('Title') or '?')
                 continue
             tiles.append(tile)
-        return tiles
+        return tiles, skipped
 
     def fetch_channels(self) -> list[ChannelData]:
         token, _ = self._token()
         out = []
-        for tile in self._tiles(token):
+        tiles, skipped = self._tiles(token)
+        for tile in tiles:
             asset = tile.get('AssetId')
             name = (tile.get('Title') or '').split(':')[0].strip()
             if not asset or not name:
@@ -317,6 +319,9 @@ class DaznTVEScraper(BaseScraper):
         if rsn_status(token) != 'ActivePaid':
             logger.info('[dazn_tve] no TV provider linked — free channels only')
         logger.info('[dazn_tve] %d channels (zones %s)', len(out), ','.join(zones(token)))
+        if skipped:
+            logger.info('[dazn_tve] skipped %d not entitled: %s', sum(map(len, skipped.values())),
+                        '; '.join(f'needs {needs}: {", ".join(titles)}' for needs, titles in skipped.items()))
         return out
 
     def fetch_epg(self, channels: list[ChannelData], **kwargs) -> list[ProgramData]:
@@ -324,7 +329,7 @@ class DaznTVEScraper(BaseScraper):
         # nothing further ahead, so the rest of the window gets hourly blocks
         # named after the channel. Rescrapes (every 90 minutes) roll it on.
         token, _ = self._token()
-        schedule = {t.get('AssetId'): t.get('LinearSchedule') or {} for t in self._tiles(token)}
+        schedule = {t.get('AssetId'): t.get('LinearSchedule') or {} for t in self._tiles(token)[0]}
         now = datetime.now(timezone.utc)
         programs = []
         for ch in channels:
