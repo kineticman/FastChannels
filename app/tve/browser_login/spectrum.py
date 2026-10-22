@@ -79,6 +79,10 @@ SPECTRUM_SIGNIN_SHOT_KEY = 'spectrum:browser-login:screenshot'
 SPECTRUM_SIGNIN_INPUT_KEY = 'spectrum:browser-login:input'
 SPECTRUM_SIGNIN_STOP_KEY = 'spectrum:browser-login:stop'
 SPECTRUM_SIGNIN_HINT_KEY = 'spectrum:browser-login:hint'
+# Set when someone clicks "Sign in to Spectrum" while a sign-in is already
+# running: an unattended re-login then has a person at the relay after all,
+# so it offers the IDID-4004 account-portal fallback like a manual one.
+SPECTRUM_SIGNIN_ATTENDED_KEY = 'spectrum:browser-login:attended'
 _SPECTRUM_SIGNIN_TIMEOUT_SECONDS = 600
 
 _START_URL = 'https://watch.spectrum.net/guide'
@@ -241,8 +245,9 @@ def run_spectrum_signin(unattended: bool = False):
     # unattended=True when fired by the scraper's re-login watchdog rather
     # than a human clicking "Sign in to Spectrum". No one is watching the
     # relay then, so the IDID-4004 account-portal fallback (which needs a
-    # person to complete the phone/text verification) is skipped — see the
-    # 4004 branch below. Everything else is identical.
+    # person to complete the phone/text verification) is skipped unless
+    # someone clicks the button while it runs — see the 4004 branch below.
+    # Everything else is identical.
     _ctx = flask_app.app_context()
     _ctx.push()
     _ctx_popped = {'v': False}
@@ -715,17 +720,20 @@ def run_spectrum_signin(unattended: bool = False):
                 page = context.pages[0] if context.pages else context.new_page()
                 _prepare_page(page)
 
-                def _restart_after_clear() -> None:
-                    """Back to the start URL after _clear_spectrum_cox_cookies.
-                    Clearing localStorage under the running guide app breaks
-                    it (forum #3527: angular injector() undefined, then the
-                    page closed and this goto died with NS_BINDING_ABORTED,
-                    failing an unattended re-login outright) — so a closed
-                    page is replaced and an aborted navigation retried once."""
+                def _goto_start(after: str) -> None:
+                    """Back to the start URL with the page in an unknown state.
+                    After _clear_spectrum_cox_cookies, clearing localStorage
+                    under the running guide app breaks it (forum #3527: angular
+                    injector() undefined, then the page closed and this goto
+                    died with NS_BINDING_ABORTED, failing an unattended
+                    re-login outright). Bridging from the account portal can
+                    land while /sign-in-redirect is still navigating, which
+                    aborts the same way. So a closed page is replaced and an
+                    aborted navigation retried once."""
                     nonlocal page
                     for attempt in (1, 2):
                         if page.is_closed():
-                            logger.info('[spectrum-signin] page closed after clearing the saved session — opening a new one')
+                            logger.info('[spectrum-signin] page closed %s — opening a new one', after)
                             page = context.new_page()
                             _prepare_page(page)
                         try:
@@ -734,8 +742,8 @@ def run_spectrum_signin(unattended: bool = False):
                         except Exception as exc:  # noqa: BLE001
                             if attempt == 2 or not (page.is_closed() or 'NS_BINDING_ABORTED' in str(exc)):
                                 raise
-                            logger.info('[spectrum-signin] navigation after clearing the saved session '
-                                        'was interrupted (%s) — retrying', str(exc).splitlines()[0][:200])
+                            logger.info('[spectrum-signin] navigation %s was interrupted (%s) — retrying',
+                                        after, str(exc).splitlines()[0][:200])
                             time.sleep(1.0)
 
                 def _dismiss_tos_and_autofill() -> None:
@@ -821,7 +829,7 @@ def run_spectrum_signin(unattended: bool = False):
                                 set_status('running', 'Verified — opening the TV guide…', url)
                                 # Off before watch loads, so its own stva-ovp token is captured.
                                 _portal_fallback_active['v'] = False
-                                page.goto(_START_URL, wait_until='domcontentloaded', timeout=30000)
+                                _goto_start('bridging from the account portal')
                                 wait_started = time.monotonic()
                                 last_seen_url = _safe_page_url(page)
                                 return True
@@ -933,7 +941,7 @@ def run_spectrum_signin(unattended: bool = False):
                     _clear_spectrum_cox_cookies(
                         context, page,
                         'force_fresh_signin requested (credentials changed, or "Clear sign-in" was used)')
-                    _restart_after_clear()
+                    _goto_start('after clearing the saved session')
                     set_status('running', 'Sign in below, including any captcha if shown.', page.url)
                     _clear_force_fresh_flag()
                 else:
@@ -949,7 +957,7 @@ def run_spectrum_signin(unattended: bool = False):
                     if not _try_capture(page) and _rejected:
                         set_status('running', 'Saved session looks stale — starting a fresh sign-in…', page.url)
                         _clear_spectrum_cox_cookies(context, page, 'SSO-carried-over token failed verification')
-                        _restart_after_clear()
+                        _goto_start('after clearing the saved session')
                         set_status('running', 'Sign in below, including any captcha if shown.', page.url)
 
                 _dismiss_tos_and_autofill()
@@ -1042,13 +1050,20 @@ def run_spectrum_signin(unattended: bool = False):
                             # portal for minutes would just waste the sign-in
                             # slot — fail fast instead (same end state as
                             # today, token stays dead until a manual sign-in).
-                            if not unattended and not _account_portal_attempted:
+                            # Unless someone clicked "Sign in to Spectrum"
+                            # while it ran and is watching it now.
+                            attended = not unattended or bool(r.exists(SPECTRUM_SIGNIN_ATTENDED_KEY))
+                            if attended and not _account_portal_attempted:
                                 _account_portal_attempted = True
                                 if _run_account_portal_fallback():
                                     continue
-                                # Portal fallback stopped/timed out without a
-                                # usable session — fall through to the message.
-                            if unattended:
+                                if r.exists(SPECTRUM_SIGNIN_STOP_KEY):
+                                    set_status('stopped', 'Cancelled')
+                                    return
+                                # Portal fallback timed out or the page died
+                                # without a usable session — fall through to
+                                # the message.
+                            if not attended:
                                 logger.warning(
                                     '[spectrum-signin] unattended re-login hit IDID-4004 (ThreatMetrix) '
                                     '(%s) — device no longer trusted, needs a manual sign-in', auth_name)

@@ -1164,6 +1164,15 @@ def spectrum_browser_login_start(source_id):
     if source.name != 'spectrum':
         return jsonify({'error': 'not a spectrum source'}), 400
     started = trigger_spectrum_signin()
+    if not started:
+        # The person is now watching whatever sign-in is running, including
+        # an unattended re-login — see SPECTRUM_SIGNIN_ATTENDED_KEY.
+        import redis as _redis
+        try:
+            r = _redis.from_url(current_app.config['REDIS_URL'])
+            r.setex('spectrum:browser-login:attended', 630, '1')
+        except Exception as exc:
+            logger.warning('[spectrum-auth] could not mark the running sign-in attended: %s', exc)
     return jsonify({'status': 'started' if started else 'already_running'})
 
 
