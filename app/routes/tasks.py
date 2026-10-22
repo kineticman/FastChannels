@@ -96,19 +96,23 @@ def signin_queue_notice(job_id: str | None = None, func_name: str | None = None,
     e.g. a link login's run_id). None once the job starts, or on any error."""
     try:
         q = get_signin_queue()
-        queued = q.jobs
         pos = None
-        for i, job in enumerate(queued):
-            if job_id is not None:
-                hit = job.id == job_id
-            else:
+        if job_id is not None:
+            # Ids only: status polls run this a few times a second, and
+            # q.jobs would fetch every queued job to compare one id.
+            try:
+                pos = q.get_job_ids().index(job_id)
+            except ValueError:
+                pass
+        else:
+            for i, job in enumerate(q.jobs):
                 hit = job.func_name == func_name
                 if hit and arg is not None:
                     idx, value = arg
                     hit = len(job.args or ()) > idx and job.args[idx] == value
-            if hit:
-                pos = i
-                break
+                if hit:
+                    pos = i
+                    break
         if pos is None:
             return None
         running = None
