@@ -109,7 +109,7 @@
       background: color-mix(in srgb, var(--bg) 40%, transparent);
     }
     .dashboard-table tbody tr.dash-row.disabled {
-      opacity: 0.55;
+      opacity: 0.6;
     }
     .dashboard-table tbody tr.dash-row.scraping td:first-child {
       border-left: 3px solid var(--accent);
@@ -158,7 +158,11 @@
       --cat-color: var(--info-soft, #7eb8f7);
       --cat-border: var(--info-border, #2a5080);
     }
-    .source-category-header.cat-specialty {
+    .source-category-header.cat-account {
+      --cat-color: var(--success-soft);
+      --cat-border: var(--success-fill);
+    }
+    .source-category-header.cat-local {
       --cat-color: var(--warning-soft);
       --cat-border: var(--warning-strong);
     }
@@ -166,17 +170,13 @@
       --cat-color: var(--accent-soft);
       --cat-border: var(--accent-border);
     }
-    .source-category-header.cat-drm {
-      --cat-color: var(--danger-soft);
-      --cat-border: var(--danger-border);
-    }
     .source-category-header.cat-retired {
       --cat-color: var(--text-muted);
       --cat-border: var(--border);
     }
     .cat-header-action { float: right; text-transform: none; letter-spacing: normal; margin: -0.2rem 0; }
     .cat-chevron { display: inline-block; width: 0.9em; margin-right: 0.3em; }
-    .cat-count { font-weight: 600; opacity: 0.75; margin-left: 0.3em; letter-spacing: normal; }
+    .cat-count { font-weight: 600; opacity: 0.75; margin-left: 0.6em; letter-spacing: normal; text-transform: none; }
 
     /* Quick access bar: filter + category jump chips */
     .sources-quicknav {
@@ -224,6 +224,98 @@
     .meta-ok { color: var(--success-soft); }
     .meta-stale { color: var(--danger); font-weight: 600; }
     .meta-pending { color: var(--text-soft); font-style: italic; }
+
+    /* ── Row health: one status line + a channel bar; quiet when all is well ── */
+    .row-health {
+      display: flex; flex-wrap: wrap; align-items: center; gap: 0.3rem 1.1rem;
+      margin-top: 0.3rem; font-size: 0.78rem; color: var(--text-soft);
+    }
+    .health-line { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 0.2rem 0.45rem; min-width: 0; cursor: default; }
+    .health-line .audit-last-result, .health-link { white-space: nowrap; }
+    .health-dot {
+      width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
+      background: var(--health-color); box-shadow: 0 0 0 3px color-mix(in srgb, var(--health-color) 18%, transparent);
+    }
+    .health-line .health-text { color: var(--health-text, var(--text-soft)); }
+    .health-ok      { --health-color: var(--success-soft); }
+    .health-pending { --health-color: var(--text-muted); --health-text: var(--text-muted); }
+    .health-info    { --health-color: var(--accent-soft); --health-text: var(--text-muted); }
+    .health-warn    { --health-color: var(--warning); --health-text: var(--warning-soft); }
+    .health-setup   { --health-color: var(--warning); --health-text: var(--warning-soft); }
+    .health-error   { --health-color: var(--danger); --health-text: var(--danger-soft, var(--danger)); }
+    .health-error .health-dot, .health-warn .health-dot, .health-setup .health-dot { animation: health-pulse 2.4s ease-in-out infinite; }
+    @keyframes health-pulse {
+      0%, 100% { box-shadow: 0 0 0 3px color-mix(in srgb, var(--health-color) 18%, transparent); }
+      50%      { box-shadow: 0 0 0 5px color-mix(in srgb, var(--health-color) 8%, transparent); }
+    }
+    @media (prefers-reduced-motion: reduce) { .health-dot { animation: none !important; } }
+    .health-line .audit-last-result { font-size: inherit; color: var(--text-muted); margin: 0; }
+    .health-line .audit-last-result .aud-dead { color: var(--danger-soft, var(--danger)); }
+
+    /* Channel bar: plays anywhere | needs FastChannels Player | off */
+    .ch-mix {
+      display: inline-flex; align-items: center; gap: 0.5rem; text-decoration: none;
+      color: var(--text-muted); white-space: nowrap; border-radius: 6px;
+    }
+    .ch-mix:hover { color: var(--text); }
+    .ch-mix:hover .ch-mix-bar { outline: 1px solid var(--text-muted); outline-offset: 2px; }
+    .ch-mix-count { font-variant-numeric: tabular-nums; }
+    .ch-mix-bar {
+      display: flex; gap: 2px; width: 7.5rem; height: 6px; border-radius: 999px; overflow: hidden;
+      background: var(--border);
+    }
+    .ch-mix-bar .seg { flex-basis: 0; min-width: 3px; }
+    .ch-mix-bar .seg-play { background: var(--success-soft); }
+    .ch-mix-bar .seg-drm  { background: #a78bfa; }
+    .ch-mix-bar .seg-off  { background: color-mix(in srgb, var(--text-muted) 45%, transparent); }
+
+    .health-link { color: var(--accent-soft); font-weight: 600; text-decoration: none; white-space: nowrap; }
+    .health-link:hover { text-decoration: underline; }
+
+    /* Heads-up when a DRM source is turned on with no DRM bridge ready. */
+    .drm-heads-up {
+      display: flex; align-items: flex-start; gap: 0.55rem; margin-top: 0.5rem; max-width: 40rem;
+      padding: 0.55rem 0.7rem; border-radius: 8px; font-size: 0.8rem; line-height: 1.45; color: var(--text);
+      background: color-mix(in srgb, var(--warning-bg) 55%, transparent);
+      border: 1px solid var(--warning-border);
+      animation: heads-up-in 0.25s ease-out;
+    }
+    .drm-heads-up[hidden] { display: none; }
+    .drm-heads-up a { color: var(--warning-soft); font-weight: 600; white-space: nowrap; }
+    .drm-heads-up-icon {
+      flex-shrink: 0; width: 1.15rem; height: 1.15rem; border-radius: 50%; display: grid; place-items: center;
+      font-size: 0.72rem; font-weight: 800; color: var(--bg); background: var(--warning);
+    }
+    .drm-heads-up-close {
+      margin-left: auto; background: none; border: none; color: var(--text-muted); font-size: 1rem;
+      line-height: 1; cursor: pointer; padding: 0 0.15rem;
+    }
+    .drm-heads-up-close:hover { color: var(--text); }
+    @keyframes heads-up-in { from { opacity: 0; transform: translateY(-3px); } to { opacity: 1; transform: none; } }
+    @media (prefers-reduced-motion: reduce) { .drm-heads-up { animation: none; } }
+
+    /* Badges that never need you stay hidden; their elements remain for loadSourceConfig(). */
+    .source-name-wrap .config-badge[id^="config-badge-"].configured,
+    .source-name-wrap .config-badge[id^="config-badge-"].anon,
+    .source-name-wrap .config-badge[id^="config-badge-"].auto { display: none; }
+    .config-badge.user-defined { font-style: italic; text-transform: none; letter-spacing: normal; }
+
+    /* While a scrape or audit runs, its live progress takes the status line's place. */
+    .dash-row.scraping .health-line,
+    .dash-row:has(.audit-status:not(:empty)) .health-line { display: none; }
+
+    /* Off rows: one quiet line, no status, bar or actions. */
+    .off-note { display: none; font-size: 0.78rem; color: var(--text-muted); font-weight: 500; }
+    .dashboard-table tbody tr.dash-row.disabled td { padding-top: 0.45rem; padding-bottom: 0.45rem; }
+    .dash-row.disabled .off-note { display: inline; }
+    .dash-row.disabled .row-health,
+    .dash-row.disabled .dash-actions,
+    .dash-row.disabled .source-name-wrap .config-badge:not(.retired):not(.needs-config):not(.drm):not(.some-drm) { display: none; }
+    .dash-row.disabled .source-name { font-size: 0.88rem; font-weight: 500; }
+    /* The off-note already says Off; keep the toggle, drop its label, and slim the button. */
+    .dash-row.disabled .toggle-label { display: none; }
+    .dash-row.disabled .configure-btn-display { padding-top: 0.25rem; padding-bottom: 0.25rem; font-size: 0.72rem; }
+    .dash-row.disabled .mobile-toggle-wrap { margin-top: 0.25rem; }
 
     /* Inactive-channel nudge pill on the cleanup button */
     .inactive-pill {
@@ -277,6 +369,17 @@
       color: var(--danger-soft, var(--danger));
       border-color: color-mix(in srgb, var(--danger) 30%, transparent);
     }
+    /* Playback: DRM channels play only through FastChannels Player. */
+    .config-badge.drm, .config-badge.some-drm {
+      background: color-mix(in srgb, var(--danger) 10%, transparent);
+      color: var(--danger-soft, var(--danger));
+      border-color: color-mix(in srgb, var(--danger) 30%, transparent);
+    }
+    .config-badge.some-drm { background: transparent; border-style: dashed; }
+    .quicknav-playback { display: flex; gap: 0.4rem; flex-wrap: wrap; margin-left: auto; }
+    .quicknav-chip.chip-attention { color: var(--warning-soft); border-color: var(--warning-border); }
+    .quicknav-chip.active { color: var(--text); border-color: var(--accent-strong);
+      background: color-mix(in srgb, var(--accent-strong) 14%, var(--bg)); }
 
     /* Scrape / audit status in dashboard row */
     .scrape-status { font-size: 0.75rem; margin-top: 0.2rem; display: flex; align-items: center; gap: 0.35rem; min-height: 0; }
@@ -882,6 +985,21 @@
           {% endif %}
         {% endfor %}
       </div>
+      <div class="quicknav-playback" role="group" aria-label="Filter by playback">
+        {% if issue_count %}
+        <button type="button" class="quicknav-chip chip-attention" data-playback-filter="issues"
+                title="Sources with an error, a stale guide, an overdue scrape, or missing setup"
+                onclick="setPlaybackFilter('issues')">Needs attention <span class="quicknav-chip-count">{{ issue_count }}</span></button>
+        {% endif %}
+        <button type="button" class="quicknav-chip active" data-playback-filter=""
+                onclick="setPlaybackFilter('')">All</button>
+        <button type="button" class="quicknav-chip" data-playback-filter="clear"
+                title="Sources whose channels play in any player: no DRM"
+                onclick="setPlaybackFilter('clear')">Any player</button>
+        <button type="button" class="quicknav-chip" data-playback-filter="drm"
+                title="Sources with DRM channels, which play only through FastChannels Player"
+                onclick="setPlaybackFilter('drm')">Needs FastChannels Player</button>
+      </div>
     </div>
 
     <div class="dashboard-panel">
@@ -902,12 +1020,14 @@
           {% set is_custom = source.name == 'custom' %}
           {% set is_playlist = source.name.startswith('m3u_') %}
           {% set this_cat = source_categories.get(source.name, 'fast') if not is_custom else 'custom' %}
+          {% set mix = source_mix.get(source.id, {}) %}
+          {% set status = source_status.get(source.id) %}
           {% if this_cat != ns.last_cat %}
             {% set ns.last_cat = this_cat %}
             <tr class="source-category-header cat-{{ this_cat }}" id="cat-header-{{ this_cat }}"
                 data-cat="{{ this_cat }}" onclick="toggleCategoryCollapse('{{ this_cat }}')">
               <td colspan="4">
-                <span class="cat-chevron" id="cat-chevron-{{ this_cat }}">▾</span>{{ _CAT_LABELS.get(this_cat, this_cat | title) }}<span class="cat-count">{{ category_counts.get(this_cat, 0) }}</span>
+                <span class="cat-chevron" id="cat-chevron-{{ this_cat }}">▾</span>{{ _CAT_LABELS.get(this_cat, this_cat | title) }}<span class="cat-count"><span class="cat-on-count" id="cat-on-count-{{ this_cat }}">{{ category_on_counts.get(this_cat, 0) }}</span> on of {{ category_counts.get(this_cat, 0) }}</span>
                 {% if this_cat == 'custom' %}
                 <button type="button" class="btn btn-run btn-sm cat-header-action"
                         onclick="event.stopPropagation(); openPlaylistModal()"
@@ -919,22 +1039,33 @@
 
           <tr class="dash-row {% if not source.is_enabled %}disabled{% endif %}" id="dash-row-{{ source.id }}"
               data-cat="{{ this_cat }}" data-search="{{ (source.display_name ~ ' ' ~ source.name) | lower }}"
+              data-playback="{{ mix.get('kind', 'clear') }}"
+              data-fc-player="{{ 'true' if mix.get('fc_player') else 'false' }}"
+              {% if mix.get('kind') in ('drm', 'some') and not bridge_ready.get(source.id) %}data-bridge-missing="true"{% endif %}
+              {% if status and status.state in ('error', 'warn', 'setup') %}data-issue="true"{% endif %}
               {% if is_custom %}data-custom="true"{% endif %}
               {% if is_custom or is_playlist %}data-keeps-channels="true"{% endif %}>
             <td class="col-source">
               <div class="source-name-wrap">
                 <span class="source-name">{{ source.display_name }}</span>
                 {% if not is_custom %}
-                  {% if source.last_error %}<span class="err-pip" title="{{ source.last_error }}">⚠</span>{% endif %}
-                  {% if premium_sources.get(source.name) %}
-                    <span class="config-badge premium">Premium</span>
+                  {% if mix.get('kind') in ('drm', 'some') %}
+                    {% set _via = 'FastChannels Player' if mix.fc_player else 'PrismCast (not yet tested with FastChannels Player)' %}
+                    {% set _ready = ' A DRM bridge is set up.' if bridge_ready.get(source.id) else ' No DRM bridge is set up yet.' %}
+                    {% if mix.kind == 'drm' %}
+                    <span class="config-badge drm" title="DRM: these channels play only through {{ _via }}.{{ _ready }}">DRM{% if not mix.fc_player %} · PrismCast only{% endif %}</span>
+                    {% else %}
+                    <span class="config-badge some-drm" title="Some channels are DRM and play only through {{ _via }}; the rest play in any player.{{ _ready }}">Some DRM{% if not mix.fc_player %} · PrismCast only{% endif %}</span>
+                    {% endif %}
                   {% endif %}
-                  {% if this_cat == 'tve' %}
-                    <span class="config-badge beta" title="TVE authentication is newer and less battle-tested than our other sources">Beta</span>
+                  {% if beta_sources.get(source.name) %}
+                    <span class="config-badge beta" title="Newly built and not yet confirmed working by users">Beta</span>
                   {% endif %}
                   {% if under_development.get(source.name) %}
                     <span class="config-badge development" title="This source is under development and disabled by default">Under development</span>
                   {% endif %}
+                  {# Only states that need you show; Configured/Optional/Auto stay hidden (CSS) but
+                     keep their element, which loadSourceConfig() updates after a save. #}
                   {% if is_playlist %}
                     <span class="config-badge auto" style="font-style:italic">User-defined</span>
                   {% elif retired %}
@@ -943,49 +1074,45 @@
                   {% elif cfg_status == 'configured' %}
                     <span class="config-badge configured" id="config-badge-{{ source.id }}">Configured</span>
                   {% elif cfg_status == 'required' %}
-                    <span class="config-badge needs-config" id="config-badge-{{ source.id }}">⚠ Needs Config</span>
+                    <span class="config-badge needs-config" id="config-badge-{{ source.id }}">Needs setup</span>
                   {% elif cfg_status == 'optional' %}
                     <span class="config-badge anon" id="config-badge-{{ source.id }}">Optional</span>
                   {% else %}
                     <span class="config-badge auto" id="config-badge-{{ source.id }}">Auto</span>
                   {% endif %}
                 {% else %}
-                  <span class="config-badge auto" style="font-style:italic">User-defined</span>
+                  <span class="config-badge user-defined">User-defined</span>
                 {% endif %}
-                {% set _sd = source.to_dict() %}
-                <span class="config-badge auto"><span id="ch-count-{{ source.id }}">{{ _sd.channel_count }}</span> channels</span>
-                {% if _sd.drm_bridge_count %}<a class="config-badge auto" href="/admin/channels?source={{ source.name }}&drm=bridge" title="DRM channels bridged via PrismCast Capture or hardware capture — click to view"><span id="bridge-count-{{ source.id }}">🌉 {{ _sd.drm_bridge_count }}</span> bridged</a>{% endif %}
+                {# Off rows collapse to this one quiet note (CSS, so the toggle can flip it live). #}
+                <span class="off-note"{% if source.last_scraped_at and not is_custom %} title="Last scraped {{ source.last_scraped_at | localtime }}"{% endif %}>Off{% if source.last_scraped_at and not is_custom %} · last on {{ source.last_scraped_at.strftime('%b ') ~ source.last_scraped_at.day }}{% endif %}</span>
               </div>
-              <div class="source-meta" id="source-meta-{{ source.id }}">
-                {% if not is_custom %}
-                <span class="meta-item meta-sched" id="scrape-schedule-part-{{ source.id }}">{% if source.scrape_cron %}Clock-aligned{% else %}Every <span id="scrape-interval-display-{{ source.id }}">{{ source.scrape_interval }}</span> min{% endif %}</span>
-                <span class="meta-item" title="Last scrape run (stamped after the channel list is committed, before the guide is fetched).">Scraped {{ source.last_scraped_at | localtime }}</span>
-                {% set cfm = channel_fetch_meta.get(source.id) %}
-                {% if cfm %}
-                  {% if cfm.pending %}
-                    <span class="meta-item meta-pending" title="Channel list will be refreshed on the next scrape.">Channels pending</span>
-                  {% elif cfm.stale %}
-                    <span class="meta-item meta-stale" title="Channel list hasn't been refreshed in over 2× the {{ cfm.refresh_hours }}h window — last refresh {{ source.last_channel_fetch_at | localtime }}. EPG may be advancing without channel refresh.">⚠ Channels stale</span>
-                  {% else %}
-                    <span class="meta-item meta-ok" title="Channels last fully refreshed {{ source.last_channel_fetch_at | localtime }} (full fetch runs every {{ cfm.refresh_hours }}h; EPG refreshes more often).">✓ Channels</span>
+              <div class="row-health">
+                {% if status %}
+                <span class="health-line health-{{ status.state }}" title="{{ status.title }}">
+                  <span class="health-dot"></span>
+                  <span class="health-text">{% if status.ts %}<span class="rel-time" data-ts="{{ status.ts.replace(tzinfo=none).isoformat() }}Z">{{ status.text.split(' · ')[0] }}</span>{% for part in status.text.split(' · ')[1:] %} · {{ part }}{% endfor %}{% else %}{{ status.text }}{% endif %}</span>
+                  {% if status.link %}<a class="health-link" href="{{ status.link[0] }}">{{ status.link[1] }}</a>{% endif %}
+                  <span class="audit-last-result" id="audit-last-result-{{ source.id }}"></span>
+                </span>
+                {% elif is_custom %}
+                <span class="health-line health-info"><span class="health-dot"></span><span class="health-text">Your own channels and playlists — managed here, never scraped</span></span>
+                {% endif %}
+                {% set total = mix.get('total', 0) %}
+                <a class="ch-mix" href="/admin/channels?source={{ source.name }}" title="{{ mix_title(mix) if mix else '' }}">
+                  <span class="ch-mix-count">{% if total %}<span id="ch-count-{{ source.id }}">{{ mix.play + mix.drm }}</span> of {{ total }} on{% else %}<span id="ch-count-{{ source.id }}" hidden>0</span>No channels yet{% endif %}</span>
+                  {% if total %}
+                  <span class="ch-mix-bar" aria-hidden="true">
+                    {% if mix.play %}<span class="seg seg-play" style="flex-grow: {{ mix.play }}"></span>{% endif %}
+                    {% if mix.drm %}<span class="seg seg-drm" style="flex-grow: {{ mix.drm }}"></span>{% endif %}
+                    {% if mix.off %}<span class="seg seg-off" style="flex-grow: {{ mix.off }}"></span>{% endif %}
+                  </span>
                   {% endif %}
-                {% endif %}
-                {% set em = epg_meta.get(source.id) %}
-                {% if em %}
-                  {% if em.pending %}
-                    <span class="meta-item meta-pending" title="Guide (EPG) will be refreshed on the next scrape.">Guide pending</span>
-                  {% elif em.stale %}
-                    <span class="meta-item meta-stale" title="No successful guide refresh in over 2× the scrape interval — last good {{ source.last_epg_success_at | localtime }}. Channels may be refreshing while the EPG phase silently fails or hangs.">⚠ Guide stale</span>
-                  {% else %}
-                    <span class="meta-item meta-ok" title="Guide (EPG) last refreshed {{ source.last_epg_success_at | localtime }}. Distinct from Scraped, which is stamped before the EPG phase runs.">✓ Guide</span>
-                  {% endif %}
-                {% endif %}
-                {% endif %}
+                </a>
               </div>
+              <div class="drm-heads-up" id="drm-heads-up-{{ source.id }}" hidden></div>
               {% if not is_custom %}
               <div class="scrape-status" id="scrape-status-{{ source.id }}"></div>
               <div class="audit-status" id="audit-status-{{ source.id }}"></div>
-              <div class="audit-last-result" id="audit-last-result-{{ source.id }}"></div>
               {% endif %}
               <div class="mobile-toggle-wrap">
                 <label class="toggle" id="mobile-toggle-{{ source.id }}">
@@ -1017,14 +1144,14 @@
             <td class="col-actions">
               {% if not is_custom %}
               <div class="dash-actions">
-                <button class="btn btn-run btn-sm" data-label="Scrape<br>Now" onclick="run({{ source.id }}, this)"
+                <button class="btn btn-run btn-sm" data-label="Scrape" onclick="run({{ source.id }}, this)"
                         {% if not source.is_enabled %}disabled{% endif %}
-                        title="Fetch the latest channel list and guide data now.">Scrape<br>Now</button>
+                        title="Fetch the latest channel list and guide data now.">Scrape</button>
                 {% if audit_enabled.get(source.name) %}
-                <button class="btn btn-audit btn-sm" data-label="Stream<br>Audit"
+                <button class="btn btn-audit btn-sm" data-label="Audit"
                         onclick='openAuditModal({{ source.id }}, {{ source.display_name | tojson }})'
                         {% if not source.is_enabled %}disabled{% endif %}
-                        title="Check linear stream health and DRM. You can include scheduled events in the audit modal.">Stream<br>Audit</button>
+                        title="Check linear stream health and DRM. You can include scheduled events in the audit modal.">Audit</button>
                 {% endif %}
               </div>
               {% endif %}
@@ -1090,7 +1217,7 @@
                 <div class="config-note">This source authenticates with your TV-provider account under <a href="/admin/settings#settings-card-tve">Settings → Credentials</a> — nothing to configure here.</div>
                 {% endif %}
                 {% if source.name == 'fox_tve' %}
-                <div class="config-note">If your TV provider works with FOX One (under Premium Sources), use that instead: it carries more channels, including your local FOX station. Keep FOX TVE if FOX One won't sign in with your provider.</div>
+                <div class="config-note">If your TV provider works with FOX One (under Subscription Sources), use that instead: it carries more channels, including your local FOX station. Keep FOX TVE if FOX One won't sign in with your provider.</div>
                 {% endif %}
 
                 {% set interval_meta = source_interval_meta.get(source.name, {'recommended': source.scrape_interval, 'min': 30, 'max': 10080}) %}
@@ -1873,6 +2000,7 @@
         mobileLabelEl.className = `toggle-label ${enabled ? 'on' : 'off'}`;
       }
       if (dashRow) dashRow.classList.toggle('disabled', !enabled);
+      if (dashRow) _refreshCategoryOnCount(dashRow.dataset.cat);
       runBtns.forEach(btn => { btn.disabled = !enabled; });
       if (auditBtn) auditBtn.disabled = !enabled;
       if (dashRow?.dataset.custom === 'true') {
@@ -1953,6 +2081,7 @@
         if (!enabled && !keepsChannels) document.getElementById(`ch-count-${sourceId}`).textContent = '0';
         applySourceEnabledState(sourceId, enabled);
         if (enabled) maybeOfferReviewHold(sourceId);
+        _showDrmHeadsUp(sourceId, enabled);
 
       } catch (e) {
         applySourceEnabledState(sourceId, !enabled);
@@ -1979,11 +2108,11 @@
           _startPolling(id, btn);
         } else {
           btn.textContent = 'Error';
-          setTimeout(() => { btn.innerHTML = 'Scrape<br>Now'; btn.disabled = false; }, 3000);
+          setTimeout(() => { btn.innerHTML = 'Scrape'; btn.disabled = false; }, 3000);
         }
       } catch (e) {
         btn.textContent = 'Error';
-        setTimeout(() => { btn.innerHTML = 'Scrape<br>Now'; btn.disabled = false; }, 3000);
+        setTimeout(() => { btn.innerHTML = 'Scrape'; btn.disabled = false; }, 3000);
       }
     }
 
@@ -2300,7 +2429,7 @@
       delete _scrapeStart[sourceId];
       document.getElementById(`dash-row-${sourceId}`)?.classList.remove('scraping');
       const btn = _scrapeBtn[sourceId];
-      if (btn) { btn.innerHTML = btn.dataset.label || 'Scrape<br>Now'; btn.disabled = false; delete _scrapeBtn[sourceId]; }
+      if (btn) { btn.innerHTML = btn.dataset.label || 'Scrape'; btn.disabled = false; delete _scrapeBtn[sourceId]; }
       const statusEl = document.getElementById(`scrape-status-${sourceId}`);
       if (!statusEl) return;
       if (lastError) {
@@ -2341,7 +2470,7 @@
             const countEl = document.getElementById(`ch-count-${sourceId}`);
             if (countEl) fetch('/api/sources').then(r => r.json()).then(ss => {
               const s = ss.find(x => x.id === sourceId);
-              if (s) countEl.textContent = s.channel_count;
+              if (s) countEl.textContent = s.enabled_channel_count;
             }).catch(() => {});
             _showResult(sourceId, d.last_error || null);
           } else {
@@ -2353,7 +2482,7 @@
               const countEl = document.getElementById(`ch-count-${sourceId}`);
               if (countEl) fetch('/api/sources').then(r => r.json()).then(ss => {
                 const s = ss.find(x => x.id === sourceId);
-                if (s) countEl.textContent = s.channel_count;
+                if (s) countEl.textContent = s.enabled_channel_count;
               }).catch(() => {});
               _showResult(sourceId, d.last_error || null);
             } else if (Date.now() - start < 30000) {
@@ -2366,7 +2495,7 @@
         } catch (e) {
           delete _pollTimers[sourceId];
           const b = _scrapeBtn[sourceId];
-          if (b) { b.innerHTML = 'Scrape<br>Now'; b.disabled = false; delete _scrapeBtn[sourceId]; }
+          if (b) { b.innerHTML = 'Scrape'; b.disabled = false; delete _scrapeBtn[sourceId]; }
         }
       }
       poll();
@@ -2394,13 +2523,28 @@
       return null;
     }
 
+    // Short relative time for a past moment: 'just now', '7m ago', '3h ago', '5d ago'.
+    function _relAgo(ms) {
+      const secs = Math.max(0, (Date.now() - ms) / 1000);
+      if (secs < 90) return 'just now';
+      if (secs < 3600) return `${Math.floor(secs / 60)}m ago`;
+      if (secs < 86400) return `${Math.floor(secs / 3600)}h ago`;
+      if (secs < 604800) return `${Math.floor(secs / 86400)}d ago`;
+      return new Date(ms).toLocaleDateString(undefined, {month: 'short', day: 'numeric'});
+    }
+
+    // The last audit rides on the status line as "· audited 3d ago" (plus dead
+    // channels, the one result worth seeing without hovering); the full
+    // breakdown is its hover text and the Stream Audit window.
     function _renderLastAuditResult(sourceId, r) {
       const el = document.getElementById(`audit-last-result-${sourceId}`);
       if (!el || !r) return;
       const ok    = (r.checked || 0) - (r.flagged || 0) - (r.vod || 0) - (r.bridged || 0);
-      const ts    = r.ts ? new Date(r.ts).toLocaleString() : '';
+      const when  = r.ts ? _relAgo(new Date(r.ts).getTime()) : '';
+      const full  = r.ts ? new Date(r.ts).toLocaleString() : '';
       if (r.skipped_reason) {
-        el.innerHTML = `Last audit: <span class="aud-partial">skipped — ${escapeHtml(r.skipped_reason)}</span>${ts ? ' <span style="opacity:.5">· ' + ts + '</span>' : ''}`;
+        el.textContent = ` · audit skipped${when ? ' ' + when : ''}`;
+        el.title = `Last audit skipped: ${r.skipped_reason}${full ? ' (' + full + ')' : ''}`;
         return;
       }
       const bits  = [];
@@ -2408,18 +2552,29 @@
                                 + (r.not_in_output ? ` (${r.not_in_output} not in output)` : ''));
       if (r.scope)            bits.push(r.scope === 'all' ? 'all channels' : 'linear only');
       if (r.skipped_events)   bits.push(`${r.skipped_events} events skipped`);
-      if (r.checked != null)  bits.push(`<span class="aud-ok">${ok} ok</span>`);
-      if (r.dead)             bits.push(`<span class="aud-dead">${r.dead} dead</span>`);
-      if (r.vod)              bits.push(`<span class="aud-vod">${r.vod} VOD</span>`);
-      if (r.not_authorized)   bits.push(`<span class="aud-auth">${r.not_authorized} not authorized</span>`);
-      if (r.flagged)          bits.push(`<span class="aud-drm">${r.flagged} DRM</span>`);
-      if (r.bridged)          bits.push(`<span class="aud-bridge">${r.bridged} bridged (DRM)</span>`);
-      if (r.skipped_403)      bits.push(`<span class="aud-403">${r.skipped_403} blocked</span>`);
+      if (r.checked != null)  bits.push(`${ok} ok`);
+      if (r.dead)             bits.push(`${r.dead} dead`);
+      if (r.vod)              bits.push(`${r.vod} VOD`);
+      if (r.not_authorized)   bits.push(`${r.not_authorized} not authorized`);
+      if (r.flagged)          bits.push(`${r.flagged} DRM`);
+      if (r.bridged)          bits.push(`${r.bridged} bridged (DRM)`);
+      if (r.skipped_403)      bits.push(`${r.skipped_403} blocked`);
       if (r.errors)           bits.push(`${r.errors} errors`);
-      const tag   = r.aborted_reason ? ` <span class="aud-partial">(aborted — ${escapeHtml(r.aborted_reason)})</span>`
-                  : r.partial ? ' <span class="aud-partial">(partial)</span>' : '';
-      el.innerHTML = `Last audit: ${bits.join(' · ')}${tag}${ts ? ' <span style="opacity:.5">· ' + ts + '</span>' : ''}`;
+      const tag = r.aborted_reason ? ` (aborted — ${r.aborted_reason})` : r.partial ? ' (partial)' : '';
+      el.innerHTML = ` · audited ${escapeHtml(when || '')}`
+        + (r.dead ? ` · <span class="aud-dead">${r.dead} dead</span>` : '')
+        + (tag ? escapeHtml(tag) : '');
+      el.title = `Last audit${full ? ' ' + full : ''}: ${bits.join(' · ')}${tag}`;
     }
+
+    // Keep "Updated 2h ago" honest while the page stays open.
+    function _refreshRelTimes() {
+      document.querySelectorAll('.rel-time[data-ts]').forEach(el => {
+        const ms = Date.parse(el.dataset.ts);
+        if (!isNaN(ms)) el.textContent = `Updated ${_relAgo(ms)}`;
+      });
+    }
+    setInterval(_refreshRelTimes, 60000);
 
     function _renderAuditStatus(sourceId, data) {
       const el = document.getElementById(`audit-status-${sourceId}`);
@@ -3086,7 +3241,7 @@
             badge.className = 'config-badge configured';
             badge.style.display = '';
           } else if (isRequired) {
-            badge.textContent = '⚠ Needs Config';
+            badge.textContent = 'Needs setup';
             badge.className = 'config-badge needs-config';
             badge.style.display = '';
           } else {
@@ -6025,6 +6180,12 @@
     function _saveCollapsedCats(set) {
       localStorage.setItem(SOURCES_COLLAPSE_KEY, JSON.stringify([...set]));
     }
+    // "6 on of 22" in a group header, recounted when a source is switched on or off.
+    function _refreshCategoryOnCount(cat) {
+      const el = document.getElementById(`cat-on-count-${cat}`);
+      if (el) el.textContent = document.querySelectorAll(`tr.dash-row[data-cat="${cat}"]:not(.disabled)`).length;
+    }
+
     function _applyCategoryCollapse(cat, collapsed) {
       document.querySelectorAll(`tr.dash-row[data-cat="${cat}"], tr.config-panel-row[data-cat="${cat}"]`)
         .forEach(row => row.classList.toggle('cat-collapsed', collapsed));
@@ -6053,14 +6214,54 @@
       if (header) header.scrollIntoView({ behavior: 'smooth', block: 'start' });
     }
 
+    // Turning on a DRM source with no DRM bridge ready: say so on the row
+    // before the user finds out from a channel that won't play.
+    function _showDrmHeadsUp(sourceId, enabled) {
+      const row = document.getElementById(`dash-row-${sourceId}`);
+      const box = document.getElementById(`drm-heads-up-${sourceId}`);
+      if (!row || !box) return;
+      if (!enabled || row.dataset.bridgeMissing !== 'true') { box.hidden = true; return; }
+      const all = row.dataset.playback === 'drm';
+      const via = row.dataset.fcPlayer === 'true' ? 'FastChannels Player (or PrismCast)' : 'PrismCast';
+      box.innerHTML = `<span class="drm-heads-up-icon" aria-hidden="true">!</span>
+        <span>${all
+          ? `Every channel here is DRM, so none will play until a DRM bridge is set up. They play through ${via}.`
+          : `Some channels here are DRM and won't play until a DRM bridge is set up; the rest work now. DRM ones play through ${via}.`}
+          <a href="/admin/bridge">Set up the Bridge →</a></span>
+        <button type="button" class="drm-heads-up-close" aria-label="Dismiss"
+                onclick="this.parentElement.hidden = true">×</button>`;
+      box.hidden = false;
+    }
+
+    // Playback filter: '' all, 'clear' plays in any player, 'drm' has DRM
+    // channels (all or some), which need FastChannels Player.
+    let _playbackFilter = '';
+
+    function setPlaybackFilter(kind) {
+      _playbackFilter = kind;
+      document.querySelectorAll('[data-playback-filter]').forEach(chip =>
+        chip.classList.toggle('active', chip.dataset.playbackFilter === kind));
+      filterSources(document.getElementById('source-filter-input')?.value || '');
+    }
+
+    function _matchesPlayback(row) {
+      if (!_playbackFilter) return true;
+      if (_playbackFilter === 'issues') return row.dataset.issue === 'true' && !row.classList.contains('disabled');
+      const kind = row.dataset.playback || 'clear';
+      if (_playbackFilter === 'clear') return kind === 'clear';
+      // DRM sources not yet tested with FastChannels Player are PrismCast only.
+      return kind !== 'clear' && row.dataset.fcPlayer === 'true';
+    }
+
     function filterSources(rawQuery) {
       const query = rawQuery.trim().toLowerCase();
+      const filtering = !!query || !!_playbackFilter;
       const collapsedCats = _loadCollapsedCats();
       const catHasMatch = {};
 
       document.querySelectorAll('tr.dash-row').forEach(row => {
         const cat = row.dataset.cat;
-        const matches = !query || (row.dataset.search || '').includes(query);
+        const matches = (!query || (row.dataset.search || '').includes(query)) && _matchesPlayback(row);
         if (matches) catHasMatch[cat] = true;
         row.classList.toggle('filter-hidden', !matches);
         const sourceId = row.id.replace('dash-row-', '');
@@ -6076,13 +6277,13 @@
         header.classList.toggle('filter-hidden', !hasMatch);
         // While filtering, force-expand categories with matches; restore the
         // user's persisted collapse choice once the query is cleared.
-        _applyCategoryCollapse(cat, query ? false : collapsedCats.has(cat));
+        _applyCategoryCollapse(cat, filtering ? false : collapsedCats.has(cat));
       });
 
       const noResultsRow = document.getElementById('no-sources-match-row');
       if (noResultsRow) {
-        noResultsRow.style.display = (query && !anyMatch) ? '' : 'none';
-        document.getElementById('no-sources-match-query').textContent = rawQuery;
+        noResultsRow.style.display = (filtering && !anyMatch) ? '' : 'none';
+        document.getElementById('no-sources-match-query').textContent = rawQuery || 'this filter';
       }
     }
 
@@ -6206,7 +6407,7 @@
         const row = document.getElementById(`dash-row-${srcId}`);
         if (row && row.dataset.custom === 'true') {
           fetch(`/api/sources/${srcId}`).then(r => r.json()).then(d => {
-            if (d.channel_count !== undefined) el.textContent = d.channel_count;
+            if (d.enabled_channel_count !== undefined) el.textContent = d.enabled_channel_count;
           }).catch(() => {});
         }
       });

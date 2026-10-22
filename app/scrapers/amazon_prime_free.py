@@ -39,7 +39,7 @@ class AmazonPrimeFreeScraper(BaseScraper):
     config_required = True
 
     stream_audit_enabled = True
-    source_category = 'drm'
+    source_category = 'account'
     # Every Amazon Free channel uses the CENC/Widevine bridge path.
     all_channels_require_drm_bridge = True
     audit_requires_config = ['cookie_header']

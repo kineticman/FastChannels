@@ -3633,6 +3633,14 @@ def _schedule_due_scrapes():
 def seed_sources():
     with flask_app.app_context():
         scrapers = registry.get_all()
+        # A DRM source (license_url) the FastChannels Player bridge hasn't been
+        # tested with is PrismCast-only until it's added to the trusted list.
+        from app.drm_bridge import DRM_BRIDGE_TRUSTED_SOURCES
+        untested = sorted({cls.source_name for cls in scrapers.values() if getattr(cls, 'license_url', None)}
+                          - DRM_BRIDGE_TRUSTED_SOURCES)
+        if untested:
+            logger.warning('DRM sources not on DRM_BRIDGE_TRUSTED_SOURCES (PrismCast only until tested with '
+                           'FastChannels Player): %s', ', '.join(untested))
         default_disabled_sources = {'amazon_prime_free', 'aenetworks_tve', 'fox_tve', 'discovery_tve', 'amcn_tve', 'fox_one', 'nbc_tve', 'warner_tve', 'cspan', 'sling', 'localnow', 'pluto', 'frndlytv', 'fubo', 'hdhomerun', 'freecast', 'vidaa', 'philo', 'directv', 'pbs', 'tubi', 'spectrum', 'espn', 'nfl', 'cbs_sports', 'free_networks', 'versant_tve', 'zeam', 'vix', 'univision_tve', 'disney_tve', 'tennis_tve', 'dazn_tve', 'cspan_tve', 'sundance_tve', 'cnn_tve', 'nesn_tve'}
         # Custom Channels source: always seeded, always enabled, never auto-scraped
         if not Source.query.filter_by(name='custom').first():

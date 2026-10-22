@@ -90,7 +90,7 @@ _LCN_RE = re.compile(r'^\d+(\.\d+)?$')
 class HDHomeRunScraper(BaseScraper):
     source_name = "hdhomerun"
     display_name = "HDHomeRun"
-    source_category = "specialty"
+    source_category = 'local'
     scrape_interval = 360
     config_required = True
     epg_quality = "full"

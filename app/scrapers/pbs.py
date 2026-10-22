@@ -102,7 +102,7 @@ class PBSScraper(BaseScraper):
     display_name = "PBS"
     scrape_interval = 360
     stream_audit_enabled = True
-    source_category = "specialty"
+    source_category = 'fast'
     config_required = False
     epg_quality = "basic"
 

@@ -802,7 +802,7 @@ def build_live_window(media_text: str, variant_url: str, rewrite_segment,
 class CSpanScraper(BaseScraper):
     source_name  = "cspan"
     display_name = "C-SPAN"
-    source_category = "specialty"
+    source_category = 'fast'
     # Live-only event feeds (dark between sessions), so DO NOT let the audit
     # resolve them — a recess would look like a dead stream. resolve() also
     # returns unavailable (not dead) with no live event, so nothing auto-disables

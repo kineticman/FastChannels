@@ -122,6 +122,8 @@ class NesnTVEScraper(MvpdCooldownMixin, BaseScraper):
     license_url = WIDEVINE_LICENSE_URL
     # Assumed from Versant on the same platform — see module docstring.
     all_channels_require_drm_bridge = True
+    # Never played past the market check — see module docstring.
+    is_beta = True
 
     # The NESN account is passwordless (an emailed code — see request_login_code
     # and the "Sign in to NESN" panel on the source). The login is kept in

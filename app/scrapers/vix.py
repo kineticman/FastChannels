@@ -67,7 +67,7 @@ class ViXScraper(BaseScraper):
 
     source_name = 'vix'
     display_name = 'ViX'
-    source_category = 'drm'
+    source_category = 'fast'
     scrape_interval = 360
     stream_audit_enabled = True
     license_url = LICENSE_BASE

@@ -87,6 +87,7 @@ class Source(db.Model):
             'last_audited_at': self.last_audited_at.isoformat() if self.last_audited_at else None,
             'last_error':     self.last_error,
             'channel_count':  self.channels.filter_by(is_active=True).count(),
+            'enabled_channel_count': self.channels.filter_by(is_active=True, is_enabled=True).count(),
             'drm_bridge_count': self.channels.filter_by(requires_drm_bridge=True).count(),
             'chnum_start':    self.chnum_start,
             'epg_only':       self.epg_only,

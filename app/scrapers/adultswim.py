@@ -33,7 +33,7 @@ class AdultSwimScraper(BaseScraper):
     channel_miss_threshold = 5
     stream_audit_enabled = True
     epg_quality = "partial"
-    source_category = 'specialty'
+    source_category = 'fast'
     config_schema = []
 
     BASE_URL = "https://www.adultswim.com"
