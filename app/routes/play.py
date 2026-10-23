@@ -3099,6 +3099,18 @@ def play(source_name: str, channel_id: str):
             302,
         )
 
+    # NBC and PBS's DASH manifests have no BaseURL and relative segment paths.
+    # A 302 straight to them works only in clients that resolve those against
+    # the 302's target; ffmpeg's dash demuxer resolves them against this URL
+    # and asks us for the segments. Their dash.mpd proxies add the BaseURL.
+    if source_name == 'nbc_tve' or (source_name == 'pbs' and (channel.stream_type or '').lower() == 'dash'):
+        from urllib.parse import quote as _quote
+        encoded_id = _quote(channel.source_channel_id, safe='')
+        return redirect(
+            f"{request.host_url.rstrip('/')}/play/{source_name}/{encoded_id}/dash.mpd",
+            302,
+        )
+
     scraper_cls = registry.get(source_name)
     scraper = None
     # Distinguish a confirmed-dead channel (permanent — being auto-disabled) from
