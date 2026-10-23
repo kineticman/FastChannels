@@ -16,7 +16,10 @@ from ..generators.m3u import (
 from ..generators.xmltv import generate_xmltv_stream
 from ..models import Feed
 from ..url import public_base_url
-from ..xml_cache import get_artifact, get_xml_artifact, xml_artifact_path, _xml_stale_path, _GLOBAL_XML_STALE
+from ..xml_cache import (
+    get_artifact, get_xml_artifact, note_artifact_request, xml_artifact_path,
+    _xml_stale_path, _GLOBAL_XML_STALE,
+)
 
 log = logging.getLogger(__name__)
 
@@ -70,6 +73,54 @@ def _log_epg_request(label: str, path, stale: bool) -> None:
     )
 
 
+# How long a request waits for an on-request build before falling back to the
+# old file (or a 503 if there is none). A 113 MB native XML took ~23s in testing.
+_ON_REQUEST_BUILD_WAIT_SECONDS = 60
+
+
+def _wait_for_build(cache_key: str, path, *, ext: str):
+    """Enqueue a build of `cache_key` and wait for a new file to land."""
+    import time
+    from .tasks import trigger_artifact_build
+    old_mtime = path.stat().st_mtime if path is not None and path.exists() else None
+    trigger_artifact_build(cache_key)
+    deadline = time.monotonic() + _ON_REQUEST_BUILD_WAIT_SECONDS
+    while time.monotonic() < deadline:
+        current = get_artifact(cache_key, ext=ext)
+        if current is not None:
+            try:
+                if old_mtime is None or current.stat().st_mtime != old_mtime:
+                    return current
+            except OSError:
+                pass
+        time.sleep(0.25)
+    log.warning('[artifacts] on-request build of %s did not finish in %ss; serving %s',
+                cache_key, _ON_REQUEST_BUILD_WAIT_SECONDS,
+                'the previous file' if path is not None else 'a 503')
+    return path
+
+
+def _artifact(cache_key: str, *, ext: str):
+    """get_artifact for a client request: records the request, and builds the
+    artifact first if refresh passes have been skipping it as idle."""
+    idle = note_artifact_request(cache_key)
+    path = get_artifact(cache_key, ext=ext)
+    if path is None or idle:
+        path = _wait_for_build(cache_key, path, ext=ext)
+    return path
+
+
+def _xml_artifact(cache_key: str):
+    """get_xml_artifact counterpart of _artifact. An idle XML that's still
+    current (no scrape since it was last built) is served without a rebuild."""
+    idle = note_artifact_request(cache_key)
+    path, stale = get_xml_artifact(cache_key)
+    if path is None or (idle and stale):
+        _wait_for_build(cache_key, path, ext='xml')
+        path, stale = get_xml_artifact(cache_key)
+    return path, stale
+
+
 def _filters():
     f = {}
     if s := request.args.getlist('source'):
@@ -110,7 +161,7 @@ def m3u():
         content = generate_m3u(filters, base_url=base_url)
         return Response(content, mimetype='application/x-mpegurl',
                         headers={'Content-Disposition': 'attachment; filename="fastchannels.m3u"'})
-    path = get_artifact('master-m3u', ext='m3u')
+    path = _artifact('master-m3u', ext='m3u')
     if path is None:
         return Response(
             'M3U artifact is warming. Retry shortly.',
@@ -149,7 +200,7 @@ def m3u_gracenote():
         content = generate_gracenote_m3u(filters, base_url=base_url, namespace_start=gn_start)
         return Response(content, mimetype='application/x-mpegurl',
                         headers={'Content-Disposition': 'attachment; filename="fastchannels-gracenote.m3u"'})
-    path = get_artifact('master-gracenote-m3u', ext='m3u')
+    path = _artifact('master-gracenote-m3u', ext='m3u')
     if path is None:
         return Response(
             'Gracenote M3U artifact is warming. Retry shortly.',
@@ -178,7 +229,7 @@ def m3u_mixed():
         content = generate_mixed_m3u(filters, base_url=base_url)
         return Response(content, mimetype='application/x-mpegurl',
                         headers={'Content-Disposition': 'attachment; filename="fastchannels-mixed.m3u"'})
-    path = get_artifact('master-mixed-m3u', ext='m3u')
+    path = _artifact('master-mixed-m3u', ext='m3u')
     if path is None:
         return Response(
             'Mixed M3U artifact is warming. Retry shortly.',
@@ -204,7 +255,7 @@ def epg_xml():
             headers={'Content-Disposition': 'attachment; filename="fastchannels.xml"'},
         )
 
-    path, stale = get_xml_artifact('master')
+    path, stale = _xml_artifact('master')
     _log_epg_request('master', path, stale)
     if path is None:
         return Response(
@@ -223,7 +274,7 @@ def epg_xml():
 @output_bp.route('/feeds/<slug>/m3u')
 def feed_m3u(slug):
     feed     = Feed.query.filter_by(slug=slug, is_enabled=True).first_or_404()
-    path = get_artifact(f'feed-{slug}-m3u', ext='m3u')
+    path = _artifact(f'feed-{slug}-m3u', ext='m3u')
     if path is None:
         return Response(
             f'Feed M3U artifact for {feed.slug} is warming. Retry shortly.',
@@ -241,7 +292,7 @@ def feed_m3u(slug):
 @output_bp.route('/feeds/<slug>/m3u/gracenote')
 def feed_m3u_gracenote(slug):
     feed     = Feed.query.filter_by(slug=slug, is_enabled=True).first_or_404()
-    path = get_artifact(f'feed-{slug}-gracenote-m3u', ext='m3u')
+    path = _artifact(f'feed-{slug}-gracenote-m3u', ext='m3u')
     if path is None:
         return Response(
             f'Feed Gracenote M3U artifact for {feed.slug} is warming. Retry shortly.',
@@ -259,7 +310,7 @@ def feed_m3u_gracenote(slug):
 @output_bp.route('/feeds/<slug>/epg.xml')
 def feed_epg(slug):
     feed     = Feed.query.filter_by(slug=slug, is_enabled=True).first_or_404()
-    path, stale = get_xml_artifact(f'feed-{feed.slug}')
+    path, stale = _xml_artifact(f'feed-{feed.slug}')
     _log_epg_request(f'feed-{feed.slug}', path, stale)
     if path is None:
         return Response(
@@ -278,7 +329,7 @@ def feed_epg(slug):
 @output_bp.route('/feeds/<slug>/native/m3u')
 def feed_native_m3u(slug):
     feed = Feed.query.filter_by(slug=slug, is_enabled=True).first_or_404()
-    path = get_artifact(f'feed-{slug}-native-m3u', ext='m3u')
+    path = _artifact(f'feed-{slug}-native-m3u', ext='m3u')
     if path is None:
         return Response(
             f'Feed native M3U artifact for {feed.slug} is warming. Retry shortly.',
@@ -296,7 +347,7 @@ def feed_native_m3u(slug):
 @output_bp.route('/feeds/<slug>/native/epg.xml')
 def feed_native_epg(slug):
     feed = Feed.query.filter_by(slug=slug, is_enabled=True).first_or_404()
-    path, stale = get_xml_artifact(f'feed-{feed.slug}-native')
+    path, stale = _xml_artifact(f'feed-{feed.slug}-native')
     _log_epg_request(f'feed-{feed.slug}-native', path, stale)
     if path is None:
         return Response(
@@ -315,7 +366,7 @@ def feed_native_epg(slug):
 @output_bp.route('/feeds/<slug>/m3u/mixed')
 def feed_m3u_mixed(slug):
     feed = Feed.query.filter_by(slug=slug, is_enabled=True).first_or_404()
-    path = get_artifact(f'feed-{slug}-mixed-m3u', ext='m3u')
+    path = _artifact(f'feed-{slug}-mixed-m3u', ext='m3u')
     if path is None:
         return Response(
             f'Feed mixed M3U artifact for {feed.slug} is warming. Retry shortly.',
@@ -356,7 +407,7 @@ def m3u_prismcast():
                                          prismcast_url=prismcast_url, inner_base_url=inner)
         return Response(content, mimetype='application/x-mpegurl',
                         headers={'Content-Disposition': 'attachment; filename="fastchannels-prismcast.m3u"'})
-    path = get_artifact('master-prismcast-m3u', ext='m3u')
+    path = _artifact('master-prismcast-m3u', ext='m3u')
     if path is None:
         return Response(
             'PrismCast M3U artifact is warming. Retry shortly.',
@@ -412,7 +463,7 @@ def m3u_prismcast_gracenote():
                                          namespace_start=gn_start, gracenote=True)
         return Response(content, mimetype='application/x-mpegurl',
                         headers={'Content-Disposition': 'attachment; filename="fastchannels-prismcast-gracenote.m3u"'})
-    path = get_artifact('master-prismcast-gracenote-m3u', ext='m3u')
+    path = _artifact('master-prismcast-gracenote-m3u', ext='m3u')
     if path is None:
         return Response(
             'PrismCast Gracenote M3U artifact is warming. Retry shortly.',
@@ -449,7 +500,7 @@ def feed_m3u_prismcast(slug):
     if not settings.prismcast_capture_configured():
         return _prismcast_not_configured()
     feed = Feed.query.filter_by(slug=slug, is_enabled=True).first_or_404()
-    path = get_artifact(f'feed-{slug}-prismcast-m3u', ext='m3u')
+    path = _artifact(f'feed-{slug}-prismcast-m3u', ext='m3u')
     if path is None:
         return Response(
             f'PrismCast M3U artifact for {feed.slug} is warming. Retry shortly.',
@@ -498,7 +549,7 @@ def feed_m3u_prismcast_gracenote(slug):
     if not settings.prismcast_capture_configured():
         return _prismcast_not_configured()
     feed = Feed.query.filter_by(slug=slug, is_enabled=True).first_or_404()
-    path = get_artifact(f'feed-{slug}-prismcast-gracenote-m3u', ext='m3u')
+    path = _artifact(f'feed-{slug}-prismcast-gracenote-m3u', ext='m3u')
     if path is None:
         return Response(
             f'PrismCast Gracenote M3U artifact for {feed.slug} is warming. Retry shortly.',
@@ -548,7 +599,7 @@ def m3u_fc_player():
         content = generate_fc_player_m3u(filters, base_url=base_url)
         return Response(content, mimetype='application/x-mpegurl',
                         headers={'Content-Disposition': 'attachment; filename="fastchannels-fc-player.m3u"'})
-    path = get_artifact('master-fc-player-m3u', ext='m3u')
+    path = _artifact('master-fc-player-m3u', ext='m3u')
     if path is None:
         return Response(
             'FastChannels Player M3U artifact is warming. Retry shortly.',
@@ -588,7 +639,7 @@ def m3u_fc_player_ah4c():
         content = generate_fc_player_m3u(filters, base_url=base_url, ah4c_base_url=ah4c_url)
         return Response(content, mimetype='application/x-mpegurl',
                         headers={'Content-Disposition': 'attachment; filename="fastchannels-fc-player-ah4c.m3u"'})
-    path = get_artifact('master-fc-player-ah4c-m3u', ext='m3u')
+    path = _artifact('master-fc-player-ah4c-m3u', ext='m3u')
     if path is None:
         return Response(
             'FastChannels Player ah4c M3U artifact is warming. Retry shortly.',
@@ -622,7 +673,7 @@ def m3u_fc_player_ah4c_gracenote():
                                           namespace_start=gn_start, gracenote=True)
         return Response(content, mimetype='application/x-mpegurl',
                         headers={'Content-Disposition': 'attachment; filename="fastchannels-fc-player-ah4c-gracenote.m3u"'})
-    path = get_artifact('master-fc-player-ah4c-gracenote-m3u', ext='m3u')
+    path = _artifact('master-fc-player-ah4c-gracenote-m3u', ext='m3u')
     if path is None:
         return Response(
             'FastChannels Player ah4c Gracenote M3U artifact is warming. Retry shortly.',
@@ -654,7 +705,7 @@ def m3u_fc_player_gracenote():
                                           namespace_start=gn_start, gracenote=True)
         return Response(content, mimetype='application/x-mpegurl',
                         headers={'Content-Disposition': 'attachment; filename="fastchannels-fc-player-gracenote.m3u"'})
-    path = get_artifact('master-fc-player-gracenote-m3u', ext='m3u')
+    path = _artifact('master-fc-player-gracenote-m3u', ext='m3u')
     if path is None:
         return Response(
             'FastChannels Player Gracenote M3U artifact is warming. Retry shortly.',
@@ -676,7 +727,7 @@ def feed_m3u_fc_player(slug):
     if not _fc_player_bridge_ready():
         return _fc_player_not_configured()
     feed = Feed.query.filter_by(slug=slug, is_enabled=True).first_or_404()
-    path = get_artifact(f'feed-{slug}-fc-player-m3u', ext='m3u')
+    path = _artifact(f'feed-{slug}-fc-player-m3u', ext='m3u')
     if path is None:
         return Response(
             f'FastChannels Player M3U artifact for {feed.slug} is warming. Retry shortly.',
@@ -700,7 +751,7 @@ def feed_m3u_fc_player_ah4c(slug):
     if not _ah4c_bridge_ready():
         return _fc_player_ah4c_not_configured()
     feed = Feed.query.filter_by(slug=slug, is_enabled=True).first_or_404()
-    path = get_artifact(f'feed-{slug}-fc-player-ah4c-m3u', ext='m3u')
+    path = _artifact(f'feed-{slug}-fc-player-ah4c-m3u', ext='m3u')
     if path is None:
         return Response(
             f'FastChannels Player ah4c M3U artifact for {feed.slug} is warming. Retry shortly.',
@@ -724,7 +775,7 @@ def feed_m3u_fc_player_ah4c_gracenote(slug):
     if not _ah4c_bridge_ready():
         return _fc_player_ah4c_not_configured()
     feed = Feed.query.filter_by(slug=slug, is_enabled=True).first_or_404()
-    path = get_artifact(f'feed-{slug}-fc-player-ah4c-gracenote-m3u', ext='m3u')
+    path = _artifact(f'feed-{slug}-fc-player-ah4c-gracenote-m3u', ext='m3u')
     if path is None:
         return Response(
             f'FastChannels Player ah4c Gracenote M3U artifact for {feed.slug} is warming. Retry shortly.',
@@ -747,7 +798,7 @@ def feed_m3u_fc_player_gracenote(slug):
     if not _fc_player_bridge_ready():
         return _fc_player_not_configured()
     feed = Feed.query.filter_by(slug=slug, is_enabled=True).first_or_404()
-    path = get_artifact(f'feed-{slug}-fc-player-gracenote-m3u', ext='m3u')
+    path = _artifact(f'feed-{slug}-fc-player-gracenote-m3u', ext='m3u')
     if path is None:
         return Response(
             f'FastChannels Player Gracenote M3U artifact for {feed.slug} is warming. Retry shortly.',
@@ -772,7 +823,7 @@ def _feed_bridge_mixed_artifact(slug: str, key: str, label: str):
             status=404,
             mimetype='text/plain',
         )
-    path = get_artifact(f'feed-{slug}-{key}-mixed-m3u', ext='m3u')
+    path = _artifact(f'feed-{slug}-{key}-mixed-m3u', ext='m3u')
     if path is None:
         return Response(
             f'{label} mixed M3U artifact for {feed.slug} is warming. Retry shortly.',
@@ -827,7 +878,7 @@ def feed_m3u_combined_ah4c(slug):
             status=404,
             mimetype='text/plain',
         )
-    path = get_artifact(f'feed-{slug}-combined-ah4c-m3u', ext='m3u')
+    path = _artifact(f'feed-{slug}-combined-ah4c-m3u', ext='m3u')
     if path is None:
         return Response(
             f'Combined ah4c M3U artifact for {feed.slug} is warming. Retry shortly.',

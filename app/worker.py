@@ -51,7 +51,10 @@ from app.channel_tags import (AUTO_EVENT_REASONS, EVENT_RETIRED_REASON, EVENT_MI
                               event_channel_clause)
 from app.event_lifecycle import hide_event, restore_event, delete_event
 from app.tve.adobe_pass import TVENotAuthorizedError
-from app.xml_cache import ensure_xml_artifact, get_artifact, invalidate_xml_cache, sweep_unused_artifacts, write_artifact
+from app.xml_cache import (
+    ARTIFACT_IDLE_SECONDS, ARTIFACT_PURGE_SECONDS, artifact_in_use, ensure_xml_artifact, get_artifact,
+    invalidate_xml_cache, purge_idle_artifacts, sweep_unused_artifacts, write_artifact,
+)
 from app.routes.images import delete_cached_logo
 
 from app.timezone_utils import make_tz_formatter
@@ -1799,8 +1802,18 @@ def _prewarm_logos(source_name: str, logo_urls: list[str], progress_cb=None) -> 
         logger.exception('[%s] logo cache pre-warm failed', source_name)
 
 
-def _refresh_xml_artifacts() -> None:
-    """Refresh master/feed XML and M3U artifacts after scrape commits land."""
+# Always rebuilt, requested or not, so a new install's first DVR/Plex fetch
+# never waits on a build.
+_ALWAYS_BUILT_ARTIFACTS = frozenset({'master', 'master-m3u', 'feed-default', 'feed-default-m3u'})
+
+
+def _refresh_xml_artifacts(only_keys: set[str] | None = None) -> None:
+    """Refresh master/feed XML and M3U artifacts after scrape commits land.
+
+    A full pass skips artifacts nobody has requested within the idle window
+    (they're built on their next request instead). `only_keys` builds just
+    those artifacts — the on-request path — with no idle check or sweep.
+    """
     from app.generators.m3u import generate_gracenote_m3u, generate_m3u, generate_native_m3u, generate_mixed_m3u, generate_combined_ah4c_m3u, generate_prismcast_m3u, generate_fc_player_m3u, feed_gracenote_start, feed_namespace_start, feed_to_query_filters, _MASTER_GRACENOTE_START
     from app import fc_player_bridge as _fc_player_bridge
     from app.generators.xmltv import write_xmltv
@@ -2018,6 +2031,24 @@ def _refresh_xml_artifacts() -> None:
                     ),
                 ))
 
+        # Every key the routes can serve right now, idle or not.
+        live_keys = {k for k, _w in xml_artifacts} | {k for k, _w in m3u_artifacts}
+        idle_keys: list[str] = []
+        if only_keys is not None:
+            xml_artifacts = [a for a in xml_artifacts if a[0] in only_keys]
+            m3u_artifacts = [a for a in m3u_artifacts if a[0] in only_keys]
+        else:
+            def _keep(artifacts):
+                kept = []
+                for cache_key, writer in artifacts:
+                    if cache_key in _ALWAYS_BUILT_ARTIFACTS or artifact_in_use(cache_key, now=pass_started):
+                        kept.append((cache_key, writer))
+                    else:
+                        idle_keys.append(cache_key)
+                return kept
+            xml_artifacts = _keep(xml_artifacts)
+            m3u_artifacts = _keep(m3u_artifacts)
+
         rebuilt_xml = 0
         for cache_key, writer in xml_artifacts:
             try:
@@ -2038,14 +2069,31 @@ def _refresh_xml_artifacts() -> None:
             logger.warning('[artifacts] missing M3U artifact(s) after refresh pass; retrying once: %s', missing_m3u)
             continue
 
-        logger.info('[artifacts] refreshed %d XML artifact(s) and %d M3U artifact(s)', rebuilt_xml, rebuilt_m3u)
+        if only_keys is not None:
+            logger.info('[artifacts] built %d XML and %d M3U artifact(s) on request: %s',
+                        rebuilt_xml, rebuilt_m3u, ', '.join(sorted(only_keys)))
+            if missing_m3u:
+                logger.warning('[artifacts] on-request build left M3U artifact(s) missing: %s', missing_m3u)
+            break
+        if idle_keys:
+            logger.info('[artifacts] refreshed %d XML artifact(s) and %d M3U artifact(s); '
+                        'skipped %d not requested in %d days', rebuilt_xml, rebuilt_m3u,
+                        len(idle_keys), ARTIFACT_IDLE_SECONDS // 86400)
+        else:
+            logger.info('[artifacts] refreshed %d XML artifact(s) and %d M3U artifact(s)', rebuilt_xml, rebuilt_m3u)
         if missing_m3u:
             logger.warning('[artifacts] still missing M3U artifact(s) after retry: %s', missing_m3u)
-        # This pass's keys are exactly what the output routes can serve right
-        # now, so anything else on disk is from a deleted feed or a bridge
-        # method that's been switched off (GitHub #73).
         try:
-            live_keys = {k for k, _w in xml_artifacts} | {k for k, _w in m3u_artifacts}
+            purged, purged_bytes = purge_idle_artifacts(idle_keys, now=pass_started)
+            if purged:
+                logger.info('[artifacts] removed %d cache file(s) not requested in %d days, freed %.1f MB',
+                            purged, ARTIFACT_PURGE_SECONDS // 86400, purged_bytes / 1024 / 1024)
+        except Exception:
+            logger.exception('[artifacts] idle-artifact purge failed')
+        # live_keys is exactly what the output routes can serve right now, so
+        # anything else on disk is from a deleted feed or a bridge method
+        # that's been switched off (GitHub #73).
+        try:
             swept, swept_bytes = sweep_unused_artifacts(live_keys, since=pass_started)
             if swept:
                 logger.info('[artifacts] removed %d unused cache file(s), freed %.1f MB',
@@ -2055,7 +2103,7 @@ def _refresh_xml_artifacts() -> None:
         break
 
 
-def _refresh_xml_artifacts_job() -> None:
+def _refresh_xml_artifacts_job(only_keys: set[str] | None = None) -> None:
     # Forked child inherits the parent's root logger handlers.  Reset to a
     # single clean StreamHandler so the child never double-logs, then
     # re-attach the shared log file so /admin/logs sees this job's output too
@@ -2072,11 +2120,11 @@ def _refresh_xml_artifacts_job() -> None:
         # the pool without closing the parent's connections (SQLAlchemy's
         # documented post-fork recipe).
         db.engine.dispose(close=False)
-        _refresh_xml_artifacts()
+        _refresh_xml_artifacts(only_keys)
 
 
-def _refresh_xml_artifacts_subprocess(timeout_seconds: int = 1800) -> None:
-    proc = multiprocessing.Process(target=_refresh_xml_artifacts_job, name='xml-refresh')
+def _refresh_xml_artifacts_subprocess(timeout_seconds: int = 1800, only_keys: set[str] | None = None) -> None:
+    proc = multiprocessing.Process(target=_refresh_xml_artifacts_job, args=(only_keys,), name='xml-refresh')
     proc.start()
     proc.join(timeout_seconds)
     if proc.is_alive():
@@ -2093,6 +2141,11 @@ def run_xml_refresh():
     # the worker's RSS via allocator fragmentation, so do the build in a
     # short-lived child process instead — the memory dies with the child.
     _refresh_xml_artifacts_subprocess()
+
+
+def run_artifact_build(cache_keys: list[str]):
+    """Build specific artifacts for a request that found them missing or idle."""
+    _refresh_xml_artifacts_subprocess(timeout_seconds=300, only_keys=set(cache_keys))
 
 
 def run_tvtv_cache_refresh():

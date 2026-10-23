@@ -375,6 +375,23 @@ def trigger_xml_refresh() -> bool:
         return True
 
 
+def trigger_artifact_build(cache_key: str) -> None:
+    """Enqueue a build of one artifact a client just requested while it was
+    missing or idle. One job per key, so concurrent requests share it."""
+    try:
+        q = get_fast_queue()
+        job_id = f'artifact-build-{cache_key}'
+        if _job_already_active(q, job_id):
+            return
+        q.enqueue('app.worker.run_artifact_build', [cache_key], job_timeout=300, job_id=job_id)
+        logger.info('Enqueued on-request build of %s', cache_key)
+    except Exception as e:
+        logger.warning(f'RQ unavailable ({e}), falling back to thread for build of {cache_key}')
+        import threading
+        from app.worker import run_artifact_build
+        threading.Thread(target=run_artifact_build, args=([cache_key],), daemon=True).start()
+
+
 def trigger_xml_refresh_catchup() -> None:
     """Enqueue a catch-up XML refresh using a separate job ID so it queues behind
     any currently-running xml-refresh job.  Used when a new feed is created while
