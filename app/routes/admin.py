@@ -34,7 +34,7 @@ from ..source_config import (
 from ..timezone_utils import format_datetime, timezone_choices, timezone_health
 from ..url import public_base_url, detected_base_url
 from ..tve.accounts import shared_tve_account
-from ..tve.providers import ytdlp_adobe_mso_providers
+from ..tve.providers import saved_providers, tve_provider_choices as provider_choices
 
 admin_bp = Blueprint('admin', __name__, template_folder='../templates')
 
@@ -1859,7 +1859,7 @@ def settings():
         })
     tz_health = timezone_health(app_settings.timezone_name)
     tve_account = shared_tve_account()
-    tve_provider_choices = ytdlp_adobe_mso_providers()
+    tve_provider_choices = provider_choices(keep=saved_providers(tve_account))
     _url_from_env = _url_source in {'FASTCHANNELS_SERVER_URL', 'PUBLIC_BASE_URL'}
     _no_port_warning = False
     if _eff_url and not _url_from_env:

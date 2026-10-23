@@ -15,7 +15,7 @@ from ..tve.accounts import (
     uses_separate_signin,
 )
 from ..tve.adobe_pass import TVEAuthError, verify_mvpd_history
-from ..tve.providers import unsupported_network_reason, ytdlp_adobe_mso_providers
+from ..tve.providers import saved_providers, tve_provider_choices, unsupported_network_reason
 
 tve_bp = Blueprint('api_tve', __name__)
 
@@ -25,7 +25,7 @@ def tve_mvpd_settings():
     account = get_or_create_shared_tve_account()
     if request.method == 'POST':
         data = request.get_json(force=True) or {}
-        provider_choices = {p['id']: p for p in ytdlp_adobe_mso_providers()}
+        provider_choices = {p['id']: p for p in tve_provider_choices(keep=saved_providers(account))}
         selected_mso_id = (data.get('provider_id') or data.get('selected_mso_id') or 'Cox').strip()
         if selected_mso_id not in provider_choices:
             return jsonify({'error': 'Unsupported TVE provider.'}), 400
@@ -96,7 +96,7 @@ def source_tve_signin(source_id):
         if own:
             own.is_enabled = False
     else:
-        provider_choices = {p['id']: p for p in ytdlp_adobe_mso_providers()}
+        provider_choices = {p['id']: p for p in tve_provider_choices(keep=saved_providers(own))}
         provider_id = (data.get('provider_id') or '').strip()
         if provider_id not in provider_choices:
             return jsonify({'error': 'Choose a TV provider.'}), 400

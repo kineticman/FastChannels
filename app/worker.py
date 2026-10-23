@@ -3903,6 +3903,16 @@ def _warn_stale_epg_refreshes():
             )
 
 
+def _rq_refresh_mvpd_catalog():
+    """RQ job target: refresh the TV-provider catalog the provider dropdowns
+    are built from (app/tve/mvpd_catalog.py) once it's a day old."""
+    from app.tve.mvpd_catalog import refresh_catalog
+    try:
+        refresh_catalog()
+    except Exception as e:
+        logger.warning('[mvpd-catalog] refresh failed, keeping the current catalog: %s', e)
+
+
 def _rq_integrity_cleanup(include_orphan_purge: bool = True):
     """RQ job target: delete orphan channels/programs. Runs inside the RQ worker process.
 
@@ -4205,6 +4215,13 @@ if __name__ == '__main__':
         except Exception as e:
             logger.error('[scheduler] could not enqueue integrity_cleanup job: %s', e)
 
+    def _scheduled_mvpd_catalog_refresh():
+        try:
+            _r = redis.from_url(flask_app.config['REDIS_URL'])
+            Queue('maintenance', connection=_r).enqueue('app.worker._rq_refresh_mvpd_catalog', job_timeout=300)
+        except Exception as e:
+            logger.error('[scheduler] could not enqueue mvpd catalog refresh: %s', e)
+
     def _scheduled_db_backup():
         try:
             _r = redis.from_url(flask_app.config['REDIS_URL'])
@@ -4315,6 +4332,11 @@ if __name__ == '__main__':
         scheduler.add_job(_scheduled_integrity_cleanup, 'interval', days=1, id='integrity_cleanup',
                           max_instances=1, coalesce=True, misfire_grace_time=3600)
         scheduler.add_job(_scheduled_logo_cache_cleanup, 'interval', hours=6, id='logo_cache_cleanup',
+                          max_instances=1, coalesce=True, misfire_grace_time=3600)
+        # Checks every 6h (and shortly after boot); the job itself only fetches
+        # once the catalog is a day old.
+        scheduler.add_job(_scheduled_mvpd_catalog_refresh, 'interval', hours=6, id='mvpd_catalog_refresh',
+                          next_run_time=datetime.now(_tz) + timedelta(minutes=3),
                           max_instances=1, coalesce=True, misfire_grace_time=3600)
 
         def _scheduled_directv_token_watchdog():

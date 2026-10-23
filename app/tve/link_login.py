@@ -38,9 +38,9 @@ _PER_TARGET_TIMEOUT = 10 * 60
 _POLL_SECONDS = 3.0
 _POLL_MAX_SECONDS = 15.0
 
-# Adobe has two ids for DIRECTV and each network enables one or both: Versant's
-# sparkmedia requestor answers `DTV` with 400 invalid_integration and only
-# lists `ATTOTT` (labelled DIRECTV; usanetwork.com sends it, checked 2026-10-23).
+# Adobe has two ids for DIRECTV. Every requestor we use lists `ATTOTT`, and all
+# but Versant's sparkmedia also list `DTV`; sparkmedia answers `DTV` with 400
+# invalid_integration (adobe-services/config/<requestor>, checked 2026-10-23).
 # A start that fails under one is retried once under the other.
 _MVPD_ALIASES = {'DTV': 'ATTOTT', 'ATTOTT': 'DTV'}
 
