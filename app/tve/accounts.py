@@ -163,7 +163,7 @@ def separate_signin_info(source_name: str) -> dict | None:
     the source can't have a separate sign-in. Never includes a password."""
     if source_name not in SEPARATE_SIGNIN_SOURCES:
         return None
-    from .providers import tve_account_mso_id, ytdlp_adobe_mso_providers
+    from .providers import saved_providers, tve_account_mso_id, tve_provider_choices
 
     own = separate_tve_account(source_name)
     own_cfg = (own.config or {}) if own else {}
@@ -172,7 +172,7 @@ def separate_signin_info(source_name: str) -> dict | None:
     return {
         'mode': 'separate' if own and own.is_enabled else 'shared',
         'provider_id': tve_account_mso_id(own) if own_cfg.get('selected_mso_id') else '',
-        'providers': [{'id': p['id'], 'name': p['name']} for p in ytdlp_adobe_mso_providers()],
+        'providers': [{'id': p['id'], 'name': p['name']} for p in tve_provider_choices(keep=saved_providers(own))],
         'shared_provider': (
             ((shared.config or {}).get('selected_mso_name') or tve_account_mso_id(shared)) if shared_ready else ''),
     }

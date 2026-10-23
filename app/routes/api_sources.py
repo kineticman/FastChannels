@@ -594,9 +594,10 @@ def _espn_event_filter(cfg: dict) -> dict | None:
 
 def _espn_tve_info(saved: dict) -> dict:
     """What the ESPN card needs for its TV-provider sign-in."""
-    from ..tve.providers import ytdlp_adobe_mso_providers
+    from ..tve.providers import tve_provider_choices
     mso_id, mso_name = _espn_tv_provider()
-    providers = ytdlp_adobe_mso_providers()
+    keep = {i: n for i, n in ((saved.get('adobe_mvpd'), saved.get('adobe_mvpd_name')), (mso_id, mso_name)) if i}
+    providers = tve_provider_choices(keep=keep)
     return {'tve_signed_in': bool(saved.get('adobe_client_id')),
             'tve_mvpd_id': saved.get('adobe_mvpd'),
             'tve_mvpd_name': saved.get('adobe_mvpd_name') or saved.get('adobe_mvpd'),
@@ -610,10 +611,8 @@ def _fox_one_signin_info(saved: dict) -> dict:
     """What FOX One's card needs to render its sign-in section."""
     from ..scrapers.fox_one import FoxOneScraper
     from ..tve.accounts import shared_tve_account
-    from ..tve.providers import unsupported_network_reason, ytdlp_adobe_mso_providers
+    from ..tve.providers import saved_providers, tve_provider_choices, unsupported_network_reason
 
-    providers = ytdlp_adobe_mso_providers()
-    names = {p['id']: p['name'] for p in providers}
     login = FoxOneScraper(config=dict(saved))._mvpd_login()
     account = shared_tve_account()
     shared_ready = bool(account and account.is_enabled and account.has_credentials())
@@ -621,6 +620,11 @@ def _fox_one_signin_info(saved: dict) -> dict:
     if account:
         cfg = account.config or {}
         shared_mso = (cfg.get('yt_dlp_mso_id') or cfg.get('selected_mso_id') or cfg.get('adobe_mso_id') or '').strip()
+    keep = saved_providers(account)
+    if login and login.mso_id:
+        keep.setdefault(login.mso_id, login.mso_id)
+    providers = tve_provider_choices(keep=keep)
+    names = {p['id']: p['name'] for p in providers}
     return {
         'providers': [{'id': p['id'], 'name': p['name']} for p in providers],
         'shared_ready': shared_ready,

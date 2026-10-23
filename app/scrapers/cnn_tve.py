@@ -23,9 +23,14 @@ Key facts established by probing:
 - One CNN authorization opens all three channels.
 - Bolt checks the media token's signature and, after a grace period, its
   expiry (code 2506), so every tune gets a fresh short token.
-- The manifest URL carries its own CDN token in the path and segment URLs
-  are relative to it; manifest and segments send ACAO *, so playback is a
-  plain 302. The license needs no headers beyond the challenge.
+- The manifest URL carries its own CDN token in the path and the manifest
+  has no BaseURL, so segment URLs are relative to it. Clients that resolve
+  them against the URL they asked for rather than the 302's target (ffmpeg's
+  dash demuxer, some IPTV players) send them to us, so the play route serves
+  the manifest itself with those paths made absolute (cnn_manifest_response
+  in routes/play.py). A tune's URL is reused for a few minutes so the manifest
+  refreshes that come back to us don't each run a token exchange. Manifest
+  and segments send ACAO *. The license needs no headers beyond the challenge.
 - Guide: HLN from the same wme-digital schedule widget warner_tve uses
   (it has no CNN or CNN International); CNN and CNN International from
   the tvtv cache under their Gracenote IDs.
@@ -60,6 +65,11 @@ BOLT = 'https://default.any-any.prd.api.bolt.cnn.com'
 # playbackInfo and is what get_license_url() hands the license proxy.
 LICENSE_BASE = 'https://busy.any-any.prd.api.discomax.com/drm-proxy/any/drm-proxy/drm/license/widevine'
 _CLIENT_VERSION = '4.70.0'
+# How long a tune's manifest URL is reused, and how close to its CDN token's
+# Expires= it stops being reused.
+_STREAM_REUSE_SECONDS = 600
+_STREAM_EXPIRY_MARGIN = 300
+_EXPIRES_RE = re.compile(r'Expires=(\d+)')
 
 # source_channel_id -> channel. media_id and edit_id are the tve-asset ids
 # on cnn.com/videos/live.
@@ -184,6 +194,11 @@ class CNNTVEScraper(MvpdCooldownMixin, BaseScraper):
         cid = raw_url[len(SCHEME):] if raw_url.startswith(SCHEME) else ''
         if cid not in CHANNELS:
             raise ValueError(f'Unsupported CNN TVE stream URL: {raw_url}')
+        cached = (self.cache.get('cnn_streams') or {}).get(cid) or {}
+        if cached.get('url') and time.time() - float(cached.get('at') or 0) < _STREAM_REUSE_SECONDS:
+            expires = _EXPIRES_RE.search(cached['url'])
+            if not expires or int(expires.group(1)) - time.time() > _STREAM_EXPIRY_MARGIN:
+                return cached['url']
         media_token = self._media_token(cid)
         for attempt in (0, 1):
             bolt = self._bolt(force=bool(attempt))
@@ -213,7 +228,7 @@ class CNNTVEScraper(MvpdCooldownMixin, BaseScraper):
             raise RuntimeError(f'CNN TVE: no stream for {CHANNELS[cid]["name"]}: HTTP {r.status_code} {_bolt_error(r)}')
         license_url = ((((body.get('drm') or {}).get('schemes') or {}).get('widevine')) or {}).get('licenseUrl')
         streams = dict(self.cache.get('cnn_streams') or {})
-        streams[cid] = {'license': license_url, 'at': time.time()}
+        streams[cid] = {'license': license_url, 'url': url, 'at': time.time()}
         self._update_cache('cnn_streams', streams)
         return url
 

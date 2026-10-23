@@ -1909,11 +1909,52 @@ def tennis_tve_dash(channel_id: str):
 
 @play_bp.route('/play/cnn_tve/<channel_id>/dash.mpd')
 def cnn_tve_dash(channel_id: str):
-    """CNN under a .mpd name for FastChannels Player, like vix_dash. Bolt's
-    manifest and segments send ACAO * and the segment URLs are relative to the
-    tokenized manifest URL, so it's the ordinary resolve + 302."""
+    """CNN under a .mpd name for FastChannels Player, like vix_dash. play()
+    answers with the manifest body rather than a 302 (cnn_manifest_response)."""
     from urllib.parse import unquote as _unquote
     return play('cnn_tve', _unquote(channel_id))
+
+
+def cnn_manifest_response(manifest_url: str):
+    """CNN's manifest served from our URL with absolute segment URLs.
+
+    Bolt's manifest has no BaseURL; its SegmentTemplate paths are relative to
+    the manifest URL, whose path carries the CDN token. A client that resolves
+    them against the URL it requested instead of the 302's target (ffmpeg's
+    dash demuxer does) sends every segment request to us: a 404, or with the
+    token path in it, gunicorn's "Request Line is too large". So the relative
+    media/initialization templates are made absolute. Not an injected
+    <BaseURL>: the token path has '&'s, and ffmpeg re-parses BaseURL text as
+    XML and drops it. Refreshes come back here and reuse the tune's URL
+    (resolve()).
+    """
+    from urllib.parse import urljoin as _urljoin
+    from xml.sax.saxutils import escape as _xml_escape, unescape as _xml_unescape
+    try:
+        r = _requests.get(manifest_url, timeout=10)
+        r.raise_for_status()
+    except Exception as e:
+        logger.warning('[cnn-tve] manifest fetch failed: %s', e)
+        return _unavailable_response()
+    manifest_text = r.text
+    if not re.search(r'<BaseURL\b', manifest_text):
+        upstream = str(r.url)
+
+        def _abs(m):
+            path = _xml_unescape(m.group(2))
+            if re.match(r'https?://', path):
+                return m.group(0)
+            return f'{m.group(1)}="{_xml_escape(_urljoin(upstream, path), {chr(34): "&quot;"})}"'
+
+        manifest_text = re.sub(r'\b(media|initialization)="([^"]*)"', _abs, manifest_text)
+    return Response(
+        manifest_text,
+        mimetype='application/dash+xml',
+        headers={
+            'Cache-Control': 'no-cache',
+            'Access-Control-Allow-Origin': '*',
+        },
+    )
 
 
 def _dazn_stream(channel_id: str):
@@ -3058,6 +3099,18 @@ def play(source_name: str, channel_id: str):
             302,
         )
 
+    # NBC and PBS's DASH manifests have no BaseURL and relative segment paths.
+    # A 302 straight to them works only in clients that resolve those against
+    # the 302's target; ffmpeg's dash demuxer resolves them against this URL
+    # and asks us for the segments. Their dash.mpd proxies add the BaseURL.
+    if source_name == 'nbc_tve' or (source_name == 'pbs' and (channel.stream_type or '').lower() == 'dash'):
+        from urllib.parse import quote as _quote
+        encoded_id = _quote(channel.source_channel_id, safe='')
+        return redirect(
+            f"{request.host_url.rstrip('/')}/play/{source_name}/{encoded_id}/dash.mpd",
+            302,
+        )
+
     scraper_cls = registry.get(source_name)
     scraper = None
     # Distinguish a confirmed-dead channel (permanent — being auto-disabled) from
@@ -3378,6 +3431,8 @@ def play(source_name: str, channel_id: str):
             resolved_url=resolved_url,
             redirect_kind='direct',
         )
+    if source_name == 'cnn_tve':
+        return cnn_manifest_response(resolved_url)
     return redirect(resolved_url, 302)
 
 

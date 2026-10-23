@@ -10,6 +10,12 @@ from typing import Callable, TextIO
 _CACHE_ROOT = Path(os.environ.get('FASTCHANNELS_XML_CACHE_DIR', '/data/cache/xml'))
 _GLOBAL_XML_STALE = _CACHE_ROOT / '.xml-stale'
 _LOCK_STALE_SECONDS = 600
+# An artifact nobody has requested for this long is left out of the refresh
+# pass and rebuilt on its next request instead (see artifact_in_use).
+ARTIFACT_IDLE_SECONDS = 7 * 86400
+# ...and after this long its file is deleted too; the usage marker stays so the
+# next request still knows it's a returning output, not a new one.
+ARTIFACT_PURGE_SECONDS = 30 * 86400
 
 
 def _ensure_cache_dir() -> None:
@@ -27,6 +33,10 @@ def _xml_stale_path(cache_key: str) -> Path:
 
 def _xml_lock_path(cache_key: str) -> Path:
     return _cache_path(cache_key, ext='xml.lock')
+
+
+def _used_path(cache_key: str) -> Path:
+    return _cache_path(cache_key, ext='used')
 
 
 def _xml_tmp_glob(cache_key: str) -> list[Path]:
@@ -152,6 +162,7 @@ def delete_xml_artifact(cache_key: str) -> int:
         _cache_path(cache_key, ext='m3u'),
         _xml_stale_path(cache_key),
         _xml_lock_path(cache_key),
+        _used_path(cache_key),
     ):
         if path.exists():
             path.unlink(missing_ok=True)
@@ -178,7 +189,7 @@ def sweep_unused_artifacts(live_keys: set[str], *, min_age_seconds: int = 600,
         return 0, 0
     live_names: set[str] = set()
     for key in live_keys:
-        for ext in ('xml', 'm3u', 'xml.stale', 'xml.lock'):
+        for ext in ('xml', 'm3u', 'xml.stale', 'xml.lock', 'used'):
             live_names.add(_cache_path(key, ext=ext).name)
     now = time.time() if since is None else min(time.time(), since)
     removed = freed = 0
@@ -201,6 +212,79 @@ def sweep_unused_artifacts(live_keys: set[str], *, min_age_seconds: int = 600,
             continue
         removed += 1
         freed += st.st_size
+    return removed, freed
+
+
+def note_artifact_request(cache_key: str) -> bool:
+    """Record that a client just requested this artifact.
+
+    The `.used` marker's mtime is the last request time. Returns True when the
+    artifact had gone idle (not requested within ARTIFACT_IDLE_SECONDS), so
+    refresh passes have been skipping it and its file may be out of date.
+    """
+    _ensure_cache_dir()
+    marker = _used_path(cache_key)
+    now = time.time()
+    try:
+        age = now - marker.stat().st_mtime
+    except FileNotFoundError:
+        # Never recorded: a new output or one from before usage tracking.
+        # Either way artifact_in_use treats it as live, so it's current.
+        _touch(marker)
+        return False
+    except OSError:
+        return False
+    # DVRs poll hourly; skip the write when the marker is already this fresh.
+    if age > 60:
+        try:
+            os.utime(marker, (now, now))
+        except OSError:
+            pass
+    return age > ARTIFACT_IDLE_SECONDS
+
+
+def artifact_in_use(cache_key: str, *, now: float | None = None) -> bool:
+    """Whether a refresh pass should rebuild this artifact.
+
+    An artifact with no usage marker yet (new feed, newly enabled bridge, or
+    an install upgrading to usage tracking) gets one stamped now, so it is
+    built and kept current for a full idle window before it can go idle.
+    """
+    marker = _used_path(cache_key)
+    now = time.time() if now is None else now
+    try:
+        return now - marker.stat().st_mtime <= ARTIFACT_IDLE_SECONDS
+    except FileNotFoundError:
+        _touch(marker)
+        return True
+    except OSError:
+        return True
+
+
+def purge_idle_artifacts(cache_keys, *, now: float | None = None) -> tuple[int, int]:
+    """Delete the files of idle artifacts not requested in ARTIFACT_PURGE_SECONDS.
+
+    The usage marker is kept, so a later request is treated as a returning
+    output (built on request) rather than a new one. Returns
+    `(files_removed, bytes_freed)`.
+    """
+    now = time.time() if now is None else now
+    removed = freed = 0
+    for key in cache_keys:
+        try:
+            if now - _used_path(key).stat().st_mtime <= ARTIFACT_PURGE_SECONDS:
+                continue
+        except OSError:
+            continue
+        for ext in ('xml', 'm3u', 'xml.stale'):
+            path = _cache_path(key, ext=ext)
+            try:
+                size = path.stat().st_size
+                path.unlink()
+            except OSError:
+                continue
+            removed += 1
+            freed += size
     return removed, freed
 
 

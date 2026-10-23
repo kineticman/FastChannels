@@ -20,6 +20,7 @@ from .tasks import (
 from ..xml_cache import (
     get_artifact,
     get_xml_artifact,
+    note_artifact_request,
 )
 from .admin import _feed_split_counts
 
@@ -220,6 +221,14 @@ def _ensure_feed_dvr_artifacts(feed: Feed, base_url: str, *, has_gracenote: bool
     else:
         std_key = f'feed-{feed.slug}-m3u'
         gn_key  = f'feed-{feed.slug}-gracenote-m3u'
+
+    # Channels DVR is about to fetch these, so count that as a request now:
+    # refresh passes skip idle artifacts, and _ready below waits on them. Once
+    # noted they're no longer idle, so an idle one's out-of-date file would be
+    # served as-is — rebuild this feed now instead.
+    idle = [note_artifact_request(key) for key in (f'feed-{feed.slug}', std_key, gn_key)]
+    if any(idle):
+        force_refresh = True
 
     if force_refresh:
         from ..generators.m3u import (

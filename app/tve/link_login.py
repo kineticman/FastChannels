@@ -38,6 +38,12 @@ _PER_TARGET_TIMEOUT = 10 * 60
 _POLL_SECONDS = 3.0
 _POLL_MAX_SECONDS = 15.0
 
+# Adobe has two ids for DIRECTV. Every requestor we use lists `ATTOTT`, and all
+# but Versant's sparkmedia also list `DTV`; sparkmedia answers `DTV` with 400
+# invalid_integration (adobe-services/config/<requestor>, checked 2026-10-23).
+# A start that fails under one is retried once under the other.
+_MVPD_ALIASES = {'DTV': 'ATTOTT', 'ATTOTT': 'DTV'}
+
 
 def job_timeout(family: str) -> int:
     targets = {'amcn': 4, 'disney': 2, 'dazn': 2}.get(family, 1)
@@ -1269,9 +1275,23 @@ def run_link_login(family: str, requestor_id: str | None, mso_id: str, run_id: s
             try:
                 url, ctx = adapter.start(label)
             except Exception as exc:  # noqa: BLE001
-                logger.warning('[link-login] %s: registration failed: %s', label, exc)
-                steps[i].update(state='failed', message=str(exc)[:160])
-                continue
+                tried = getattr(adapter, 'mso_id', mso_id)
+                alias = _MVPD_ALIASES.get(tried)
+                retried = None
+                if alias:
+                    logger.info('[link-login] %s: %s failed (%s), retrying as %s', label, tried, exc, alias)
+                    try:
+                        retry_adapter = _ADAPTERS[family](account, alias, requestor_id)
+                        url, ctx = retry_adapter.start(label)
+                        # Later targets and the saved sign-in use the id that worked.
+                        adapter, mso_id, retried = retry_adapter, alias, True
+                        base['mso_id'] = alias
+                    except Exception as alias_exc:  # noqa: BLE001
+                        logger.info('[link-login] %s: %s failed too: %s', label, alias, alias_exc)
+                if not retried:
+                    logger.warning('[link-login] %s: registration failed: %s', label, exc)
+                    steps[i].update(state='failed', message=str(exc)[:160])
+                    continue
             code = ctx.get('code') if isinstance(ctx, dict) else None
             set_status('waiting', f'Sign in for {label}', label=label, url=url or '', code=code or '')
             logger.info('[link-login] %s: waiting for the %s sign-in', label, getattr(adapter, 'mso_id', mso_id))
