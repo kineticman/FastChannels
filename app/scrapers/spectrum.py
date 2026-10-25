@@ -32,10 +32,12 @@ _TOKEN_REFRESH_BUFFER of expiring — no browser/recaptcha needed for that. The
 refresh_token itself has its own absolute ceiling tied to the original login
 (refresh_ceiling_at, read from validateSession's refreshTokenMaxTTL — a
 countdown, not a sliding window that resets per refresh); once that's within
-_RELOGIN_BUFFER, app.worker's spectrum_relogin_watchdog job fires an
+_RELOGIN_BUFFER, app.worker's spectrum_relogin_watchdog job renews the
+session from the saved device verifier (_renew_with_device_verifier, the same
+no-browser renewal watch.spectrum.net does), and only if that fails fires an
 unattended Camoufox re-login (check_relogin_due) using saved credentials
 against the same trusted persistent profile the manual button uses.
-_refresh_session also fires that same re-login REACTIVELY the instant a
+_refresh_session does the same REACTIVELY the instant a
 refresh comes back 401 — confirmed live 2026-09-18 the refresh_token can be
 invalidated well before refresh_ceiling_at's predicted deadline (e.g. a
 separate login attempt against the same account, even an abandoned one, can
@@ -46,9 +48,12 @@ back to the button.
 """
 from __future__ import annotations
 
+import base64
+import hashlib
 import logging
 import fcntl
 import re
+import secrets
 import time
 import uuid
 import random
@@ -168,6 +173,12 @@ class SpectrumScraper(BaseScraper):
         # treating an unknown expiry as an indefinitely valid access token.
         if not expires_at or time.time() > float(expires_at) - _TOKEN_REFRESH_BUFFER:
             if not self._refresh_session():
+                relogin_age = time.time() - float(self.config.get('auto_relogin_last_attempt_at') or 0)
+                if self.config.get('rejected_refresh_token') and relogin_age < _RELOGIN_COOLDOWN:
+                    raise ScrapeSkipError(
+                        f'[spectrum] saved session was rejected; an automatic re-sign-in started '
+                        f'{int(relogin_age)}s ago — if it doesn\'t finish, use the "Sign in to '
+                        f'Spectrum" button.')
                 raise ScrapeSkipError(
                     '[spectrum] saved session has expired and could not be refreshed — '
                     'sign in again via the "Sign in to Spectrum" button.')
@@ -182,6 +193,17 @@ class SpectrumScraper(BaseScraper):
         fresh browser sign-in."""
         refresh_token = self.config.get('refresh_token')
         if not refresh_token:
+            return False
+        if self.config.get('rejected_refresh_token') == _token_fingerprint(refresh_token):
+            # Spectrum already answered 401 for this exact refresh_token; posting
+            # it again only repeats that (forum #3582: ~10 identical 401s in 14s,
+            # one per player retry, while the re-login it triggered was running).
+            # A renewal or re-login saves a new one, which no longer matches.
+            # Both have cooldowns, so this mostly returns without a request.
+            if self._renew_with_device_verifier():
+                return True
+            if self._fire_unattended_relogin():
+                logger.info('[spectrum] saved refresh_token was already rejected — triggered unattended re-login')
             return False
         try:
             r = self.session.post(
@@ -203,27 +225,15 @@ class SpectrumScraper(BaseScraper):
             logger.warning('[spectrum] token refresh request failed: %s', exc)
             return False
         if not r.ok:
-            # Capture WHY the refresh died: this is the rare, important moment
-            # for the device_verifier question (a headless deviceverifier/auth
-            # renewal here could avoid the browser re-login + its 2FA, IF the
-            # saved verifier is usable and not ThreatMetrix-gated — see
-            # save_login_result and dev/spectrum/android_app_login_research.md).
-            # Greppable tag 'spectrum-renewal'; WARNING not DEBUG on purpose —
-            # at most ~1/day, and DEBUG is usually off exactly when a real
-            # off-home ceiling-death happens in the wild. Also mirrored into
-            # the DB config so a later session can read it without live logs.
-            detail = ''
-            try:
-                body = r.json()
-                detail = str(body.get('resultCode') or body.get('result_code')
-                             or body.get('error') or body)[:200]
-            except Exception:  # noqa: BLE001
-                detail = (r.text or '')[:200]
+            # Capture WHY the refresh died. Greppable tag 'spectrum-renewal';
+            # WARNING not DEBUG on purpose — at most ~1/day, and DEBUG is
+            # usually off exactly when a real ceiling-death happens in the
+            # wild. Also mirrored into the DB config so a later session can
+            # read it without live logs.
+            detail = _response_detail(r)
             logger.warning(
                 '[spectrum-renewal] refresh_token grant rejected: HTTP %d reason=%s '
-                '(device_verifier saved=%s, client_device_id saved=%s) — if a browser '
-                're-login follows, this is the window a deviceverifier/auth renewal could '
-                'replace', r.status_code, detail,
+                '(device_verifier saved=%s, client_device_id saved=%s)', r.status_code, detail,
                 bool(self.config.get('device_verifier')), bool(self.config.get('client_device_id')))
             try:
                 self._update_config(
@@ -241,7 +251,11 @@ class SpectrumScraper(BaseScraper):
                 # just wait for the proactive ceiling watchdog to notice —
                 # fire the same unattended re-login right away so the NEXT
                 # resolve()/scrape() call has a fresh session instead of a
-                # human needing to notice a 503 and hit the button.
+                # human needing to notice a 503 and hit the button. The saved
+                # device verifier goes first: it needs no browser at all.
+                self._update_config('rejected_refresh_token', _token_fingerprint(refresh_token))
+                if self._renew_with_device_verifier():
+                    return True
                 if self._fire_unattended_relogin():
                     logger.info('[spectrum] refresh_token was rejected outright — triggered unattended re-login')
             return False
@@ -301,6 +315,9 @@ class SpectrumScraper(BaseScraper):
         remaining = float(ceiling_at) - time.time()
         if remaining > _RELOGIN_BUFFER:
             return False
+        if self._renew_with_device_verifier():
+            logger.info('[spectrum] refresh_token had %.1fh left before its ceiling — renewed with the device verifier', remaining / 3600)
+            return True
         fired = self._fire_unattended_relogin()
         if fired:
             logger.info('[spectrum] refresh_token has %.1fh left before its ceiling — triggered unattended re-login', remaining / 3600)
@@ -332,6 +349,99 @@ class SpectrumScraper(BaseScraper):
         if not trigger_spectrum_signin(unattended=True):
             return False  # shared browser profile busy with another MVPD login — retry next tick
         self._update_config('auto_relogin_last_attempt_at', int(time.time()))
+        return True
+
+    def _renew_with_device_verifier(self, ignore_cooldown: bool = False) -> bool:
+        """Start a new session from the saved device verifier, with no browser.
+
+        This is what watch.spectrum.net does itself when its refresh grant
+        fails (its auth library's refreshFallbackToVerifier defaults to true,
+        and a failed validateSession says nextAction DEVICEVERIFIER_AUTH):
+        POST consumer/video/deviceverifier/auth with the verifier as a Bearer
+        token and a PKCE challenge, then the usual authorization_code /token
+        exchange. The web client sends no reCAPTCHA or ThreatMetrix data on
+        this call (checked in its 18.0.2 bundle, 2026-10-25), and the test
+        box's ceiling re-logins already went through it in-browser
+        (deviceverifier/auth 200 PROCESSED, 2026-10-23/25). The new
+        refresh_token gets a fresh ~24h ceiling, like a password sign-in.
+
+        Returns False without a request when there's no verifier, inside
+        _RELOGIN_COOLDOWN of the last attempt, or while another process is
+        renewing; on any failure the callers fall back to the browser
+        re-login. ignore_cooldown is for the source's "Renew session" button,
+        where a person asked for it now."""
+        verifier = self.config.get('device_verifier')
+        device_id = self.config.get('client_device_id')
+        if not verifier or not device_id:
+            return False
+        last_attempt = float(self.config.get('verifier_renewal_last_attempt_at') or 0)
+        if not ignore_cooldown and time.time() - last_attempt < _RELOGIN_COOLDOWN:
+            return False
+        if not _claim_verifier_renewal():
+            return False
+        self._update_config('verifier_renewal_last_attempt_at', int(time.time()))
+        code_verifier = base64.urlsafe_b64encode(secrets.token_bytes(32)).rstrip(b'=').decode()
+        code_challenge = base64.urlsafe_b64encode(
+            hashlib.sha256(code_verifier.encode()).digest()).rstrip(b'=').decode()
+        headers = {
+            'accept': 'application/json, text/plain, */*',
+            'origin': 'https://watch.spectrum.net',
+            'referer': 'https://watch.spectrum.net/',
+            'user-agent': _USER_AGENT,
+        }
+        step = 'deviceverifier/auth'
+        try:
+            r = self.session.post(
+                f'{_AUTH_BASE}/auth/oauth/v2/consumer/video/deviceverifier/auth',
+                data={
+                    'client_id': _CLIENT_ID, 'response_type': 'code', 'state': 'state',
+                    'client_device_id': device_id, 'nonce': secrets.token_hex(16),
+                    'supportSMB': 'true', 'supportMDUBulk': 'false',
+                    'code_challenge': code_challenge, 'code_challenge_method': 'S256',
+                },
+                headers={**headers, 'authorization': f'Bearer {verifier}'},
+                timeout=15,
+            )
+            auth_code = r.json().get('authCode') if r.ok else None
+            if auth_code:
+                step = 'token'
+                r = self.session.post(
+                    f'{_AUTH_BASE}/auth/oauth/v2/token',
+                    data={
+                        'client_id': _CLIENT_ID, 'grant_type': 'authorization_code',
+                        'code': auth_code, 'client_device_id': device_id,
+                        'code_verifier': code_verifier,
+                    },
+                    headers=headers, timeout=15,
+                )
+            data = r.json() if r.ok and auth_code else {}
+        except Exception as exc:  # noqa: BLE001
+            logger.warning('[spectrum-renewal] device-verifier renewal failed at %s: %s', step, exc)
+            self._update_config('auto_relogin_last_error',
+                                f'{int(time.time())}: verifier {step} failed: {exc}'[:300])
+            return False
+        access_token = data.get('access_token')
+        if not access_token:
+            detail = _response_detail(r)
+            logger.warning('[spectrum-renewal] device-verifier renewal rejected at %s: HTTP %d reason=%s',
+                           step, r.status_code, detail)
+            self._update_config(
+                'auto_relogin_last_error',
+                f'{int(time.time())}: verifier {step} HTTP {r.status_code}: {detail}'[:300])
+            return False
+        expires_in = int(data.get('expires_in') or 0)
+        self._update_config('access_token', access_token)
+        self._update_config('refresh_token', data.get('refresh_token') or self.config.get('refresh_token'))
+        self._update_config('device_verifier', data.get('deviceVerifier') or verifier)
+        self._update_config('token_captured_at', int(time.time()))
+        self._update_config('token_expires_at', int(time.time()) + expires_in)
+        self._update_config('rejected_refresh_token', None)
+        self._update_config('auto_relogin_last_error', None)
+        ceiling_ttl = _fetch_refresh_ceiling(access_token, self.config.get('refresh_token'), device_id)
+        if ceiling_ttl is not None:
+            self._update_config('refresh_ceiling_at', int(time.time()) + ceiling_ttl)
+        logger.info('[spectrum-renewal] renewed the session with the saved device verifier '
+                    '(no browser sign-in), valid for %ds', expires_in)
         return True
 
     def _headers(self, extra: dict | None = None) -> dict:
@@ -943,6 +1053,38 @@ class SpectrumScraper(BaseScraper):
         return challenge, headers
 
 
+def _token_fingerprint(token: str) -> str:
+    """Short hash of a token, so config can remember which refresh_token was
+    rejected without storing a second copy of it."""
+    return hashlib.sha256(token.encode()).hexdigest()[:16]
+
+
+def _response_detail(r) -> str:
+    """Spectrum's reason for a failed auth call: the JSON resultCode/error if
+    there is one, else the start of the body."""
+    try:
+        body = r.json()
+        return str(body.get('resultCode') or body.get('result_code')
+                   or body.get('error') or body)[:200]
+    except Exception:  # noqa: BLE001
+        return (r.text or '')[:200]
+
+
+def _claim_verifier_renewal() -> bool:
+    """One device-verifier renewal at a time across gunicorn and worker
+    processes: a second one would replace the session the first just saved.
+    The claim is left to expire rather than released, so a request that
+    loaded the old config just before the save can't renew again behind it.
+    Without Redis, go ahead (the per-source cooldown still applies)."""
+    try:
+        import redis
+        from flask import current_app
+        r = redis.from_url(current_app.config['REDIS_URL'])
+        return bool(r.set('spectrum:verifier-renewal', '1', nx=True, ex=60))
+    except Exception:  # noqa: BLE001
+        return True
+
+
 def _fetch_refresh_ceiling(access_token: str, refresh_token: str, client_device_id: str) -> int | None:
     """validateSession is the only endpoint that reports refreshTokenMaxTTL —
     seconds actually remaining on the refresh_token's absolute ceiling, tied to
@@ -1028,10 +1170,16 @@ def save_login_result(local_storage: dict, cox_cookies: list[dict] | None,
         cfg.get('access_token'), cfg.get('refresh_token'), cfg.get('client_device_id'))
     if ceiling_ttl is not None:
         cfg['refresh_ceiling_at'] = int(_time.time()) + ceiling_ttl
+    else:
+        logger.warning('[spectrum-renewal] could not read the new session\'s refresh ceiling — '
+                       'the early renewal before it runs out can\'t be scheduled; a rejected '
+                       'refresh will still trigger one')
     # A fresh login means the auto-relogin watchdog's job is done — clear any
     # retry bookkeeping from a prior attempt so it doesn't carry over.
     cfg.pop('auto_relogin_last_attempt_at', None)
     cfg.pop('auto_relogin_last_error', None)
+    cfg.pop('rejected_refresh_token', None)
+    cfg.pop('verifier_renewal_last_attempt_at', None)
     if cox_cookies:
         cfg['cox_cookie_jar'] = cox_cookies
         cfg['cox_cookie_jar_captured_at'] = int(_time.time())

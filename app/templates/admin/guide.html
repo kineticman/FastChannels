@@ -1173,6 +1173,11 @@
         // HDHomeRun (muxed MPEG-TS) can't decode in the browser — disable the
         // in-browser actions but keep VLC, which plays MPEG-2/AC-3 natively.
         const isMuxed = streamType === 'mpegts';
+        // Bridge-only DRM: external players can't decrypt it (see channels.html).
+        const bridgeOnly = !!ch.requires_drm_bridge;
+        const bridgeNote = bridgeOnly
+          ? `<div class="gm-note">This channel is DRM-protected, so it plays here in the browser or through the DRM bridge (FastChannels Player, ah4c or PrismCast), not in VLC or other players.</div>`
+          : '';
         const muxedNote = isMuxed
           ? `<div class="gm-note">Browser playback isn't supported for HDHomeRun (MPEG-TS) channels yet. Use <strong>Open in VLC</strong>, or play it through Channels DVR.</div>`
           : '';
@@ -1196,8 +1201,8 @@
                   ? `<button class="preview-action-btn secondary" onclick="loadGuidePlayer('${escapeHtml(previewUrl)}','${escapeHtml(mode)}','${escapeHtml(streamType)}','${escapeHtml(licenseUrl)}')">Play Here</button>`
                   : ''));
         const watchBtn = (playUrl && !isMuxed) ? `<a class="preview-action-btn secondary" href="/watch/${ch.id}" target="_blank" rel="noopener">Watch Fullscreen</a>` : '';
-        const extBtn  = (playUrl && !isMuxed) ? `<a class="preview-action-btn secondary" href="${escapeHtml(playUrl)}" target="_blank" rel="noopener">Open in New Tab</a>` : '';
-        const vlcBtn  = playUrl ? `<a class="preview-action-btn secondary gm-vlc-btn" href="${escapeHtml(playUrl.replace('.m3u8','.m3u'))}">Open in VLC</a>` : '';
+        const extBtn  = (playUrl && !isMuxed && !bridgeOnly) ? `<a class="preview-action-btn secondary" href="${escapeHtml(playUrl)}" target="_blank" rel="noopener">Open in New Tab</a>` : '';
+        const vlcBtn  = (playUrl && !bridgeOnly) ? `<a class="preview-action-btn secondary gm-vlc-btn" href="${escapeHtml(playUrl.replace('.m3u8','.m3u'))}">Open in VLC</a>` : '';
         const noStream = !playUrl && !detecting ? `<span style="font-size:0.8rem;color:var(--text-muted)">No stream available for this source</span>` : '';
 
         const navRow = _guideChannelList && _guideChannelList.length > 1 ? `
@@ -1233,7 +1238,7 @@
           ` : `<div class="gm-prog-label">No current program data</div>`}
           ${notCurrentNote}
           ${renderGuideFeedMemberships(data.feed_memberships)}
-          ${muxedNote}
+          ${muxedNote}${bridgeNote}
           ${warningHtml}
           <div class="gm-actions" id="gm-actions">
             ${playBtn}${watchBtn}${extBtn}${vlcBtn}${noStream}
@@ -1395,6 +1400,7 @@
         const actions    = document.getElementById('gm-actions');
         if (!actions) return;
         const isMuxed = type === 'mpegts';
+        const bridgeOnly = !!ch.requires_drm_bridge;
         const muxedNote = isMuxed
           ? `<div class="gm-note" style="flex-basis:100%">Browser playback isn't supported for HDHomeRun (MPEG-TS) channels yet. Use <strong>Open in VLC</strong>, or play it through Channels DVR.</div>`
           : '';
@@ -1402,8 +1408,8 @@
           ? `<button class="preview-action-btn secondary" onclick="loadGuidePlayer('${escapeHtml(previewUrl)}','${escapeHtml(mode)}','${escapeHtml(type)}','${escapeHtml(licenseUrl)}')">Play Here</button>`
           : '';
         const watchBtn = (playUrl && !isMuxed) ? `<a class="preview-action-btn secondary" href="/watch/${channelId}" target="_blank" rel="noopener">Watch Fullscreen</a>` : '';
-        const extBtn  = (playUrl && !isMuxed) ? `<a class="preview-action-btn secondary" href="${escapeHtml(playUrl)}" target="_blank" rel="noopener">Open in New Tab</a>` : '';
-        const vlcBtn  = playUrl ? `<a class="preview-action-btn secondary gm-vlc-btn" href="${escapeHtml(playUrl.replace('.m3u8','.m3u'))}">Open in VLC</a>` : '';
+        const extBtn  = (playUrl && !isMuxed && !bridgeOnly) ? `<a class="preview-action-btn secondary" href="${escapeHtml(playUrl)}" target="_blank" rel="noopener">Open in New Tab</a>` : '';
+        const vlcBtn  = (playUrl && !bridgeOnly) ? `<a class="preview-action-btn secondary gm-vlc-btn" href="${escapeHtml(playUrl.replace('.m3u8','.m3u'))}">Open in VLC</a>` : '';
         actions.innerHTML = `${muxedNote}${playBtn}${watchBtn}${extBtn}${vlcBtn}<button class="preview-action-btn danger" onclick="closeGuideModal()">Close</button>`;
       } catch (_e) { /* silently ignore — stream detect failed */ }
     }

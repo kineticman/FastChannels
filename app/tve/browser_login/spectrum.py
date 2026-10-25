@@ -71,8 +71,11 @@ from app.tve.browser_login.common import (
     install_browser_login_activity_log,
     uninstall_browser_login_activity_log,
 )
+from app.scrapers.base import mask_username
 
 logger = logging.getLogger(__name__)
+
+_EMAIL_RE = re.compile(r'[\w.+-]+@[\w-]+(?:\.[\w-]+)+')
 
 SPECTRUM_SIGNIN_STATUS_KEY = 'spectrum:browser-login:status'
 SPECTRUM_SIGNIN_SHOT_KEY = 'spectrum:browser-login:screenshot'
@@ -84,6 +87,9 @@ SPECTRUM_SIGNIN_HINT_KEY = 'spectrum:browser-login:hint'
 # so it offers the IDID-4004 account-portal fallback like a manual one.
 SPECTRUM_SIGNIN_ATTENDED_KEY = 'spectrum:browser-login:attended'
 _SPECTRUM_SIGNIN_TIMEOUT_SECONDS = 600
+# How long an outdated saved session gets to renew itself in the page before
+# falling back to clearing it (see the stale_own_session branch).
+_STALE_SESSION_RENEW_SECONDS = 20
 
 _START_URL = 'https://watch.spectrum.net/guide'
 # Spectrum page-script errors seen on every sign-in that don't affect it;
@@ -262,6 +268,9 @@ def run_spectrum_signin(unattended: bool = False):
         _activity_handler = install_browser_login_activity_log(r)
 
         _terminal_status_set = {'v': False}
+        # Account names that can appear in a status message, masked before it
+        # is logged (filled in below once they're known).
+        _log_identities: set = set()
 
         def set_status(state: str, message: str = '', url: str = ''):
             try:
@@ -273,6 +282,16 @@ def run_spectrum_signin(unattended: bool = False):
                     _terminal_status_set['v'] = True
             except Exception:  # noqa: BLE001
                 pass
+            if state in ('success', 'error', 'stopped') and not _terminal_status_set.get('logged'):
+                # The status itself lives in Redis for 120s, so without this an
+                # unattended run that timed out left no trace in the log at all.
+                _terminal_status_set['logged'] = True
+                logged = _EMAIL_RE.sub(lambda m: mask_username(m.group(0)), message)
+                for ident in _log_identities:
+                    logged = logged.replace(ident, mask_username(ident))
+                logger.log(logging.WARNING if state == 'error' else logging.INFO,
+                           '[spectrum-signin] %s sign-in ended: %s — %s',
+                           'unattended' if unattended else 'manual', state, logged)
 
         r.delete(SPECTRUM_SIGNIN_STOP_KEY)
         r.delete(SPECTRUM_SIGNIN_INPUT_KEY)
@@ -289,6 +308,8 @@ def run_spectrum_signin(unattended: bool = False):
         saved_cfg = source.config or {} if source else {}
         username = saved_cfg.get('username')
         password = saved_cfg.get('password')
+        if username:
+            _log_identities.add(username)
         # Set by save_source_config when the saved username/password actually
         # change, and by the "Clear sign-in" button (clear_spectrum_auth) —
         # both in app/routes/api_sources.py. Consumed once below to force a
@@ -621,6 +642,7 @@ def run_spectrum_signin(unattended: bool = False):
                         'for a different account, not this install\'s login; discarding '
                         'and forcing a fresh sign-in', captured_username, username)
                     _last_mismatch['account'] = captured_username
+                    _log_identities.add(captured_username)
                     _rejected.add(candidate['oauth_token'])
                     captured.pop('candidate', None)
                     set_status(
@@ -629,7 +651,8 @@ def run_spectrum_signin(unattended: bool = False):
                         'forcing a fresh sign-in…', page.url)
                     return False
             captured['verified'] = candidate
-            logger.info('[spectrum-signin] captured and verified a working token')
+            logger.info('[spectrum-signin] captured and verified a working token for %s',
+                        mask_username(captured_username) if captured_username else 'an unreported account')
             return True
 
         def _clear_spectrum_cox_cookies(context, page, reason: str) -> None:
@@ -954,7 +977,39 @@ def run_spectrum_signin(unattended: bool = False):
                     # login instead of sitting forever waiting for a login form that
                     # SSO carryover means will never appear.
                     page.wait_for_timeout(1500)
-                    if not _try_capture(page) and _rejected:
+                    stale_own_session = not _try_capture(page) and _rejected and not _last_mismatch
+                    if stale_own_session:
+                        # An outdated token for the RIGHT account is normal (the
+                        # scraper renews without this browser, so the profile's
+                        # copy goes stale). Clearing cookies here threw away the
+                        # profile's sign-in state and forced a password sign-in
+                        # on every run (test box 2026-10-23/24/25). The page
+                        # won't renew a token it still thinks is unexpired, so
+                        # drop just the outdated token (a local sign-out; the
+                        # device verifier stays) and reload: the page then runs
+                        # its own verifier renewal, as it did on 2026-10-25.
+                        # Only clear if it neither does that nor moves on to
+                        # its own sign-in screen.
+                        try:
+                            # SAL.t is the page's own (encrypted) token store; the
+                            # plain keys are a legacy copy. SAL.d.v, its device
+                            # verifier, is kept.
+                            page.evaluate("() => ['SAL.t', 'oauth_token', 'xoauth_refresh_token', "
+                                          "'xoauth_token_expiration'].forEach(k => localStorage.removeItem(k))")
+                            _goto_start('after dropping the outdated token')
+                        except Exception as exc:  # noqa: BLE001
+                            logger.info('[spectrum-signin] could not drop the outdated token: %s', exc)
+                        renew_deadline = time.monotonic() + _STALE_SESSION_RENEW_SECONDS
+                        while time.monotonic() < renew_deadline:
+                            if _try_capture(page) or _last_mismatch:
+                                break
+                            if 'watch.spectrum.net' not in _safe_page_url(page):
+                                break  # the page went to its own sign-in; continue normally
+                            page.wait_for_timeout(500)
+                        if 'verified' in captured:
+                            logger.info('[spectrum-signin] outdated saved session renewed by the page itself')
+                    if not _try_capture(page) and _rejected and (
+                            _last_mismatch or 'watch.spectrum.net' in _safe_page_url(page)):
                         set_status('running', 'Saved session looks stale — starting a fresh sign-in…', page.url)
                         _clear_spectrum_cox_cookies(context, page, 'SSO-carried-over token failed verification')
                         _goto_start('after clearing the saved session')

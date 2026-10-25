@@ -2230,6 +2230,13 @@
       // <video> element. Disable the in-browser playback actions but keep VLC,
       // which handles MPEG-2/AC-3 natively.
       const isMuxed = streamType === 'mpegts';
+      // A bridge-only DRM channel's plain play URL hands an external player a
+      // Widevine DASH manifest it can't decrypt (VLC even reads it as an M3U and
+      // requests each line from us), so only the in-browser actions are offered.
+      const bridgeOnly = !!ch.requires_drm_bridge;
+      const bridgeNote = bridgeOnly
+        ? `<div class="modal-preview">This channel is DRM-protected, so it plays here in the browser or through the DRM bridge (FastChannels Player, ah4c or PrismCast), not in VLC or other players.</div>`
+        : '';
       const unsupportedNote = !detecting && playbackMode === 'unsupported'
         ? `<div class="modal-preview">This stream type is not supported by the built-in browser preview. Use <strong>Open Externally</strong> or VLC for playback.</div>`
         : '';
@@ -2245,12 +2252,12 @@
             ? `<button class="preview-action-btn secondary" disabled>Detecting stream…</button>`
             : (previewUrl ? `<button class="preview-action-btn secondary" onclick="loadPreviewPlayer('${escapeHtml(previewUrl)}', '${escapeHtml(playbackMode)}', '${escapeHtml(streamType)}', '${escapeHtml(licenseUrl)}')">Play Here</button>` : ''));
       return `
-        ${unsupportedNote}${muxedNote}${playbackNote}
+        ${unsupportedNote}${muxedNote}${bridgeNote}${playbackNote}
         <div class="preview-actions">
           ${playBtn}
           ${(playUrl && !isMuxed) ? `<a class="preview-action-btn secondary" href="/watch/${ch.id}" target="_blank" rel="noopener">Watch Fullscreen</a>` : ''}
-          ${(playUrl && !isMuxed) ? `<a class="preview-action-btn secondary" href="${escapeHtml(playUrl)}" target="_blank" rel="noopener">Open in New Tab</a>` : ''}
-          ${playUrl ? `<a class="preview-action-btn secondary" href="${escapeHtml(playUrl.replace('.m3u8', '.m3u'))}" title="Download playlist and open in VLC">Open in VLC</a>` : ''}
+          ${(playUrl && !isMuxed && !bridgeOnly) ? `<a class="preview-action-btn secondary" href="${escapeHtml(playUrl)}" target="_blank" rel="noopener">Open in New Tab</a>` : ''}
+          ${(playUrl && !bridgeOnly) ? `<a class="preview-action-btn secondary" href="${escapeHtml(playUrl.replace('.m3u8', '.m3u'))}" title="Download playlist and open in VLC">Open in VLC</a>` : ''}
           <button class="preview-action-btn danger" onclick="closePreviewModal()">Close</button>
         </div>
       `;
