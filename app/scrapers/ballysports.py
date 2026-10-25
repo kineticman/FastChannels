@@ -36,7 +36,7 @@ class BallysScraper(BaseScraper):
     config_schema = []
 
     # Any channel page works; the RSC payload includes all channels + EPG.
-    _PAGE_URL = "https://www.ballysports.com/channels/2-milb"
+    _PAGE_URL = "https://www.ballysports.com/channels/milb"
 
     def __init__(self, config: dict | None = None):
         super().__init__(config)
@@ -182,7 +182,10 @@ class BallysScraper(BaseScraper):
                 if arr:
                     channel_entries = arr
             if not epg_events:
-                arr = self._extract_json_array(cleaned, "epgData")
+                # Older builds inlined the array as epgData; since 2026-10 epgData
+                # is only a back-reference and the array lives under epgItems.
+                arr = (self._extract_json_array(cleaned, "epgItems")
+                       or self._extract_json_array(cleaned, "epgData"))
                 if arr:
                     epg_events = arr
             if channel_entries and epg_events:
@@ -190,6 +193,8 @@ class BallysScraper(BaseScraper):
 
         if not channel_entries:
             logger.warning("[%s] channelData not found in RSC payload", self.source_name)
+        if not epg_events:
+            logger.warning("[%s] epgItems/epgData not found in RSC payload", self.source_name)
 
         return channel_entries, epg_events
 
@@ -197,7 +202,7 @@ class BallysScraper(BaseScraper):
     def _find_rsc_chunks(html: str) -> list[str]:
         """
         Return the decoded inner strings of every __next_f.push([1, "..."])
-        call whose payload mentions channelData or epgData.
+        call whose payload mentions channelData, epgItems or epgData.
         """
         import json
 
@@ -212,7 +217,7 @@ class BallysScraper(BaseScraper):
                 and len(arr) >= 2
                 and arr[0] == 1
                 and isinstance(arr[1], str)
-                and ("channelData" in arr[1] or "epgData" in arr[1])
+                and any(k in arr[1] for k in ("channelData", "epgItems", "epgData"))
             ):
                 chunks.append(arr[1])
         return chunks
