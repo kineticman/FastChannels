@@ -283,16 +283,19 @@ class DisneyTVEScraper(MvpdCooldownMixin, BaseScraper):
 
     # ── guide ────────────────────────────────────────────────────────────────
 
-    def _schedule(self, brand: str, affiliate: str | None) -> list[dict]:
+    def _schedule(self, brand: str, affiliate: str | None, video: str | None = None) -> list[dict]:
         # Times are local to `offset`, which must be a US one (ABC News Live
         # answers nothing for +0000).
         now = (datetime.now(timezone.utc) - timedelta(hours=5)).replace(minute=0, second=0, microsecond=0)
-        r = self.session.get(_SCHEDULE, timeout=30, params={
+        params = {
             'brand': '001', 'device': '001', 'layout': _SCHEDULE_LAYOUT, 'channel': brand,
             'starttime': (now - timedelta(hours=3)).strftime('%Y%m%d-%H%M'),
             'endtime': (now + timedelta(days=_GUIDE_DAYS)).strftime('%Y%m%d-%H%M'),
             # With an affiliate the module answers that station's lineup whatever the channel.
-            'offset': '-0500', 'affiliate': (affiliate or '') if brand == '001' else '', 'locale': 'US/Eastern'})
+            'offset': '-0500', 'affiliate': (affiliate or '') if brand == '001' else '', 'locale': 'US/Eastern'}
+        if video:
+            params['video'] = video  # the local news streams (brand 200) each have their own
+        r = self.session.get(_SCHEDULE, timeout=30, params=params)
         r.raise_for_status()
         return (r.json() or {}).get('videos') or []
 
@@ -303,16 +306,17 @@ class DisneyTVEScraper(MvpdCooldownMixin, BaseScraper):
         programs = []
         for ch in channels:
             brand = ch.stream_url[len(SCHEME):].split('/')[0]
-            if brand == '200':
-                continue  # the local news streams have no schedule
-            if brand not in schedules:
+            # Each local news stream has its own schedule; the other brands share one per brand.
+            key = ch.source_channel_id if brand == '200' else brand
+            if key not in schedules:
                 try:
-                    schedules[brand] = self._schedule(brand, affiliate)
+                    schedules[key] = self._schedule(brand, affiliate,
+                                                    video=ch.source_channel_id if brand == '200' else None)
                 except (requests.RequestException, ValueError) as exc:
-                    logger.warning('[disney_tve] guide for brand %s failed: %s', brand, exc)
-                    schedules[brand] = []
+                    logger.warning('[disney_tve] guide for %s failed: %s', key, exc)
+                    schedules[key] = []
             shift = timedelta(hours=3) if _is_west(ch.name) else timedelta(0)
-            for v in schedules[brand]:
+            for v in schedules[key]:
                 prog = _program(ch.source_channel_id, v, shift)
                 if prog:
                     programs.append(prog)
