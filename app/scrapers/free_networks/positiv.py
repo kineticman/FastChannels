@@ -11,7 +11,7 @@ from ._common import Network, NetChannel, parse_iso, program
 _MEDIA = 'FoWynVnP'
 _STREAM = f'https://cdn.jwplayer.com/live/broadcast/{_MEDIA}.m3u8'
 _EPG = 'https://positivdsp-prod.trilogyapps.com/v1/epg'
-_LOGO = f'https://cdn.jwplayer.com/v2/media/{_MEDIA}/poster.jpg?width=720'
+_LOGO = 'https://tmsimg.fancybits.co/assets/s34169_ll_h15_ad.png?w=360&h=270'  # Gracenote's
 
 
 class PosiTV(Network):

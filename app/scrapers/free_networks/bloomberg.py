@@ -34,7 +34,17 @@ from ._common import ET, Network, NetChannel, logger, parse_iso, program
 _DAI = 'https://dai.google.com/linear/hls/event/{}/master.m3u8'
 _MANIFEST = 'https://www.bloomberg.com/media-manifest/streams/{}.m3u8'
 _SCHEDULE = 'https://www.bloomberg.com/live/schedule/{}'
-_LOGO = 'https://www.bloomberg.com/favicon-black.png'
+# Gracenote's logos; bloomberg.com only has a favicon.
+_TMS_LOGO = 'https://tmsimg.fancybits.co/assets/{}.png?w=360&h=270'
+_LOGO = _TMS_LOGO.format('s53168_ll_h15_ad')  # "Bloomberg"
+_LOGOS = {
+    'us': _TMS_LOGO.format('s71799_ll_h15_aa'),  # "Bloomberg TV"
+    'us-plus': _TMS_LOGO.format('s175659_ll_h15_aa'),  # "Bloomberg TV+"
+    'europe': _TMS_LOGO.format('s14755_ll_h15_ab'),  # "Bloomberg Television"
+    'asia': _TMS_LOGO.format('s14755_ll_h15_ab'),
+    'australia': _TMS_LOGO.format('s14755_ll_h15_ab'),
+    'originals': _TMS_LOGO.format('GNLZZGG003PQG7H'),
+}
 _RADIO_SCHEDULE = 'https://www.bloombergradio.com/schedule/'
 _RADIO_BLOCK_RE = re.compile(
     r'class="show-block[^"]*day_(\w+) station_WBBR_RADIO">\s*<div class="col-md-2">(\d\d):(\d\d)</div>'
@@ -66,7 +76,7 @@ class Bloomberg(Network):
     name = 'Bloomberg'
 
     def channels(self, s):
-        return [NetChannel(cid, name, url, logo=_LOGO, category='News') for cid, name, url, _ in _CHANNELS]
+        return [NetChannel(cid, name, url, logo=_LOGOS.get(cid, _LOGO), category='News') for cid, name, url, _ in _CHANNELS]
 
     def has_guide(self, channel_id):
         return channel_id in _GUIDED

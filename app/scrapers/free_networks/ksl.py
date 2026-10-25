@@ -21,6 +21,8 @@ _APP = 'https://app.ksltv.com'
 # feed 404s). They get placeholder blocks.
 _NO_GUIDE = {'3ahVLEws', 'MKg1R1CV', '9U3YgnFK'}
 _NAMES = {'Happening Now': 'KSL Happening Now', 'BEONDTV': 'BEOND TV'}
+# KSL On Air's poster is a studio photo; the others' posters are title cards.
+_LOGOS = {'4vsaoghj': 'https://tmsimg.fancybits.co/assets/GNLZZGG002QZZCY.png?w=360&h=270'}  # Gracenote's KSL TV
 
 
 def _category(title: str) -> str:
@@ -54,7 +56,7 @@ class KSL(Network):
                 continue
             name = _NAMES.get(title) or (title[:-5] if title.endswith(' Live') and 'Sports Live' not in title
                                          else title)
-            out.append(NetChannel(it['mediaid'], name, stream, logo=it.get('image'), category=_category(title)))
+            out.append(NetChannel(it['mediaid'], name, stream, logo=_LOGOS.get(it['mediaid']) or it.get('image'), category=_category(title)))
         return out
 
     def has_guide(self, channel_id):
