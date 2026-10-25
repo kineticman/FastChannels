@@ -27,6 +27,7 @@ _STATION_TTL = 30 * 60
 _PROFILE_LABELS = {
     "ga-create": "Create",
     "ga-fnx": "FNX",
+    "ga-france-24": "France 24",
     "ga-local-subchannel-1": "Local Subchannel 1",
     "ga-local-subchannel-2": "Local Subchannel 2",
     "ga-main": "Main",
@@ -38,6 +39,7 @@ _PROFILE_LABELS = {
 _NATIONAL_SECONDARY_PROFILES = frozenset({
     "ga-create",
     "ga-fnx",
+    "ga-france-24",
     "ga-nhk",
     "ga-world",
 })
@@ -52,6 +54,7 @@ _NATIONAL_SIMULCAST_MARKERS = {
     "world": "World",
     "nhk": "NHK World",
     "fnx": "FNX",
+    "france 24": "France 24",
 }
 
 _DEFAULT_STATIONS = {
