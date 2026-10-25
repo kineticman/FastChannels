@@ -29,6 +29,7 @@
     .actions-buttons { display: flex; flex-direction: row; gap: 0.6rem; flex-wrap: wrap; }
     .actions-btn { flex: 1 1 0; text-align: center; min-width: 10rem; }
     .global-status { font-size: 0.78rem; min-height: 1rem; color: var(--text-soft); }
+    .global-status:empty { display: none; }
     .global-status.ok { color: var(--success-soft); }
     .global-status.error { color: var(--danger); }
     @keyframes cc-detect-indeterminate {
@@ -921,7 +922,8 @@
       .col-configure { display: none; }
       .dashboard-table th.col-configure { display: none; }
       .mobile-configure { display: block; width: 100%; margin-top: 0.4rem; }
-      .dash-actions { align-items: stretch; }
+      .dash-actions { align-items: stretch; flex-direction: column; }
+      .ch-mix-bar { width: 4.5rem; }
       .config-panel { padding: 1rem; }
       .config-actions, .modal-actions { flex-wrap: wrap; }
       .config-actions { justify-content: flex-start; }
@@ -1030,7 +1032,7 @@
             <tr class="source-category-header cat-{{ this_cat }}" id="cat-header-{{ this_cat }}"
                 data-cat="{{ this_cat }}" onclick="toggleCategoryCollapse('{{ this_cat }}')">
               <td colspan="4">
-                <span class="cat-chevron" id="cat-chevron-{{ this_cat }}">▾</span>{{ _CAT_LABELS.get(this_cat, this_cat | title) }}<span class="cat-count"><span class="cat-on-count" id="cat-on-count-{{ this_cat }}">{{ category_on_counts.get(this_cat, 0) }}</span> on of {{ category_counts.get(this_cat, 0) }}</span>
+                <span class="cat-chevron" id="cat-chevron-{{ this_cat }}">▾</span>{{ _CAT_LABELS.get(this_cat, this_cat | title) }}<span class="cat-count"><span class="cat-on-count" id="cat-on-count-{{ this_cat }}">{{ category_on_counts.get(this_cat, 0) }}</span> of {{ category_counts.get(this_cat, 0) }} on</span>
                 {% if this_cat == 'custom' %}
                 <button type="button" class="btn btn-run btn-sm cat-header-action"
                         onclick="event.stopPropagation(); openPlaylistModal()"
@@ -6233,7 +6235,7 @@
     function _saveCollapsedCats(set) {
       localStorage.setItem(SOURCES_COLLAPSE_KEY, JSON.stringify([...set]));
     }
-    // "6 on of 22" in a group header, recounted when a source is switched on or off.
+    // "6 of 22 on" in a group header, recounted when a source is switched on or off.
     function _refreshCategoryOnCount(cat) {
       const el = document.getElementById(`cat-on-count-${cat}`);
       if (el) el.textContent = document.querySelectorAll(`tr.dash-row[data-cat="${cat}"]:not(.disabled)`).length;
