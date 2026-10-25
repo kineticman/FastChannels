@@ -924,6 +924,7 @@ def preview_channel(channel_id):
             'is_enabled': ch.is_enabled,
             'description': ch.description,
             'license_url': license_url,
+            'requires_drm_bridge': bool(ch.requires_drm_bridge),
         },
         'current_program': _program_dict(current_program),
         'next_program': _program_dict(next_program),
