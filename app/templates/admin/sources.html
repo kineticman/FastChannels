@@ -81,7 +81,7 @@
     /* ── Dashboard table ────────────────────────────────────────── */
     .dashboard-panel {
       background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
-      overflow: hidden; margin-bottom: 2rem;
+      overflow-x: auto; margin-bottom: 2rem;
     }
     .dashboard-table {
       width: 100%; border-collapse: collapse;
@@ -99,7 +99,7 @@
     .dashboard-table th.col-toggle,
     .dashboard-table th.col-actions { text-align: center; }
     .dashboard-table tbody tr.dash-row {
-      border-bottom: 1px solid var(--border);
+      border-bottom: 1px solid var(--border); cursor: pointer;
       transition: background 0.15s, box-shadow 0.15s;
     }
     .dashboard-table tbody tr.dash-row:last-of-type {
@@ -120,7 +120,9 @@
     .dashboard-table td {
       padding: 0.75rem 1rem; vertical-align: middle;
     }
-    .col-source { width: auto; }
+    /* Long status/audit text wraps here instead of widening the column and
+       pushing the toggle and Configure columns out of the panel (#78). */
+    .col-source { width: auto; overflow-wrap: anywhere; }
     .col-toggle { width: 90px; text-align: center; }
     .col-actions { width: 200px; text-align: right; }
     .col-configure { width: 110px; text-align: right; }
@@ -231,7 +233,7 @@
       margin-top: 0.3rem; font-size: 0.78rem; color: var(--text-soft);
     }
     .health-line { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 0.2rem 0.45rem; min-width: 0; cursor: default; }
-    .health-line .audit-last-result, .health-link { white-space: nowrap; }
+    .health-link { white-space: nowrap; }
     .health-dot {
       width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
       background: var(--health-color); box-shadow: 0 0 0 3px color-mix(in srgb, var(--health-color) 18%, transparent);
@@ -443,7 +445,7 @@
     .btn-audit:disabled { opacity: 0.4; cursor: not-allowed; }
     .btn-configure {
       background: transparent; color: var(--text-soft);
-      border: 1px solid var(--border); font-size: 0.75rem;
+      border: 1px solid var(--border); font-size: 0.75rem; white-space: nowrap;
     }
     .btn-configure:hover { background: var(--bg); color: var(--text); border-color: var(--text-muted); }
     .btn-configure.open { color: var(--accent-soft); border-color: var(--accent-soft); }
@@ -1602,6 +1604,16 @@
       }
     }
 
+    // A click anywhere on a source row opens its Configure/Manage panel, the
+    // same as the button; clicks on the row's own controls and links act alone.
+    document.addEventListener('click', (e) => {
+      const row = e.target.closest('tr.dash-row');
+      if (!row || e.target.closest('a, button, input, select, label, textarea')) return;
+      if (window.getSelection().toString()) return;  // selecting text, not opening
+      const btn = document.getElementById(`configure-btn-${row.id.replace('dash-row-', '')}`);
+      if (btn && !btn.disabled) btn.click();
+    });
+
     function scrollToConfig(sourceId) {
       const row = document.getElementById(`config-panel-row-${sourceId}`);
       const cat = row?.dataset.cat;
@@ -2560,9 +2572,11 @@
       if (r.skipped_403)      bits.push(`${r.skipped_403} blocked`);
       if (r.errors)           bits.push(`${r.errors} errors`);
       const tag = r.aborted_reason ? ` (aborted — ${r.aborted_reason})` : r.partial ? ' (partial)' : '';
+      // The row gets the short form; the abort reason (often a whole
+      // exception message) stays in the hover text.
       el.innerHTML = ` · audited ${escapeHtml(when || '')}`
         + (r.dead ? ` · <span class="aud-dead">${r.dead} dead</span>` : '')
-        + (tag ? escapeHtml(tag) : '');
+        + (r.aborted_reason ? ' (aborted)' : tag);
       el.title = `Last audit${full ? ' ' + full : ''}: ${bits.join(' · ')}${tag}`;
     }
 
