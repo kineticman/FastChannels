@@ -127,6 +127,7 @@ _STREAM_CACHE_TTL = 10 * 60
 _BAM_TOKEN_TTL = 4 * 3600
 _ADOBE_TOKEN_MAX_AGE = 5 * 3600     # client tokens last ~6h; the sign-ins 90 days / a year
 _TOKEN_MARGIN = 300
+_STATION_GRACENOTE_TTL = 7 * 86400
 
 
 class DisneyTVEScraper(MvpdCooldownMixin, BaseScraper):
@@ -273,13 +274,44 @@ class DisneyTVEScraper(MvpdCooldownMixin, BaseScraper):
                 language='en',
                 country='US',
                 guide_key=f'DISNEY:{vid}',
-                gracenote_id=resolve_gracenote('disney_tve', lookup_key=call or vid),
+                gracenote_id=(resolve_gracenote('disney_tve', lookup_key=call or vid)
+                              or (self._station_gracenote(call) if call else None)),
             ))
         self._update_cache('disney_channels', {ch.source_channel_id: {
             'brand': ch.stream_url[len(SCHEME):].split('/')[0], 'west': _is_west(ch.name),
             'affiliate': affiliate} for ch in out})
         logger.info('[disney_tve] %d channels (station %s)', len(out), affiliate or 'none')
         return out
+
+    def _station_gracenote(self, call: str) -> str | None:
+        """The local station's Gracenote id from Channels DVR's TMS search, for
+        stations the community map doesn't list, so tvtv can fill in their guide
+        when Disney's schedule has none. Only a station Gracenote lists as an ABC
+        affiliate counts: Disney's location lookup can still name one that has
+        left ABC (WLNE went to Roar), whose tvtv guide would be the wrong one."""
+        found = dict(self.cache.get('disney_station_gracenote') or {})
+        hit = found.get(call) or {}
+        if hit and time.time() - hit.get('at', 0) < _STATION_GRACENOTE_TTL:
+            return hit.get('id') or None
+        try:
+            from ..gracenote_suggest import fetch_tms_station_candidates
+            from ..models import AppSettings
+            dvr_url = (AppSettings.get().effective_channels_dvr_url() or '').strip()
+            if not dvr_url:
+                return None
+            rows = fetch_tms_station_candidates(dvr_url, call)
+        except Exception as exc:
+            logger.debug('[disney_tve] Gracenote lookup for %s failed: %s', call, exc)
+            return hit.get('id') or None
+        abc = {(r.get('callSign') or '').upper(): str(r.get('stationId') or '') for r in rows
+               if (r.get('affiliateCallSign') or '').upper() == 'ABC' and r.get('stationId')}
+        # The -DT record is the digital station tvtv lists; the bare call sign is the old analog one.
+        gid = abc.get(f'{call}DT') or abc.get(call) or ''
+        if not gid:
+            logger.info("[disney_tve] %s isn't an ABC station in Gracenote; no tvtv guide fallback", call)
+        found[call] = {'id': gid, 'at': time.time()}
+        self._update_cache('disney_station_gracenote', found)
+        return gid or None
 
     # ── guide ────────────────────────────────────────────────────────────────
 
@@ -315,6 +347,12 @@ class DisneyTVEScraper(MvpdCooldownMixin, BaseScraper):
                 except (requests.RequestException, ValueError) as exc:
                     logger.warning('[disney_tve] guide for %s failed: %s', key, exc)
                     schedules[key] = []
+            if brand == '001' and not schedules[key] and ch.gracenote_id:
+                from .free_networks import FreeNetworksScraper
+                rows = FreeNetworksScraper._tvtv_programs(self, ch.source_channel_id, ch.gracenote_id)
+                logger.info('[disney_tve] no Disney guide for %s; %d entries from tvtv', ch.name, len(rows))
+                programs.extend(rows)
+                continue
             shift = timedelta(hours=3) if _is_west(ch.name) else timedelta(0)
             for v in schedules[key]:
                 prog = _program(ch.source_channel_id, v, shift)
