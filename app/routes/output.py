@@ -102,10 +102,12 @@ def _wait_for_build(cache_key: str, path, *, ext: str):
 
 def _artifact(cache_key: str, *, ext: str):
     """get_artifact for a client request: records the request, and builds the
-    artifact first if refresh passes have been skipping it as idle."""
+    artifact first if refresh passes have been skipping it as idle. A missing
+    artifact that isn't idle (a new feed) is left to the refresh pass already
+    building it, so the request gets the usual quick 503 instead of waiting."""
     idle = note_artifact_request(cache_key)
     path = get_artifact(cache_key, ext=ext)
-    if path is None or idle:
+    if idle:
         path = _wait_for_build(cache_key, path, ext=ext)
     return path
 
@@ -115,7 +117,7 @@ def _xml_artifact(cache_key: str):
     current (no scrape since it was last built) is served without a rebuild."""
     idle = note_artifact_request(cache_key)
     path, stale = get_xml_artifact(cache_key)
-    if path is None or (idle and stale):
+    if idle and (path is None or stale):
         _wait_for_build(cache_key, path, ext='xml')
         path, stale = get_xml_artifact(cache_key)
     return path, stale

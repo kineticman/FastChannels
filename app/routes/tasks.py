@@ -383,7 +383,7 @@ def trigger_artifact_build(cache_key: str) -> None:
         job_id = f'artifact-build-{cache_key}'
         if _job_already_active(q, job_id):
             return
-        q.enqueue('app.worker.run_artifact_build', [cache_key], job_timeout=300, job_id=job_id)
+        q.enqueue('app.worker.run_artifact_build', [cache_key], job_timeout=300, job_id=job_id, at_front=True)
         logger.info('Enqueued on-request build of %s', cache_key)
     except Exception as e:
         logger.warning(f'RQ unavailable ({e}), falling back to thread for build of {cache_key}')
