@@ -1170,6 +1170,10 @@ def save_login_result(local_storage: dict, cox_cookies: list[dict] | None,
         cfg.get('access_token'), cfg.get('refresh_token'), cfg.get('client_device_id'))
     if ceiling_ttl is not None:
         cfg['refresh_ceiling_at'] = int(_time.time()) + ceiling_ttl
+    else:
+        logger.warning('[spectrum-renewal] could not read the new session\'s refresh ceiling — '
+                       'the early renewal before it runs out can\'t be scheduled; a rejected '
+                       'refresh will still trigger one')
     # A fresh login means the auto-relogin watchdog's job is done — clear any
     # retry bookkeeping from a prior attempt so it doesn't carry over.
     cfg.pop('auto_relogin_last_attempt_at', None)

@@ -71,8 +71,11 @@ from app.tve.browser_login.common import (
     install_browser_login_activity_log,
     uninstall_browser_login_activity_log,
 )
+from app.scrapers.base import mask_username
 
 logger = logging.getLogger(__name__)
+
+_EMAIL_RE = re.compile(r'[\w.+-]+@[\w-]+(?:\.[\w-]+)+')
 
 SPECTRUM_SIGNIN_STATUS_KEY = 'spectrum:browser-login:status'
 SPECTRUM_SIGNIN_SHOT_KEY = 'spectrum:browser-login:screenshot'
@@ -262,6 +265,9 @@ def run_spectrum_signin(unattended: bool = False):
         _activity_handler = install_browser_login_activity_log(r)
 
         _terminal_status_set = {'v': False}
+        # Account names that can appear in a status message, masked before it
+        # is logged (filled in below once they're known).
+        _log_identities: set = set()
 
         def set_status(state: str, message: str = '', url: str = ''):
             try:
@@ -273,6 +279,16 @@ def run_spectrum_signin(unattended: bool = False):
                     _terminal_status_set['v'] = True
             except Exception:  # noqa: BLE001
                 pass
+            if state in ('success', 'error', 'stopped') and not _terminal_status_set.get('logged'):
+                # The status itself lives in Redis for 120s, so without this an
+                # unattended run that timed out left no trace in the log at all.
+                _terminal_status_set['logged'] = True
+                logged = _EMAIL_RE.sub(lambda m: mask_username(m.group(0)), message)
+                for ident in _log_identities:
+                    logged = logged.replace(ident, mask_username(ident))
+                logger.log(logging.WARNING if state == 'error' else logging.INFO,
+                           '[spectrum-signin] %s sign-in ended: %s — %s',
+                           'unattended' if unattended else 'manual', state, logged)
 
         r.delete(SPECTRUM_SIGNIN_STOP_KEY)
         r.delete(SPECTRUM_SIGNIN_INPUT_KEY)
@@ -289,6 +305,8 @@ def run_spectrum_signin(unattended: bool = False):
         saved_cfg = source.config or {} if source else {}
         username = saved_cfg.get('username')
         password = saved_cfg.get('password')
+        if username:
+            _log_identities.add(username)
         # Set by save_source_config when the saved username/password actually
         # change, and by the "Clear sign-in" button (clear_spectrum_auth) —
         # both in app/routes/api_sources.py. Consumed once below to force a
@@ -621,6 +639,7 @@ def run_spectrum_signin(unattended: bool = False):
                         'for a different account, not this install\'s login; discarding '
                         'and forcing a fresh sign-in', captured_username, username)
                     _last_mismatch['account'] = captured_username
+                    _log_identities.add(captured_username)
                     _rejected.add(candidate['oauth_token'])
                     captured.pop('candidate', None)
                     set_status(
@@ -629,7 +648,8 @@ def run_spectrum_signin(unattended: bool = False):
                         'forcing a fresh sign-in…', page.url)
                     return False
             captured['verified'] = candidate
-            logger.info('[spectrum-signin] captured and verified a working token')
+            logger.info('[spectrum-signin] captured and verified a working token for %s',
+                        mask_username(captured_username) if captured_username else 'an unreported account')
             return True
 
         def _clear_spectrum_cox_cookies(context, page, reason: str) -> None:
