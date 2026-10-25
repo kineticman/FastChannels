@@ -4949,7 +4949,10 @@
             <button class="btn btn-run" type="button" onclick="openSpectrumLoginModal(${sourceId})">Sign in to Spectrum</button>
             <button class="btn btn-cancel" type="button" id="spectrum-clear-btn-${sourceId}"
                     onclick="spectrumClearSignin(${sourceId})" ${signedIn ? '' : 'disabled'}>Clear sign-in</button>
+            <button class="btn btn-cancel" type="button" id="spectrum-renew-btn-${sourceId}"
+                    onclick="spectrumRenewSession(${sourceId})" ${signedIn ? '' : 'disabled'}>Renew session</button>
             <div class="help">Opens a real Spectrum sign-in page right here — solve the captcha yourself if it's shown, and FastChannels saves the resulting session automatically. No credentials are typed by FastChannels.</div>
+            <div class="help">Renew session gets a fresh session from this device's saved Spectrum sign-in, without a browser or password. FastChannels does this on its own before the session runs out; the button is for doing it now.</div>
             <div id="spectrum-clear-status-${sourceId}"></div>
             ${lastSignInHtml}
           </div>
@@ -5291,6 +5294,24 @@
       if (!_foxOneLoginSourceId) return;
       event.preventDefault();
       _foxOneLoginSend({ type: 'key', key: event.key });
+    }
+
+    async function spectrumRenewSession(sourceId) {
+      const btn = document.getElementById(`spectrum-renew-btn-${sourceId}`);
+      const statusEl = document.getElementById(`spectrum-clear-status-${sourceId}`);
+      if (btn) btn.disabled = true;
+      if (statusEl) statusEl.innerHTML = '<span class="help">Renewing…</span>';
+      try {
+        const r = await fetch(`/api/sources/${sourceId}/spectrum-renew`, {method: 'POST'});
+        const data = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(data.error || 'Could not renew the session');
+        const until = data.refresh_ceiling_at ? ` Valid until ${new Date(data.refresh_ceiling_at * 1000).toLocaleString()}; renewed again automatically before then.` : '';
+        if (statusEl) statusEl.innerHTML = `<span style="color:var(--success-soft)">✓ Session renewed.${escapeHtml(until)}</span>`;
+        setTimeout(() => loadSourceConfig(sourceId, 'spectrum'), 2500);
+      } catch (e) {
+        if (statusEl) statusEl.innerHTML = `<span style="color:var(--danger)">${escapeHtml(e.message || 'Could not renew the session')}</span>`;
+        if (btn) btn.disabled = false;
+      }
     }
 
     async function spectrumClearSignin(sourceId) {

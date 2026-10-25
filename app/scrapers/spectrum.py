@@ -351,7 +351,7 @@ class SpectrumScraper(BaseScraper):
         self._update_config('auto_relogin_last_attempt_at', int(time.time()))
         return True
 
-    def _renew_with_device_verifier(self) -> bool:
+    def _renew_with_device_verifier(self, ignore_cooldown: bool = False) -> bool:
         """Start a new session from the saved device verifier, with no browser.
 
         This is what watch.spectrum.net does itself when its refresh grant
@@ -368,13 +368,14 @@ class SpectrumScraper(BaseScraper):
         Returns False without a request when there's no verifier, inside
         _RELOGIN_COOLDOWN of the last attempt, or while another process is
         renewing; on any failure the callers fall back to the browser
-        re-login."""
+        re-login. ignore_cooldown is for the source's "Renew session" button,
+        where a person asked for it now."""
         verifier = self.config.get('device_verifier')
         device_id = self.config.get('client_device_id')
         if not verifier or not device_id:
             return False
         last_attempt = float(self.config.get('verifier_renewal_last_attempt_at') or 0)
-        if time.time() - last_attempt < _RELOGIN_COOLDOWN:
+        if not ignore_cooldown and time.time() - last_attempt < _RELOGIN_COOLDOWN:
             return False
         if not _claim_verifier_renewal():
             return False
@@ -416,6 +417,8 @@ class SpectrumScraper(BaseScraper):
             data = r.json() if r.ok and auth_code else {}
         except Exception as exc:  # noqa: BLE001
             logger.warning('[spectrum-renewal] device-verifier renewal failed at %s: %s', step, exc)
+            self._update_config('auto_relogin_last_error',
+                                f'{int(time.time())}: verifier {step} failed: {exc}'[:300])
             return False
         access_token = data.get('access_token')
         if not access_token:

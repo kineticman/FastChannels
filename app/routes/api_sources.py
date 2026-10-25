@@ -1300,6 +1300,34 @@ def clear_spectrum_auth(source_id):
     return jsonify({'status': 'cleared'})
 
 
+@sources_bp.route('/sources/<int:source_id>/spectrum-renew', methods=['POST'])
+def spectrum_renew_session(source_id):
+    """Renew the saved session from its device verifier now, with no browser
+    (SpectrumScraper._renew_with_device_verifier) — the same renewal the
+    watchdog runs near the refresh ceiling or after a rejected refresh,
+    without waiting for either."""
+    from app.config_store import persist_source_config_updates
+    from app.scrapers.spectrum import SpectrumScraper
+
+    source = Source.query.get_or_404(source_id)
+    if source.name != 'spectrum':
+        return jsonify({'error': 'not a spectrum source'}), 400
+    cfg = dict(source.config or {})
+    if not cfg.get('device_verifier') or not cfg.get('client_device_id'):
+        return jsonify({'error': 'No saved device verifier — use "Sign in to Spectrum" first.'}), 400
+    scraper = SpectrumScraper(config=cfg)
+    ok = scraper._renew_with_device_verifier(ignore_cooldown=True)
+    if scraper._pending_config_updates:
+        persist_source_config_updates(source.id, scraper._pending_config_updates)
+    if ok:
+        return jsonify({'status': 'renewed', 'expires_at': scraper.config.get('token_expires_at'),
+                        'refresh_ceiling_at': scraper.config.get('refresh_ceiling_at')})
+    if not scraper._pending_config_updates:
+        return jsonify({'error': 'A renewal just ran — try again in a minute.'}), 409
+    reason = str(scraper.config.get('auto_relogin_last_error') or '').split(': ', 1)[-1]
+    return jsonify({'error': f'Spectrum refused the renewal ({reason}). Use "Sign in to Spectrum" instead.'}), 502
+
+
 # ── FOX One sign-in ─────────────────────────────────────────────────────────
 # Runs the same browser-assisted TV-provider sign-in the TVE settings page
 # uses (app.tve.browser_login.foxone), with the same job lock and redis
