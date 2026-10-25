@@ -87,6 +87,9 @@ SPECTRUM_SIGNIN_HINT_KEY = 'spectrum:browser-login:hint'
 # so it offers the IDID-4004 account-portal fallback like a manual one.
 SPECTRUM_SIGNIN_ATTENDED_KEY = 'spectrum:browser-login:attended'
 _SPECTRUM_SIGNIN_TIMEOUT_SECONDS = 600
+# How long an outdated saved session gets to renew itself in the page before
+# falling back to clearing it (see the stale_own_session branch).
+_STALE_SESSION_RENEW_SECONDS = 20
 
 _START_URL = 'https://watch.spectrum.net/guide'
 # Spectrum page-script errors seen on every sign-in that don't affect it;
@@ -974,7 +977,39 @@ def run_spectrum_signin(unattended: bool = False):
                     # login instead of sitting forever waiting for a login form that
                     # SSO carryover means will never appear.
                     page.wait_for_timeout(1500)
-                    if not _try_capture(page) and _rejected:
+                    stale_own_session = not _try_capture(page) and _rejected and not _last_mismatch
+                    if stale_own_session:
+                        # An outdated token for the RIGHT account is normal (the
+                        # scraper renews without this browser, so the profile's
+                        # copy goes stale). Clearing cookies here threw away the
+                        # profile's sign-in state and forced a password sign-in
+                        # on every run (test box 2026-10-23/24/25). The page
+                        # won't renew a token it still thinks is unexpired, so
+                        # drop just the outdated token (a local sign-out; the
+                        # device verifier stays) and reload: the page then runs
+                        # its own verifier renewal, as it did on 2026-10-25.
+                        # Only clear if it neither does that nor moves on to
+                        # its own sign-in screen.
+                        try:
+                            # SAL.t is the page's own (encrypted) token store; the
+                            # plain keys are a legacy copy. SAL.d.v, its device
+                            # verifier, is kept.
+                            page.evaluate("() => ['SAL.t', 'oauth_token', 'xoauth_refresh_token', "
+                                          "'xoauth_token_expiration'].forEach(k => localStorage.removeItem(k))")
+                            _goto_start('after dropping the outdated token')
+                        except Exception as exc:  # noqa: BLE001
+                            logger.info('[spectrum-signin] could not drop the outdated token: %s', exc)
+                        renew_deadline = time.monotonic() + _STALE_SESSION_RENEW_SECONDS
+                        while time.monotonic() < renew_deadline:
+                            if _try_capture(page) or _last_mismatch:
+                                break
+                            if 'watch.spectrum.net' not in _safe_page_url(page):
+                                break  # the page went to its own sign-in; continue normally
+                            page.wait_for_timeout(500)
+                        if 'verified' in captured:
+                            logger.info('[spectrum-signin] outdated saved session renewed by the page itself')
+                    if not _try_capture(page) and _rejected and (
+                            _last_mismatch or 'watch.spectrum.net' in _safe_page_url(page)):
                         set_status('running', 'Saved session looks stale — starting a fresh sign-in…', page.url)
                         _clear_spectrum_cox_cookies(context, page, 'SSO-carried-over token failed verification')
                         _goto_start('after clearing the saved session')
