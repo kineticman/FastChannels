@@ -372,6 +372,11 @@ def app_settings():
             row.fc_player_bridge_idle_stop_enabled = bool(data['fc_player_idle_stop_enabled'])
         if 'fc_player_captions_enabled' in data:
             row.fc_player_bridge_captions_enabled = bool(data['fc_player_captions_enabled'])
+        if 'fc_player_audio_mode' in data:
+            mode = str(data['fc_player_audio_mode'] or '').strip().lower()
+            if mode not in fc_player_bridge.FC_PLAYER_AUDIO_MODES:
+                return jsonify({'error': f'fc_player_audio_mode must be one of {", ".join(fc_player_bridge.FC_PLAYER_AUDIO_MODES)}'}), 400
+            row.fc_player_bridge_audio_mode = mode
         if 'fc_player_ah4c_enabled' in data:
             row.fc_player_bridge_ah4c_enabled = bool(data['fc_player_ah4c_enabled'])
         if 'fc_player_ah4c_url' in data:
@@ -427,6 +432,7 @@ def app_settings():
         'fc_player_hdmi_enabled': bool(row.fc_player_bridge_hdmi_enabled),
         'fc_player_idle_stop_enabled': bool(row.fc_player_bridge_idle_stop_enabled),
         'fc_player_captions_enabled': bool(row.fc_player_bridge_captions_enabled),
+        'fc_player_audio_mode': row.fc_player_bridge_audio_mode or 'auto',
         'fc_player_ah4c_enabled': bool(row.fc_player_bridge_ah4c_enabled),
         'fc_player_ah4c_url': row.fc_player_bridge_ah4c_url or '',
         'channels_dvr_url_source': 'db' if (row.channels_dvr_url or '').strip() else ('env' if row.env_channels_dvr_url() is not None else 'unset'),

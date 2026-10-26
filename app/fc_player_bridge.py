@@ -303,6 +303,19 @@ def idle_stop_enabled() -> bool:
     return bool(settings.fc_player_bridge_idle_stop_enabled and is_configured())
 
 
+# "Bridge audio" (Bridge page): what the player does with Dolby audio. 'auto' is the
+# player's own choice (passthrough when the HDMI device claims to accept it); 'pcm'
+# decodes on the device; 'stereo' prefers a stereo AAC track, else decodes. For HDMI
+# capture cards that only handle stereo PCM.
+FC_PLAYER_AUDIO_MODES = ('auto', 'pcm', 'stereo')
+
+
+def audio_mode() -> str:
+    """The Bridge audio setting, applied per trigger like captions_enabled()."""
+    mode = AppSettings.get().fc_player_bridge_audio_mode or 'auto'
+    return mode if mode in FC_PLAYER_AUDIO_MODES else 'auto'
+
+
 def captions_enabled() -> bool:
     """Whether the device should render an English subtitle/CC track when the stream
     advertises one. Applied per-trigger (an Intent extra passed at am start time), not
@@ -1879,6 +1892,8 @@ def trigger_channel(manifest_url: str, license_url: str | None = None, *, name: 
             '--es', 'channel_key', shlex.quote(channel_key or ''),
             '--ez', 'drm', 'true' if drm else 'false',
             '--ez', 'captions', 'true' if captions_enabled() else 'false',
+            # Players older than 5.2.13 ignore this extra and keep their default.
+            '--es', 'audio_mode', shlex.quote(audio_mode()),
         ])
         if drm:
             remote_cmd += ' --es license_url ' + shlex.quote(license_url)

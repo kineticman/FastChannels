@@ -355,6 +355,11 @@ async function saveFcPlayerCaptionsToggle() {
   await saveSettings({fc_player_captions_enabled: enabled}, 'fc-player-toggles-status');
 }
 
+async function saveFcPlayerAudioMode() {
+  const mode = document.getElementById('fc-player-audio-mode').value;
+  await saveSettings({fc_player_audio_mode: mode}, 'fc-player-toggles-status');
+}
+
 async function saveFcPlayerAh4cToggle() {
   const enabled = document.getElementById('fc-player-ah4c-enabled').checked;
   const ok = await saveSettings({fc_player_ah4c_enabled: enabled}, 'fc-player-ah4c-status');

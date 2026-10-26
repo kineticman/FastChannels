@@ -12,6 +12,7 @@ import android.view.WindowManager;
 import androidx.media3.common.C;
 import androidx.media3.common.Format;
 import androidx.media3.common.MediaItem;
+import androidx.media3.common.MimeTypes;
 import androidx.media3.common.PlaybackException;
 import androidx.media3.common.Player;
 import androidx.media3.common.Timeline;
@@ -83,6 +84,9 @@ public class PlaybackActivity extends Activity {
     static final String EXTRA_DRM = "drm";
     static final String EXTRA_LICENSE_URL = "license_url";
     static final String EXTRA_CAPTIONS = "captions";
+    // FastChannels' "Bridge audio" setting: "auto" (default), "pcm" (decode Dolby on the
+    // device, never pass it through) or "stereo" (prefer a stereo AAC track, else "pcm").
+    static final String EXTRA_AUDIO_MODE = "audio_mode";
     static final String EXTRA_COMMAND = "command";
     static final String EXTRA_CHANNEL_KEY = "channel_key";
     static final String COMMAND_WARM_STOP = "warm_stop";
@@ -115,6 +119,7 @@ public class PlaybackActivity extends Activity {
     private static final long BOUNDARY_NEAR_WINDOW_S = 15;
 
     private ExoPlayer player;
+    private AudioModeRenderersFactory renderersFactory;
     private DefaultTrackSelector trackSelector;
     private MediaSession mediaSession;
     private String activeChannelKey;
@@ -242,7 +247,8 @@ public class PlaybackActivity extends Activity {
         // 2026-08-25 rendering real captions on both DirecTV and Roku.
         trackSelector = new DefaultTrackSelector(this);
 
-        player = new ExoPlayer.Builder(this)
+        renderersFactory = new AudioModeRenderersFactory(this);
+        player = new ExoPlayer.Builder(this, renderersFactory)
                 .setTrackSelector(trackSelector)
                 .setBandwidthMeter(bandwidthMeter)
                 .setMediaSourceFactory(new DefaultMediaSourceFactory(this)
@@ -393,10 +399,29 @@ public class PlaybackActivity extends Activity {
         // (fc_player_bridge.trigger_channel), and this is the only moment this Activity
         // re-checks it. Covers both real sidecar subtitle renditions and muxed CEA-608/708
         // captions (see the trackSelector construction comment in onCreate).
+        // Same per-trigger shape for audio. "stereo" asks for a 2-channel AAC track when
+        // the stream offers one (DIRECTV carries AC3 5.1 plus AAC stereo); both non-auto
+        // modes refuse encoded output so Dolby is decoded on the device, never passed
+        // through to HDMI. Unknown or missing values mean "auto" (older servers).
+        String audioMode = intent.getStringExtra(EXTRA_AUDIO_MODE);
+        boolean stereoAudio = "stereo".equals(audioMode);
+        boolean pcmOnly = stereoAudio || "pcm".equals(audioMode);
+        if (pcmOnly != renderersFactory.isPcmOnly()) {
+            // A warm player keeps the previous tune's audio decoder when the next stream
+            // has the same format (seen live: AC3 kept passing through after switching to
+            // pcm). stop() resets the renderers so the next prepare picks the decoder
+            // again under the new setting. Only on a change, so normal tunes stay warm.
+            player.stop();
+        }
+        renderersFactory.setPcmOnly(pcmOnly);
         trackSelector.setParameters(trackSelector.buildUponParameters()
                 .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, !captions)
                 .setPreferredTextLanguage(captions ? "en" : null)
-                .setSelectUndeterminedTextLanguage(captions));
+                .setSelectUndeterminedTextLanguage(captions)
+                .setMaxAudioChannelCount(stereoAudio ? 2 : Integer.MAX_VALUE)
+                .setPreferredAudioMimeTypes(stereoAudio ? new String[]{MimeTypes.AUDIO_AAC} : new String[0]));
+        Log.i(AudioDiagnostics.TAG, "audio mode channel_key=" + intent.getStringExtra(EXTRA_CHANNEL_KEY)
+                + ": " + (audioMode == null ? "auto" : audioMode));
 
         Log.i(TAG, "playing \"" + title + "\" drm=" + drm + " url=" + streamUrl);
         // A fresh tune is a clean slate — cancel any retry left pending from whatever was

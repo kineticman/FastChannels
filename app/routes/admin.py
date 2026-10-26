@@ -1932,6 +1932,7 @@ def settings():
                            fc_player_encoder_url=app_settings.saved_fc_player_bridge_encoder_url() or '',
                            fc_player_idle_stop_enabled=bool(app_settings.fc_player_bridge_idle_stop_enabled),
                            fc_player_captions_enabled=bool(app_settings.fc_player_bridge_captions_enabled),
+                           fc_player_audio_mode=app_settings.fc_player_bridge_audio_mode or 'auto',
                            fc_player_ah4c_enabled=bool(app_settings.fc_player_bridge_ah4c_enabled),
                            fc_player_ah4c_url=app_settings.fc_player_bridge_ah4c_url or '',
                            fc_player_configured=bool(
@@ -1988,6 +1989,7 @@ def bridge():
         fc_player_hdmi_enabled=bool(app_settings.fc_player_bridge_hdmi_enabled),
         fc_player_idle_stop_enabled=bool(app_settings.fc_player_bridge_idle_stop_enabled),
         fc_player_captions_enabled=bool(app_settings.fc_player_bridge_captions_enabled),
+        fc_player_audio_mode=app_settings.fc_player_bridge_audio_mode or 'auto',
         fc_player_ah4c_enabled=bool(app_settings.fc_player_bridge_ah4c_enabled),
         fc_player_ah4c_url=app_settings.fc_player_bridge_ah4c_url or '',
         fc_player_configured=bool(
