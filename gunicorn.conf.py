@@ -51,7 +51,6 @@ _SUPPRESS_PATTERNS = (
     'GET /api/settings/tve/status',        # settings-page TVE network status — fires on every page load, can take several seconds
     '/api/sources/chnum',      # overlap-banner polling
     '/api/feeds/chnum-ranges', # feed page chnum conflict checker
-    '/play/amazon_prime_free/license', # Amazon DRM license — fires per key rotation
     '/play/fox_tve/key',      # FOX Weather Uplynk AES keys — one per key rotation
     'GET /api/sources HTTP',   # sources list fetched on every poll cycle finish
     '"GET /admin/',            # admin page navigation GETs (POSTs still logged)
@@ -78,6 +77,7 @@ _SUPPRESS_WATCH_RE = re.compile(r'"(?:GET|HEAD) /watch/\d+')
 _SUCCESS_ACCESS_RE = re.compile(r'HTTP/\d(?:\.\d)?" [23]\d\d ')
 _SUCCESS_SUPPRESS_PATTERNS = (
     '/play/philo/license',     # Philo DRM license — noisy during startup/key rotation
+    '/play/amazon_prime_free/license', # Amazon DRM license — fires per key rotation
     'GET /api/settings/fc-player/devices HTTP',  # Bridge devices card list, on page load
     'GET /api/settings/fc-player/ah4c-activity HTTP',  # Bridge activity card polls every 15s while visible
     'POST /api/settings/fc-player/devices/probe',  # read-only adb probe, one per device per page load
