@@ -19,7 +19,7 @@ Spectrum caps concurrent stream sessions ("aegis" sessions) at 3 per account
 regardless of client. resolve() never releases the channel it's currently
 serving (a real concurrent viewer on another device might still be using
 it), but every distinct channel change mints a brand-new one — so
-channel-surfing alone can exhaust the cap well inside the 5min cache TTL
+channel-surfing alone can exhaust the cap well inside the cache TTL
 (confirmed live 2026-09-17). _evict_lru_sessions keeps at most
 _MAX_TRACKED_SESSIONS other channels' sessions open, releasing the
 least-recently-minted ones first; _evict_cache_entry also releases a
@@ -132,7 +132,9 @@ _MUSIC_CHOICE_NAMES: dict[int, str] = {
 
 _EPG_HOURS_PER_CALL = 6
 _EPG_BLOCKS = 8  # 8 * 6h = 48h of guide data per scrape
-_STREAM_CACHE_TTL = 5 * 60  # aegisTokenRefreshSeconds was 300 on every mint seen live — match it
+# aegisTokenRefreshSeconds is 300, but the AST minted alongside it stops working
+# after ~4-4.5min (license 401 INVALID_TOKEN on a re-tune, a8a2f59), so stay under that.
+_STREAM_CACHE_TTL = 210
 _MAX_TRACKED_SESSIONS = 2  # self-imposed, one under Spectrum's real 3-session AegisTooManySessions cap
 
 
@@ -867,8 +869,8 @@ class SpectrumScraper(BaseScraper):
     def _evict_cache_entry(self, cid: str, entry: dict) -> None:
         """Pops a cache entry and, if it's still holding an aegis session
         Spectrum thinks is open, releases it. Without this, a channel that's
-        genuinely still being watched past the 5min cache TTL (matches
-        aegisTokenRefreshSeconds, confirmed live 2026-09-17) would silently
+        genuinely still being watched past the cache TTL (_STREAM_CACHE_TTL)
+        would silently
         mint a second session on the next resolve() call instead of reusing
         one — eating a slot in the account's hard 3-concurrent cap for the
         exact same channel."""
@@ -884,7 +886,7 @@ class SpectrumScraper(BaseScraper):
         channel's session on its own (it might still have a real concurrent
         viewer on another device), but confirmed live 2026-09-17 that alone
         is enough to exhaust the account's hard 3-session cap within a
-        handful of channel changes, well inside the 5min TTL that would
+        handful of channel changes, well inside the cache TTL that would
         otherwise self-heal it (see _evict_cache_entry). Keep at most
         _MAX_TRACKED_SESSIONS other channels' sessions open, releasing the
         least-recently-minted ones first, before minting one more.
