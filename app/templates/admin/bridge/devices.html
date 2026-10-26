@@ -32,7 +32,7 @@
     <div class="toggle-row" style="margin-top:12px">
       <div class="toggle-row-text">
         <div class="toggle-row-label">Bridge audio</div>
-        <div class="toggle-row-help">How FastChannels Player sends audio to the HDMI device. <b>Auto</b> passes Dolby through when the device says it accepts it. If a capture card clicks or drops out on Dolby channels (e.g. DIRECTV), try <b>Decode to PCM</b> (decoded on the stick) or <b>Stereo</b> (picks the channel's stereo track when it has one). Takes effect on the next tune; needs FastChannels Player 5.2.13 or newer.</div>
+        <div class="toggle-row-help">Auto passes Dolby through when the HDMI device accepts it. If a capture card clicks or drops out, try Stereo or Decode to PCM. Takes effect on the next tune; needs FastChannels Player 5.2.13+.</div>
       </div>
       <div class="toggle-row-control">
         <select id="fc-player-audio-mode" onchange="saveFcPlayerAudioMode()">
