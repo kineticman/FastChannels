@@ -4428,6 +4428,7 @@ if __name__ == '__main__':
             try:
                 with flask_app.app_context():
                     fc_player_bridge.check_playback_errors()
+                    fc_player_bridge.check_audio_diagnostics()
             except Exception as e:
                 logger.warning('[fc-player] playback-error watchdog check failed: %s', e)
 

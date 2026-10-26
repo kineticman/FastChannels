@@ -256,6 +256,7 @@ public class PlaybackActivity extends Activity {
         // just "Source error". Cheap (log calls only, no network/IO of its own) — left in
         // rather than gated behind a flag since there's no on-device UI to toggle it from.
         player.addAnalyticsListener(new EventLogger(trackSelector, "FCPlayer.EventLogger"));
+        player.addAnalyticsListener(new AudioDiagnostics(() -> activeChannelKey));
         // Without this, a failed tune (entitlement rejection, DRM license denial, decode
         // error — ExoPlayer treats all of these as a fatal PlaybackException) left the
         // Activity sitting on a blank surface forever: nothing observed the error, so
