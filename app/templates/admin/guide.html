@@ -342,6 +342,8 @@
       border: 1px solid var(--accent-border);
       transition: filter 0.1s;
       min-width: 2px;
+      /* Lets the rule below hide the text by the block's drawn width. */
+      container-type: inline-size;
     }
     .program-block:hover { filter: brightness(1.15); z-index: 2; }
     .program-block.prog-current {
@@ -366,8 +368,13 @@
       overflow: hidden;
     }
     .prog-year, .gm-prog-year { font-weight: 400; color: var(--text-muted); }
-    .program-block.narrow .prog-title,
-    .program-block.narrow .prog-time { display: none; }
+    /* Hide the text only when there's no room even for an ellipsis (the
+       width is the block's content box, inside its padding). A share of the
+       5-hour window (the old 4% rule) hid ~11-minute shows on blocks with
+       room for "Squi…". */
+    @container (max-width: 12px) {
+      .prog-title, .prog-time { display: none; }
+    }
 
     /* ── Empty EPG row ── */
     .prog-empty {
@@ -740,7 +747,7 @@
         return;
       }
       const html = programs.map(p => {
-        const cls     = 'program-block' + (p.current ? ' prog-current' : '') + (p.width < 4 ? ' narrow' : '');
+        const cls     = 'program-block' + (p.current ? ' prog-current' : '');
         const yearHtml = p.year ? ` <span class="prog-year">(${escapeHtml(p.year)})</span>` : '';
         const tooltip = escapeHtml(p.title) + (p.year ? ` (${escapeHtml(p.year)})` : '') + ' · ' + escapeHtml(p.start) + '–' + escapeHtml(p.end)
                         + (p.desc ? ' · ' + escapeHtml(p.desc.slice(0, 120)) : '');
