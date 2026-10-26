@@ -573,6 +573,11 @@
     }
     .config-checklist-item input { margin: 0; flex: none; }
     .config-checklist-count { color: var(--text-muted); font-size: 0.75rem; }
+    .config-list { display: flex; flex-direction: column; gap: 0.4rem; }
+    .config-list-row { display: flex; align-items: center; gap: 0.4rem; }
+    .config-list-row input { flex: 1; min-width: 0; }
+    .config-list-row .btn { flex: none; }
+    .config-list-add { align-self: flex-start; }
     .field input[type=text],
     .field input[type=password],
     .field input[type=number] {
@@ -6104,6 +6109,23 @@
               <div class="config-checklist">${items}</div>
               ${help}
             </div>`;
+        } else if (f.field_type === 'list') {
+          // One box per entry; saved comma-joined. Always show at least one box.
+          const entries = String(val).split(/[,;\s]+/).map(v => v.trim()).filter(Boolean);
+          const rows = (entries.length ? entries : ['']).map((v, i) =>
+            configListRowHtml(f, v, i === 0 ? `cfg-${sourceId}-${f.key}` : '')
+          ).join('');
+          return `
+            <div class="field field-full">
+              <label for="cfg-${sourceId}-${f.key}">${escapeHtml(f.label)}${req}</label>
+              <div class="config-list" data-list-key="${f.key}">
+                ${rows}
+                <button type="button" class="btn btn-sm btn-cancel config-list-add"
+                        data-placeholder="${escapeHtml(f.placeholder || '')}"
+                        onclick="addConfigListRow(this)">+ ${escapeHtml(f.add_label || 'Add another')}</button>
+              </div>
+              ${help}
+            </div>`;
         } else if (f.field_type === 'toggle') {
           const checked = ['1', 'true', 'yes', 'on'].includes(String(val).trim().toLowerCase()) ? ' checked' : '';
           return `
@@ -6207,6 +6229,10 @@
           payload[key] = [...new Set([...selected, ...custom])].join(',');
           return;
         }
+        if (keyFields[0].dataset.list === 'true') {
+          payload[key] = keyFields.map(el => el.value.trim()).filter(Boolean).join(',');
+          return;
+        }
         if (keyFields[0].dataset.checklist === 'true') {
           payload[key] = keyFields.filter(el => !el.checked).map(el => el.value).join(',');
           return;
@@ -6264,7 +6290,38 @@
       }
     }
 
+    function configListRowHtml(f, value, id) {
+      const placeholder = f.placeholder ? `placeholder="${escapeHtml(f.placeholder)}"` : '';
+      return `
+        <div class="config-list-row">
+          <input type="text"${id ? ` id="${id}"` : ''} data-key="${f.key}" data-list="true"
+                 value="${escapeHtml(String(value))}" ${placeholder} autocomplete="off">
+          <button type="button" class="btn btn-sm btn-cancel" title="Remove"
+                  onclick="removeConfigListRow(this)">✕</button>
+        </div>`;
+    }
+
+    function addConfigListRow(button) {
+      const list = button.closest('.config-list');
+      const f = {key: list.dataset.listKey, placeholder: button.dataset.placeholder};
+      button.insertAdjacentHTML('beforebegin', configListRowHtml(f, '', ''));
+      button.previousElementSibling.querySelector('input').focus();
+    }
+
+    function removeConfigListRow(button) {
+      const row = button.closest('.config-list-row');
+      // Keep one box around so there is always somewhere to type.
+      if (row.parentElement.querySelectorAll('.config-list-row').length > 1) {
+        row.remove();
+      } else {
+        row.querySelector('input').value = '';
+      }
+    }
+
     function clearConfigFields(sourceId) {
+      document.querySelectorAll(`#source-config-${sourceId} .config-list`).forEach(list => {
+        list.querySelectorAll('.config-list-row').forEach((row, i) => { if (i) row.remove(); });
+      });
       document.querySelectorAll(`#source-config-${sourceId} input[data-key], #source-config-${sourceId} select[data-key]`).forEach(field => {
         if (field.tagName === 'SELECT' && field.multiple) {
           [...field.options].forEach(opt => { opt.selected = false; });
