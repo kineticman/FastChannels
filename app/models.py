@@ -485,6 +485,9 @@ class AppSettings(db.Model):
     # default: this is meant to be flipped on briefly while reproducing a specific
     # issue, not left running.
     debug_logging_enabled = db.Column(db.Boolean, nullable=False, default=False, server_default=db.text('0'))
+    # Optional admin UI login (app/admin_auth.py) — on while a password hash is set.
+    admin_username       = db.Column(db.Text, nullable=True)
+    admin_password_hash  = db.Column(db.Text, nullable=True)
 
     @staticmethod
     def _env_int(name: str) -> int | None:

@@ -364,6 +364,10 @@ def ensure_runtime_schema() -> None:
                 # Default off — meant to be flipped on briefly while reproducing a
                 # specific issue (see app/debug_flag.py), not left running.
                 conn.execute(text("ALTER TABLE app_settings ADD COLUMN debug_logging_enabled BOOLEAN NOT NULL DEFAULT 0"))
+            if "admin_username" not in cols:
+                conn.execute(text("ALTER TABLE app_settings ADD COLUMN admin_username TEXT"))
+            if "admin_password_hash" not in cols:
+                conn.execute(text("ALTER TABLE app_settings ADD COLUMN admin_password_hash TEXT"))
             _ensure_app_settings_row(conn)
 
         if "sources" in tables:

@@ -190,6 +190,9 @@ def create_app(config_class=Config):
             ensure_runtime_schema()
         write_timezone_cache(AppSettings.get().timezone_name)
 
+    from . import admin_auth
+    admin_auth.register(app)
+
     from .routes.output import output_bp
     from .routes.api_sources import sources_bp
     from .routes.api_custom_channels import custom_channels_bp

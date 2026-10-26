@@ -11,4 +11,22 @@
       document.documentElement.setAttribute('data-theme', theme);
     })();
   </script>
+  <script>
+    // Admin login (app/admin_auth.py): if the session expires while a page is open,
+    // its API calls start getting 401s — send the browser to the sign-in page
+    // instead of leaving every panel showing an error.
+    (function () {
+      if (!window.fetch) return;
+      var origFetch = window.fetch;
+      window.fetch = function () {
+        return origFetch.apply(this, arguments).then(function (resp) {
+          if (resp.status === 401 && resp.headers.get('X-FastChannels-Auth') === 'required') {
+            var here = window.location.pathname + window.location.search;
+            window.location.href = '/login?next=' + encodeURIComponent(here);
+          }
+          return resp;
+        });
+      };
+    })();
+  </script>
   <link rel="stylesheet" href="{{ url_for('static', filename='css/admin_theme.css') }}">

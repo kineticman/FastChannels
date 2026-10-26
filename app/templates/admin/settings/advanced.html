@@ -39,3 +39,45 @@
       </div>
     </div>
   </div>
+
+  <!-- Admin login card (app/admin_auth.py) -->
+  <div class="source-card" id="settings-card-admin-login">
+    <div class="source-header" style="cursor:default">
+      <div class="source-title">
+        <div class="source-icon">🔒</div>
+        <div>
+          <div class="source-name">Admin login</div>
+          <div class="source-meta" id="admin-login-meta">{% if admin_login_enabled %}On — username <strong>{{ admin_login_username }}</strong>{% else %}Off — anyone who can reach this server can open the admin UI{% endif %}</div>
+        </div>
+      </div>
+    </div>
+    <div class="source-body open">
+      {% if admin_auth_env_disabled %}
+      <div class="help" style="color:var(--warning-soft);margin-bottom:0.75rem">
+        <code>FC_AUTH_DISABLED</code> is set in the container's environment, so the login is bypassed{% if admin_login_enabled %} even though one is saved{% endif %}. Remove it and restart the container once you've reset the password.
+      </div>
+      {% endif %}
+      <div class="fields-grid" style="max-width:480px">
+        <div class="field field-full">
+          <label for="admin-login-username">Username</label>
+          <input type="text" id="admin-login-username" autocomplete="username" value="{{ admin_login_username or 'admin' }}">
+        </div>
+        <div class="field field-full">
+          <label for="admin-login-password">{% if admin_login_enabled %}New password{% else %}Password{% endif %}</label>
+          <input type="password" id="admin-login-password" autocomplete="new-password" placeholder="At least 8 characters">
+        </div>
+        <div class="field field-full">
+          <label for="admin-login-password-confirm">Confirm password</label>
+          <input type="password" id="admin-login-password-confirm" autocomplete="new-password">
+          <div class="help">Requires a sign-in for the admin UI and its API (settings, sources, database backup/restore). Playlists, guides, streams, images and the <code>/watch</code> page stay open, because Channels DVR, Plex, IPTV players and the DRM bridges can't sign in, so anyone who can reach this server can still pull your M3U/EPG and play channels. Changing the password signs out every other browser.</div>
+          <div class="help">Forgot it? Add <code>FC_AUTH_DISABLED=1</code> to the container's environment, restart, then change or turn off the login here.</div>
+        </div>
+      </div>
+      <div class="field-actions">
+        <span class="save-status" id="admin-login-status"></span>
+        <button class="btn btn-danger" id="admin-login-disable"{% if not admin_login_enabled %} style="display:none"{% endif %} onclick="disableAdminLogin()">Turn off</button>
+        <a class="btn btn-secondary" id="admin-login-signout" href="/logout" style="text-decoration:none;{% if not admin_login_enabled %}display:none{% endif %}">Sign out</a>
+        <button class="btn btn-primary" id="admin-login-save" onclick="saveAdminLogin()">{% if admin_login_enabled %}Change password{% else %}Turn on{% endif %}</button>
+      </div>
+    </div>
+  </div>

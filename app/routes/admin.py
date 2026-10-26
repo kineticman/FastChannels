@@ -8,6 +8,7 @@ from flask import Blueprint, current_app, jsonify, render_template, request
 from sqlalchemy import select, case, func, or_
 from sqlalchemy.orm import load_only, defer
 from ..extensions import db
+from .. import admin_auth
 from ..models import Source, Channel, Feed, FeedChannelNumber, AppSettings, Program
 from ..generators.m3u import (
     _build_channel_query,
@@ -1918,6 +1919,9 @@ def settings():
                            event_guide_filler=app_settings.event_guide_filler if app_settings.event_guide_filler is not None else True,
                            m3u_rewrite_timestamps=bool(app_settings.m3u_rewrite_timestamps),
                            debug_logging_enabled=bool(app_settings.debug_logging_enabled),
+                           admin_login_enabled=bool((app_settings.admin_password_hash or '').strip()),
+                           admin_login_username=(app_settings.admin_username or '').strip(),
+                           admin_auth_env_disabled=admin_auth.env_disabled(),
                            prismcast_url=app_settings.effective_prismcast_url() or '',
                            prismcast_inner_url=app_settings.prismcast_inner_url or '',
                            prismcast_max_height=int(app_settings.prismcast_max_height or 0),
