@@ -2837,28 +2837,32 @@ def _sync_intrinsic_drm_bridge(source) -> None:
 
     Most DRM-capable sources only need this for DASH rows. Some premium sources,
     such as DirecTV Stream, are all-DRM even when their manifests are HLS; those
-    scrapers advertise all_channels_require_drm_bridge; mixed ones (Warner TVE)
-    list their DRM channels in drm_bridge_channel_ids and every other channel
-    is held clear. The flag is gated on
+    scrapers advertise all_channels_require_drm_bridge. The flag is gated on
     whether some bridge mode (PrismCast or FastChannels Player) is on for this source and only
-    flips requires_drm_bridge; audit still owns disable/dead state."""
+    flips requires_drm_bridge; audit still owns disable/dead state.
+
+    A source without license handling can't have bridge channels, so any flag
+    left from before it dropped DRM (Warner TVE, 2026-10) is cleared."""
     scraper_cls = registry.get(source.name)
-    if not (scraper_cls and getattr(scraper_cls, 'license_url', None)):
+    if not scraper_cls:
+        return
+    if not getattr(scraper_cls, 'license_url', None):
+        cleared = source.channels.filter(Channel.requires_drm_bridge.is_(True)).update(
+            {Channel.requires_drm_bridge: False}, synchronize_session='fetch')
+        if cleared:
+            logger.info('[%s] requires_drm_bridge cleared on %d channel(s): source has no DRM',
+                        source.name, cleared)
         return
     want = _drm_bridge_mode_for(source.name)
     q = source.channels
     label = 'all'
-    bridge_ids = getattr(scraper_cls, 'drm_bridge_channel_ids', None)
-    if bridge_ids is not None:
-        label = 'listed'
-    elif not getattr(scraper_cls, 'all_channels_require_drm_bridge', False):
+    if not getattr(scraper_cls, 'all_channels_require_drm_bridge', False):
         q = q.filter(Channel.stream_type == 'dash')
         label = 'DASH'
     changed = 0
     for ch in q.all():
-        target = want and (bridge_ids is None or ch.source_channel_id in bridge_ids)
-        if bool(ch.requires_drm_bridge) != target:
-            ch.requires_drm_bridge = target
+        if bool(ch.requires_drm_bridge) != want:
+            ch.requires_drm_bridge = want
             changed += 1
     if changed:
         logger.info('[%s] requires_drm_bridge synced on %d %s channel(s) (bridge=%s)',

@@ -581,13 +581,8 @@ def _get_playback_info(ch, fast_mode=True, browser=False):
     # These sources use AES-128 encrypted TS; Shaka 4.x cannot decrypt via MSE
     # (error 4042). Force native mode so the watch page sets video.src directly
     # and lets the browser's native HLS stack handle decryption.
-    if ch.source and ch.source.name in ('pluto', 'fubo', 'roku', 'discovery_tve') and not roku_drm and not fubo_drm:
+    if ch.source and ch.source.name in ('pluto', 'fubo', 'roku', 'discovery_tve', 'warner_tve') and not roku_drm and not fubo_drm:
         playback_mode = 'native'
-    if ch.source and ch.source.name == 'warner_tve':
-        # TBS/TNT/truTV/TCM are AES-128 TS like the sources above.
-        from ..scrapers.warner_tve import AES_CHANNEL_IDS as _WARNER_AES_CHANNEL_IDS
-        if ch.source_channel_id in _WARNER_AES_CHANNEL_IDS:
-            playback_mode = 'native'
     if roku_drm or fubo_drm:
         playback_mode = 'dash'
 

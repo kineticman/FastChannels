@@ -145,10 +145,11 @@ class SpectrumScraper(BaseScraper):
     license_url = _LICENSE_BASE
     stream_audit_enabled = True
     # Every channel is DASH+CENC, no exceptions observed — same shape as
-    # amazon_prime_free/nbc_tve/sling/directv/warner_tve. Declared statically
+    # amazon_prime_free/nbc_tve/sling/directv. Declared statically
     # rather than left to the audit's live per-fetch Widevine/PlayReady marker
     # detection, which can false-negative on an SSAI ad-break splice landing
-    # genuinely clear content mid-otherwise-encrypted-stream (see warner_tve).
+    # genuinely clear content mid-otherwise-encrypted-stream (seen 2026-09-12
+    # on Warner TVE's old Widevine feeds).
     all_channels_require_drm_bridge = True
     config_schema = [
         ConfigField('username', 'Username', placeholder='your Spectrum username',

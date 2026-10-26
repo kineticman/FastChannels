@@ -56,7 +56,6 @@ from .fox_tve_proxy import (
 )
 from .paramount_proxy import configure_paramount_proxy, paramount_proxy_bp
 from .warner_proxy import configure_warner_proxy, warner_proxy_bp
-from ..scrapers.warner_tve import AES_CHANNEL_IDS as _WARNER_AES_CHANNEL_IDS
 
 
 from ..scrapers.cspan import (
@@ -3110,7 +3109,7 @@ def play(source_name: str, channel_id: str):
 
     # TBS/TNT/truTV/TCM: their Akamai tokens break in clients that normalize URL
     # escapes, so everything below the master goes through the proxy.
-    if source_name == 'warner_tve' and channel.source_channel_id in _WARNER_AES_CHANNEL_IDS:
+    if source_name == 'warner_tve':
         from urllib.parse import quote as _quote
         encoded_id = _quote(channel.source_channel_id, safe='')
         return redirect(

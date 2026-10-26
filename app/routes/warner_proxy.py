@@ -19,7 +19,7 @@ from flask import Blueprint, Response, abort, current_app, request
 from app.config_store import persist_source_cache_updates, persist_source_config_updates
 from ..models import Channel, Source
 from ..scrapers import registry
-from ..scrapers.warner_tve import AES_CHANNEL_IDS, UA, aes_cdn_url_allowed
+from ..scrapers.warner_tve import CHANNELS, UA, aes_cdn_url_allowed
 
 logger = logging.getLogger(__name__)
 warner_proxy_bp = Blueprint('warner_proxy', __name__)
@@ -98,7 +98,7 @@ def _persist(channel: Channel, scraper) -> None:
 @warner_proxy_bp.route('/play/warner_tve/<channel_id>/proxy.m3u8')
 def warner_proxy(channel_id: str):
     raw_id = unquote(channel_id)
-    if raw_id not in AES_CHANNEL_IDS:
+    if raw_id not in CHANNELS:
         abort(404)
     channel = (Channel.query.join(Source)
                .filter(Source.name == 'warner_tve', Channel.source_channel_id == raw_id)

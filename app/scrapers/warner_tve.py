@@ -16,12 +16,13 @@ that to `%2F` and get a 403. So these channels play through
 app/routes/warner_proxy.py, which fetches every upstream URL byte for byte,
 rather than a 302.
 
-The website's own stack — Widevine CENC HLS via the v2 media API, with the
-same native license-proxy pattern as app/scrapers/directv.py — is still here
-for any channel marked `drm=True` (none today): resolve() returns the
-encrypted manifest URL and the generic license_proxy route in
-app/routes/play.py lets a browser's Shaka player pull a Widevine license.
-Full investigation: dev/warner/probe_playback.py and
+The websites themselves play Widevine CENC HLS from the v2 media API
+(medium.ngtv.io/v2/media/<id>/desktop, license at
+widevine.license.istreamplanet.com with an X-ISP-Token header). This scraper
+played that, bridge-only, until 2026-10; the complete, verified Widevine path
+is in commit 38ae38c if Turner ever drops the AES feeds. Full investigation:
+dev/warner/probe_playback.py, dev/hitlist/sources_todo.json
+(warner_tve_direct_claim) and
 /home/brad/.claude/plans/scalable-percolating-coral.md.
 
 Key facts established by probing (not derivable from a single HAR capture):
@@ -34,19 +35,9 @@ Key facts established by probing (not derivable from a single HAR capture):
   as the `appId` query param against token.ngtv.io/medium.ngtv.io), and
   `auth.authBrand` (the exact Adobe Pass requestor_id — truTV's is cased
   `truTV`, not `TRUTV`). No login required to read this.
-- The same blob publishes a `companyId` per media id — confirmed to be the
-  SAME value as the trailing UUID in
-  `widevine.license.istreamplanet.com/widevine/api/license/<uuid>` from an
-  earlier HAR capture (dev/tnt/README.md), and identical across east/west of
-  a brand. I.e. the Widevine license URL is a static, publicly-published
-  per-brand constant — NOT a dynamic per-session value, so this scraper uses
-  a static per-brand `get_license_url()` lookup (DirecTV-style), not a
-  Roku-style cached-per-session URL.
-- token.ngtv.io's token_ngtv call needs `accessTokenType=adobe` — the prior
-  HAR notes said `turner`, which returns error 2505 "Invalid token format"
-  against a live shortAuthorize token (confirmed 2026-08-03).
-- medium.ngtv.io's `widevine.cenc` block directly returns a ready-to-fetch
-  manifest `url` (no FairPlay-URL substitution needed in practice).
+- token.ngtv.io calls need `accessTokenType=adobe` — old HAR notes said
+  `turner`, which returns error 2505 "Invalid token format" against a live
+  shortAuthorize token (confirmed 2026-08-03).
 - Real EPG *is* available, just not from `sbp.ngtv.io`/`medium.ngtv.io` (both
   came back empty/scheduleless during the DRM investigation). Each brand's
   public `/schedule` page embeds an iframe pointing at a third-party widget —
@@ -85,7 +76,6 @@ from ..tve.adobe_pass import (MvpdCooldownMixin, TVEAuthError, TVENotAuthorizedE
 
 SCHEME = 'warner-tve://'
 UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36'
-WIDEVINE_LICENSE_BASE = 'https://widevine.license.istreamplanet.com/widevine/api/license/'
 
 # Third-party schedule widget embedded (via iframe) on each brand's public
 # /schedule page — see module docstring. No auth needed; ?network=<code>
@@ -105,16 +95,13 @@ _NEXT_DATA_RE = re.compile(
     r'<script id="__NEXT_DATA__" type="application/json">(.*?)</script>', re.S,
 )
 
-# top2 config (software statement / appId / companyId / adsProfile) is public,
-# unauthenticated, and rarely changes — cache it well past a single scrape/play
-# cycle. Mirrors the TTL shape of app/tve/adobe_pass.py's own statement cache.
+# top2 config (software statement / appId) is public, unauthenticated, and
+# rarely changes — cache it well past a single scrape/play cycle. Mirrors the
+# TTL shape of app/tve/adobe_pass.py's own statement cache.
 _CONFIG_CACHE_TTL = 6 * 3600
-# medium.ngtv.io manifest URLs embed Yospace SSAI session context; re-resolve
-# well inside the ~1hr NGTV token / 8hr ISP JWT TTLs observed during probing.
-_MANIFEST_CACHE_TTL = 20 * 60
 # token_spe's hdnts lasts 300s and is only needed to fetch the master; the
 # master hands out its own ~8h hdntl for everything below it.
-_AES_MANIFEST_CACHE_TTL = 4 * 60
+_MANIFEST_CACHE_TTL = 4 * 60
 
 NGTV_MEDIA_V1 = 'https://medium.ngtv.io/media'
 NGTV_TOKEN_SPE = 'https://token.ngtv.io/token/token_spe'
@@ -157,10 +144,8 @@ class WarnerChannel:
     media_id: str
     logo_url: str
     category: str = 'Entertainment'
-    # True = Widevine-only, bridge-only; False = AES-128 via warner_proxy.py.
-    drm: bool = False
     # AES master for feeds the v1 media API doesn't list (TCM).
-    aes_master_url: str | None = None
+    master_url: str | None = None
 
     @property
     def stream_url(self) -> str:
@@ -195,15 +180,14 @@ CHANNELS: dict[str, WarnerChannel] = {
     'tcm-east': WarnerChannel(
         channel_id='tcm-east', name='TCM (East)', brand_key='tcm', media_id='tcm-east',
         logo_url='https://static.tcm.com/2025-11/legacy-watch-tcm-logo.png', category='Movies',
-        aes_master_url=f'https://{AES_KEY_HOST}/hls/live/2023186/tcmeast/noslate/master.m3u8',
+        master_url=f'https://{AES_KEY_HOST}/hls/live/2023186/tcmeast/noslate/master.m3u8',
     ),
     'tcm-west': WarnerChannel(
         channel_id='tcm-west', name='TCM (West)', brand_key='tcm', media_id='tcm-west',
         logo_url='https://static.tcm.com/2025-11/legacy-watch-tcm-logo.png', category='Movies',
-        aes_master_url=f'https://{AES_KEY_HOST}/hls/live/2023187/tcmwest/noslate/master.m3u8',
+        master_url=f'https://{AES_KEY_HOST}/hls/live/2023187/tcmwest/noslate/master.m3u8',
     ),
 }
-AES_CHANNEL_IDS = frozenset(cid for cid, ch in CHANNELS.items() if not ch.drm)
 
 
 def channel_for_url(raw_url: str) -> WarnerChannel | None:
@@ -307,16 +291,6 @@ class WarnerTVEScraper(MvpdCooldownMixin, BaseScraper):
     is_premium = True
     scrape_interval = 720
     stream_audit_enabled = True
-    license_url = WIDEVINE_LICENSE_BASE  # class-level presence only: signals DRM-capable
-                                          # to registry.drm_capable_source_names(); the real
-                                          # per-brand URL comes from get_license_url() below.
-                                          # Also what lets worker._sync_intrinsic_drm_bridge
-                                          # clear the bridge flag on installs from when every
-                                          # channel here was Widevine.
-    # Channels marked drm=True are kept out of standard IPTV outputs and routed
-    # through the bridge immediately, rather than waiting for Stream Audit to
-    # discover it; every other channel is held clear. None today.
-    drm_bridge_channel_ids = frozenset(cid for cid, ch in CHANNELS.items() if ch.drm)
 
     def fetch_channels(self) -> list[ChannelData]:
         return [
@@ -473,7 +447,7 @@ class WarnerTVEScraper(MvpdCooldownMixin, BaseScraper):
             for i in range(24)
         ]
 
-    # ── brand config (software statement / appId / companyId / adsProfile) ──
+    # ── brand config (requestor / software statement / appId) ───────────────
 
     def _brand_config(self, brand_key: str) -> dict[str, Any]:
         all_cfg = self.cache.get('warner_brand_config') or {}
@@ -495,11 +469,6 @@ class WarnerTVEScraper(MvpdCooldownMixin, BaseScraper):
             'requestor_id': (top2.get('auth') or {}).get('authBrand') or brand_key.upper(),
             'software_statement': top2.get('softwareStatement') or '',
             'app_id': top2.get('serviceAppId') or '',
-            'media': {
-                media_id: {'company_id': cfg.get('companyId'), 'ads_profile': cfg.get('adsProfile')}
-                for media_id, cfg in top2.items()
-                if isinstance(cfg, dict) and cfg.get('companyId')
-            },
             'cached_at': time.time(),
         }
         if not entry['requestor_id'] or not entry['software_statement'] or not entry['app_id']:
@@ -526,10 +495,6 @@ class WarnerTVEScraper(MvpdCooldownMixin, BaseScraper):
                 'requestor_id': auth['brand'],
                 'software_statement': auth.get('softwareStatementV2') or auth['softwareStatement'],
                 'app_id': player['mediaAppId'],
-                'media': {
-                    media_id: {'company_id': auth['companyId']['live'], 'ads_profile': ''}
-                    for media_id in ('tcm-east', 'tcm-west')
-                },
                 'cached_at': time.time(),
             }
             if entry['requestor_id'] != 'TCM' or not all(entry[k] for k in ('software_statement', 'app_id')):
@@ -543,49 +508,14 @@ class WarnerTVEScraper(MvpdCooldownMixin, BaseScraper):
         self._update_cache('warner_brand_config', updated)
         return entry
 
-    @classmethod
-    def get_license_url(cls, config: dict, channel_id: str | None = None) -> str | None:
-        channel = CHANNELS.get(channel_id or '')
-        if not channel:
-            return cls.license_url
-        if not channel.drm:
-            return None
-        media_cfg = ((config.get('warner_brand_config') or {}).get(channel.brand_key) or {}).get('media', {})
-        company_id = (media_cfg.get(channel.media_id) or {}).get('company_id')
-        if not company_id:
-            return cls.license_url
-        return WIDEVINE_LICENSE_BASE + company_id
-
-    @classmethod
-    def prepare_license_request(
-        cls, challenge: bytes, config: dict, channel_id: str | None = None, **kwargs,
-    ) -> tuple[bytes, dict]:
-        # Confirmed via a real HAR capture of a successful license exchange on
-        # tbs.com (dev/tbs/1.har): the site's player sends the ISP token
-        # (fetched from token.ngtv.io/token/token_isp during resolve(), cached
-        # alongside the manifest URL below) as a plain `X-ISP-Token` header —
-        # no Bearer prefix, no JSON envelope. Omitting it gets a real,
-        # well-formed challenge rejected with HTTP 403 ErrorCode 8008.
-        headers = dict(cls.license_request_headers(config))
-        manifest_cache = (config.get('warner_manifest') or {}).get(channel_id or '') or {}
-        isp_token = manifest_cache.get('isp_token')
-        if isp_token:
-            headers['X-ISP-Token'] = isp_token
-        return challenge, headers
-
     # ── playback resolve ─────────────────────────────────────────────────────
 
     def audit_resolve(self, raw_url: str) -> str:
-        # TCM is intrinsically DRM (Widevine CENC) even though the resolved
-        # manifest looks like ordinary HLS to the generic audit — the
-        # #EXT-X-KEY/CENC markers live in the child variant playlists, not
-        # the top-level Yospace-wrapped master manifest resolve() returns, so
-        # the audit's manifest inspection was misreading it as clear HLS and
-        # clearing requires_drm_bridge. The AES channels' variants 403 for the
-        # audit's requests session (see module docstring). Validate
+        # The variant playlists 403 for the audit's requests session (it
+        # rewrites the hdntl token; see module docstring), so a generic
+        # manifest check would read every channel as broken. Validate
         # entitlement via resolve(), then return the opaque URL sentinel so
-        # the audit skips manifest inspection entirely — same pattern as
-        # directv.py.
+        # the audit skips manifest inspection — same pattern as directv.py.
         if raw_url.startswith(SCHEME):
             self.resolve(raw_url)
             return raw_url
@@ -598,8 +528,7 @@ class WarnerTVEScraper(MvpdCooldownMixin, BaseScraper):
 
         cached_manifest = self.cache.get('warner_manifest') or {}
         cached = cached_manifest.get(channel.channel_id) if isinstance(cached_manifest, dict) else None
-        ttl = _MANIFEST_CACHE_TTL if channel.drm else _AES_MANIFEST_CACHE_TTL
-        if cached and (time.time() - float(cached.get('cached_at', 0))) < ttl:
+        if cached and (time.time() - float(cached.get('cached_at', 0))) < _MANIFEST_CACHE_TTL:
             return cached['url']
 
         account = tve_account_for(self.source_name)
@@ -635,17 +564,12 @@ class WarnerTVEScraper(MvpdCooldownMixin, BaseScraper):
                 pass
             raise TVEAuthError(f'Warner TVE: Adobe Pass auth failed for {channel.brand_key}: {exc}') from exc
 
-        if channel.drm:
-            manifest_url, isp_token = self._resolve_manifest(session, brand_cfg, channel, adobe_token)
-        else:
-            manifest_url, isp_token = self._resolve_aes_manifest(session, brand_cfg, channel, adobe_token), None
+        manifest_url = self._resolve_manifest(session, brand_cfg, channel, adobe_token)
         if not manifest_url:
             raise RuntimeError(f'Warner TVE: could not resolve manifest for {channel.channel_id}')
 
         manifests = dict(cached_manifest) if isinstance(cached_manifest, dict) else {}
-        manifests[channel.channel_id] = {
-            'url': manifest_url, 'isp_token': isp_token, 'cached_at': time.time(),
-        }
+        manifests[channel.channel_id] = {'url': manifest_url, 'cached_at': time.time()}
         self._update_cache('warner_manifest', manifests)
         return manifest_url
 
@@ -705,12 +629,12 @@ class WarnerTVEScraper(MvpdCooldownMixin, BaseScraper):
         return adobe_token, client.session
 
     @staticmethod
-    def _resolve_aes_manifest(
+    def _resolve_manifest(
         session: requests.Session, brand_cfg: dict, channel: WarnerChannel, adobe_token: str,
     ) -> str | None:
         """The AES-128 master URL, with its hdnts appended verbatim."""
         app_id = brand_cfg['app_id']
-        master_url = channel.aes_master_url
+        master_url = channel.master_url
         if not master_url:
             media = session.get(f'{NGTV_MEDIA_V1}/{channel.media_id}/tv', params={'appId': app_id}, timeout=20)
             if media.status_code != 200:
@@ -738,80 +662,3 @@ class WarnerTVEScraper(MvpdCooldownMixin, BaseScraper):
         if not token:
             return None
         return f'{master_url}?hdnts={token}'
-
-    @staticmethod
-    def _resolve_manifest(
-        session: requests.Session, brand_cfg: dict, channel: WarnerChannel, adobe_token: str,
-    ) -> tuple[str | None, str | None]:
-        app_id = brand_cfg['app_id']
-        media_cfg = brand_cfg.get('media', {}).get(channel.media_id) or {}
-
-        # Validation/gate step observed in the real auth chain — not consumed
-        # downstream (medium.ngtv.io and token_isp both authenticate with the
-        # Adobe authorization token directly, not this token's value), but
-        # kept in sequence since that's the proven-working order.
-        ngtv_params = {'appId': app_id, 'accessTokenType': 'adobe',
-                       'accessToken': adobe_token, 'format': 'json'}
-        if channel.brand_key == 'tcm':
-            ngtv = session.post('https://token.ngtv.io/token/token_ngtv',
-                                params=ngtv_params, json={}, timeout=20)
-        else:
-            ngtv = session.get('https://token.ngtv.io/token/token_ngtv',
-                               params={**ngtv_params, 'fname': 'ngtv'}, timeout=20)
-        if ngtv.status_code != 200:
-            return None, None
-        try:
-            ngtv_data = ngtv.json()
-        except ValueError:
-            return None, None
-        if not ((ngtv_data.get('auth') or {}).get('ngtv_token')):
-            return None, None
-
-        ssai_profile = media_cfg.get('ads_profile') or ''
-        desktop_params = {'appId': app_id}
-        if ssai_profile:
-            desktop_params['ssaiProfile'] = ssai_profile
-        desktop = session.get(
-            f'https://medium.ngtv.io/v2/media/{channel.media_id}/desktop',
-            params=desktop_params,
-            timeout=20,
-        )
-        if desktop.status_code != 200:
-            return None, None
-        try:
-            desktop_data = desktop.json()
-        except ValueError:
-            return None, None
-
-        media_data = ((desktop_data.get('media') or {}).get('desktop')) or {}
-        widevine = media_data.get('widevine', {}).get('cenc', {}) if isinstance(media_data.get('widevine'), dict) else {}
-        fairplay = media_data.get('fairplay', {}).get('cbcs', {}) if isinstance(media_data.get('fairplay'), dict) else {}
-        asset_id = widevine.get('assetId') or fairplay.get('assetId')
-        manifest_url = widevine.get('url')
-        if not manifest_url and fairplay.get('url'):
-            # Not observed in practice (widevine.cenc.url has always been present
-            # directly), but kept as a fallback per the original HAR investigation.
-            manifest_url = fairplay['url'].replace('-cbcs', '-cenc').replace('_fp_', '_wv_')
-        if not manifest_url:
-            return None, None
-
-        isp_token = None
-        if asset_id:
-            isp = session.get(
-                'https://token.ngtv.io/token/token_isp',
-                params={'assetId': asset_id, 'appId': app_id, 'format': 'json',
-                        'mediaId': channel.media_id, 'accessToken': adobe_token,
-                        'accessTokenType': 'adobe'},
-                timeout=20,
-            )
-            # This JWT is NOT needed to build the manifest URL (widevine.cenc.url
-            # already resolves and plays without it), but it IS required by the
-            # license server as the `X-ISP-Token` header — confirmed via a real
-            # HAR capture of a successful license exchange (dev/tbs/1.har).
-            if isp.status_code == 200:
-                try:
-                    isp_token = isp.json().get('jwt')
-                except ValueError:
-                    isp_token = None
-
-        return manifest_url, isp_token
