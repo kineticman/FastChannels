@@ -801,6 +801,9 @@ def custom_segment_proxy():
 
     if r.status_code != 200:
         logger.warning('[custom-seg-proxy] upstream HTTP %s host=%s url=%s', r.status_code, seg_host, url[:200])
+        if r.status_code == 403 and seg_host.endswith('googlevideo.com'):
+            from ..scrapers.stream_detector import note_youtube_segment_403
+            note_youtube_segment_403(url)
         status = r.status_code if 400 <= r.status_code <= 599 else 502
         return Response(f'upstream returned HTTP {r.status_code}', status=status, content_type='text/plain')
 
