@@ -1927,8 +1927,9 @@ def _refresh_xml_artifacts(only_keys: set[str] | None = None) -> None:
             # cleanly into Threadfin/Plex and other bridges.
             m3u_artifacts.append((
                 f'feed-{feed.slug}-native-m3u',
-                lambda fp, filters=filters, std_kw=std_kw: fp.write(
-                    generate_native_m3u(filters, base_url=base_url, include_description=False, **std_kw)
+                lambda fp, filters=filters, std_kw=std_kw, slug=feed.slug: fp.write(
+                    generate_native_m3u(filters, base_url=base_url, include_description=False,
+                                        epg_url=f'{base_url}/feeds/{slug}/native/epg.xml', **std_kw)
                 ),
             ))
             # EXPERIMENTAL: mixed Gracenote/XMLTV single-source playlist, pairs with
