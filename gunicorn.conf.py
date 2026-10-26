@@ -96,7 +96,7 @@ _SUCCESS_SUPPRESS_PATTERNS = (
 # through browser.mpd?s=; the first browser.mpd (the tune) still logs.
 # Paramount+ matches refresh their media playlist through the proxy every ~6s
 # per viewer, plus a key fetch at tune; proxy.m3u8 (the tune) still logs.
-# Warner TVE (TBS/TNT/truTV) relays everything below the master: a variant
+# Warner TVE (TBS/TNT/truTV/TCM) relays everything below the master: a variant
 # refresh and a segment every ~6s per viewer, plus a key per rotation.
 _SUCCESS_SUPPRESS_RE = re.compile(
     r'(?:GET|HEAD) /play/directv/browser-asset\?url=|(?:GET|HEAD) /play/dazn_tve/[^/]+/seg/'

@@ -1,25 +1,27 @@
 """
 warner_tve.py — Warner Bros Discovery / Turner cable networks: TBS, TNT,
-truTV and TCM. TCM uses the same NGTV/Widevine playback stack, with Adobe
-Pass v2 and its own public Next.js page config / GraphQL guide.
+truTV and TCM. TCM signs in through Adobe Pass v2 and has its own public
+Next.js page config / GraphQL guide.
 
-Playback, TBS/TNT/truTV: plain AES-128 HLS, no DRM (verified 2026-10-26 —
-the same feeds Channels DVR's TVE plays). Turner's older v1 media API on the
-`tv` platform (medium.ngtv.io/media/<id>/tv, not the v2 API the website uses)
-returns a `bulkaes` rendition on tve-live-aka.warnermediacdn.com, and
-token.ngtv.io/token/token_spe swaps the Adobe token for an Akamai `hdnts`.
-The master's variant, key and segment URLs then carry an `hdntl` token whose
-HMAC covers its literal text, lowercase `%2f` included — python-requests,
-urllib3 and ffmpeg all rewrite that to `%2F` and get a 403. So these channels
-play through app/routes/warner_proxy.py, which fetches every upstream URL
-byte for byte, rather than a 302.
+Playback: plain AES-128 HLS, no DRM (verified 2026-10-26 — the same feeds
+Channels DVR's TVE plays). For TBS/TNT/truTV, Turner's older v1 media API on
+the `tv` platform (medium.ngtv.io/media/<id>/tv, not the v2 API the website
+uses) returns a `bulkaes` rendition on tve-live-aka.warnermediacdn.com. TCM
+isn't in the v1 API, so its masters on turnerlive.akamaized.net are fixed
+URLs, as Channels DVR has them. token.ngtv.io/token/token_spe swaps the Adobe
+token for an Akamai `hdnts` for the master. The master's variant, key and
+segment URLs then carry an `hdntl` token whose HMAC covers its literal text,
+lowercase `%2f` included — python-requests, urllib3 and ffmpeg all rewrite
+that to `%2F` and get a 403. So these channels play through
+app/routes/warner_proxy.py, which fetches every upstream URL byte for byte,
+rather than a 302.
 
-Playback, TCM: Widevine CENC HLS via Adobe Pass + Turner's NGTV token stack,
-bridge-only. Same native license-proxy pattern as app/scrapers/directv.py —
-resolve() returns an encrypted HLS manifest URL, and the generic license_proxy
-route in app/routes/play.py lets a real browser's Shaka player pull a Widevine
-license. TCM's AES path is unverified (no entitled test account), so it stays
-here. Full investigation: dev/warner/probe_playback.py and
+The website's own stack — Widevine CENC HLS via the v2 media API, with the
+same native license-proxy pattern as app/scrapers/directv.py — is still here
+for any channel marked `drm=True` (none today): resolve() returns the
+encrypted manifest URL and the generic license_proxy route in
+app/routes/play.py lets a browser's Shaka player pull a Widevine license.
+Full investigation: dev/warner/probe_playback.py and
 /home/brad/.claude/plans/scalable-percolating-coral.md.
 
 Key facts established by probing (not derivable from a single HAR capture):
@@ -157,6 +159,8 @@ class WarnerChannel:
     category: str = 'Entertainment'
     # True = Widevine-only, bridge-only; False = AES-128 via warner_proxy.py.
     drm: bool = False
+    # AES master for feeds the v1 media API doesn't list (TCM).
+    aes_master_url: str | None = None
 
     @property
     def stream_url(self) -> str:
@@ -190,11 +194,13 @@ CHANNELS: dict[str, WarnerChannel] = {
     ),
     'tcm-east': WarnerChannel(
         channel_id='tcm-east', name='TCM (East)', brand_key='tcm', media_id='tcm-east',
-        logo_url='https://static.tcm.com/2025-11/legacy-watch-tcm-logo.png', category='Movies', drm=True,
+        logo_url='https://static.tcm.com/2025-11/legacy-watch-tcm-logo.png', category='Movies',
+        aes_master_url=f'https://{AES_KEY_HOST}/hls/live/2023186/tcmeast/noslate/master.m3u8',
     ),
     'tcm-west': WarnerChannel(
         channel_id='tcm-west', name='TCM (West)', brand_key='tcm', media_id='tcm-west',
-        logo_url='https://static.tcm.com/2025-11/legacy-watch-tcm-logo.png', category='Movies', drm=True,
+        logo_url='https://static.tcm.com/2025-11/legacy-watch-tcm-logo.png', category='Movies',
+        aes_master_url=f'https://{AES_KEY_HOST}/hls/live/2023187/tcmwest/noslate/master.m3u8',
     ),
 }
 AES_CHANNEL_IDS = frozenset(cid for cid, ch in CHANNELS.items() if not ch.drm)
@@ -293,7 +299,7 @@ def _parse_widget_time(value: str | None, tz) -> datetime | None:
 
 
 class WarnerTVEScraper(MvpdCooldownMixin, BaseScraper):
-    """TBS, TNT and truTV via Adobe Pass + NGTV AES-128; TCM via NGTV/Widevine CENC."""
+    """TBS, TNT, truTV and TCM via Adobe Pass + NGTV AES-128."""
 
     source_name = 'warner_tve'
     display_name = 'Warner Bros Discovery TVE'
@@ -304,10 +310,12 @@ class WarnerTVEScraper(MvpdCooldownMixin, BaseScraper):
     license_url = WIDEVINE_LICENSE_BASE  # class-level presence only: signals DRM-capable
                                           # to registry.drm_capable_source_names(); the real
                                           # per-brand URL comes from get_license_url() below.
-    # TCM is Widevine-CENC DRM — keep it out of standard IPTV outputs and route
-    # it through the bridge immediately (worker._sync_intrinsic_drm_bridge),
-    # rather than waiting for Stream Audit to discover it. The AES channels
-    # play in any client through warner_proxy.py.
+                                          # Also what lets worker._sync_intrinsic_drm_bridge
+                                          # clear the bridge flag on installs from when every
+                                          # channel here was Widevine.
+    # Channels marked drm=True are kept out of standard IPTV outputs and routed
+    # through the bridge immediately, rather than waiting for Stream Audit to
+    # discover it; every other channel is held clear. None today.
     drm_bridge_channel_ids = frozenset(cid for cid, ch in CHANNELS.items() if ch.drm)
 
     def fetch_channels(self) -> list[ChannelData]:
@@ -702,14 +710,16 @@ class WarnerTVEScraper(MvpdCooldownMixin, BaseScraper):
     ) -> str | None:
         """The AES-128 master URL, with its hdnts appended verbatim."""
         app_id = brand_cfg['app_id']
-        media = session.get(f'{NGTV_MEDIA_V1}/{channel.media_id}/tv', params={'appId': app_id}, timeout=20)
-        if media.status_code != 200:
-            return None
-        try:
-            bulkaes = ((media.json().get('media') or {}).get('tv') or {}).get('bulkaes') or {}
-        except ValueError:
-            return None
-        master_url = bulkaes.get('secureUrl')
+        master_url = channel.aes_master_url
+        if not master_url:
+            media = session.get(f'{NGTV_MEDIA_V1}/{channel.media_id}/tv', params={'appId': app_id}, timeout=20)
+            if media.status_code != 200:
+                return None
+            try:
+                bulkaes = ((media.json().get('media') or {}).get('tv') or {}).get('bulkaes') or {}
+            except ValueError:
+                return None
+            master_url = bulkaes.get('secureUrl')
         if not master_url or not aes_cdn_url_allowed(master_url):
             return None
 

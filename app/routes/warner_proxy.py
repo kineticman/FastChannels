@@ -1,4 +1,4 @@
-"""Warner TVE HLS proxy for the AES-128 channels (TBS/TNT/truTV).
+"""Warner TVE HLS proxy for the AES-128 channels (TBS/TNT/truTV/TCM).
 
 Every URL under the master carries an Akamai `hdntl` token whose HMAC covers
 its literal text, lowercase `%2f` included. python-requests, urllib3 and ffmpeg
