@@ -32,6 +32,7 @@ class BallysScraper(BaseScraper):
     stream_audit_enabled = True
     epg_quality = 'partial'   # descriptions present; no poster artwork
     source_category = 'fast'
+    grouped_under = 'free_networks'   # a free network's own website, listed under Free Networks
 
     config_schema = []
 

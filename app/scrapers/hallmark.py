@@ -24,6 +24,7 @@ class HallmarkScraper(BaseScraper):
     scrape_interval = 360
     stream_audit_enabled = True
     source_category = 'fast'
+    grouped_under = 'free_networks'   # a free network's own website, listed under Free Networks
 
     config_schema = []
 

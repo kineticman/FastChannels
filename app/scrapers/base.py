@@ -595,6 +595,9 @@ class BaseScraper(ABC):
     source_category: str = 'fast'     # 'fast' (free) | 'account' (free with an account) | 'premium' (subscription) | 'tve' | 'local' (antenna tuner)
     under_development: bool = False  # shown in the admin UI; source remains opt-in
     is_beta: bool = False            # "Beta" badge: built, but not yet confirmed by real users
+    # Sources page only: list this source under another source's row (by source_name),
+    # tucked away until expanded. Channels, IDs and play URLs stay its own.
+    grouped_under: str | None = None
     channel_refresh_hours: int = 0   # 0 = refresh channels every run; >0 = only refresh channels after N hours
     channel_miss_threshold: int = 3  # missed scrapes before is_active=False; override per scraper
     # Reset/populate per fetch_channels() with upstream IDs intentionally

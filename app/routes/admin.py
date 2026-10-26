@@ -871,7 +871,31 @@ def sources():
     def _cat_for(s):
         return _source_category(s, all_scrapers)
 
-    sources_list.sort(key=lambda s: (_CAT_ORDER.get(_cat_for(s), 99), s.display_name))
+    # Sources listed under another source's row (grouped_under) sort right after
+    # it, when that source is listed in the same group; otherwise they stand alone.
+    _by_name = {s.name: s for s in sources_list}
+    source_parent = {}
+    for s in sources_list:
+        parent = _by_name.get(getattr(all_scrapers.get(s.name), 'grouped_under', None))
+        if parent is not None and parent is not s and _cat_for(parent) == _cat_for(s):
+            source_parent[s.name] = parent.name
+    source_children = {}
+    for s in sorted(sources_list, key=lambda s: s.display_name):
+        if s.name in source_parent:
+            source_children.setdefault(source_parent[s.name], []).append(s)
+
+    # Within a group, sources that are on come first, then the ones that are off.
+    # A source with sources listed under it counts as on when any of them is.
+    def _block_on(top):
+        return top.is_enabled or any(c.is_enabled for c in source_children.get(top.name, []))
+
+    def _sort_key(s):
+        parent = _by_name.get(source_parent.get(s.name)) or s
+        return (_CAT_ORDER.get(_cat_for(s), 99), not _block_on(parent), parent.display_name,
+                parent is not s, s.display_name)
+
+    sources_list.sort(key=_sort_key)
+    source_block_on = {s.name: _block_on(_by_name.get(source_parent.get(s.name)) or s) for s in sources_list}
 
     category_counts = {}
     category_on_counts = {}
@@ -907,6 +931,9 @@ def sources():
                            under_development=under_development,
                            beta_sources=beta_sources,
                            source_categories=source_categories,
+                           source_parent=source_parent,
+                           source_children=source_children,
+                           source_block_on=source_block_on,
                            source_mix=source_mix,
                            bridge_ready=bridge_ready,
                            source_status=source_status,
