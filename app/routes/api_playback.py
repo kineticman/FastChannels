@@ -583,6 +583,11 @@ def _get_playback_info(ch, fast_mode=True, browser=False):
     # and lets the browser's native HLS stack handle decryption.
     if ch.source and ch.source.name in ('pluto', 'fubo', 'roku', 'discovery_tve') and not roku_drm and not fubo_drm:
         playback_mode = 'native'
+    if ch.source and ch.source.name == 'warner_tve':
+        # TBS/TNT/truTV are AES-128 TS like the sources above; TCM stays Widevine.
+        from ..scrapers.warner_tve import AES_CHANNEL_IDS as _WARNER_AES_CHANNEL_IDS
+        if ch.source_channel_id in _WARNER_AES_CHANNEL_IDS:
+            playback_mode = 'native'
     if roku_drm or fubo_drm:
         playback_mode = 'dash'
 

@@ -55,6 +55,8 @@ from .fox_tve_proxy import (
     fox_tve_proxy_bp,
 )
 from .paramount_proxy import configure_paramount_proxy, paramount_proxy_bp
+from .warner_proxy import configure_warner_proxy, warner_proxy_bp
+from ..scrapers.warner_tve import AES_CHANNEL_IDS as _WARNER_AES_CHANNEL_IDS
 
 
 from ..scrapers.cspan import (
@@ -347,6 +349,13 @@ configure_paramount_proxy(
     channel_is_retired=_channel_is_retired,
 )
 play_bp.register_blueprint(paramount_proxy_bp)
+configure_warner_proxy(
+    unavailable_response=_unavailable_response,
+    gone_response=_gone_response,
+    refresh_stream_info_async=_refresh_stream_info_async,
+    channel_is_retired=_channel_is_retired,
+)
+play_bp.register_blueprint(warner_proxy_bp)
 
 
 def _check_manifest(url: str, session) -> tuple[str | None, dict | None]:
@@ -3096,6 +3105,16 @@ def play(source_name: str, channel_id: str):
         encoded_id = _quote(channel.source_channel_id, safe='')
         return redirect(
             f"{request.host_url.rstrip('/')}/play/paramount/{encoded_id}/proxy.m3u8",
+            302,
+        )
+
+    # TBS/TNT/truTV: their Akamai tokens break in clients that normalize URL
+    # escapes, so everything below the master goes through the proxy.
+    if source_name == 'warner_tve' and channel.source_channel_id in _WARNER_AES_CHANNEL_IDS:
+        from urllib.parse import quote as _quote
+        encoded_id = _quote(channel.source_channel_id, safe='')
+        return redirect(
+            f"{request.host_url.rstrip('/')}/play/warner_tve/{encoded_id}/proxy.m3u8",
             302,
         )
 

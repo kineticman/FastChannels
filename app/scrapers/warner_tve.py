@@ -3,11 +3,23 @@ warner_tve.py — Warner Bros Discovery / Turner cable networks: TBS, TNT,
 truTV and TCM. TCM uses the same NGTV/Widevine playback stack, with Adobe
 Pass v2 and its own public Next.js page config / GraphQL guide.
 
-DRM: Widevine CENC HLS via Adobe Pass Cox + Turner's NGTV token stack. Same
-native license-proxy pattern as app/scrapers/directv.py — resolve() returns an
-encrypted HLS manifest URL, and the generic license_proxy route in
-app/routes/play.py lets a real browser's Shaka player pull a Widevine license.
-Full investigation: dev/warner/probe_playback.py and
+Playback, TBS/TNT/truTV: plain AES-128 HLS, no DRM (verified 2026-10-26 —
+the same feeds Channels DVR's TVE plays). Turner's older v1 media API on the
+`tv` platform (medium.ngtv.io/media/<id>/tv, not the v2 API the website uses)
+returns a `bulkaes` rendition on tve-live-aka.warnermediacdn.com, and
+token.ngtv.io/token/token_spe swaps the Adobe token for an Akamai `hdnts`.
+The master's variant, key and segment URLs then carry an `hdntl` token whose
+HMAC covers its literal text, lowercase `%2f` included — python-requests,
+urllib3 and ffmpeg all rewrite that to `%2F` and get a 403. So these channels
+play through app/routes/warner_proxy.py, which fetches every upstream URL
+byte for byte, rather than a 302.
+
+Playback, TCM: Widevine CENC HLS via Adobe Pass + Turner's NGTV token stack,
+bridge-only. Same native license-proxy pattern as app/scrapers/directv.py —
+resolve() returns an encrypted HLS manifest URL, and the generic license_proxy
+route in app/routes/play.py lets a real browser's Shaka player pull a Widevine
+license. TCM's AES path is unverified (no entitled test account), so it stays
+here. Full investigation: dev/warner/probe_playback.py and
 /home/brad/.claude/plans/scalable-percolating-coral.md.
 
 Key facts established by probing (not derivable from a single HAR capture):
@@ -57,6 +69,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
+from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo
 
 import requests
@@ -97,6 +110,23 @@ _CONFIG_CACHE_TTL = 6 * 3600
 # medium.ngtv.io manifest URLs embed Yospace SSAI session context; re-resolve
 # well inside the ~1hr NGTV token / 8hr ISP JWT TTLs observed during probing.
 _MANIFEST_CACHE_TTL = 20 * 60
+# token_spe's hdnts lasts 300s and is only needed to fetch the master; the
+# master hands out its own ~8h hdntl for everything below it.
+_AES_MANIFEST_CACHE_TTL = 4 * 60
+
+NGTV_MEDIA_V1 = 'https://medium.ngtv.io/media'
+NGTV_TOKEN_SPE = 'https://token.ngtv.io/token/token_spe'
+AES_TOKEN_PATH = '/hls/live/*'
+# Playlists and segments come from tve-live-aka.warnermediacdn.com, AES keys
+# from turnerlive.akamaized.net.
+AES_KEY_HOST = 'turnerlive.akamaized.net'
+AES_CDN_SUFFIX = '.warnermediacdn.com'
+
+
+def aes_cdn_url_allowed(url: str) -> bool:
+    parts = urlsplit(url)
+    host = (parts.hostname or '').lower()
+    return parts.scheme == 'https' and (host == AES_KEY_HOST or host.endswith(AES_CDN_SUFFIX))
 
 
 @dataclass(frozen=True)
@@ -125,6 +155,8 @@ class WarnerChannel:
     media_id: str
     logo_url: str
     category: str = 'Entertainment'
+    # True = Widevine-only, bridge-only; False = AES-128 via warner_proxy.py.
+    drm: bool = False
 
     @property
     def stream_url(self) -> str:
@@ -158,13 +190,14 @@ CHANNELS: dict[str, WarnerChannel] = {
     ),
     'tcm-east': WarnerChannel(
         channel_id='tcm-east', name='TCM (East)', brand_key='tcm', media_id='tcm-east',
-        logo_url='https://static.tcm.com/2025-11/legacy-watch-tcm-logo.png', category='Movies',
+        logo_url='https://static.tcm.com/2025-11/legacy-watch-tcm-logo.png', category='Movies', drm=True,
     ),
     'tcm-west': WarnerChannel(
         channel_id='tcm-west', name='TCM (West)', brand_key='tcm', media_id='tcm-west',
-        logo_url='https://static.tcm.com/2025-11/legacy-watch-tcm-logo.png', category='Movies',
+        logo_url='https://static.tcm.com/2025-11/legacy-watch-tcm-logo.png', category='Movies', drm=True,
     ),
 }
+AES_CHANNEL_IDS = frozenset(cid for cid, ch in CHANNELS.items() if not ch.drm)
 
 
 def channel_for_url(raw_url: str) -> WarnerChannel | None:
@@ -260,7 +293,7 @@ def _parse_widget_time(value: str | None, tz) -> datetime | None:
 
 
 class WarnerTVEScraper(MvpdCooldownMixin, BaseScraper):
-    """TBS, TNT, truTV and TCM via Adobe Pass + NGTV/Widevine CENC."""
+    """TBS, TNT and truTV via Adobe Pass + NGTV AES-128; TCM via NGTV/Widevine CENC."""
 
     source_name = 'warner_tve'
     display_name = 'Warner Bros Discovery TVE'
@@ -271,10 +304,11 @@ class WarnerTVEScraper(MvpdCooldownMixin, BaseScraper):
     license_url = WIDEVINE_LICENSE_BASE  # class-level presence only: signals DRM-capable
                                           # to registry.drm_capable_source_names(); the real
                                           # per-brand URL comes from get_license_url() below.
-    # Every channel here is Widevine-CENC DRM — keep them out of standard IPTV
-    # outputs and route through the PrismCast bridge immediately, matching
-    # directv.py rather than waiting for Stream Audit to discover it.
-    all_channels_require_drm_bridge = True
+    # TCM is Widevine-CENC DRM — keep it out of standard IPTV outputs and route
+    # it through the bridge immediately (worker._sync_intrinsic_drm_bridge),
+    # rather than waiting for Stream Audit to discover it. The AES channels
+    # play in any client through warner_proxy.py.
+    drm_bridge_channel_ids = frozenset(cid for cid, ch in CHANNELS.items() if ch.drm)
 
     def fetch_channels(self) -> list[ChannelData]:
         return [
@@ -506,6 +540,8 @@ class WarnerTVEScraper(MvpdCooldownMixin, BaseScraper):
         channel = CHANNELS.get(channel_id or '')
         if not channel:
             return cls.license_url
+        if not channel.drm:
+            return None
         media_cfg = ((config.get('warner_brand_config') or {}).get(channel.brand_key) or {}).get('media', {})
         company_id = (media_cfg.get(channel.media_id) or {}).get('company_id')
         if not company_id:
@@ -532,14 +568,16 @@ class WarnerTVEScraper(MvpdCooldownMixin, BaseScraper):
     # ── playback resolve ─────────────────────────────────────────────────────
 
     def audit_resolve(self, raw_url: str) -> str:
-        # Every channel here is intrinsically DRM (Widevine CENC) even though
-        # the resolved manifest looks like ordinary HLS to the generic audit —
-        # the #EXT-X-KEY/CENC markers live in the child variant playlists, not
+        # TCM is intrinsically DRM (Widevine CENC) even though the resolved
+        # manifest looks like ordinary HLS to the generic audit — the
+        # #EXT-X-KEY/CENC markers live in the child variant playlists, not
         # the top-level Yospace-wrapped master manifest resolve() returns, so
-        # the audit's manifest inspection was misreading these as clear HLS
-        # and clearing requires_drm_bridge. Validate entitlement via
-        # resolve(), then return the opaque URL sentinel so the audit skips
-        # manifest inspection entirely — same pattern as directv.py.
+        # the audit's manifest inspection was misreading it as clear HLS and
+        # clearing requires_drm_bridge. The AES channels' variants 403 for the
+        # audit's requests session (see module docstring). Validate
+        # entitlement via resolve(), then return the opaque URL sentinel so
+        # the audit skips manifest inspection entirely — same pattern as
+        # directv.py.
         if raw_url.startswith(SCHEME):
             self.resolve(raw_url)
             return raw_url
@@ -552,7 +590,8 @@ class WarnerTVEScraper(MvpdCooldownMixin, BaseScraper):
 
         cached_manifest = self.cache.get('warner_manifest') or {}
         cached = cached_manifest.get(channel.channel_id) if isinstance(cached_manifest, dict) else None
-        if cached and (time.time() - float(cached.get('cached_at', 0))) < _MANIFEST_CACHE_TTL:
+        ttl = _MANIFEST_CACHE_TTL if channel.drm else _AES_MANIFEST_CACHE_TTL
+        if cached and (time.time() - float(cached.get('cached_at', 0))) < ttl:
             return cached['url']
 
         account = tve_account_for(self.source_name)
@@ -588,7 +627,10 @@ class WarnerTVEScraper(MvpdCooldownMixin, BaseScraper):
                 pass
             raise TVEAuthError(f'Warner TVE: Adobe Pass auth failed for {channel.brand_key}: {exc}') from exc
 
-        manifest_url, isp_token = self._resolve_manifest(session, brand_cfg, channel, adobe_token)
+        if channel.drm:
+            manifest_url, isp_token = self._resolve_manifest(session, brand_cfg, channel, adobe_token)
+        else:
+            manifest_url, isp_token = self._resolve_aes_manifest(session, brand_cfg, channel, adobe_token), None
         if not manifest_url:
             raise RuntimeError(f'Warner TVE: could not resolve manifest for {channel.channel_id}')
 
@@ -653,6 +695,39 @@ class WarnerTVEScraper(MvpdCooldownMixin, BaseScraper):
         account.config = new_cfg
         db.session.commit()
         return adobe_token, client.session
+
+    @staticmethod
+    def _resolve_aes_manifest(
+        session: requests.Session, brand_cfg: dict, channel: WarnerChannel, adobe_token: str,
+    ) -> str | None:
+        """The AES-128 master URL, with its hdnts appended verbatim."""
+        app_id = brand_cfg['app_id']
+        media = session.get(f'{NGTV_MEDIA_V1}/{channel.media_id}/tv', params={'appId': app_id}, timeout=20)
+        if media.status_code != 200:
+            return None
+        try:
+            bulkaes = ((media.json().get('media') or {}).get('tv') or {}).get('bulkaes') or {}
+        except ValueError:
+            return None
+        master_url = bulkaes.get('secureUrl')
+        if not master_url or not aes_cdn_url_allowed(master_url):
+            return None
+
+        spe = session.get(
+            NGTV_TOKEN_SPE,
+            params={'appId': app_id, 'accessToken': adobe_token, 'accessTokenType': 'adobe',
+                    'format': 'json', 'path': AES_TOKEN_PATH},
+            timeout=20,
+        )
+        if spe.status_code != 200:
+            return None
+        try:
+            token = (spe.json().get('auth') or {}).get('token')
+        except ValueError:
+            return None
+        if not token:
+            return None
+        return f'{master_url}?hdnts={token}'
 
     @staticmethod
     def _resolve_manifest(
