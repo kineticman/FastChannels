@@ -2643,6 +2643,10 @@ def _resolved_logo_url(existing_logo: str | None, incoming_logo: str | None, cac
         return current
     if not current or incoming == current:
         return incoming
+    # Bundled logos ship with the app, so a scraper switching to one is taken
+    # as-is; without this an existing channel kept its old upstream URL forever.
+    if incoming.startswith('/static/'):
+        return incoming
     if not incoming.startswith(('http://', 'https://')):
         return current
     # Never keep a non-absolute existing URL when we have an absolute replacement.
