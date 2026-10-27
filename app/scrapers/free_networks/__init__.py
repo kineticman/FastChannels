@@ -14,7 +14,7 @@ from ..base import BaseScraper, ChannelData, ConfigField, ProgramData
 from ...gracenote_map import resolve_gracenote
 from ._common import UA, NetChannel
 from . import (
-    aetn, aljazeera, arirang, bloomberg, cbn, cbsnews, cineverse, cw, dw, ewtn, fstv, gameandfish, hsn, ksl,
+    aetn, aljazeera, arirang, beond, bloomberg, cbn, cbsnews, cineverse, cw, dw, ewtn, fstv, gameandfish, hsn, ksl, mansa,
     newsmax, newsnation, nhk, og_network, outside, positiv, qvc, scripps, simple, sinclair, tastemade, tbn, trt,
 )
 
@@ -25,7 +25,7 @@ NETWORKS = [
     arirang.Arirang(), bloomberg.Bloomberg(), cbsnews.CBSNews(), scripps.Scripps(),
     newsmax.Newsmax(), newsnation.NewsNation(), fstv.FreeSpeechTV(), ewtn.EWTN(), positiv.PosiTV(), tbn.TBN(),
     hsn.HSN(), qvc.QVC(), tastemade.Tastemade(), aetn.AETN(), ksl.KSL(), cbn.CBN(),
-    gameandfish.GameAndFish(), outside.OutsideTV(), cw.CW(), cineverse.Cineverse(), og_network.OGNetwork(), *simple.NETWORKS,
+    gameandfish.GameAndFish(), outside.OutsideTV(), cw.CW(), cineverse.Cineverse(), og_network.OGNetwork(), beond.BeOND(), mansa.Mansa(), *simple.NETWORKS,
 ]
 _BY_KEY = {n.key: n for n in NETWORKS}
 
@@ -121,7 +121,7 @@ class FreeNetworksScraper(BaseScraper):
     NHK, Arirang, Bloomberg, CBS News, Scripps, Newsmax2 + World at War, NewsNation, Free Speech TV, Sky
     News, Global News, KSL), faith (EWTN, PosiTV, TBN, CBN, NRB, theDove), shopping
     (HSN, QVC), Sinclair's diginets (Comet, Charge!, TheNest), Tastemade, A+E's
-    FAST channels, The CW's FAST lineup, Cineverse's channels, OG Network, Outside TV, Game & Fish TV and a few
+    FAST channels, The CW's FAST lineup, Cineverse's channels, OG Network, BeOND, Mansa, Outside TV, Game & Fish TV and a few
     singles.
 
     Each network is a small module in this package (see _common.Network) with

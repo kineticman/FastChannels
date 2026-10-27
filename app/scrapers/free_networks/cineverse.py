@@ -50,8 +50,10 @@ _SITES = (
     ('joysauce', 'https://www.joysauce.tv'),
     ('cineverse', 'https://streaming.cineverse.com'),
 )
-# Carried in Free Networks already from the network's own feed.
-_ELSEWHERE = {'cmc california music channel', 'tastemade us', 'tastemade home', 'tastemade travel'}
+# Carried in Free Networks already from the network's own feed, or from
+# BeOND's (its EntrepreneurTV plays; Cineverse's g-mana copy doesn't).
+_ELSEWHERE = {'cmc california music channel', 'tastemade us', 'tastemade home', 'tastemade travel',
+              'entrepreneurtv'}
 # Hosts that need the stream URL's query string.
 _KEEP_QUERY = {'cnvslinear.telos.indicue.com'}
 # Names category_utils can't place.
