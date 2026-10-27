@@ -728,9 +728,10 @@ def _get_playback_info(ch, fast_mode=True, browser=False):
     if ch.source and ch.source.name == 'versant_tve' and ch.source_channel_id:
         from urllib.parse import quote as _quote
         preview_url = f'/play/versant_tve/{_quote(ch.source_channel_id, safe="")}/dash.mpd'
-    if ch.source and ch.source.name == 'nesn_tve' and ch.source_channel_id:
+    from ..scrapers.viewlift_tve import VIEWLIFT_SOURCES
+    if ch.source and ch.source.name in VIEWLIFT_SOURCES and ch.source_channel_id:
         from urllib.parse import quote as _quote
-        preview_url = f'/play/nesn_tve/{_quote(ch.source_channel_id, safe="")}/dash.mpd'
+        preview_url = f'/play/{ch.source.name}/{_quote(ch.source_channel_id, safe="")}/dash.mpd'
     if ch.source and ch.source.name == 'vix' and ch.source_channel_id:
         from urllib.parse import quote as _quote
         # A browser can't fetch ViX's segments (CORS is vix.com-only), so the

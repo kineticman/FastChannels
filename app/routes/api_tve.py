@@ -166,7 +166,8 @@ def tve_network_status_route():
 # reset and any future TVE-wide admin action stay in sync automatically.
 _TVE_SOURCE_NAMES = ('aenetworks_tve', 'fox_tve', 'discovery_tve', 'amcn_tve', 'warner_tve', 'nbc_tve',
                      'versant_tve', 'univision_tve', 'disney_tve', 'tennis_tve', 'dazn_tve', 'cspan_tve',
-                     'sundance_tve', 'cnn_tve', 'nesn_tve')
+                     'sundance_tve', 'cnn_tve', 'nesn_tve', 'monumental_tve', 'altitude_tve',
+                     'myoutdoortv_tve')
 
 # FOX One is a Premium source with its own settings (sign-in method,
 # separate login, home ZIP); a TVE reset only drops the sign-in it got from
@@ -233,7 +234,10 @@ def tve_reset():
                                             'cspan_tve_client', 'cspan_tve_authz',
                                             'sundance_session', 'sundance_streams',
                                             'cnn_tve_client', 'cnn_tve_authz', 'cnn_streams', 'cnn_bolt',
-                                            'nesn_session', 'nesn_playback')),
+                                            'nesn_session', 'nesn_playback',
+                                            'monumental_session', 'monumental_playback',
+                                            'altitude_session', 'altitude_playback',
+                                            'motv_session', 'motv_playback')),
             ),
         ).delete(synchronize_session=False)
 

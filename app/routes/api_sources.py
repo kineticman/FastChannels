@@ -510,10 +510,13 @@ def get_source_config(source_id):
         extra['paramount'] = {'signed_in': bool((saved.get('cookies') or {}).get('CBS_COM')),
                               'account_status': saved.get('account_status'),
                               'signin_error': saved.get('signin_error')}
-    if source.name == 'nesn_tve':
-        login = saved.get('nesn_account') or {}
-        extra['nesn'] = {'signed_in': bool(login.get('refresh_token')), 'email': login.get('email'),
-                         'signed_in_at': login.get('signed_in_at')}
+    from ..scrapers.viewlift_tve import VIEWLIFT_SOURCES
+    if source.name in VIEWLIFT_SOURCES and scraper_cls:
+        login = saved.get(f'{scraper_cls.key}_account') or {}
+        extra['viewlift'] = {'signed_in': bool(login.get('refresh_token')), 'email': login.get('email'),
+                             'signed_in_at': login.get('signed_in_at'), 'brand': scraper_cls.brand,
+                             'domain': scraper_cls.domain_name, 'signup': scraper_cls.account_signup,
+                             'market_note': scraper_cls.market_note}
     from ..tve.accounts import SEPARATE_SIGNIN_SOURCES
     if source.name in SEPARATE_SIGNIN_SOURCES:
         from .api_tve import _source_signin_payload
@@ -1593,50 +1596,68 @@ def philo_login_verify(source_id):
     return jsonify({'status': 'signed_in', 'config_complete': config_complete})
 
 
-@sources_bp.route('/sources/<int:source_id>/nesn-login/send-code', methods=['POST'])
-def nesn_login_send_code(source_id):
-    """Step 1 of the NESN account sign-in (passwordless, like Philo's): NESN
-    emails a code. The TV-provider sign-in is linked to this account."""
-    import redis as _redis
-    from ..scrapers.nesn_tve import NesnTVEScraper
-
-    source = Source.query.get_or_404(source_id)
-    if source.name != 'nesn_tve':
-        return jsonify({'error': 'not a nesn_tve source'}), 400
-    data = request.get_json() or {}
-    email = (data.get('email') or '').strip() or ((source.config or {}).get('email') or '').strip()
-    try:
-        ctx = NesnTVEScraper.request_login_code(email)
-    except ValueError as e:
-        return jsonify({'error': str(e)}), 400
-    _redis.from_url(current_app.config['REDIS_URL']).setex(f'nesn:login:ctx:{source_id}', 900, json.dumps(ctx))
-    return jsonify({'status': 'sent', 'email': email})
+def _viewlift_scraper_cls(source):
+    """The ViewLift scraper class for a source, or None (see viewlift_tve.py)."""
+    from ..scrapers.viewlift_tve import VIEWLIFT_SOURCES
+    return registry.get(source.name) if source.name in VIEWLIFT_SOURCES else None
 
 
-@sources_bp.route('/sources/<int:source_id>/nesn-login/verify', methods=['POST'])
-def nesn_login_verify(source_id):
-    """Step 2: the emailed code → the NESN account login, kept on the source."""
-    import redis as _redis
-    from ..scrapers.nesn_tve import NesnTVEScraper
-
-    source = Source.query.get_or_404(source_id)
-    if source.name != 'nesn_tve':
-        return jsonify({'error': 'not a nesn_tve source'}), 400
-    code = ((request.get_json() or {}).get('code') or '').strip()
-    r = _redis.from_url(current_app.config['REDIS_URL'])
-    raw = r.get(f'nesn:login:ctx:{source_id}')
-    if not raw:
-        return jsonify({'error': 'Sign-in session expired — request a new code.'}), 400
-    try:
-        login = NesnTVEScraper.verify_login_code(json.loads(raw), code)
-    except ValueError as e:
-        return jsonify({'error': str(e)}), 400
+def _save_viewlift_login(source, cls, login: dict) -> None:
     cfg = dict(source.config or {})
-    cfg['nesn_account'] = login
+    cfg[f'{cls.key}_account'] = login
     cfg['email'] = login['email']
     source.config = cfg
     db.session.commit()
-    r.delete(f'nesn:login:ctx:{source_id}')
+
+
+# /nesn-login/ is the path NESN's panel used before the other ViewLift sites.
+@sources_bp.route('/sources/<int:source_id>/viewlift-login/send-code', methods=['POST'])
+@sources_bp.route('/sources/<int:source_id>/nesn-login/send-code', methods=['POST'])
+def viewlift_login_send_code(source_id):
+    """Step 1 of a ViewLift account sign-in (passwordless, like Philo's): the
+    site either creates the account from the email alone (signed in at once)
+    or emails a code. The TV-provider sign-in is linked to this account."""
+    import redis as _redis
+
+    source = Source.query.get_or_404(source_id)
+    cls = _viewlift_scraper_cls(source)
+    if not cls:
+        return jsonify({'error': 'not a ViewLift source'}), 400
+    data = request.get_json() or {}
+    email = (data.get('email') or '').strip() or ((source.config or {}).get('email') or '').strip()
+    try:
+        result = cls.begin_account_login(email)
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    if result['status'] == 'signed_in':
+        _save_viewlift_login(source, cls, result['login'])
+        return jsonify({'status': 'signed_in', 'email': email})
+    _redis.from_url(current_app.config['REDIS_URL']).setex(
+        f'{cls.key}:login:ctx:{source_id}', 900, json.dumps(result['ctx']))
+    return jsonify({'status': 'sent', 'email': email})
+
+
+@sources_bp.route('/sources/<int:source_id>/viewlift-login/verify', methods=['POST'])
+@sources_bp.route('/sources/<int:source_id>/nesn-login/verify', methods=['POST'])
+def viewlift_login_verify(source_id):
+    """Step 2, when the site emailed a code: the code → the account login, kept on the source."""
+    import redis as _redis
+
+    source = Source.query.get_or_404(source_id)
+    cls = _viewlift_scraper_cls(source)
+    if not cls:
+        return jsonify({'error': 'not a ViewLift source'}), 400
+    code = ((request.get_json() or {}).get('code') or '').strip()
+    r = _redis.from_url(current_app.config['REDIS_URL'])
+    raw = r.get(f'{cls.key}:login:ctx:{source_id}')
+    if not raw:
+        return jsonify({'error': 'Sign-in session expired — request a new code.'}), 400
+    try:
+        login = cls.verify_login_code(json.loads(raw), code)
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    _save_viewlift_login(source, cls, login)
+    r.delete(f'{cls.key}:login:ctx:{source_id}')
     return jsonify({'status': 'signed_in'})
 
 

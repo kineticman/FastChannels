@@ -1803,12 +1803,12 @@ def versant_tve_dash(channel_id: str):
     return play('versant_tve', _unquote(channel_id))
 
 
-@play_bp.route('/play/nesn_tve/<channel_id>/dash.mpd')
-def nesn_tve_dash(channel_id: str):
-    """NESN under a .mpd name for FastChannels Player, like versant_tve_dash
-    (same ViewLift platform)."""
+@play_bp.route('/play/<any(nesn_tve, monumental_tve, altitude_tve, myoutdoortv_tve):source>/<channel_id>/dash.mpd')
+def viewlift_tve_dash(source: str, channel_id: str):
+    """The ViewLift sources (NESN, Monumental, Altitude, MyOutdoorTV) under a
+    .mpd name for FastChannels Player, like versant_tve_dash (same platform)."""
     from urllib.parse import unquote as _unquote
-    return play('nesn_tve', _unquote(channel_id))
+    return play(source, _unquote(channel_id))
 
 
 @play_bp.route('/play/vix/<channel_id>/dash.mpd')
