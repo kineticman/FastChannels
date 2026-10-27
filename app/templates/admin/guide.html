@@ -533,6 +533,14 @@
           <option value="{{ src.id }}"{% if source_id == src.id %} selected{% endif %}>{{ src.display_name }}</option>
           {% endfor %}
         </select>
+        {% if networks %}
+        <select name="network" onchange="this.form.submit()" aria-label="Network" title="Network">
+          <option value="">All Networks</option>
+          {% for key, name, count in networks %}
+          <option value="{{ key }}"{% if network == key %} selected{% endif %}>{{ name }} ({{ count }})</option>
+          {% endfor %}
+        </select>
+        {% endif %}
         <select name="feed_id" onchange="this.form.submit()" aria-label="Feed">
           <option value="">All Feeds</option>
           {% for feed in feeds %}

@@ -1370,6 +1370,32 @@ def guide():
         cat_count_q = cat_count_q.filter(event_clause)
     categories = cat_count_q.group_by(Channel.category).order_by(Channel.category).all()
 
+    # Free Networks bundles dozens of networks under one source; its channel
+    # IDs are "<network>.<id>", so a second dropdown can narrow by network.
+    network  = request.args.get('network', type=str, default='').strip()
+    networks = []
+    selected_source = next((s for s in sources if s.id == source_id), None) if source_id else None
+    if selected_source and selected_source.name == 'free_networks':
+        from ..scrapers.free_networks import NETWORKS
+        net_q = (
+            db.session.query(Channel.source_channel_id)
+            .filter(Channel.source_id == source_id, Channel.is_active == True)
+        )
+        if state == 'enabled':
+            net_q = net_q.filter(Channel.is_enabled == True)
+        elif state == 'disabled':
+            net_q = net_q.filter(Channel.is_enabled == False)
+        net_counts = {}
+        for (scid,) in net_q:
+            key = (scid or '').split('.', 1)[0]
+            net_counts[key] = net_counts.get(key, 0) + 1
+        networks = sorted(
+            ((n.key, n.name, net_counts[n.key]) for n in NETWORKS if n.key in net_counts),
+            key=lambda n: n[1].lower(),
+        )
+    else:
+        network = ''
+
     q = Channel.query.options(load_only(
         Channel.id, Channel.name, Channel.logo_url, Channel.number, Channel.source_id,
         Channel.is_enabled,
@@ -1380,6 +1406,8 @@ def guide():
         q = q.filter(Channel.is_enabled == False)
     if source_id:
         q = q.filter(Channel.source_id == source_id)
+    if network:
+        q = q.filter(Channel.source_channel_id.startswith(f'{network}.', autoescape=True))
     if feed_id:
         selected_feed = Feed.query.filter_by(id=feed_id, is_enabled=True).first()
         if selected_feed:
@@ -1465,6 +1493,8 @@ def guide():
         feeds=feeds,
         categories=categories,
         source_id=source_id,
+        networks=networks,
+        network=network,
         feed_id=feed_id,
         event_filter=event_filter,
         category=category,
