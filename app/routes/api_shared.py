@@ -13,7 +13,7 @@ from .tasks import (
 from ..xml_cache import (
     invalidate_xml_cache,
 )
-from .admin import _apply_admin_feed_membership_filters, _category_clause, _duplicate_name_sets, _language_clause
+from .admin import _apply_admin_feed_membership_filters, _category_clause, _duplicate_name_sets, _language_clause, _network_clause
 from ..channel_tags import event_filter_clause
 
 _GRACENOTE_RE = re.compile(r'^(\d+|(EP|SH|MV|SP|TR)\d+)$', re.I)
@@ -93,6 +93,8 @@ def _apply_channel_filters(q, filters: dict | None = None):
             q = _apply_admin_feed_membership_filters(q, feed)
     if src := filters.get('source'):
         q = q.filter(Source.name == src)
+        if (net_clause := _network_clause(src, filters.get('network'))) is not None:
+            q = q.filter(net_clause)
     if (cat_clause := _category_clause(filters.get('category'))) is not None:
         q = q.filter(cat_clause)
     if (lang_clause := _language_clause(filters.get('language'))) is not None:

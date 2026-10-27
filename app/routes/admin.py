@@ -323,6 +323,33 @@ def _category_clause(values):
     return db.or_(*clauses) if len(clauses) > 1 else clauses[0]
 
 
+def _network_clause(source_name, network):
+    """SQLAlchemy filter for one Free Networks network, or None.
+
+    Free Networks bundles dozens of networks under one source; its channel IDs
+    are "<network>.<id>", so a network is a prefix match on source_channel_id.
+    Ignored for any other source, so a leftover ?network= never empties a view.
+    Shared by the Channels and Guide pages and the bulk API.
+    """
+    if source_name != 'free_networks' or not network:
+        return None
+    return Channel.source_channel_id.startswith(f'{network}.', autoescape=True)
+
+
+def _network_facets(source_channel_ids):
+    """(key, name, count) per Free Networks network present in the given
+    source_channel_ids, sorted by name."""
+    from ..scrapers.free_networks import NETWORKS
+    counts = {}
+    for scid in source_channel_ids:
+        key = (scid or '').split('.', 1)[0]
+        counts[key] = counts.get(key, 0) + 1
+    return sorted(
+        ((n.key, n.name, counts[n.key]) for n in NETWORKS if n.key in counts),
+        key=lambda n: n[1].lower(),
+    )
+
+
 def _apply_admin_feed_membership_filters(query, feed: Feed):
     """Apply a feed's membership rules without forcing enabled/active output constraints."""
     filters = feed_to_query_filters(feed.filters or {})
@@ -958,6 +985,7 @@ def channels():
     page             = request.args.get('page', 1, type=int)
     feed_filter      = request.args.get('feed', '')
     source_filter    = request.args.get('source', '')
+    network_filter   = request.args.get('network', '').strip()
     search           = request.args.get('search', '')
     enabled_filter   = request.args.get('enabled', '')
     review_filter    = request.args.get('review', '')
@@ -1063,6 +1091,11 @@ def channels():
 
     if source_filter:
         q = q.filter(Source.name == source_filter)
+    q_before_network = q  # snapshot for network facet (exclude own filter)
+    if (net_clause := _network_clause(source_filter, network_filter)) is not None:
+        q = q.filter(net_clause)
+    else:
+        network_filter = ''
     q_before_language = q  # snapshot for language facet (exclude own filter)
     if (lang_clause := _language_clause(language_filter)) is not None:
         q = q.filter(lang_clause)
@@ -1209,6 +1242,12 @@ def channels():
         .order_by(Channel.country).all()
     countries = [(c, cnt) for c, cnt in country_rows]
 
+    networks = []
+    if source_filter == 'free_networks':
+        networks = _network_facets(
+            scid for (scid,) in q_before_network.with_entities(Channel.source_channel_id)
+        )
+
     page_names = {(ch.name or '').strip() for ch in channels.items if (ch.name or '').strip()}
     page_ids   = {ch.id for ch in channels.items}
     duplicate_names = exact_duplicate_names & page_names
@@ -1251,7 +1290,7 @@ def channels():
 
     from urllib.parse import urlencode
     filter_qs = urlencode({k: v for k, v in {
-        'feed': feed_filter, 'source': source_filter, 'search': search,
+        'feed': feed_filter, 'source': source_filter, 'network': network_filter, 'search': search,
         'enabled': enabled_filter, 'review': review_filter, 'presence': presence_filter, 'drm': drm_filter,
         'language': language_filter, 'country': country_filter,
         'gracenote': gracenote_filter, 'gracenote_mode': gracenote_mode_filter,
@@ -1269,6 +1308,7 @@ def channels():
                            sources=sources, feeds=feeds,
                            feed_filter=feed_filter, selected_feed=selected_feed,
                            source_filter=source_filter, search=search,
+                           network_filter=network_filter, networks=networks,
                            enabled_filter=enabled_filter, drm_filter=drm_filter,
                            review_filter=review_filter,
                            presence_filter=presence_filter,
@@ -1370,13 +1410,12 @@ def guide():
         cat_count_q = cat_count_q.filter(event_clause)
     categories = cat_count_q.group_by(Channel.category).order_by(Channel.category).all()
 
-    # Free Networks bundles dozens of networks under one source; its channel
-    # IDs are "<network>.<id>", so a second dropdown can narrow by network.
+    # Free Networks: a second dropdown narrows the guide to one network.
     network  = request.args.get('network', type=str, default='').strip()
     networks = []
     selected_source = next((s for s in sources if s.id == source_id), None) if source_id else None
-    if selected_source and selected_source.name == 'free_networks':
-        from ..scrapers.free_networks import NETWORKS
+    source_name = selected_source.name if selected_source else None
+    if source_name == 'free_networks':
         net_q = (
             db.session.query(Channel.source_channel_id)
             .filter(Channel.source_id == source_id, Channel.is_active == True)
@@ -1385,14 +1424,7 @@ def guide():
             net_q = net_q.filter(Channel.is_enabled == True)
         elif state == 'disabled':
             net_q = net_q.filter(Channel.is_enabled == False)
-        net_counts = {}
-        for (scid,) in net_q:
-            key = (scid or '').split('.', 1)[0]
-            net_counts[key] = net_counts.get(key, 0) + 1
-        networks = sorted(
-            ((n.key, n.name, net_counts[n.key]) for n in NETWORKS if n.key in net_counts),
-            key=lambda n: n[1].lower(),
-        )
+        networks = _network_facets(scid for (scid,) in net_q)
     else:
         network = ''
 
@@ -1406,8 +1438,8 @@ def guide():
         q = q.filter(Channel.is_enabled == False)
     if source_id:
         q = q.filter(Channel.source_id == source_id)
-    if network:
-        q = q.filter(Channel.source_channel_id.startswith(f'{network}.', autoescape=True))
+    if (net_clause := _network_clause(source_name, network)) is not None:
+        q = q.filter(net_clause)
     if feed_id:
         selected_feed = Feed.query.filter_by(id=feed_id, is_enabled=True).first()
         if selected_feed:
