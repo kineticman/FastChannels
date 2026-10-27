@@ -2407,7 +2407,7 @@
         type: streamType,
         license: licenseUrl,
         onStatus: (text) => { if (status) status.textContent = text; },
-        onError:  (info) => { if (status) status.textContent = info.message; },
+        onError:  (info) => FCPlayer.showError(status, info),
       });
     }
 

@@ -499,7 +499,7 @@
     .gm-stats-overlay .sfn-lbl { color: #aaa; min-width: 110px; }
     .gm-stats-overlay .sfn-val { color: #fff; font-weight: 600; }
     .gm-player-foot { display: flex; align-items: center; gap: 0.5rem; margin-top: 0.25rem; }
-    .gm-player-foot #gm-player-status { flex: 1; font-size: 0.8rem; color: var(--text-muted); }
+    .gm-player-foot #gm-player-status { flex: 1; min-width: 0; font-size: 0.8rem; color: var(--text-muted); }
     .btn-stats-toggle {
       background: none; border: 1px solid var(--border); color: var(--text-muted);
       border-radius: 4px; padding: 0.15rem 0.5rem; font-size: 0.72rem; cursor: pointer;
@@ -1295,7 +1295,7 @@
         type,
         license: licenseUrl,
         onStatus: (text) => { if (status) status.textContent = text; },
-        onError:  (info) => { if (status) status.textContent = info.message; },
+        onError:  (info) => FCPlayer.showError(status, info),
       });
       if (_guideShaka && _guideStatsVisible) _startGuideStatsLoop();
     }
