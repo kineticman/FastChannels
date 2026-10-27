@@ -43,6 +43,19 @@ _CHANNELS = {
     '9G7uKMZf': ('tci', 'Faith', 'it', 'IT', None, None),
 }
 _TRILOGY = {v[0]: v[4] for v in _CHANNELS.values() if v[4]}
+# Logos in place of the playlist's posters, which for these are photos with the
+# brand small in the middle (Gracenote's, or TBN+'s own circle). The rest keep
+# their posters: they're already title cards, or there's nothing better.
+_TMS_LOGO = 'https://tmsimg.fancybits.co/assets/{}.png?w=360&h=270'
+_LOGOS = {
+    'tbn': _TMS_LOGO.format('GNLZZGG0028Y4QD'),
+    'inspire': _TMS_LOGO.format('s122276_ll_h15_aa'),
+    'womenoffaith': _TMS_LOGO.format('s165133_ll_h15_aa'),
+    'teaching': 'https://cdn.mediabackstage.com/assets/tbn/thumbnails/imglivefeedcircletandw-1788470129575.png',
+    'yippee': _TMS_LOGO.format('s146780_ll_h15_aa'),
+    'uk': _TMS_LOGO.format('s97332_ll_h15_ac'),
+    'enlace': _TMS_LOGO.format('s20286_ll_h15_ab'),
+}
 # JW pop-up FAST channels, whose guide is found from their stream URL.
 _JW_IDS = {'teaching', 'womenoffaith', 'menoffaith', 'drivethruhistory', 'bettertogether', 'gaither'}
 
@@ -66,7 +79,7 @@ class TBN(Network):
                 continue
             cid, category, lang, country, _, gracenote = _CHANNELS.get(
                 media, (media.lower(), 'Faith', 'en', 'US', None, None))
-            out.append(NetChannel(cid, item.get('title') or cid, stream, logo=item.get('image'),
+            out.append(NetChannel(cid, item.get('title') or cid, stream, logo=_LOGOS.get(cid) or item.get('image'),
                                   category=category, language=lang, country=country,
                                   gracenote_id=gracenote))
         if r and not out:

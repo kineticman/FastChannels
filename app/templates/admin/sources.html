@@ -84,21 +84,20 @@
       background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
       overflow-x: auto; margin-bottom: 2rem;
     }
+    /* Each group is its own card; a card whose group search filtered out goes too. */
+    .dashboard-panel.source-group-card { margin-bottom: 1.1rem; }
+    .dashboard-panel.source-group-card:has(tr.source-category-header.filter-hidden) { display: none; }
+    /* Quiet label where a group's sources that are on end and the off ones begin. */
+    .source-off-divider td {
+      padding: 0.5rem 1rem 0.3rem; font-size: 0.68rem; font-weight: 700; letter-spacing: 0.08em;
+      text-transform: uppercase; color: var(--text-muted);
+      border-top: 1px solid var(--border-strong);
+    }
     .dashboard-table {
       width: 100%; border-collapse: collapse;
     }
-    .dashboard-table thead tr {
-      border-bottom: 1px solid var(--border);
-    }
-    .dashboard-table th {
-      padding: 0.6rem 1rem; font-size: 0.72rem; font-weight: 700; color: var(--text-soft);
-      text-transform: uppercase; letter-spacing: 0.05em; text-align: left;
-      background: var(--surface);
-    }
 
 
-    .dashboard-table th.col-toggle,
-    .dashboard-table th.col-actions { text-align: center; }
     .dashboard-table tbody tr.dash-row {
       border-bottom: 1px solid var(--border); cursor: pointer;
       transition: background 0.15s, box-shadow 0.15s;
@@ -203,12 +202,14 @@
     .quicknav-chip-count { opacity: 0.65; font-weight: 500; }
 
     /* Row visibility: collapsed category or filtered-out by search */
-    tr.dash-row.cat-collapsed, tr.config-panel-row.cat-collapsed,
+    tr.dash-row.cat-collapsed, tr.config-panel-row.cat-collapsed, tr.source-off-divider.cat-collapsed,
+    tr.source-off-divider.filter-hidden,
+    tr.dash-row.child-collapsed, tr.config-panel-row.child-collapsed,
     tr.dash-row.filter-hidden, tr.config-panel-row.filter-hidden,
     tr.source-category-header.filter-hidden {
       display: none !important;
     }
-    .no-results-row td { padding: 1.5rem 1rem; text-align: center; color: var(--text-muted); font-size: 0.85rem; }
+    .no-results-row { padding: 1.5rem 1rem; text-align: center; color: var(--text-muted); font-size: 0.85rem; }
 
     /* Source cell content */
     .source-name-wrap { display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap; margin-bottom: 0.2rem; }
@@ -227,6 +228,50 @@
     .meta-ok { color: var(--success-soft); }
     .meta-stale { color: var(--danger); font-weight: 600; }
     .meta-pending { color: var(--text-soft); font-style: italic; }
+
+    /* Anything open — a source with its Configure panel showing, or a source with
+       the sources listed under it shown — reads as one raised block: a neutral tint
+       on its rows and a stronger line above and below it. Not blue and no left
+       edge: a blue tint with a left bar is a running scrape, and the coloured left
+       edge is the group header. */
+    .dashboard-table { --open-bg: color-mix(in srgb, var(--text) 5%, var(--surface)); }
+    :root[data-theme="light"] .dashboard-table { --open-bg: color-mix(in srgb, var(--text) 7%, var(--surface)); }
+    /* An off row fades by opacity, which would fade the block's tint with it and
+       stripe the block; fade what's in the cells instead. */
+    .dashboard-table tbody tr.dash-row.disabled:is(.child-row, .config-open) { opacity: 1; }
+    .dashboard-table tbody tr.dash-row.disabled:is(.child-row, .config-open) > td > * { opacity: 0.6; }
+    .dashboard-table tbody tr.dash-row.config-open,
+    .dashboard-table tbody tr.dash-row.has-open-children,
+    .dashboard-table tbody tr.dash-row.child-row { background: var(--open-bg); }
+    .dashboard-table tbody tr.dash-row.config-open:not(.child-row),
+    .dashboard-table tbody tr.dash-row.has-open-children { border-top: 2px solid var(--border-strong); }
+    .config-panel-row td { border-bottom: 2px solid var(--border-strong); }
+    .dashboard-table tbody tr.dash-row.child-row.child-last { border-bottom: 2px solid var(--border-strong); }
+
+    /* Sources listed under another source's row (grouped_under): no dividers
+       inside the block, and each name hangs off a ↳ under the parent's name. */
+    tr.dash-row.child-row > td.col-source { padding-left: 2.6rem; }
+    tr.dash-row.child-row .source-name::before {
+      content: '↳'; display: inline-block; width: 1.2rem; margin-left: -1.2rem;
+      color: var(--text-muted); font-weight: 400;
+    }
+    tr.dash-row.child-row .source-name { font-size: 0.88rem; }
+    .dashboard-table tbody tr.dash-row.has-open-children:not(.config-open),
+    .dashboard-table tbody tr.dash-row.child-row:not(.child-last):not(.config-open) { border-bottom: none; }
+    .dashboard-table tbody tr.dash-row.has-open-children > td { padding-bottom: 0.4rem; }
+    .dashboard-table tbody tr.dash-row.child-row > td { padding-top: 0.35rem; padding-bottom: 0.35rem; }
+    .dashboard-table tbody tr.dash-row.child-row.child-last > td { padding-bottom: 0.7rem; }
+    .config-panel-row[data-parent] td { border-bottom: 1px solid var(--border); }
+    .child-toggle {
+      display: inline-flex; align-items: center; gap: 0.4rem; margin-top: 0.45rem;
+      background: var(--bg); color: var(--text-soft); border: 1px solid var(--border-strong);
+      border-radius: 999px; padding: 0.25rem 0.75rem; cursor: pointer;
+      font: inherit; font-size: 0.78rem; font-weight: 600; text-align: left;
+    }
+    .child-toggle:hover { color: var(--text); border-color: var(--text-muted); }
+    .child-toggle[aria-expanded="true"] { color: var(--accent-soft); border-color: var(--accent-soft); }
+    .child-toggle-names { font-weight: 500; color: var(--text-muted); }
+    .child-toggle-count { font-weight: 500; opacity: 0.75; white-space: nowrap; }
 
     /* ── Row health: one status line + a channel bar; quiet when all is well ── */
     .row-health {
@@ -528,6 +573,11 @@
     }
     .config-checklist-item input { margin: 0; flex: none; }
     .config-checklist-count { color: var(--text-muted); font-size: 0.75rem; }
+    .config-list { display: flex; flex-direction: column; gap: 0.4rem; }
+    .config-list-row { display: flex; align-items: center; gap: 0.4rem; }
+    .config-list-row input { flex: 1; min-width: 0; }
+    .config-list-row .btn { flex: none; }
+    .config-list-add { align-self: flex-start; }
     .field input[type=text],
     .field input[type=password],
     .field input[type=number] {
@@ -916,11 +966,9 @@
       .page-actions { padding: 1rem; }
       .actions-btn { flex: 1 1 100%; }
       .col-toggle { display: none; }
-      .dashboard-table th.col-toggle { display: none; }
       .mobile-toggle-wrap { display: flex; }
       .col-actions { width: auto; }
       .col-configure { display: none; }
-      .dashboard-table th.col-configure { display: none; }
       .mobile-configure { display: block; width: 100%; margin-top: 0.4rem; }
       .dash-actions { align-items: stretch; flex-direction: column; }
       .ch-mix-bar { width: 4.5rem; }
@@ -1007,18 +1055,11 @@
       </div>
     </div>
 
-    <div class="dashboard-panel">
+    {# One card per group: each group header opens a new card. #}
+    <div class="dashboard-panel source-group-card">
       <table class="dashboard-table">
-        <thead>
-          <tr>
-            <th class="col-source">Source</th>
-            <th class="col-toggle">Enabled</th>
-            <th class="col-actions">Actions</th>
-            <th class="col-configure"></th>
-          </tr>
-        </thead>
         <tbody>
-          {% set ns = namespace(last_cat=None) %}
+          {% set ns = namespace(last_cat=None, last_on=True, any_on=False) %}
           {% for source in sources %}
           {% set cfg_status = source_config_status.get(source.id, 'none') %}
           {% set retired = source_retired.get(source.id) %}
@@ -1027,8 +1068,20 @@
           {% set this_cat = source_categories.get(source.name, 'fast') if not is_custom else 'custom' %}
           {% set mix = source_mix.get(source.id, {}) %}
           {% set status = source_status.get(source.id) %}
+          {% set parent_name = source_parent.get(source.name) %}
+          {% set block_on = source_block_on.get(source.name, source.is_enabled) %}
           {% if this_cat != ns.last_cat %}
+            {% if ns.last_cat is not none %}
+        </tbody>
+      </table>
+    </div>
+    <div class="dashboard-panel source-group-card">
+      <table class="dashboard-table">
+        <tbody>
+            {% endif %}
             {% set ns.last_cat = this_cat %}
+            {% set ns.last_on = True %}
+            {% set ns.any_on = False %}
             <tr class="source-category-header cat-{{ this_cat }}" id="cat-header-{{ this_cat }}"
                 data-cat="{{ this_cat }}" onclick="toggleCategoryCollapse('{{ this_cat }}')">
               <td colspan="4">
@@ -1042,8 +1095,16 @@
             </tr>
           {% endif %}
 
-          <tr class="dash-row {% if not source.is_enabled %}disabled{% endif %}" id="dash-row-{{ source.id }}"
-              data-cat="{{ this_cat }}" data-search="{{ (source.display_name ~ ' ' ~ source.name) | lower }}"
+          {% if block_on %}{% set ns.any_on = True %}{% endif %}
+          {# Only between on and off sources: a group with none on says so in its header. #}
+          {% if ns.last_on and not block_on %}
+            {% set ns.last_on = False %}
+            {% if ns.any_on %}
+            <tr class="source-off-divider" data-cat="{{ this_cat }}"><td colspan="4">Off</td></tr>
+            {% endif %}
+          {% endif %}
+          <tr class="dash-row {% if not source.is_enabled %}disabled{% endif %}{% if parent_name %} child-row{% if source_children[parent_name][-1] is sameas source %} child-last{% endif %}{% endif %}" id="dash-row-{{ source.id }}"
+              data-cat="{{ this_cat }}"{% if parent_name %} data-parent="{{ parent_name }}"{% endif %} data-search="{{ (source.display_name ~ ' ' ~ source.name) | lower }}"
               data-playback="{{ mix.get('kind', 'clear') }}"
               data-fc-player="{{ 'true' if mix.get('fc_player') else 'false' }}"
               {% if mix.get('kind') in ('drm', 'some') and not bridge_ready.get(source.id) %}data-bridge-missing="true"{% endif %}
@@ -1112,6 +1173,16 @@
                   {% endif %}
                 </a>
               </div>
+              {% set children = source_children.get(source.name) %}
+              {% if children %}
+              <button type="button" class="child-toggle" id="child-toggle-{{ source.name }}" aria-expanded="false"
+                      onclick="toggleChildSources('{{ source.name }}')"
+                      title="Separate sources for networks' own websites, listed here to save space">
+                <span class="child-toggle-chevron">▸</span>
+                <span>{{ children | length }} more sources <span class="child-toggle-names">{{ children | map(attribute='display_name') | join(' · ') }}</span></span>
+                <span class="child-toggle-count"><span id="child-on-count-{{ source.name }}">{{ children | selectattr('is_enabled') | list | length }}</span> on</span>
+              </button>
+              {% endif %}
               <div class="drm-heads-up" id="drm-heads-up-{{ source.id }}" hidden></div>
               {% if not is_custom %}
               <div class="scrape-status" id="scrape-status-{{ source.id }}"></div>
@@ -1186,7 +1257,7 @@
 
           <!-- Custom source: collapsible channel list panel -->
           {% if is_custom %}
-          <tr class="config-panel-row" id="config-panel-row-{{ source.id }}" data-cat="{{ this_cat }}" style="display:none">
+          <tr class="config-panel-row" id="config-panel-row-{{ source.id }}" data-cat="{{ this_cat }}"{% if parent_name %} data-parent="{{ parent_name }}"{% endif %} style="display:none">
             <td colspan="4" class="config-panel-cell">
               <div class="config-panel" id="card-{{ source.id }}">
                 <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1rem;">
@@ -1206,7 +1277,7 @@
 
           <!-- Collapsible config panel row (not shown for custom source) -->
           {% if not is_custom %}
-          <tr class="config-panel-row" id="config-panel-row-{{ source.id }}" data-cat="{{ this_cat }}" style="display:none">
+          <tr class="config-panel-row" id="config-panel-row-{{ source.id }}" data-cat="{{ this_cat }}"{% if parent_name %} data-parent="{{ parent_name }}"{% endif %} style="display:none">
             <td colspan="4" class="config-panel-cell">
               <div class="config-panel" id="card-{{ source.id }}"
                    data-source-name="{{ source.name }}"
@@ -1323,11 +1394,11 @@
           </tr>
           {% endif %}
           {% endfor %}
-          <tr class="no-results-row" id="no-sources-match-row" style="display:none">
-            <td colspan="4">No sources match "<span id="no-sources-match-query"></span>".</td>
-          </tr>
         </tbody>
       </table>
+    </div>
+    <div class="dashboard-panel no-results-row" id="no-sources-match-row" style="display:none">
+      No sources match "<span id="no-sources-match-query"></span>".
     </div>
 
   </div>
@@ -1590,6 +1661,10 @@
       const row = document.getElementById(`config-panel-row-${sourceId}`);
       if (!row) return;
       const isOpen = row.style.display !== 'none';
+      // A source with sources listed under it shows one thing beneath its row at
+      // a time: its panel or those sources, never the sources below the panel.
+      const childToggle = document.querySelector(`#dash-row-${sourceId} .child-toggle[aria-expanded="true"]`);
+      if (!isOpen && childToggle) toggleChildSources(childToggle.id.replace('child-toggle-', ''));
       row.style.display = isOpen ? 'none' : '';
       if (isOpen) {  // no-ops unless a sign-in is waiting here
         espnAbandon(sourceId);
@@ -1599,6 +1674,7 @@
         btn.textContent = isOpen ? 'Configure ▾' : 'Configure ▴';
         btn.classList.toggle('open', !isOpen);
       });
+      document.getElementById(`dash-row-${sourceId}`)?.classList.toggle('config-open', !isOpen);
       if (!isOpen) {
         // Load config form on first open
         loadSourceConfig(sourceId, getSourceName(sourceId));
@@ -1625,6 +1701,7 @@
         _saveCollapsedCats(collapsedCats);
         _applyCategoryCollapse(cat, false);
       }
+      if (row?.classList.contains('child-collapsed')) _applyChildCollapse(row.dataset.parent, false);
       if (!row || row.style.display !== 'none') {
         row?.scrollIntoView({ behavior: 'smooth', block: 'start' });
         return;
@@ -2014,6 +2091,7 @@
       }
       if (dashRow) dashRow.classList.toggle('disabled', !enabled);
       if (dashRow) _refreshCategoryOnCount(dashRow.dataset.cat);
+      if (dashRow?.dataset.parent) _refreshChildOnCount(dashRow.dataset.parent);
       runBtns.forEach(btn => { btn.disabled = !enabled; });
       if (auditBtn) auditBtn.disabled = !enabled;
       if (dashRow?.dataset.custom === 'true') {
@@ -6031,6 +6109,23 @@
               <div class="config-checklist">${items}</div>
               ${help}
             </div>`;
+        } else if (f.field_type === 'list') {
+          // One box per entry; saved comma-joined. Always show at least one box.
+          const entries = String(val).split(/[,;\s]+/).map(v => v.trim()).filter(Boolean);
+          const rows = (entries.length ? entries : ['']).map((v, i) =>
+            configListRowHtml(f, v, i === 0 ? `cfg-${sourceId}-${f.key}` : '')
+          ).join('');
+          return `
+            <div class="field field-full">
+              <label for="cfg-${sourceId}-${f.key}">${escapeHtml(f.label)}${req}</label>
+              <div class="config-list" data-list-key="${f.key}">
+                ${rows}
+                <button type="button" class="btn btn-sm btn-cancel config-list-add"
+                        data-placeholder="${escapeHtml(f.placeholder || '')}"
+                        onclick="addConfigListRow(this)">+ ${escapeHtml(f.add_label || 'Add another')}</button>
+              </div>
+              ${help}
+            </div>`;
         } else if (f.field_type === 'toggle') {
           const checked = ['1', 'true', 'yes', 'on'].includes(String(val).trim().toLowerCase()) ? ' checked' : '';
           return `
@@ -6134,6 +6229,10 @@
           payload[key] = [...new Set([...selected, ...custom])].join(',');
           return;
         }
+        if (keyFields[0].dataset.list === 'true') {
+          payload[key] = keyFields.map(el => el.value.trim()).filter(Boolean).join(',');
+          return;
+        }
         if (keyFields[0].dataset.checklist === 'true') {
           payload[key] = keyFields.filter(el => !el.checked).map(el => el.value).join(',');
           return;
@@ -6191,7 +6290,38 @@
       }
     }
 
+    function configListRowHtml(f, value, id) {
+      const placeholder = f.placeholder ? `placeholder="${escapeHtml(f.placeholder)}"` : '';
+      return `
+        <div class="config-list-row">
+          <input type="text"${id ? ` id="${id}"` : ''} data-key="${f.key}" data-list="true"
+                 value="${escapeHtml(String(value))}" ${placeholder} autocomplete="off">
+          <button type="button" class="btn btn-sm btn-cancel" title="Remove"
+                  onclick="removeConfigListRow(this)">✕</button>
+        </div>`;
+    }
+
+    function addConfigListRow(button) {
+      const list = button.closest('.config-list');
+      const f = {key: list.dataset.listKey, placeholder: button.dataset.placeholder};
+      button.insertAdjacentHTML('beforebegin', configListRowHtml(f, '', ''));
+      button.previousElementSibling.querySelector('input').focus();
+    }
+
+    function removeConfigListRow(button) {
+      const row = button.closest('.config-list-row');
+      // Keep one box around so there is always somewhere to type.
+      if (row.parentElement.querySelectorAll('.config-list-row').length > 1) {
+        row.remove();
+      } else {
+        row.querySelector('input').value = '';
+      }
+    }
+
     function clearConfigFields(sourceId) {
+      document.querySelectorAll(`#source-config-${sourceId} .config-list`).forEach(list => {
+        list.querySelectorAll('.config-list-row').forEach((row, i) => { if (i) row.remove(); });
+      });
       document.querySelectorAll(`#source-config-${sourceId} input[data-key], #source-config-${sourceId} select[data-key]`).forEach(field => {
         if (field.tagName === 'SELECT' && field.multiple) {
           [...field.options].forEach(opt => { opt.selected = false; });
@@ -6241,8 +6371,57 @@
       if (el) el.textContent = document.querySelectorAll(`tr.dash-row[data-cat="${cat}"]:not(.disabled)`).length;
     }
 
+    // Sources listed under another source's row start tucked away; which parents
+    // are open is remembered per browser. One with a problem opens by itself.
+    const SOURCES_EXPANDED_KEY = 'fc_sources_expanded_parents';
+
+    function _loadExpandedParents() {
+      try { return new Set(JSON.parse(localStorage.getItem(SOURCES_EXPANDED_KEY)) || []); }
+      catch { return new Set(); }
+    }
+    function _saveExpandedParents(set) {
+      try { localStorage.setItem(SOURCES_EXPANDED_KEY, JSON.stringify([...set])); } catch {}
+    }
+    function _refreshChildOnCount(parent) {
+      const el = document.getElementById(`child-on-count-${parent}`);
+      if (el) el.textContent = document.querySelectorAll(`tr.dash-row[data-parent="${parent}"]:not(.disabled)`).length;
+    }
+    function _applyChildCollapse(parent, collapsed) {
+      document.querySelectorAll(`tr.dash-row[data-parent="${parent}"], tr.config-panel-row[data-parent="${parent}"]`)
+        .forEach(row => row.classList.toggle('child-collapsed', collapsed));
+      const btn = document.getElementById(`child-toggle-${parent}`);
+      if (btn) {
+        btn.closest('tr.dash-row')?.classList.toggle('has-open-children', !collapsed);
+        btn.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+        btn.querySelector('.child-toggle-chevron').textContent = collapsed ? '▸' : '▾';
+      }
+    }
+    function _childNeedsAttention(parent) {
+      return !!document.querySelector(`tr.dash-row[data-parent="${parent}"][data-issue="true"]:not(.disabled)`);
+    }
+    function _restoreChildCollapse() {
+      const expanded = _loadExpandedParents();
+      document.querySelectorAll('.child-toggle').forEach(btn => {
+        const parent = btn.id.replace('child-toggle-', '');
+        _applyChildCollapse(parent, !expanded.has(parent) && !_childNeedsAttention(parent));
+      });
+    }
+    function toggleChildSources(parent) {
+      const expanded = _loadExpandedParents();
+      const willExpand = document.getElementById(`child-toggle-${parent}`)?.getAttribute('aria-expanded') !== 'true';
+      if (willExpand) expanded.add(parent); else expanded.delete(parent);
+      _saveExpandedParents(expanded);
+      // Its own panel closes first, so the sources open right under its row.
+      const parentRow = document.getElementById(`child-toggle-${parent}`)?.closest('tr.dash-row');
+      const parentId = parentRow?.id.replace('dash-row-', '');
+      if (willExpand && parentId && document.getElementById(`config-panel-row-${parentId}`)?.style.display !== 'none') {
+        toggleConfigPanel(parentId);
+      }
+      _applyChildCollapse(parent, !willExpand);
+    }
+
     function _applyCategoryCollapse(cat, collapsed) {
-      document.querySelectorAll(`tr.dash-row[data-cat="${cat}"], tr.config-panel-row[data-cat="${cat}"]`)
+      document.querySelectorAll(`tr.dash-row[data-cat="${cat}"], tr.config-panel-row[data-cat="${cat}"], tr.source-off-divider[data-cat="${cat}"]`)
         .forEach(row => row.classList.toggle('cat-collapsed', collapsed));
       const chevron = document.getElementById(`cat-chevron-${cat}`);
       if (chevron) chevron.textContent = collapsed ? '▸' : '▾';
@@ -6324,6 +6503,15 @@
         if (panelRow) panelRow.classList.toggle('filter-hidden', !matches);
       });
 
+      // A group's Off label stays while filtering when sources show on both sides of it.
+      document.querySelectorAll('tr.source-off-divider').forEach(divider => {
+        const shown = (row) => row.classList.contains('dash-row') && !row.classList.contains('filter-hidden');
+        const rowsAfter = [], rowsBefore = [];
+        for (let r = divider.nextElementSibling; r; r = r.nextElementSibling) rowsAfter.push(r);
+        for (let r = divider.previousElementSibling; r && !r.classList.contains('source-category-header'); r = r.previousElementSibling) rowsBefore.push(r);
+        divider.classList.toggle('filter-hidden', !(rowsBefore.some(shown) && rowsAfter.some(shown)));
+      });
+
       let anyMatch = false;
       document.querySelectorAll('tr.source-category-header').forEach(header => {
         const cat = header.dataset.cat;
@@ -6334,6 +6522,12 @@
         // user's persisted collapse choice once the query is cleared.
         _applyCategoryCollapse(cat, filtering ? false : collapsedCats.has(cat));
       });
+      if (filtering) {
+        document.querySelectorAll('.child-toggle').forEach(btn =>
+          _applyChildCollapse(btn.id.replace('child-toggle-', ''), false));
+      } else {
+        _restoreChildCollapse();
+      }
 
       const noResultsRow = document.getElementById('no-sources-match-row');
       if (noResultsRow) {
@@ -6345,6 +6539,7 @@
     // ── Page load ─────────────────────────────────────────────────────────
     document.addEventListener('DOMContentLoaded', () => {
       _loadCollapsedCats().forEach(cat => _applyCategoryCollapse(cat, true));
+      _restoreChildCollapse();
 
       // Load persisted audit results
       document.querySelectorAll('[id^="audit-last-result-"]').forEach(el => {
@@ -6402,6 +6597,7 @@
         btn.textContent = isOpen ? 'Manage ▾' : 'Manage ▴';
         btn.classList.toggle('open', !isOpen);
       });
+      document.getElementById(`dash-row-${sourceId}`)?.classList.toggle('config-open', !isOpen);
       if (!isOpen) {
         loadCustomChannelList();
         row.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
@@ -7117,7 +7313,7 @@
         type,
         license,
         onStatus: (text) => { if (status) status.textContent = text; },
-        onError:  (info) => { if (status) status.textContent = info.message; },
+        onError:  (info) => FCPlayer.showError(status, info),
       });
     }
 

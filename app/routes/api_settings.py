@@ -372,6 +372,11 @@ def app_settings():
             row.fc_player_bridge_idle_stop_enabled = bool(data['fc_player_idle_stop_enabled'])
         if 'fc_player_captions_enabled' in data:
             row.fc_player_bridge_captions_enabled = bool(data['fc_player_captions_enabled'])
+        if 'fc_player_audio_mode' in data:
+            mode = str(data['fc_player_audio_mode'] or '').strip().lower()
+            if mode not in fc_player_bridge.FC_PLAYER_AUDIO_MODES:
+                return jsonify({'error': f'fc_player_audio_mode must be one of {", ".join(fc_player_bridge.FC_PLAYER_AUDIO_MODES)}'}), 400
+            row.fc_player_bridge_audio_mode = mode
         if 'fc_player_ah4c_enabled' in data:
             row.fc_player_bridge_ah4c_enabled = bool(data['fc_player_ah4c_enabled'])
         if 'fc_player_ah4c_url' in data:
@@ -427,6 +432,7 @@ def app_settings():
         'fc_player_hdmi_enabled': bool(row.fc_player_bridge_hdmi_enabled),
         'fc_player_idle_stop_enabled': bool(row.fc_player_bridge_idle_stop_enabled),
         'fc_player_captions_enabled': bool(row.fc_player_bridge_captions_enabled),
+        'fc_player_audio_mode': row.fc_player_bridge_audio_mode or 'auto',
         'fc_player_ah4c_enabled': bool(row.fc_player_bridge_ah4c_enabled),
         'fc_player_ah4c_url': row.fc_player_bridge_ah4c_url or '',
         'channels_dvr_url_source': 'db' if (row.channels_dvr_url or '').strip() else ('env' if row.env_channels_dvr_url() is not None else 'unset'),
@@ -1124,6 +1130,50 @@ def fc_player_heartbeat():
     if source and channel_id:
         fc_player_bridge.note_web_heartbeat(f'{source}:{channel_id}')
     return ('', 204)
+
+
+_ADMIN_PASSWORD_MIN_LEN = 8
+
+
+def _admin_login_state(row: AppSettings) -> dict:
+    from .. import admin_auth
+    return {
+        'enabled': bool((row.admin_password_hash or '').strip()),
+        'username': (row.admin_username or '').strip(),
+        'env_disabled': admin_auth.env_disabled(),
+    }
+
+
+@settings_bp.route('/settings/admin-login', methods=['GET', 'POST', 'DELETE'])
+def admin_login_settings():
+    """Admin UI login (app/admin_auth.py). POST {username, password} turns it on or
+    changes it; DELETE turns it off. Reaching this at all already took a signed-in
+    session (or no login configured yet)."""
+    from werkzeug.security import generate_password_hash
+    from .. import admin_auth
+    row = AppSettings.get()
+    if request.method == 'POST':
+        data = request.get_json(silent=True) or {}
+        username = (data.get('username') or '').strip()
+        password = data.get('password') or ''
+        if not username:
+            return jsonify({'error': 'Enter a username.'}), 422
+        if len(username) > 64 or any(c.isspace() for c in username):
+            return jsonify({'error': 'Username can’t contain spaces or be longer than 64 characters.'}), 422
+        if len(password) < _ADMIN_PASSWORD_MIN_LEN:
+            return jsonify({'error': f'Password must be at least {_ADMIN_PASSWORD_MIN_LEN} characters.'}), 422
+        row.admin_username = username
+        row.admin_password_hash = generate_password_hash(password)
+        db.session.commit()
+        # Keep this browser signed in; every other session is signed out because
+        # its token was derived from the old hash.
+        admin_auth.sign_in(row.admin_password_hash)
+        logger.info('[admin-auth] admin login set for user %r', username)
+    elif request.method == 'DELETE':
+        row.admin_password_hash = None
+        db.session.commit()
+        logger.info('[admin-auth] admin login turned off')
+    return jsonify(_admin_login_state(row))
 
 
 @settings_bp.route('/settings/gracenote-auto-clear', methods=['POST'])

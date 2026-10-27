@@ -472,6 +472,7 @@ class AppSettings(db.Model):
     fc_player_bridge_hdmi_enabled = db.Column(db.Boolean, nullable=False, default=False, server_default=db.text('0'))  # method: the single fixed HDMI Capture path (encoder_url); upgraders with a saved URL are backfilled on in schema.py
     fc_player_bridge_idle_stop_enabled = db.Column(db.Boolean, nullable=False, default=False, server_default=db.text('0'))  # stop the device when Channels DVR activity + the web player's heartbeat both go quiet
     fc_player_bridge_captions_enabled  = db.Column(db.Boolean, nullable=False, default=True, server_default=db.text('1'))  # render an English subtitle/CC track when the stream advertises one
+    fc_player_bridge_audio_mode   = db.Column(db.Text, nullable=False, default='auto', server_default=db.text("'auto'"))  # 'auto' | 'pcm' (decode Dolby on the device) | 'stereo' (prefer a stereo AAC track, else pcm)
     fc_player_bridge_ah4c_enabled = db.Column(db.Boolean, nullable=False, default=False, server_default=db.text('0'))  # ah4c (github.com/sullrich/ah4c) as the HDMI-capture front end instead of the single fixed encoder_url
     fc_player_bridge_ah4c_url     = db.Column(db.Text, nullable=True)  # ah4c's own base URL, e.g. http://192.168.1.30:7654 — where its /play/tuner/<channel> lives
     # JSON snapshot of the Fire TV's display settings immediately before FastChannels
@@ -485,6 +486,9 @@ class AppSettings(db.Model):
     # default: this is meant to be flipped on briefly while reproducing a specific
     # issue, not left running.
     debug_logging_enabled = db.Column(db.Boolean, nullable=False, default=False, server_default=db.text('0'))
+    # Optional admin UI login (app/admin_auth.py) — on while a password hash is set.
+    admin_username       = db.Column(db.Text, nullable=True)
+    admin_password_hash  = db.Column(db.Text, nullable=True)
 
     @staticmethod
     def _env_int(name: str) -> int | None:

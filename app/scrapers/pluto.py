@@ -77,7 +77,10 @@ BOOT_HEADERS = {
 
 BOOT_PARAMS_BASE = {
     'appName': 'web',
-    'appVersion': '8.0.0-111b2b9dc00bd0bea9030b30662159ed9e7c8bc6',
+    # Pluto gates demuxed audio on this version (9.13.0 and older get audio muxed into
+    # the video variants). Muxed sessions lose the audio of video-only ad bumpers,
+    # which drifts Channels DVR's live remux ~15s per ad break.
+    'appVersion': '9.20.0-89258290264838515e264f5b051b7c1602a58482',
     'deviceVersion': '122.0.0',
     'deviceModel': 'web',
     'deviceMake': 'chrome',

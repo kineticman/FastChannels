@@ -25,24 +25,16 @@ from . import fc_player_bridge
 # native DRM client on our side; only a screen-capture-style bridge (PrismCast
 # running real Chrome) could ever reach Cox TVE outside the browser.
 #
-# Warner TVE was ALSO excluded on the same assumption (dev/kodi/README.md recorded a
-# real failure via the old Kodi bridge: "repeated stream-reopen loop... same failure
-# shape as Cox") — but that was inputstream.adaptive's client-side session-splitting
-# hitting Turner's one-license-per-attempt backend, not a Cox-style app-identity wall.
-# Re-tested live 2026-09-12 against fc_player (Media3, a different native Widevine
-# client): real MVPD-entitled TNT (East), confirmed genuine Widevine CENC (device made
-# a real POST to our license proxy, got a real 200/947-byte license), sustained ~2.5
-# minutes of stable state=PLAYING with one harmless ~188ms self-recovering session
-# blip — no reopen loop. Media3's session handling doesn't reproduce what Kodi hit.
-# See also [[project_warner_ad_break_drm_audit_flap]] for a related but separate audit
-# bug this re-test surfaced (fixed alongside, in run_stream_audit).
+# (Warner TVE was on this list until 2026-10, when it moved to Turner's clear
+# AES-128 feeds and stopped being a DRM source; SundanceTV likewise left when it
+# moved to AMC Networks' clear HLS.)
 #
 # Shared by app/routes/play.py, app/routes/admin.py, app/routes/api_dvr.py,
 # app/generators/m3u.py, and app/worker.py — keep them all in sync via this single
 # source of truth.
 DRM_BRIDGE_TRUSTED_SOURCES = frozenset({
     'sling', 'nbc_tve', 'pbs', 'amazon_prime_free', 'directv', 'vidaa', 'philo', 'roku',
-    'fubo', 'warner_tve', 'spectrum', 'espn', 'versant_tve', 'vix', 'disney_tve', 'tennis_tve', 'dazn_tve', 'sundance_tve', 'cnn_tve', 'nesn_tve',
+    'fubo', 'spectrum', 'espn', 'versant_tve', 'vix', 'disney_tve', 'tennis_tve', 'dazn_tve', 'cnn_tve', 'nesn_tve',
 })
 
 

@@ -12,6 +12,7 @@ import android.view.WindowManager;
 import androidx.media3.common.C;
 import androidx.media3.common.Format;
 import androidx.media3.common.MediaItem;
+import androidx.media3.common.MimeTypes;
 import androidx.media3.common.PlaybackException;
 import androidx.media3.common.Player;
 import androidx.media3.common.Timeline;
@@ -44,6 +45,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayDeque;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -82,6 +84,9 @@ public class PlaybackActivity extends Activity {
     static final String EXTRA_DRM = "drm";
     static final String EXTRA_LICENSE_URL = "license_url";
     static final String EXTRA_CAPTIONS = "captions";
+    // FastChannels' "Bridge audio" setting: "auto" (default), "pcm" (decode Dolby on the
+    // device, never pass it through) or "stereo" (prefer a stereo AAC track, else "pcm").
+    static final String EXTRA_AUDIO_MODE = "audio_mode";
     static final String EXTRA_COMMAND = "command";
     static final String EXTRA_CHANNEL_KEY = "channel_key";
     static final String COMMAND_WARM_STOP = "warm_stop";
@@ -114,6 +119,7 @@ public class PlaybackActivity extends Activity {
     private static final long BOUNDARY_NEAR_WINDOW_S = 15;
 
     private ExoPlayer player;
+    private AudioModeRenderersFactory renderersFactory;
     private DefaultTrackSelector trackSelector;
     private MediaSession mediaSession;
     private String activeChannelKey;
@@ -162,6 +168,8 @@ public class PlaybackActivity extends Activity {
     private static final String STATUS_DUMP_PREFIX = "FCPLAYER_STATUS ";
     private static final int STATUS_MAX_EVENTS = 20;
     private final ExecutorService statusExecutor = Executors.newSingleThreadExecutor();
+    // Set first thing in onDestroy, so player callbacks fired by release() are ignored.
+    private boolean destroying = false;
     private final ArrayDeque<JSONObject> statusEvents = new ArrayDeque<>();
     private final Handler stallHandler = new Handler(Looper.getMainLooper());
     private final Runnable checkStall = this::checkStall;
@@ -239,7 +247,8 @@ public class PlaybackActivity extends Activity {
         // 2026-08-25 rendering real captions on both DirecTV and Roku.
         trackSelector = new DefaultTrackSelector(this);
 
-        player = new ExoPlayer.Builder(this)
+        renderersFactory = new AudioModeRenderersFactory(this);
+        player = new ExoPlayer.Builder(this, renderersFactory)
                 .setTrackSelector(trackSelector)
                 .setBandwidthMeter(bandwidthMeter)
                 .setMediaSourceFactory(new DefaultMediaSourceFactory(this)
@@ -253,6 +262,7 @@ public class PlaybackActivity extends Activity {
         // just "Source error". Cheap (log calls only, no network/IO of its own) — left in
         // rather than gated behind a flag since there's no on-device UI to toggle it from.
         player.addAnalyticsListener(new EventLogger(trackSelector, "FCPlayer.EventLogger"));
+        player.addAnalyticsListener(new AudioDiagnostics(() -> activeChannelKey));
         // Without this, a failed tune (entitlement rejection, DRM license denial, decode
         // error — ExoPlayer treats all of these as a fatal PlaybackException) left the
         // Activity sitting on a blank surface forever: nothing observed the error, so
@@ -270,6 +280,12 @@ public class PlaybackActivity extends Activity {
         player.addListener(new Player.Listener() {
             @Override
             public void onPlayerError(PlaybackException error) {
+                // release() in onDestroy can report one last error (e.g. its own release
+                // timeout); retrying or recording it then would only touch torn-down state.
+                if (destroying) {
+                    Log.w(TAG, "ignoring player error during shutdown: " + error.getErrorCodeName());
+                    return;
+                }
                 if (isLiveGapError(error)) {
                     retryHandler.removeCallbacks(resetRetryCount);
                     long now = System.currentTimeMillis();
@@ -383,10 +399,29 @@ public class PlaybackActivity extends Activity {
         // (fc_player_bridge.trigger_channel), and this is the only moment this Activity
         // re-checks it. Covers both real sidecar subtitle renditions and muxed CEA-608/708
         // captions (see the trackSelector construction comment in onCreate).
+        // Same per-trigger shape for audio. "stereo" asks for a 2-channel AAC track when
+        // the stream offers one (DIRECTV carries AC3 5.1 plus AAC stereo); both non-auto
+        // modes refuse encoded output so Dolby is decoded on the device, never passed
+        // through to HDMI. Unknown or missing values mean "auto" (older servers).
+        String audioMode = intent.getStringExtra(EXTRA_AUDIO_MODE);
+        boolean stereoAudio = "stereo".equals(audioMode);
+        boolean pcmOnly = stereoAudio || "pcm".equals(audioMode);
+        if (pcmOnly != renderersFactory.isPcmOnly()) {
+            // A warm player keeps the previous tune's audio decoder when the next stream
+            // has the same format (seen live: AC3 kept passing through after switching to
+            // pcm). stop() resets the renderers so the next prepare picks the decoder
+            // again under the new setting. Only on a change, so normal tunes stay warm.
+            player.stop();
+        }
+        renderersFactory.setPcmOnly(pcmOnly);
         trackSelector.setParameters(trackSelector.buildUponParameters()
                 .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, !captions)
                 .setPreferredTextLanguage(captions ? "en" : null)
-                .setSelectUndeterminedTextLanguage(captions));
+                .setSelectUndeterminedTextLanguage(captions)
+                .setMaxAudioChannelCount(stereoAudio ? 2 : Integer.MAX_VALUE)
+                .setPreferredAudioMimeTypes(stereoAudio ? new String[]{MimeTypes.AUDIO_AAC} : new String[0]));
+        Log.i(AudioDiagnostics.TAG, "audio mode channel_key=" + intent.getStringExtra(EXTRA_CHANNEL_KEY)
+                + ": " + (audioMode == null ? "auto" : audioMode));
 
         Log.i(TAG, "playing \"" + title + "\" drm=" + drm + " url=" + streamUrl);
         // A fresh tune is a clean slate — cancel any retry left pending from whatever was
@@ -468,7 +503,7 @@ public class PlaybackActivity extends Activity {
         final File dir = getExternalFilesDir(null);
         if (dir == null) return;
         final String body = "{\"events\":" + new JSONArray(statusEvents) + "}";
-        statusExecutor.execute(() -> {
+        runInBackground(statusExecutor, () -> {
             File tmp = new File(dir, STATUS_FILE + ".tmp");
             try (FileOutputStream out = new FileOutputStream(tmp)) {
                 out.write(body.getBytes(StandardCharsets.UTF_8));
@@ -564,7 +599,7 @@ public class PlaybackActivity extends Activity {
     private void pollBoundaryStatus() {
         String url = boundaryStatusUrl;
         if (url == null) return;
-        boundaryPollExecutor.execute(() -> {
+        runInBackground(boundaryPollExecutor, () -> {
             boolean confirmed = false;
             Double boundaryEpoch = null;
             HttpURLConnection conn = null;
@@ -631,7 +666,7 @@ public class PlaybackActivity extends Activity {
      * existed. */
     private void ackBoundaryHandled(String statusUrl) {
         String ackUrl = statusUrl.replace("/boundary-status", "/boundary-ack");
-        boundaryPollExecutor.execute(() -> {
+        runInBackground(boundaryPollExecutor, () -> {
             HttpURLConnection conn = null;
             try {
                 conn = (HttpURLConnection) new URL(ackUrl).openConnection();
@@ -658,7 +693,7 @@ public class PlaybackActivity extends Activity {
         if (!baseMatch.find()) return;
         String url = baseMatch.group(1) + "/play/fc-player/warm-stop-ack?channel_key="
                 + Uri.encode(channelKey);
-        boundaryPollExecutor.execute(() -> {
+        runInBackground(boundaryPollExecutor, () -> {
             HttpURLConnection conn = null;
             try {
                 conn = (HttpURLConnection) new URL(url).openConnection();
@@ -712,12 +747,15 @@ public class PlaybackActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        destroying = true;
         retryHandler.removeCallbacksAndMessages(null);
         stallHandler.removeCallbacksAndMessages(null);
         boundaryPollHandler.removeCallbacksAndMessages(null);
         boundaryStatusUrl = null;
-        boundaryPollExecutor.shutdownNow();
-        statusExecutor.shutdown();
+        // Release the player before shutting the executors down: release() fires the
+        // player's listeners, which record a status event and hand it to statusExecutor.
+        // Shutting down first made that hand-off throw RejectedExecutionException and
+        // crash the app on its way out (forum #3582, 2026-10-26).
         if (mediaSession != null) {
             mediaSession.release();
             mediaSession = null;
@@ -726,6 +764,18 @@ public class PlaybackActivity extends Activity {
             player.release();
             player = null;
         }
+        boundaryPollExecutor.shutdownNow();
+        statusExecutor.shutdown();
         super.onDestroy();
+    }
+
+    /** Runs task on executor, dropping it if the activity is already shutting down —
+     * background work submitted during teardown isn't worth crashing over. */
+    private static void runInBackground(ExecutorService executor, Runnable task) {
+        try {
+            executor.execute(task);
+        } catch (RejectedExecutionException e) {
+            Log.w(TAG, "background task dropped during shutdown");
+        }
     }
 }

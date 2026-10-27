@@ -1927,8 +1927,9 @@ def _refresh_xml_artifacts(only_keys: set[str] | None = None) -> None:
             # cleanly into Threadfin/Plex and other bridges.
             m3u_artifacts.append((
                 f'feed-{feed.slug}-native-m3u',
-                lambda fp, filters=filters, std_kw=std_kw: fp.write(
-                    generate_native_m3u(filters, base_url=base_url, include_description=False, **std_kw)
+                lambda fp, filters=filters, std_kw=std_kw, slug=feed.slug: fp.write(
+                    generate_native_m3u(filters, base_url=base_url, include_description=False,
+                                        epg_url=f'{base_url}/feeds/{slug}/native/epg.xml', **std_kw)
                 ),
             ))
             # EXPERIMENTAL: mixed Gracenote/XMLTV single-source playlist, pairs with
@@ -2642,6 +2643,10 @@ def _resolved_logo_url(existing_logo: str | None, incoming_logo: str | None, cac
         return current
     if not current or incoming == current:
         return incoming
+    # Bundled logos ship with the app, so a scraper switching to one is taken
+    # as-is; without this an existing channel kept its old upstream URL forever.
+    if incoming.startswith('/static/'):
+        return incoming
     if not incoming.startswith(('http://', 'https://')):
         return current
     # Never keep a non-absolute existing URL when we have an absolute replacement.
@@ -2838,9 +2843,19 @@ def _sync_intrinsic_drm_bridge(source) -> None:
     such as DirecTV Stream, are all-DRM even when their manifests are HLS; those
     scrapers advertise all_channels_require_drm_bridge. The flag is gated on
     whether some bridge mode (PrismCast or FastChannels Player) is on for this source and only
-    flips requires_drm_bridge; audit still owns disable/dead state."""
+    flips requires_drm_bridge; audit still owns disable/dead state.
+
+    A source without license handling can't have bridge channels, so any flag
+    left from before it dropped DRM (Warner TVE, 2026-10) is cleared."""
     scraper_cls = registry.get(source.name)
-    if not (scraper_cls and getattr(scraper_cls, 'license_url', None)):
+    if not scraper_cls:
+        return
+    if not getattr(scraper_cls, 'license_url', None):
+        cleared = source.channels.filter(Channel.requires_drm_bridge.is_(True)).update(
+            {Channel.requires_drm_bridge: False}, synchronize_session='fetch')
+        if cleared:
+            logger.info('[%s] requires_drm_bridge cleared on %d channel(s): source has no DRM',
+                        source.name, cleared)
         return
     want = _drm_bridge_mode_for(source.name)
     q = source.channels
@@ -4417,6 +4432,7 @@ if __name__ == '__main__':
             try:
                 with flask_app.app_context():
                     fc_player_bridge.check_playback_errors()
+                    fc_player_bridge.check_audio_diagnostics()
             except Exception as e:
                 logger.warning('[fc-player] playback-error watchdog check failed: %s', e)
 

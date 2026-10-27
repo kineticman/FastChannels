@@ -14,8 +14,8 @@ from ..base import BaseScraper, ChannelData, ConfigField, ProgramData
 from ...gracenote_map import resolve_gracenote
 from ._common import UA, NetChannel
 from . import (
-    aetn, aljazeera, arirang, bloomberg, cbn, cbsnews, cw, dw, ewtn, fstv, gameandfish, hsn, ksl,
-    newsmax, newsnation, nhk, outside, positiv, qvc, scripps, simple, sinclair, tastemade, tbn, trt,
+    aetn, aljazeera, arirang, beond, bloomberg, cbn, cbsnews, cineverse, cw, dw, ewtn, fstv, gameandfish, hsn, ksl, mansa,
+    newsmax, newsnation, nhk, og_network, outside, positiv, qvc, scripps, simple, sinclair, tastemade, tbn, trt,
 )
 
 logger = logging.getLogger(__name__)
@@ -25,7 +25,7 @@ NETWORKS = [
     arirang.Arirang(), bloomberg.Bloomberg(), cbsnews.CBSNews(), scripps.Scripps(),
     newsmax.Newsmax(), newsnation.NewsNation(), fstv.FreeSpeechTV(), ewtn.EWTN(), positiv.PosiTV(), tbn.TBN(),
     hsn.HSN(), qvc.QVC(), tastemade.Tastemade(), aetn.AETN(), ksl.KSL(), cbn.CBN(),
-    gameandfish.GameAndFish(), outside.OutsideTV(), cw.CW(), *simple.NETWORKS,
+    gameandfish.GameAndFish(), outside.OutsideTV(), cw.CW(), cineverse.Cineverse(), og_network.OGNetwork(), beond.BeOND(), mansa.Mansa(), *simple.NETWORKS,
 ]
 _BY_KEY = {n.key: n for n in NETWORKS}
 
@@ -48,6 +48,26 @@ _LAST_GOOD_MAX_AGE = 3 * 86400
 # TV's guide takes 65-85s.
 _CHANNELS_BUDGET_SECS = 60
 _GUIDE_BUDGET_SECS = 180
+
+
+_HOLE = timedelta(minutes=30)
+
+
+def _has_hole(rows: list[ProgramData]) -> bool:
+    """Whether a network's guide for one channel leaves a stretch of at least
+    _HOLE uncovered between now and its last entry."""
+    t = datetime.now(timezone.utc)
+    for p in sorted(rows, key=lambda p: p.start_time):
+        if p.start_time - t >= _HOLE:
+            return True
+        t = max(t, p.end_time)
+    return False
+
+
+def _outside(extra: list[ProgramData], rows: list[ProgramData]) -> list[ProgramData]:
+    """The entries of `extra` that don't overlap any of `rows`."""
+    spans = [(p.start_time, p.end_time) for p in rows]
+    return [p for p in extra if not any(p.start_time < b and a < p.end_time for a, b in spans)]
 
 
 class NetworkBudgetExceeded(requests.exceptions.Timeout):
@@ -101,7 +121,7 @@ class FreeNetworksScraper(BaseScraper):
     NHK, Arirang, Bloomberg, CBS News, Scripps, Newsmax2 + World at War, NewsNation, Free Speech TV, Sky
     News, Global News, KSL), faith (EWTN, PosiTV, TBN, CBN, NRB, theDove), shopping
     (HSN, QVC), Sinclair's diginets (Comet, Charge!, TheNest), Tastemade, A+E's
-    FAST channels, The CW's FAST lineup, Outside TV, Game & Fish TV and a few
+    FAST channels, The CW's FAST lineup, Cineverse's channels, OG Network, BeOND, Mansa, Outside TV, Game & Fish TV and a few
     singles.
 
     Each network is a small module in this package (see _common.Network) with
@@ -286,9 +306,9 @@ class FreeNetworksScraper(BaseScraper):
                 progs = None
             if progs is None:
                 skipped, progs = True, []
-            covered = set()
+            covered: dict[str, list[ProgramData]] = {}
             for p in progs:
-                covered.add(p.source_channel_id)
+                covered.setdefault(p.source_channel_id, []).append(p)
                 p.source_channel_id = f'{key}.{p.source_channel_id}'
             programs.extend(progs)
 
@@ -298,9 +318,17 @@ class FreeNetworksScraper(BaseScraper):
             # or failed fetch leaves the network's guided channels untouched.
             borrowed = filled = 0
             for cd, nc in pairs:
-                if nc.id in covered or (skipped and net.has_guide(nc.id)):
-                    continue
                 gid = gracenote.get(cd.source_channel_id)
+                if nc.id in covered:
+                    # A guide of its own with holes (Tastemade Travel's can start
+                    # half a day out): fill them from tvtv where it has rows.
+                    if gid and net.borrows_tvtv(nc.id) and _has_hole(covered[nc.id]):
+                        rows = _outside(self._tvtv_programs(cd.source_channel_id, gid), covered[nc.id])
+                        borrowed += len(rows)
+                        programs.extend(rows)
+                    continue
+                if skipped and net.has_guide(nc.id):
+                    continue
                 rows = self._tvtv_programs(cd.source_channel_id, gid) if gid and net.borrows_tvtv(nc.id) else []
                 if rows:
                     borrowed += len(rows)

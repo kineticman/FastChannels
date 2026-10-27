@@ -315,13 +315,15 @@ class ConfigField:
                  required: bool = False, secret: bool = False,
                  placeholder: str = '', help_text: str = '', default=None,
                  options: list | None = None, multiple: bool = False,
-                 hidden: bool = False):
+                 hidden: bool = False, add_label: str = ''):
         self.key         = key          # key in source.config JSON
         self.label       = label        # human label in UI
         self.field_type  = field_type   # 'text' | 'password' | 'select' | 'toggle' | 'number'
                                         # | 'checklist' (one checkbox per option, all on by default;
                                         #   the value stores the UNCHECKED options, comma-separated,
                                         #   so options added later start out on)
+                                        # | 'list' (one text box per entry with add/remove buttons;
+                                        #   the value stores the entries comma-separated)
         self.required    = required
         self.secret      = secret       # never echo back in API responses
         self.placeholder = placeholder
@@ -330,6 +332,7 @@ class ConfigField:
         self.options     = options or []  # [{'value': ..., 'label': ...}] for select fields
         self.multiple    = multiple
         self.hidden      = hidden       # internal/auto-managed only — never sent to the UI at all
+        self.add_label   = add_label    # 'list' fields: text of the add-entry button
 
     def to_dict(self):
         d = {
@@ -346,6 +349,8 @@ class ConfigField:
             d['options'] = self.options
         if self.multiple:
             d['multiple'] = self.multiple
+        if self.add_label:
+            d['add_label'] = self.add_label
         return d
 
 
@@ -595,6 +600,9 @@ class BaseScraper(ABC):
     source_category: str = 'fast'     # 'fast' (free) | 'account' (free with an account) | 'premium' (subscription) | 'tve' | 'local' (antenna tuner)
     under_development: bool = False  # shown in the admin UI; source remains opt-in
     is_beta: bool = False            # "Beta" badge: built, but not yet confirmed by real users
+    # Sources page only: list this source under another source's row (by source_name),
+    # tucked away until expanded. Channels, IDs and play URLs stay its own.
+    grouped_under: str | None = None
     channel_refresh_hours: int = 0   # 0 = refresh channels every run; >0 = only refresh channels after N hours
     channel_miss_threshold: int = 3  # missed scrapes before is_active=False; override per scraper
     # Reset/populate per fetch_channels() with upstream IDs intentionally

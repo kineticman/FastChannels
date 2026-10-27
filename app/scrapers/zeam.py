@@ -5,7 +5,7 @@ import logging
 import re
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from ..gracenote_map import resolve_gracenote
 from .base import BaseScraper, ChannelData, ProgramData
@@ -189,7 +189,20 @@ class ZeamScraper(BaseScraper):
                     if self._progress_cb:
                         self._progress_cb('epg', done, len(wanted))
 
-        logger.info('[%s] %d EPG entries for %d channels', self.source_name, len(programs), len(wanted))
+        # A few channels have no current guide at all (a schedule file that
+        # stopped updating, or one CloudFront 403s); zeam.com shows nothing for
+        # them either. Give them hourly blocks with the channel's name.
+        covered = {p.source_channel_id for p in programs}
+        bare = [ch for ch in channels if ch.source_channel_id not in covered]
+        start = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
+        for ch in bare:
+            programs.extend(ProgramData(source_channel_id=ch.source_channel_id, title=ch.name,
+                                        start_time=start + timedelta(hours=i),
+                                        end_time=start + timedelta(hours=i + 1), category=ch.category)
+                            for i in range(48))
+
+        logger.info('[%s] %d EPG entries for %d channels (%d on placeholder blocks)',
+                    self.source_name, len(programs), len(wanted), len(bare))
         return programs
 
     def resolve(self, raw_url: str) -> str:

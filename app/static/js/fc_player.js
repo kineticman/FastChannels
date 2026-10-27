@@ -9,7 +9,7 @@
  *   const player = FCPlayer.load({
  *     video, url, mode, type, license,
  *     onStatus: (text) => { ... },          // info: loading / loaded / native-mode notes
- *     onError:  (info) => { ... },          // info = { phase, err, message }
+ *     onError:  (info) => { ... },          // info = { phase, err, message, details? }
  *   });
  *   // `player` is the shaka.Player instance, or null for native playback.
  *   // The caller owns its lifetime: keep the reference for stats and destroy it
@@ -18,6 +18,8 @@
  * onError phases: 'browser-unsupported', 'drm-insecure', 'event' (runtime error
  * during playback), 'load' (load() promise rejected). `message` is a verbose,
  * human-readable string; pages that want terse text can switch on phase/err.code.
+ * `details` (Shaka errors only) is the full error as redacted JSON;
+ * FCPlayer.showError(el, info) renders both with a Details/Copy toggle.
  */
 (function () {
   'use strict';
@@ -27,34 +29,82 @@
     return (/Safari/.test(ua) && !/Chrome/.test(ua)) || /iPad|iPhone|iPod/.test(ua);
   }
 
+  // Error data can hold signed CDN URLs: keep origin + path, drop the query.
+  function redactValue(key, value) {
+    if (typeof value === 'string' && /^https?:\/\//i.test(value)) {
+      try {
+        const parsed = new URL(value);
+        return `${parsed.origin}${parsed.pathname}`;
+      } catch (_) {
+        return value;
+      }
+    }
+    if (value instanceof Error) return { name: value.name, message: value.message };
+    return value;
+  }
+
   function formatErrorData(data) {
     if (!Array.isArray(data) || !data.length) return '';
     try {
-      return JSON.stringify(data, (key, value) => {
-        if (typeof value === 'string' && /^https?:\/\//i.test(value)) {
-          try {
-            const parsed = new URL(value);
-            return `${parsed.origin}${parsed.pathname}`;
-          } catch (_) {
-            return value;
-          }
-        }
-        if (value instanceof Error) return { name: value.name, message: value.message };
-        return value;
-      }).slice(0, 500);
+      return JSON.stringify(data, redactValue).slice(0, 500);
     } catch (_) {
       return String(data).slice(0, 500);
     }
   }
 
-  function formatError(err) {
-    if (!err) return 'Shaka playback failed (no error details).';
-
-    const code = err.code || 'unknown';
+  function errorIdentity(err) {
     const codeName = Object.entries(window.shaka?.util?.Error?.Code || {})
       .find(([, value]) => value === err.code)?.[0];
     const categoryName = Object.entries(window.shaka?.util?.Error?.Category || {})
       .find(([, value]) => value === err.category)?.[0];
+    return [categoryName, codeName].filter(Boolean).join('.');
+  }
+
+  // The full error for the "Details" toggle / bug reports, URLs redacted as above.
+  function diagnostics(err) {
+    const dump = {
+      time: new Date().toISOString(),
+      page: window.location.pathname,
+      user_agent: navigator.userAgent,
+      shaka_version: window.shaka?.Player?.version || null,
+    };
+    if (err) {
+      Object.assign(dump, {
+        code: err.code,
+        name: errorIdentity(err) || null,
+        severity: err.severity,
+        message: err.message || null,
+        data: err.data,
+      });
+    }
+    try {
+      return JSON.stringify(dump, redactValue, 2).slice(0, 8000);
+    } catch (_) {
+      return String(err);
+    }
+  }
+
+  // BAD_HTTP_STATUS data is [uri, status, responseText, headers, requestType,
+  // responseUri]. Our /play route puts the resolve error in
+  // X-FastChannels-Error; otherwise show the (short) response body.
+  function formatHttpError(err) {
+    const [uri, status, body, headers, , responseUri] = err.data || [];
+    const h = headers || {};
+    const reason = h['x-fastchannels-error'] || String(body || '').trim().slice(0, 200);
+    let path = '';
+    try { path = new URL(responseUri || uri, window.location.href).pathname; } catch (_) {}
+    return [
+      `Stream request failed (HTTP ${status}, Shaka 1001)${reason ? `: ${reason}` : ''}.`,
+      path ? `URL: ${path}` : '',
+      h['x-fastchannels-request-id'] ? `Request ID: ${h['x-fastchannels-request-id']}` : '',
+    ].filter(Boolean).join(' ');
+  }
+
+  function formatError(err) {
+    if (!err) return 'Shaka playback failed (no error details).';
+    if (err.code === 1001 && Array.isArray(err.data) && err.data.length >= 2) return formatHttpError(err);
+
+    const code = err.code || 'unknown';
     const context = [];
 
     if (err.code === 4042) {
@@ -74,7 +124,7 @@
     }
 
     const details = formatErrorData(err.data);
-    const identity = [categoryName, codeName].filter(Boolean).join('.');
+    const identity = errorIdentity(err);
     return [
       `Shaka error ${code}${identity ? ` (${identity})` : ''}: ${err.message || 'playback failed'}.`,
       ...context,
@@ -262,7 +312,7 @@
       }
       player.addEventListener('error', (event) => {
         const err = event.detail;
-        onError({ phase: 'event', err, message: formatError(err) });
+        onError({ phase: 'event', err, message: formatError(err), details: diagnostics(err) });
         console.error('[Shaka] error', err.code, err);
       });
       if (license) {
@@ -319,11 +369,55 @@
       // the page's click/keypress handler unmutes and re-plays on a real gesture.
       video.play().catch(() => {});
     }).catch((err) => {
-      onError({ phase: 'load', err, message: formatError(err) });
+      onError({ phase: 'load', err, message: formatError(err), details: diagnostics(err) });
       console.error('[Shaka] load failed', err);
     });
     return player;
   }
 
-  window.FCPlayer = { load, formatError, isSafariOrIos };
+  // Render onError's info into a status element: the message, plus a
+  // "Details" toggle revealing the full diagnostics dump with a Copy button.
+  function showError(el, info) {
+    if (!el) return;
+    el.textContent = info.message;
+    if (!info.details) return;
+    const btnStyle = 'margin-left:6px;padding:0 6px;font:inherit;font-size:11px;'
+      + 'background:none;color:inherit;border:1px solid currentColor;border-radius:4px;'
+      + 'opacity:.75;cursor:pointer';
+    const toggle = document.createElement('button');
+    toggle.type = 'button';
+    toggle.textContent = 'Details';
+    toggle.style.cssText = btnStyle;
+    const copy = document.createElement('button');
+    copy.type = 'button';
+    copy.textContent = 'Copy';
+    copy.style.cssText = btnStyle + ';display:none';
+    const pre = document.createElement('pre');
+    pre.textContent = info.details;
+    pre.style.cssText = 'display:none;margin:6px 0 0;max-height:220px;overflow:auto;'
+      + 'white-space:pre-wrap;word-break:break-all;font-size:11px;text-align:left';
+    toggle.addEventListener('click', () => {
+      const open = pre.style.display === 'none';
+      pre.style.display = open ? 'block' : 'none';
+      copy.style.display = open ? '' : 'none';
+      toggle.textContent = open ? 'Hide details' : 'Details';
+    });
+    copy.addEventListener('click', () => {
+      const done = () => { copy.textContent = 'Copied'; setTimeout(() => { copy.textContent = 'Copy'; }, 1500); };
+      if (navigator.clipboard && window.isSecureContext) {
+        navigator.clipboard.writeText(info.details).then(done, () => {});
+      } else {
+        // Plain-HTTP LAN origins have no Clipboard API.
+        const range = document.createRange();
+        range.selectNodeContents(pre);
+        const sel = window.getSelection();
+        sel.removeAllRanges();
+        sel.addRange(range);
+        try { document.execCommand('copy'); done(); } catch (_) {}
+      }
+    });
+    el.append(toggle, copy, pre);
+  }
+
+  window.FCPlayer = { load, formatError, showError, isSafariOrIos };
 })();

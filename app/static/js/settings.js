@@ -355,6 +355,11 @@ async function saveFcPlayerCaptionsToggle() {
   await saveSettings({fc_player_captions_enabled: enabled}, 'fc-player-toggles-status');
 }
 
+async function saveFcPlayerAudioMode() {
+  const mode = document.getElementById('fc-player-audio-mode').value;
+  await saveSettings({fc_player_audio_mode: mode}, 'fc-player-toggles-status');
+}
+
 async function saveFcPlayerAh4cToggle() {
   const enabled = document.getElementById('fc-player-ah4c-enabled').checked;
   const ok = await saveSettings({fc_player_ah4c_enabled: enabled}, 'fc-player-ah4c-status');
@@ -2838,4 +2843,65 @@ async function signInToAllTveByLink() {
   status.textContent = `✓ Signed in to ${okCount}/${steps.length} networks.`
     + (skipped ? ` ${skipped} need "Sign in for me" (not available as a phone link).` : '');
   loadTveNetworkStatus();
+}
+
+// ── Admin login (app/admin_auth.py) ──────────────────────────────────────────
+function _applyAdminLoginState(state) {
+  const meta = document.getElementById('admin-login-meta');
+  meta.textContent = '';
+  if (state.enabled) {
+    meta.append('On — username ');
+    const strong = document.createElement('strong');
+    strong.textContent = state.username;
+    meta.append(strong);
+  } else {
+    meta.textContent = 'Off — anyone who can reach this server can open the admin UI';
+  }
+  document.getElementById('admin-login-disable').style.display = state.enabled ? '' : 'none';
+  document.getElementById('admin-login-signout').style.display = state.enabled ? '' : 'none';
+  document.getElementById('admin-login-save').textContent = state.enabled ? 'Change password' : 'Turn on';
+  document.querySelector('label[for="admin-login-password"]').textContent = state.enabled ? 'New password' : 'Password';
+  document.getElementById('admin-login-password').value = '';
+  document.getElementById('admin-login-password-confirm').value = '';
+}
+
+async function _adminLoginRequest(method, body) {
+  const status = document.getElementById('admin-login-status');
+  status.className = 'save-status';
+  status.textContent = 'Saving…';
+  try {
+    const r = await fetch('/api/settings/admin-login', {
+      method,
+      headers: {'Content-Type': 'application/json'},
+      body: body ? JSON.stringify(body) : undefined,
+    });
+    let payload = null;
+    try { payload = await r.json(); } catch (_) {}
+    if (!r.ok) throw new Error(payload?.error || `HTTP ${r.status}`);
+    _applyAdminLoginState(payload);
+    status.className = 'save-status ok';
+    status.textContent = '✓ Saved';
+    setTimeout(() => { status.textContent = ''; }, 2500);
+  } catch (e) {
+    status.className = 'save-status error';
+    status.textContent = '✕ ' + e.message;
+  }
+}
+
+function saveAdminLogin() {
+  const username = document.getElementById('admin-login-username').value.trim();
+  const password = document.getElementById('admin-login-password').value;
+  const confirmPw = document.getElementById('admin-login-password-confirm').value;
+  const status = document.getElementById('admin-login-status');
+  if (password !== confirmPw) {
+    status.className = 'save-status error';
+    status.textContent = '✕ Passwords don’t match';
+    return;
+  }
+  _adminLoginRequest('POST', {username, password});
+}
+
+function disableAdminLogin() {
+  if (!confirm('Turn off the admin login? Anyone who can reach this server will be able to open the admin UI again.')) return;
+  _adminLoginRequest('DELETE');
 }

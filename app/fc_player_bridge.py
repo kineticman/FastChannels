@@ -286,6 +286,10 @@ _APP_CRASH_LOG_TAG = 'FCPlayer.Crash'
 _ANDROIDRUNTIME_LOG_TAG = 'AndroidRuntime'
 _PACKAGE_NAME = 'com.fastchannels.player'
 _LAST_ERROR_LOGCAT_LINE_KEY = 'fc:fc-player:last-error-logcat-line'
+# The player's audio diagnostics (AudioDiagnostics.java), surfaced only with debug
+# logging on — see check_audio_diagnostics().
+_AUDIO_LOG_TAG = 'FCPlayer.Audio'
+_LAST_AUDIO_LOGCAT_LINE_KEY = 'fc:fc-player:last-audio-logcat-line'
 
 
 def _redis():
@@ -297,6 +301,19 @@ def idle_stop_enabled() -> bool:
     checked first everywhere below, so a disabled toggle costs nothing."""
     settings = AppSettings.get()
     return bool(settings.fc_player_bridge_idle_stop_enabled and is_configured())
+
+
+# "Bridge audio" (Bridge page): what the player does with Dolby audio. 'auto' is the
+# player's own choice (passthrough when the HDMI device claims to accept it); 'pcm'
+# decodes on the device; 'stereo' prefers a stereo AAC track, else decodes. For HDMI
+# capture cards that only handle stereo PCM.
+FC_PLAYER_AUDIO_MODES = ('auto', 'pcm', 'stereo')
+
+
+def audio_mode() -> str:
+    """The Bridge audio setting, applied per trigger like captions_enabled()."""
+    mode = AppSettings.get().fc_player_bridge_audio_mode or 'auto'
+    return mode if mode in FC_PLAYER_AUDIO_MODES else 'auto'
 
 
 def captions_enabled() -> bool:
@@ -1771,6 +1788,47 @@ def check_playback_errors() -> None:
         logger.warning('[fc-player] playback-error watchdog redis write failed: %s', e)
 
 
+def check_audio_diagnostics() -> None:
+    """Debug-logging companion to check_playback_errors(): copies the player's
+    FCPlayer.Audio lines (chosen audio track, format changes, output encoding — e.g.
+    AC3 passthrough vs decoded PCM — underruns, decoder/output errors) into
+    FastChannels' log, so an audio complaint on a bridged channel can be matched to
+    what the player did without pulling logcat off the device by hand. Only runs with
+    debug logging on (Settings → Advanced, FC_DEBUG, or FC_PLAYER_AUDIO_DEBUG); same
+    configured-device scope and Redis last-seen bookkeeping as the error watchdog."""
+    from .debug_flag import debug_logging_enabled
+    if not is_configured() or not debug_logging_enabled('FC_PLAYER_AUDIO_DEBUG'):
+        return
+    try:
+        address = _adb_address()
+    except FcPlayerNotConfigured:
+        return
+    ok, text = _adb_shell(address, 'logcat', '-d', '-v', 'time',
+                           '-s', f'{_AUDIO_LOG_TAG}:I', '*:S')
+    if not ok or not text.strip():
+        return
+    entries = [e for e in _group_logcat_entries(text) if _AUDIO_LOG_TAG in e]
+    if not entries:
+        return
+    try:
+        r = _redis()
+        last_seen = (r.get(_LAST_AUDIO_LOGCAT_LINE_KEY) or b'').decode() or None
+    except Exception as e:
+        logger.warning('[fc-player] audio-diagnostics redis read failed: %s', e)
+        return
+    if last_seen and last_seen in entries:
+        new_entries = entries[entries.index(last_seen) + 1:]
+    else:
+        # First run or the buffer rolled over: the last tune's worth, not a backlog.
+        new_entries = entries[-8:]
+    for entry in new_entries:
+        logger.info('[fc-player][audio] %s', _entry_summary(entry))
+    try:
+        r.set(_LAST_AUDIO_LOGCAT_LINE_KEY, entries[-1])
+    except Exception as e:
+        logger.warning('[fc-player] audio-diagnostics redis write failed: %s', e)
+
+
 def trigger_channel(manifest_url: str, license_url: str | None = None, *, name: str = 'FastChannels',
                      channel_key: str | None = None, adb_address: str | None = None) -> bool:
     """Tell the FastChannels Player app to start playing this stream right now.
@@ -1834,6 +1892,8 @@ def trigger_channel(manifest_url: str, license_url: str | None = None, *, name: 
             '--es', 'channel_key', shlex.quote(channel_key or ''),
             '--ez', 'drm', 'true' if drm else 'false',
             '--ez', 'captions', 'true' if captions_enabled() else 'false',
+            # Players older than 5.2.13 ignore this extra and keep their default.
+            '--es', 'audio_mode', shlex.quote(audio_mode()),
         ])
         if drm:
             remote_cmd += ' --es license_url ' + shlex.quote(license_url)

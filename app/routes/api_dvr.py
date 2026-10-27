@@ -554,7 +554,8 @@ def push_feed_native_to_dvr(feed_id):
     )
     write_artifact(
         f'feed-{feed.slug}-native-m3u',
-        lambda fp: fp.write(generate_native_m3u(filters, base_url=base, include_description=False, **std_kw)),
+        lambda fp: fp.write(generate_native_m3u(filters, base_url=base, include_description=False,
+                                                epg_url=f'{base}/feeds/{feed.slug}/native/epg.xml', **std_kw)),
         ext='m3u',
     )
 

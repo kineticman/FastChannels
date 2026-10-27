@@ -1504,7 +1504,8 @@ def generate_combined_ah4c_m3u(filters: dict = None, base_url: str = None, *,
 
 def generate_native_m3u(filters: dict = None, base_url: str = None,
                         feed_chnum_start: int = None, namespace_start: int = None,
-                        feed_id: int = None, include_description: bool = True) -> str:
+                        feed_id: int = None, include_description: bool = True,
+                        epg_url: str = None) -> str:
     """
     Native (scraped-only) playlist — all feed channels, standard play URLs.
 
@@ -1517,6 +1518,11 @@ def generate_native_m3u(filters: dict = None, base_url: str = None,
     the EPG XML). Threadfin/Plex bridges bleed that long comma-bearing value into
     the channel name, so the native artifact is generated without it — cleaner than
     emitting-then-stripping the rendered text.
+
+    epg_url, when given, is advertised in the header (url-tvg / x-tvg-url) so
+    generic IPTV players load the guide without a separate EPG URL (#79). Only
+    the native pair gets this: every native line carries a tvg-id the native
+    XMLTV covers, while the split and mixed variants rely on Gracenote ids.
     """
     filters  = filters or {}
     base_url = (base_url or '').rstrip('/')
@@ -1539,7 +1545,7 @@ def generate_native_m3u(filters: dict = None, base_url: str = None,
         _sort_by_assigned_chnum(channels, chnum_map)
 
     multi_country_map = _source_multi_country_map(channels)
-    lines = ['#EXTM3U']
+    lines = [f'#EXTM3U url-tvg="{_esc(epg_url)}" x-tvg-url="{_esc(epg_url)}"' if epg_url else '#EXTM3U']
     for ch in channels:
         tvg_id = _tvg_id(ch)
         display_name = _channel_display_name(ch, multi_country_map)

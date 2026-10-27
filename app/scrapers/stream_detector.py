@@ -261,18 +261,83 @@ _TWITCH_RE = re.compile(
     re.IGNORECASE,
 )
 # Player clients tried in order. YouTube expanded its GVS PO Token requirement
-# to web_safari/web/ios/tv/mweb in mid-2026 — without a PO token provider those
-# clients now return zero formats ("No video formats found!") for ordinary
-# videos, not just live streams. android_vr and android are (as of 2026-07)
-# the only clients yt-dlp ships with no PO token requirement for HLS, so they
-# go first; android_vr is preferred (no PO token needed for HTTPS/DASH either),
-# android is the second string. `tv` looked promising on paper (also no PO
-# token policy) but empirically only returns storyboard-image formats for
-# every live stream tested — useless here since custom YouTube channels are
-# almost always live — so it's deliberately left out. The old web-based
-# clients stay as a last-resort fallback for content android_vr/android can't
-# serve (e.g. android_vr excludes "made for kids" videos).
-_YT_PLAYER_CLIENTS = ('android_vr', 'android', 'web_safari', 'web', 'ios')
+# to web_safari/web/ios/tv in mid-2026 — without a PO token provider those
+# clients return zero formats ("No video formats found!"), and the first client
+# that resolves wins. android goes first: confirmed 2026-10-26 it plays a live
+# stream cleanly for minutes, as does mweb. android_vr still resolves live
+# streams without a PO token, but YouTube now 403s their segments ~30s in, so
+# it would "resolve fine" and then die mid-stream; it stays as a late fallback
+# for content the others can't serve (it covers some android excludes). `tv`
+# only returns storyboard-image formats for live streams, so it's left out.
+_YT_PLAYER_CLIENTS = ('android', 'mweb', 'android_vr', 'web_safari', 'web', 'ios')
+
+# Automatic fallback when YouTube starts refusing a client's segments (as it did to
+# android_vr in 2026-10): a client can still resolve a live stream and then have
+# every segment 403 a few seconds in. googlevideo URLs don't name the client, but a
+# resolve's `ei` value appears in both its manifest URL and every segment URL, so
+# each resolve records ei -> client, and the custom segment proxy reports 403s back
+# here. A client that collects _YT_403_DEMOTE_AT of them inside _YT_403_WINDOW_S is
+# moved to the end of the order for _YT_DEMOTE_S, so the next tune uses the next
+# client without a code change. The stream that hit the 403s still drops.
+_YT_EI_RE = re.compile(r'/ei/([^/]+)/')
+_YT_EI_TTL_S = 6 * 60 * 60  # googlevideo URLs expire within about 6h
+_YT_403_WINDOW_S = 120
+_YT_403_DEMOTE_AT = 5
+_YT_DEMOTE_S = 24 * 60 * 60
+
+
+def _yt_redis():
+    import redis
+    return redis.from_url(os.environ.get('REDIS_URL', 'redis://localhost:6379/0'))
+
+
+def _yt_client_order() -> tuple[str, ...]:
+    """_YT_PLAYER_CLIENTS with currently demoted clients moved to the end (kept,
+    not dropped, so a run where every client is demoted still tries them all)."""
+    try:
+        r = _yt_redis()
+        demoted = {c for c in _YT_PLAYER_CLIENTS if r.exists(f'yt:demoted:{c}')}
+    except Exception:  # noqa: BLE001 — no Redis means no fallback, not no YouTube
+        return _YT_PLAYER_CLIENTS
+    if not demoted:
+        return _YT_PLAYER_CLIENTS
+    return (tuple(c for c in _YT_PLAYER_CLIENTS if c not in demoted)
+            + tuple(c for c in _YT_PLAYER_CLIENTS if c in demoted))
+
+
+def _yt_note_resolve(stream_url: str, client: str) -> None:
+    match = _YT_EI_RE.search(stream_url or '')
+    if not match:
+        return
+    try:
+        _yt_redis().setex(f'yt:ei:{match.group(1)}', _YT_EI_TTL_S, client)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def note_youtube_segment_403(segment_url: str) -> None:
+    """Called by the custom segment proxy for a googlevideo 403; demotes the client
+    that produced this stream once it has collected enough of them recently."""
+    match = _YT_EI_RE.search(segment_url or '')
+    if not match:
+        return
+    try:
+        r = _yt_redis()
+        client = r.get(f'yt:ei:{match.group(1)}')
+        if not client:
+            return
+        client = client.decode()
+        key = f'yt:403:{client}'
+        count = r.incr(key)
+        if count == 1:
+            r.expire(key, _YT_403_WINDOW_S)
+        if count >= _YT_403_DEMOTE_AT and r.set(f'yt:demoted:{client}', '1', nx=True, ex=_YT_DEMOTE_S):
+            r.delete(key)
+            logger.warning(
+                '[youtube] client=%s got %d segment 403s within %ds — trying the other clients '
+                'first for the next %dh', client, count, _YT_403_WINDOW_S, _YT_DEMOTE_S // 3600)
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def _ytdlp_verbose_enabled() -> bool:
@@ -3860,7 +3925,7 @@ class StreamDetector:
         # reason instead of swallowing it as a bare "extraction failed".
         throttled_client: str | None = None
 
-        for client in _YT_PLAYER_CLIENTS:
+        for client in _yt_client_order():
             try:
                 ydl_opts = {
                     'skip_download': True,
@@ -3926,6 +3991,7 @@ class StreamDetector:
                     '[youtube] resolved via client=%s pot=%s type=%s url=%s…',
                     client, pot_used, stream_type, stream_url[:80],
                 )
+                _yt_note_resolve(stream_url, client)
                 return self._finalize_extracted_stream(
                     stream_url,
                     stream_type,

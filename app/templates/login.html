@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <link rel="icon" type="image/x-icon" href="/static/favicon.ico">
+  <link rel="icon" type="image/png" sizes="32x32" href="/static/favicon-32x32.png">
+  <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+  <link rel="apple-touch-icon" sizes="180x180" href="/static/apple-touch-icon.png">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="robots" content="noindex">
+  <title>Sign in — FastChannels</title>
+  {% include 'admin/_theme_head.html' %}
+  <style>
+    *, *::before, *::after { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 1rem;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+    }
+    .login-card {
+      width: 100%;
+      max-width: 22rem;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 1.75rem 1.5rem;
+    }
+    h1 { color: var(--accent); font-size: 1.3rem; margin: 0 0 0.25rem; }
+    .sub { color: var(--text-soft); font-size: 0.85rem; margin: 0 0 1.25rem; }
+    label { display: block; font-size: 0.8rem; color: var(--text-soft); margin: 0 0 0.3rem; }
+    input {
+      width: 100%;
+      padding: 0.55rem 0.7rem;
+      margin: 0 0 0.9rem;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      background: var(--surface-2);
+      color: var(--text);
+      font-size: 0.95rem;
+    }
+    input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+    button {
+      width: 100%;
+      padding: 0.6rem;
+      border: 0;
+      border-radius: 6px;
+      background: var(--accent-strong);
+      color: #fff;
+      font-size: 0.95rem;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    button:hover { background: var(--accent-strong-hover); }
+    .error {
+      background: var(--danger-bg);
+      border: 1px solid var(--danger-border);
+      color: var(--danger-soft);
+      border-radius: 6px;
+      padding: 0.5rem 0.7rem;
+      font-size: 0.85rem;
+      margin: 0 0 1rem;
+    }
+  </style>
+</head>
+<body>
+  <form class="login-card" method="post" action="{{ url_for('admin_login') }}">
+    <h1>⚡ FastChannels</h1>
+    <p class="sub">Sign in to manage this server.</p>
+    {% if error %}<div class="error" role="alert">{{ error }}</div>{% endif %}
+    <input type="hidden" name="next" value="{{ next_url }}">
+    <label for="username">Username</label>
+    <input id="username" name="username" autocomplete="username" value="{{ username }}" required {% if not username %}autofocus{% endif %}>
+    <label for="password">Password</label>
+    <input id="password" name="password" type="password" autocomplete="current-password" required {% if username %}autofocus{% endif %}>
+    <button type="submit">Sign in</button>
+  </form>
+</body>
+</html>

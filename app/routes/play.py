@@ -55,6 +55,7 @@ from .fox_tve_proxy import (
     fox_tve_proxy_bp,
 )
 from .paramount_proxy import configure_paramount_proxy, paramount_proxy_bp
+from .warner_proxy import configure_warner_proxy, warner_proxy_bp
 
 
 from ..scrapers.cspan import (
@@ -109,16 +110,28 @@ def _channel_is_retired(channel: Channel) -> bool:
     return datetime.now(timezone.utc) >= deadline
 
 
-def _unavailable_response() -> Response:
+def _unavailable_response(reason: str | None = None) -> Response:
     """503 + Retry-After for a transient upstream failure (timeout, CDN hiccup,
     expired token). Well-behaved clients back off and retry instead of hammering
-    or giving up permanently."""
+    or giving up permanently. `reason` (a resolve error) goes out as
+    X-FastChannels-Error so the admin player can say why."""
+    headers = {'Retry-After': '30'}
+    if reason:
+        headers['X-FastChannels-Error'] = _error_header(reason)
     return Response(
         'Stream temporarily unavailable.\n',
         status=503,
         mimetype='text/plain',
-        headers={'Retry-After': '30'},
+        headers=headers,
     )
+
+
+def _error_header(reason: str) -> str:
+    """A resolve error made safe for a response header: URLs cut to their host
+    (paths and queries can carry tokens), one line, ASCII, capped."""
+    text = re.sub(r'https?://\S+', lambda m: _redact_url(m.group(0)).replace('\u2026', '...'), str(reason))
+    text = ' '.join(text.split())
+    return text.encode('ascii', 'replace').decode('ascii')[:300]
 
 def _stream_upstream_response(
     upstream: _requests.Response,
@@ -347,6 +360,13 @@ configure_paramount_proxy(
     channel_is_retired=_channel_is_retired,
 )
 play_bp.register_blueprint(paramount_proxy_bp)
+configure_warner_proxy(
+    unavailable_response=_unavailable_response,
+    gone_response=_gone_response,
+    refresh_stream_info_async=_refresh_stream_info_async,
+    channel_is_retired=_channel_is_retired,
+)
+play_bp.register_blueprint(warner_proxy_bp)
 
 
 def _check_manifest(url: str, session) -> tuple[str | None, dict | None]:
@@ -3099,6 +3119,16 @@ def play(source_name: str, channel_id: str):
             302,
         )
 
+    # TBS/TNT/truTV/TCM: their Akamai tokens break in clients that normalize URL
+    # escapes, so everything below the master goes through the proxy.
+    if source_name == 'warner_tve':
+        from urllib.parse import quote as _quote
+        encoded_id = _quote(channel.source_channel_id, safe='')
+        return redirect(
+            f"{request.host_url.rstrip('/')}/play/warner_tve/{encoded_id}/proxy.m3u8",
+            302,
+        )
+
     # NBC and PBS's DASH manifests have no BaseURL and relative segment paths.
     # A 302 straight to them works only in clients that resolve those against
     # the 302's target; ffmpeg's dash demuxer resolves them against this URL
@@ -3117,6 +3147,7 @@ def play(source_name: str, channel_id: str):
     # a transient resolve failure (timeout, CDN hiccup, expired token). They get
     # different HTTP responses below so clients back off correctly.
     resolve_dead = False
+    resolve_error = None
     if scraper_cls:
         scraper = scraper_cls(config=channel.source.config or {})
         try:
@@ -3155,12 +3186,14 @@ def play(source_name: str, channel_id: str):
                 getattr(g, 'request_id', '-'), source_name, channel_id, e,
             )
             resolved_url = None
+            resolve_error = str(e)
         except Exception as e:
             logger.error(
                 '[play] resolve failed request_id=%s ip=%s source=%s channel_id=%s channel_name=%s: %s',
                 getattr(g, 'request_id', '-'), client_ip, source_name, channel_id, channel.name, e,
             )
             resolved_url = None
+            resolve_error = str(e)
         finally:
             from ..extensions import db
             if scraper._pending_config_updates:
@@ -3192,7 +3225,7 @@ def play(source_name: str, channel_id: str):
         resolved_url = channel.stream_url
 
     if not resolved_url or not resolved_url.startswith(('http://', 'https://')):
-        return _gone_response() if resolve_dead else _unavailable_response()
+        return _gone_response() if resolve_dead else _unavailable_response(resolve_error)
 
     # STIRR channels resolve to URLs with IP-bound session tokens — proxy all
     # Stirr streams so every manifest fetch goes through the server IP, regardless

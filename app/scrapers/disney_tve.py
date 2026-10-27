@@ -127,6 +127,7 @@ _STREAM_CACHE_TTL = 10 * 60
 _BAM_TOKEN_TTL = 4 * 3600
 _ADOBE_TOKEN_MAX_AGE = 5 * 3600     # client tokens last ~6h; the sign-ins 90 days / a year
 _TOKEN_MARGIN = 300
+_STATION_GRACENOTE_TTL = 7 * 86400
 
 
 class DisneyTVEScraper(MvpdCooldownMixin, BaseScraper):
@@ -273,7 +274,8 @@ class DisneyTVEScraper(MvpdCooldownMixin, BaseScraper):
                 language='en',
                 country='US',
                 guide_key=f'DISNEY:{vid}',
-                gracenote_id=resolve_gracenote('disney_tve', lookup_key=call or vid),
+                gracenote_id=(resolve_gracenote('disney_tve', lookup_key=call or vid)
+                              or (self._station_gracenote(call) if call else None)),
             ))
         self._update_cache('disney_channels', {ch.source_channel_id: {
             'brand': ch.stream_url[len(SCHEME):].split('/')[0], 'west': _is_west(ch.name),
@@ -281,18 +283,51 @@ class DisneyTVEScraper(MvpdCooldownMixin, BaseScraper):
         logger.info('[disney_tve] %d channels (station %s)', len(out), affiliate or 'none')
         return out
 
+    def _station_gracenote(self, call: str) -> str | None:
+        """The local station's Gracenote id from Channels DVR's TMS search, for
+        stations the community map doesn't list, so tvtv can fill in their guide
+        when Disney's schedule has none. Only a station Gracenote lists as an ABC
+        affiliate counts: Disney's location lookup can still name one that has
+        left ABC (WLNE went to Roar), whose tvtv guide would be the wrong one."""
+        found = dict(self.cache.get('disney_station_gracenote') or {})
+        hit = found.get(call) or {}
+        if hit and time.time() - hit.get('at', 0) < _STATION_GRACENOTE_TTL:
+            return hit.get('id') or None
+        try:
+            from ..gracenote_suggest import fetch_tms_station_candidates
+            from ..models import AppSettings
+            dvr_url = (AppSettings.get().effective_channels_dvr_url() or '').strip()
+            if not dvr_url:
+                return None
+            rows = fetch_tms_station_candidates(dvr_url, call)
+        except Exception as exc:
+            logger.debug('[disney_tve] Gracenote lookup for %s failed: %s', call, exc)
+            return hit.get('id') or None
+        abc = {(r.get('callSign') or '').upper(): str(r.get('stationId') or '') for r in rows
+               if (r.get('affiliateCallSign') or '').upper() == 'ABC' and r.get('stationId')}
+        # The -DT record is the digital station tvtv lists; the bare call sign is the old analog one.
+        gid = abc.get(f'{call}DT') or abc.get(call) or ''
+        if not gid:
+            logger.info("[disney_tve] %s isn't an ABC station in Gracenote; no tvtv guide fallback", call)
+        found[call] = {'id': gid, 'at': time.time()}
+        self._update_cache('disney_station_gracenote', found)
+        return gid or None
+
     # ── guide ────────────────────────────────────────────────────────────────
 
-    def _schedule(self, brand: str, affiliate: str | None) -> list[dict]:
+    def _schedule(self, brand: str, affiliate: str | None, video: str | None = None) -> list[dict]:
         # Times are local to `offset`, which must be a US one (ABC News Live
         # answers nothing for +0000).
         now = (datetime.now(timezone.utc) - timedelta(hours=5)).replace(minute=0, second=0, microsecond=0)
-        r = self.session.get(_SCHEDULE, timeout=30, params={
+        params = {
             'brand': '001', 'device': '001', 'layout': _SCHEDULE_LAYOUT, 'channel': brand,
             'starttime': (now - timedelta(hours=3)).strftime('%Y%m%d-%H%M'),
             'endtime': (now + timedelta(days=_GUIDE_DAYS)).strftime('%Y%m%d-%H%M'),
             # With an affiliate the module answers that station's lineup whatever the channel.
-            'offset': '-0500', 'affiliate': (affiliate or '') if brand == '001' else '', 'locale': 'US/Eastern'})
+            'offset': '-0500', 'affiliate': (affiliate or '') if brand == '001' else '', 'locale': 'US/Eastern'}
+        if video:
+            params['video'] = video  # the local news streams (brand 200) each have their own
+        r = self.session.get(_SCHEDULE, timeout=30, params=params)
         r.raise_for_status()
         return (r.json() or {}).get('videos') or []
 
@@ -303,16 +338,23 @@ class DisneyTVEScraper(MvpdCooldownMixin, BaseScraper):
         programs = []
         for ch in channels:
             brand = ch.stream_url[len(SCHEME):].split('/')[0]
-            if brand == '200':
-                continue  # the local news streams have no schedule
-            if brand not in schedules:
+            # Each local news stream has its own schedule; the other brands share one per brand.
+            key = ch.source_channel_id if brand == '200' else brand
+            if key not in schedules:
                 try:
-                    schedules[brand] = self._schedule(brand, affiliate)
+                    schedules[key] = self._schedule(brand, affiliate,
+                                                    video=ch.source_channel_id if brand == '200' else None)
                 except (requests.RequestException, ValueError) as exc:
-                    logger.warning('[disney_tve] guide for brand %s failed: %s', brand, exc)
-                    schedules[brand] = []
+                    logger.warning('[disney_tve] guide for %s failed: %s', key, exc)
+                    schedules[key] = []
+            if brand == '001' and not schedules[key] and ch.gracenote_id:
+                from .free_networks import FreeNetworksScraper
+                rows = FreeNetworksScraper._tvtv_programs(self, ch.source_channel_id, ch.gracenote_id)
+                logger.info('[disney_tve] no Disney guide for %s; %d entries from tvtv', ch.name, len(rows))
+                programs.extend(rows)
+                continue
             shift = timedelta(hours=3) if _is_west(ch.name) else timedelta(0)
-            for v in schedules[brand]:
+            for v in schedules[key]:
                 prog = _program(ch.source_channel_id, v, shift)
                 if prog:
                     programs.append(prog)

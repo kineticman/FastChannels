@@ -339,6 +339,11 @@ def ensure_runtime_schema() -> None:
                 # Default on — purely a rendering choice with no operational cost, unlike
                 # the other fc_player_bridge_* toggles above.
                 conn.execute(text("ALTER TABLE app_settings ADD COLUMN fc_player_bridge_captions_enabled BOOLEAN NOT NULL DEFAULT 1"))
+            if "fc_player_bridge_audio_mode" not in cols:
+                # 'auto' keeps the player's existing behavior (Dolby passed through when
+                # the HDMI device says it accepts it); the other modes are opt-in for
+                # capture cards that only handle stereo PCM.
+                conn.execute(text("ALTER TABLE app_settings ADD COLUMN fc_player_bridge_audio_mode TEXT NOT NULL DEFAULT 'auto'"))
             if "fc_player_bridge_ah4c_enabled" not in cols:
                 # Default off — ah4c (github.com/sullrich/ah4c) is an alternate HDMI-capture
                 # front end for the bridge; unrelated installs shouldn't get a new M3U/DVR-push
@@ -364,6 +369,10 @@ def ensure_runtime_schema() -> None:
                 # Default off — meant to be flipped on briefly while reproducing a
                 # specific issue (see app/debug_flag.py), not left running.
                 conn.execute(text("ALTER TABLE app_settings ADD COLUMN debug_logging_enabled BOOLEAN NOT NULL DEFAULT 0"))
+            if "admin_username" not in cols:
+                conn.execute(text("ALTER TABLE app_settings ADD COLUMN admin_username TEXT"))
+            if "admin_password_hash" not in cols:
+                conn.execute(text("ALTER TABLE app_settings ADD COLUMN admin_password_hash TEXT"))
             _ensure_app_settings_row(conn)
 
         if "sources" in tables:

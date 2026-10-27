@@ -8,6 +8,7 @@ from flask import Blueprint, current_app, jsonify, render_template, request
 from sqlalchemy import select, case, func, or_
 from sqlalchemy.orm import load_only, defer
 from ..extensions import db
+from .. import admin_auth
 from ..models import Source, Channel, Feed, FeedChannelNumber, AppSettings, Program
 from ..generators.m3u import (
     _build_channel_query,
@@ -320,6 +321,33 @@ def _category_clause(values):
     if not clauses:
         return None
     return db.or_(*clauses) if len(clauses) > 1 else clauses[0]
+
+
+def _network_clause(source_name, network):
+    """SQLAlchemy filter for one Free Networks network, or None.
+
+    Free Networks bundles dozens of networks under one source; its channel IDs
+    are "<network>.<id>", so a network is a prefix match on source_channel_id.
+    Ignored for any other source, so a leftover ?network= never empties a view.
+    Shared by the Channels and Guide pages and the bulk API.
+    """
+    if source_name != 'free_networks' or not network:
+        return None
+    return Channel.source_channel_id.startswith(f'{network}.', autoescape=True)
+
+
+def _network_facets(source_channel_ids):
+    """(key, name, count) per Free Networks network present in the given
+    source_channel_ids, sorted by name."""
+    from ..scrapers.free_networks import NETWORKS
+    counts = {}
+    for scid in source_channel_ids:
+        key = (scid or '').split('.', 1)[0]
+        counts[key] = counts.get(key, 0) + 1
+    return sorted(
+        ((n.key, n.name, counts[n.key]) for n in NETWORKS if n.key in counts),
+        key=lambda n: n[1].lower(),
+    )
 
 
 def _apply_admin_feed_membership_filters(query, feed: Feed):
@@ -871,7 +899,31 @@ def sources():
     def _cat_for(s):
         return _source_category(s, all_scrapers)
 
-    sources_list.sort(key=lambda s: (_CAT_ORDER.get(_cat_for(s), 99), s.display_name))
+    # Sources listed under another source's row (grouped_under) sort right after
+    # it, when that source is listed in the same group; otherwise they stand alone.
+    _by_name = {s.name: s for s in sources_list}
+    source_parent = {}
+    for s in sources_list:
+        parent = _by_name.get(getattr(all_scrapers.get(s.name), 'grouped_under', None))
+        if parent is not None and parent is not s and _cat_for(parent) == _cat_for(s):
+            source_parent[s.name] = parent.name
+    source_children = {}
+    for s in sorted(sources_list, key=lambda s: s.display_name):
+        if s.name in source_parent:
+            source_children.setdefault(source_parent[s.name], []).append(s)
+
+    # Within a group, sources that are on come first, then the ones that are off.
+    # A source with sources listed under it counts as on when any of them is.
+    def _block_on(top):
+        return top.is_enabled or any(c.is_enabled for c in source_children.get(top.name, []))
+
+    def _sort_key(s):
+        parent = _by_name.get(source_parent.get(s.name)) or s
+        return (_CAT_ORDER.get(_cat_for(s), 99), not _block_on(parent), parent.display_name,
+                parent is not s, s.display_name)
+
+    sources_list.sort(key=_sort_key)
+    source_block_on = {s.name: _block_on(_by_name.get(source_parent.get(s.name)) or s) for s in sources_list}
 
     category_counts = {}
     category_on_counts = {}
@@ -907,6 +959,9 @@ def sources():
                            under_development=under_development,
                            beta_sources=beta_sources,
                            source_categories=source_categories,
+                           source_parent=source_parent,
+                           source_children=source_children,
+                           source_block_on=source_block_on,
                            source_mix=source_mix,
                            bridge_ready=bridge_ready,
                            source_status=source_status,
@@ -930,6 +985,7 @@ def channels():
     page             = request.args.get('page', 1, type=int)
     feed_filter      = request.args.get('feed', '')
     source_filter    = request.args.get('source', '')
+    network_filter   = request.args.get('network', '').strip()
     search           = request.args.get('search', '')
     enabled_filter   = request.args.get('enabled', '')
     review_filter    = request.args.get('review', '')
@@ -1035,6 +1091,11 @@ def channels():
 
     if source_filter:
         q = q.filter(Source.name == source_filter)
+    q_before_network = q  # snapshot for network facet (exclude own filter)
+    if (net_clause := _network_clause(source_filter, network_filter)) is not None:
+        q = q.filter(net_clause)
+    else:
+        network_filter = ''
     q_before_language = q  # snapshot for language facet (exclude own filter)
     if (lang_clause := _language_clause(language_filter)) is not None:
         q = q.filter(lang_clause)
@@ -1181,6 +1242,12 @@ def channels():
         .order_by(Channel.country).all()
     countries = [(c, cnt) for c, cnt in country_rows]
 
+    networks = []
+    if source_filter == 'free_networks':
+        networks = _network_facets(
+            scid for (scid,) in q_before_network.with_entities(Channel.source_channel_id)
+        )
+
     page_names = {(ch.name or '').strip() for ch in channels.items if (ch.name or '').strip()}
     page_ids   = {ch.id for ch in channels.items}
     duplicate_names = exact_duplicate_names & page_names
@@ -1223,7 +1290,7 @@ def channels():
 
     from urllib.parse import urlencode
     filter_qs = urlencode({k: v for k, v in {
-        'feed': feed_filter, 'source': source_filter, 'search': search,
+        'feed': feed_filter, 'source': source_filter, 'network': network_filter, 'search': search,
         'enabled': enabled_filter, 'review': review_filter, 'presence': presence_filter, 'drm': drm_filter,
         'language': language_filter, 'country': country_filter,
         'gracenote': gracenote_filter, 'gracenote_mode': gracenote_mode_filter,
@@ -1241,6 +1308,7 @@ def channels():
                            sources=sources, feeds=feeds,
                            feed_filter=feed_filter, selected_feed=selected_feed,
                            source_filter=source_filter, search=search,
+                           network_filter=network_filter, networks=networks,
                            enabled_filter=enabled_filter, drm_filter=drm_filter,
                            review_filter=review_filter,
                            presence_filter=presence_filter,
@@ -1342,6 +1410,24 @@ def guide():
         cat_count_q = cat_count_q.filter(event_clause)
     categories = cat_count_q.group_by(Channel.category).order_by(Channel.category).all()
 
+    # Free Networks: a second dropdown narrows the guide to one network.
+    network  = request.args.get('network', type=str, default='').strip()
+    networks = []
+    selected_source = next((s for s in sources if s.id == source_id), None) if source_id else None
+    source_name = selected_source.name if selected_source else None
+    if source_name == 'free_networks':
+        net_q = (
+            db.session.query(Channel.source_channel_id)
+            .filter(Channel.source_id == source_id, Channel.is_active == True)
+        )
+        if state == 'enabled':
+            net_q = net_q.filter(Channel.is_enabled == True)
+        elif state == 'disabled':
+            net_q = net_q.filter(Channel.is_enabled == False)
+        networks = _network_facets(scid for (scid,) in net_q)
+    else:
+        network = ''
+
     q = Channel.query.options(load_only(
         Channel.id, Channel.name, Channel.logo_url, Channel.number, Channel.source_id,
         Channel.is_enabled,
@@ -1352,6 +1438,8 @@ def guide():
         q = q.filter(Channel.is_enabled == False)
     if source_id:
         q = q.filter(Channel.source_id == source_id)
+    if (net_clause := _network_clause(source_name, network)) is not None:
+        q = q.filter(net_clause)
     if feed_id:
         selected_feed = Feed.query.filter_by(id=feed_id, is_enabled=True).first()
         if selected_feed:
@@ -1437,6 +1525,8 @@ def guide():
         feeds=feeds,
         categories=categories,
         source_id=source_id,
+        networks=networks,
+        network=network,
         feed_id=feed_id,
         event_filter=event_filter,
         category=category,
@@ -1891,6 +1981,9 @@ def settings():
                            event_guide_filler=app_settings.event_guide_filler if app_settings.event_guide_filler is not None else True,
                            m3u_rewrite_timestamps=bool(app_settings.m3u_rewrite_timestamps),
                            debug_logging_enabled=bool(app_settings.debug_logging_enabled),
+                           admin_login_enabled=bool((app_settings.admin_password_hash or '').strip()),
+                           admin_login_username=(app_settings.admin_username or '').strip(),
+                           admin_auth_env_disabled=admin_auth.env_disabled(),
                            prismcast_url=app_settings.effective_prismcast_url() or '',
                            prismcast_inner_url=app_settings.prismcast_inner_url or '',
                            prismcast_max_height=int(app_settings.prismcast_max_height or 0),
@@ -1901,6 +1994,7 @@ def settings():
                            fc_player_encoder_url=app_settings.saved_fc_player_bridge_encoder_url() or '',
                            fc_player_idle_stop_enabled=bool(app_settings.fc_player_bridge_idle_stop_enabled),
                            fc_player_captions_enabled=bool(app_settings.fc_player_bridge_captions_enabled),
+                           fc_player_audio_mode=app_settings.fc_player_bridge_audio_mode or 'auto',
                            fc_player_ah4c_enabled=bool(app_settings.fc_player_bridge_ah4c_enabled),
                            fc_player_ah4c_url=app_settings.fc_player_bridge_ah4c_url or '',
                            fc_player_configured=bool(
@@ -1957,6 +2051,7 @@ def bridge():
         fc_player_hdmi_enabled=bool(app_settings.fc_player_bridge_hdmi_enabled),
         fc_player_idle_stop_enabled=bool(app_settings.fc_player_bridge_idle_stop_enabled),
         fc_player_captions_enabled=bool(app_settings.fc_player_bridge_captions_enabled),
+        fc_player_audio_mode=app_settings.fc_player_bridge_audio_mode or 'auto',
         fc_player_ah4c_enabled=bool(app_settings.fc_player_bridge_ah4c_enabled),
         fc_player_ah4c_url=app_settings.fc_player_bridge_ah4c_url or '',
         fc_player_configured=bool(

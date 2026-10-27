@@ -34,6 +34,7 @@ class AdultSwimScraper(BaseScraper):
     stream_audit_enabled = True
     epg_quality = "partial"
     source_category = 'fast'
+    grouped_under = 'free_networks'   # a free network's own website, listed under Free Networks
     config_schema = []
 
     BASE_URL = "https://www.adultswim.com"
@@ -41,7 +42,23 @@ class AdultSwimScraper(BaseScraper):
     VIDEO_URL = BASE_URL + "/api/shows/v1/videos/{video_id}"
     SCHEDULE_URL = BASE_URL + "/api/schedule/marathons/{marathon_id}"
     STREAM_SCHEME = "adultswim://stream"
+    LIVE_URL = "https://adultswim-vodlive.cdn.turner.com/live/{path}/stream.m3u8"
     NO_SHOW_PAGE_SLUGS = frozenset({"channel-5"})
+    # Catalog rows whose video API entry lists no stream, though the stream is live.
+    ASSET_FALLBACKS = {"off-the-air-smalls": LIVE_URL.format(path="off-the-air")}
+    # Catalog slugs whose show page lives under another slug.
+    SHOW_PAGE_SLUGS = {"off-the-air-smalls": "off-the-air"}
+    # Live marathon streams with schedules that the catalog no longer lists
+    # (Channels DVR plays Mr. Pickles too): slug, title, marathon id, stream
+    # path, poster (the show page's og:image). Added only while the stream is up.
+    UNLISTED_STREAMS = (
+        ("mr-pickles", "Mr. Pickles", "5801264b1bb9661440d5f848", "mr-pickles",
+         "https://i.cdn.turner.com/adultswim/big/img/2018/04/18/MrPicklesS02_fbsearchTn.jpg"),
+        ("squidbillies", "Squidbillies", "5801264b1bb9661440d5f84a", "squidbillies",
+         "https://media.cdn.adultswim.com/uploads/20211107/21117198155-SquidbilliesMetaThumb420x236.png"),
+        ("check-it-out-with-dr-steve-brule", "Check It Out! with Dr. Steve Brule", "5801264b1bb9661440d5f84d",
+         "check-it-out", "https://i.cdn.turner.com/adultswim/big/img/2014/08/22/CheckitOut2.jpg"),
+    )
     VIDEO_FIELDS = (
         "title,type,duration,collection_title,poster,stream,title_id,auth,"
         "media_id,launch_date,auth_launch_date,disable_ads,season_number,episode_number"
@@ -111,7 +128,7 @@ class AdultSwimScraper(BaseScraper):
             title = self._clean(row["title"])
             video_id = self._clean(row["stream"])
             marathon_id = self._clean(row["vod_to_live_id"])
-            asset_url = assets.get(video_id)
+            asset_url = assets.get(video_id) or self.ASSET_FALLBACKS.get(slug)
             if not asset_url:
                 no_asset.append(title)
                 continue
@@ -134,6 +151,28 @@ class AdultSwimScraper(BaseScraper):
                     stream_type="hls",
                     number=number,
                     description=self._clean(row.get("description")) or None,
+                )
+            )
+
+        listed = {channel.source_channel_id for channel in channels}
+        for slug, title, marathon_id, path, poster in self.UNLISTED_STREAMS:
+            asset_url = self.LIVE_URL.format(path=path)
+            if slug in listed or not self._stream_is_up(asset_url):
+                continue
+            channels.append(
+                ChannelData(
+                    source_channel_id=slug,
+                    name=title,
+                    stream_url=self._build_stream_uri(
+                        slug=slug, video_id="", marathon_id=marathon_id, asset_url=asset_url,
+                    ),
+                    logo_url=poster,
+                    slug=slug,
+                    category="Comedy",
+                    language="en",
+                    country="US",
+                    stream_type="hls",
+                    number=len(channels) + 1,
                 )
             )
 
@@ -222,9 +261,16 @@ class AdultSwimScraper(BaseScraper):
             return None
         return self._select_stable_asset(payload)
 
+    def _stream_is_up(self, url: str) -> bool:
+        try:
+            return self.session.get(url, timeout=10).status_code == 200
+        except Exception:  # noqa: BLE001
+            return False
+
     def _episode_metadata_for_slug(self, slug: str) -> dict[str, list[dict[str, Any]]]:
         if slug in self.NO_SHOW_PAGE_SLUGS:
             return {}
+        slug = self.SHOW_PAGE_SLUGS.get(slug, slug)
         now = time.monotonic()
         with _episode_cache_lock:
             cached = _episode_cache.get(slug)

@@ -51,7 +51,6 @@ _SUPPRESS_PATTERNS = (
     'GET /api/settings/tve/status',        # settings-page TVE network status — fires on every page load, can take several seconds
     '/api/sources/chnum',      # overlap-banner polling
     '/api/feeds/chnum-ranges', # feed page chnum conflict checker
-    '/play/amazon_prime_free/license', # Amazon DRM license — fires per key rotation
     '/play/fox_tve/key',      # FOX Weather Uplynk AES keys — one per key rotation
     'GET /api/sources HTTP',   # sources list fetched on every poll cycle finish
     '"GET /admin/',            # admin page navigation GETs (POSTs still logged)
@@ -78,6 +77,7 @@ _SUPPRESS_WATCH_RE = re.compile(r'"(?:GET|HEAD) /watch/\d+')
 _SUCCESS_ACCESS_RE = re.compile(r'HTTP/\d(?:\.\d)?" [23]\d\d ')
 _SUCCESS_SUPPRESS_PATTERNS = (
     '/play/philo/license',     # Philo DRM license — noisy during startup/key rotation
+    '/play/amazon_prime_free/license', # Amazon DRM license — fires per key rotation
     'GET /api/settings/fc-player/devices HTTP',  # Bridge devices card list, on page load
     'GET /api/settings/fc-player/ah4c-activity HTTP',  # Bridge activity card polls every 15s while visible
     'POST /api/settings/fc-player/devices/probe',  # read-only adb probe, one per device per page load
@@ -96,16 +96,21 @@ _SUCCESS_SUPPRESS_PATTERNS = (
 # through browser.mpd?s=; the first browser.mpd (the tune) still logs.
 # Paramount+ matches refresh their media playlist through the proxy every ~6s
 # per viewer, plus a key fetch at tune; proxy.m3u8 (the tune) still logs.
+# Warner TVE (TBS/TNT/truTV/TCM) relays everything below the master: a variant
+# refresh and a segment every ~6s per viewer, plus a key per rotation.
 _SUCCESS_SUPPRESS_RE = re.compile(
     r'(?:GET|HEAD) /play/directv/browser-asset\?url=|(?:GET|HEAD) /play/dazn_tve/[^/]+/seg/'
     r'|(?:GET|HEAD) /play/vix/[^/]+/(?:seg\?|browser\.mpd\?s=)'
-    r'|(?:GET|HEAD) /play/paramount/[^/]+/(?:variant\.m3u8|key)\?url=')
+    r'|(?:GET|HEAD) /play/paramount/[^/]+/(?:variant\.m3u8|key)\?url='
+    r'|(?:GET|HEAD) /play/warner_tve/[^/]+/(?:variant\.m3u8|key|segment\.ts)\?url=')
 _DASH_RE = re.compile(r'(?:GET|HEAD) /play/(amazon_prime_free|cox|philo|sling|pbs|vidaa|fubo|dazn_tve)/[^/]+/dash\.mpd')
 # DirecTV/cox use path-form license URLs (/license/<id>), while vidaa/fubo/sling use
 # query-form URLs (/license?channel_id=<id>) — matched via the separator below. Sling's
 # fire on every tune, block-boundary swap, and FC Player ad-gap rejoin.
 _LICENSE_RE = re.compile(r'POST /play/(directv|cox|vidaa|fubo|sling|espn|dazn_tve|vix|cnn_tve)/license(?:/|\?channel_id=)')
 _PLUTO_VARIANT_QUERY_RE = re.compile(r'("(?:GET|HEAD) /play/pluto/variant)\?[^ ]+')
+# Warner's ?url= carries the CDN token; ~8h valid, so keep it out of the log.
+_WARNER_PROXY_QUERY_RE = re.compile(r'("(?:GET|HEAD) /play/warner_tve/[^/]+/(?:variant\.m3u8|key|segment\.ts))\?[^ ]+')
 
 
 class _AccessFilter(logging.Filter):
@@ -131,6 +136,10 @@ class _AccessFilter(logging.Filter):
         # Failed variant requests remain visible, without the signed Pluto URL.
         if _PLUTO_VARIANT_QUERY_RE.search(msg):
             record.msg = _PLUTO_VARIANT_QUERY_RE.sub(r'\1?[redacted]', msg)
+            record.args = ()
+        # Same for Warner proxy failures.
+        elif _WARNER_PROXY_QUERY_RE.search(msg):
+            record.msg = _WARNER_PROXY_QUERY_RE.sub(r'\1?[redacted]', msg)
             record.args = ()
         return True
 
