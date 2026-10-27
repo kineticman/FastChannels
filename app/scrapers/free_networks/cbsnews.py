@@ -1,5 +1,6 @@
 """CBS News 24/7, the CBS News local streams, and CBS's other free channels
-(Sports HQ, Inside Edition, ET, 48 Hours, 60 Minutes).
+(Sports HQ, Inside Edition, ET, 48 Hours, 60 Minutes, and from cbs.com's live
+TV: Judge Judy, Hot Bench, Car Chase).
 
 Channel list: www.cbsnews.com/video/xhr/collection/component/live-channels/
 (JSON; needs a browser TLS fingerprint, plain requests get 406). Each entry's
@@ -39,6 +40,18 @@ _KNOWN = {
     'mixible':        ('ET Live', 'xrVrJYTmTfitfXBQfeZByQ', '110291', 'Entertainment'),
     '48-hours':       ('48 Hours', 'JUr94WL2QAiVpGNHY5n5dA', '160400', 'True Crime'),
     '60-minutes':     ('60 Minutes', 'nrb-l85CR7SIr-rGXqz4zA', '161735', 'News'),
+    # On cbs.com/live-tv but not cbsnews.com's list (DAI events from the
+    # cbs.com channel pages, 2026-10-27). Gracenote IDs are Pluto's; tvtv's
+    # slots matched cbs.com's on-now times the same day.
+    'judge-judy':     ('Judge Judy', 'bRE69gQJQm2_cW4qnf6okg', '201079', 'Reality TV'),
+    'hot-bench':      ('Hot Bench', 'ZU0VFVOpRB29p8Lhj_z1CA', '202596', 'Reality TV'),
+    'car-chase':      ('Car Chase', 'RjvF1cd0Qx-65Dz14THpPA', '148202', 'Reality TV'),
+}
+_CBS_LOGO = 'https://wwwimage-tve.cbsstatic.com/thumbnails/photos/w370-q80/channel/{}.png'
+_LOGOS = {
+    'judge-judy': _CBS_LOGO.format('78/49/95/3af01ed5-da60-477e-a5fe-c40193cfbf3c'),
+    'hot-bench':  _CBS_LOGO.format('59/93/30/890c4d26-c818-4b84-9233-004c9b653b4b'),
+    'car-chase':  _CBS_LOGO.format('88/01/96/ce80dc2e-ebf8-489e-a730-6ad58284f62e'),
 }
 
 
@@ -60,7 +73,8 @@ class CBSNews(Network):
         out = []
         for slug, (name, event, gracenote, category) in _KNOWN.items():
             url = live.get(slug, (None, _DAI.format(event)))[1]
-            out.append(NetChannel(slug, name, url, logo=_LOGO, category=category, gracenote_id=gracenote))
+            out.append(NetChannel(slug, name, url, logo=_LOGOS.get(slug, _LOGO), category=category,
+                                  gracenote_id=gracenote))
         for slug, (title, url) in live.items():
             if slug not in _KNOWN:
                 logger.info('[free_networks] CBS News: new channel %r (%s) not in the built-in list', title, slug)
