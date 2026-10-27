@@ -16,6 +16,8 @@ from ._common import Network, NetChannel, from_epoch, program
 _PLAYLISTS = 'https://prod.kankuapi.com/mansa/playlist/page'
 _EPG = 'https://prod.epgsyncservice.kankuapi.com/api/epgs'
 _HEADERS = {'Origin': 'https://www.mansa.com', 'Referer': 'https://www.mansa.com/'}
+_WARM_ATTEMPTS = 3
+_WARM_DELAY_SECS = 1.5
 # Carried in Free Networks already from The CW's feed.
 _ELSEWHERE = {'electric now'}
 
@@ -45,6 +47,23 @@ class Mansa(Network):
 
     def has_guide(self, channel_id: str) -> bool:
         return channel_id not in self._unguided
+
+    def resolve(self, s, ref):
+        # Ottera's ad stitcher (the Stingray channels) answers a channel's
+        # first request after it has sat idle with HTTP 400, then 200 a moment
+        # later; the stream audit marked three Dead on that first 400. Warm the
+        # channel before handing the URL over.
+        if 'ottera.tv' not in ref:
+            return ref
+        for attempt in range(_WARM_ATTEMPTS):
+            if attempt:
+                time.sleep(_WARM_DELAY_SECS)
+            try:
+                if s.session.get(ref, timeout=15).status_code != 400:
+                    break
+            except Exception:
+                break
+        return ref
 
     def programs(self, s, channels):
         r = s.get(_EPG, headers=_HEADERS)
