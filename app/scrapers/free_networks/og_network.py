@@ -8,6 +8,9 @@ follows the web app: an anonymous client_credentials token for its public
 client (sent as x-auth-token), the channel asset's 'hls-live' resource, then a
 playback session whose playback_url is clear HLS (up to 1080p) on noisypeak.
 The session ticket in that URL lasts ~10 minutes, so it's created per tune.
+Some channels' variant playlists carry no segments at all (a dozen on
+2026-10-27, FearStream and CaribVision among them), which players fail on
+with opaque errors, so resolve() checks for segments before handing it over.
 
 No guide: the web app shows none and SDP exposes none to this client, so the
 channels get tvtv (by Gracenote ID; only CaribVision's checks out) or
@@ -18,6 +21,7 @@ from __future__ import annotations
 import threading
 import time
 import uuid
+from urllib.parse import urljoin
 
 from ._common import Network, NetChannel, logger
 
@@ -85,7 +89,25 @@ class OGNetwork(Network):
         url = ((r.json() or {}).get('data') or {}).get('playback_url')
         if not url:
             raise RuntimeError(f'OG Network gave no playback URL for channel {asset_id}')
+        if not _has_segments(s, url):
+            raise RuntimeError(f'OG Network channel {asset_id} is serving an empty playlist (no segments)')
         return url
+
+
+def _has_segments(s, url: str) -> bool:
+    """False only when the first variant definitely lists no segments; any
+    probe failure lets the URL through for the player to try."""
+    try:
+        r = s.session.get(url, headers=_HEADERS, timeout=15)
+        if not r.ok:
+            return True
+        variant = next((ln.strip() for ln in r.text.splitlines() if ln.strip() and not ln.startswith('#')), None)
+        if not variant:
+            return True
+        v = s.session.get(urljoin(r.url, variant), headers=_HEADERS, timeout=15)
+        return not v.ok or '#EXTINF' in v.text
+    except Exception:
+        return True
 
 
 def _auth_token(s, fresh: bool = False) -> str:
