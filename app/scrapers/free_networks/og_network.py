@@ -10,7 +10,8 @@ playback session whose playback_url is clear HLS (up to 1080p) on noisypeak.
 The session ticket in that URL lasts ~10 minutes, so it's created per tune.
 
 No guide: the web app shows none and SDP exposes none to this client, so the
-channels get tvtv (by Gracenote ID) or placeholder blocks.
+channels get tvtv (by Gracenote ID; only CaribVision's checks out) or
+placeholder blocks.
 """
 from __future__ import annotations
 
@@ -26,6 +27,10 @@ _CLIENT_ID = 'cloud:ognetwork_ottweb_device'
 _HEADERS = {'Origin': 'https://play.theognetwork.net', 'Referer': 'https://play.theognetwork.net/'}
 # Tokens carry no expiry; take a new one now and then, and on any 401.
 _TOKEN_MAX_AGE = 6 * 3600
+# Checked 2026-10-26 by matching the playback URL's ads.content_title against
+# tvtv's now-playing. Other name matches (Dark Matter TV, Ghost Dimension,
+# Viajar, Terra, The Family Channel, ...) air different schedules.
+_GRACENOTE = {'471446': '49411'}  # CaribVision
 # Tagged Hispanic/LATAM but in English.
 _ENGLISH = {'The TRUMP Channel', 'New America Channel', 'GALLI Lucha Libre'}
 
@@ -52,6 +57,7 @@ class OGNetwork(Network):
                 logo=ch.get('posterImg') or None,
                 category=genres[0] if genres else None,
                 language='es' if 'Hispanic' in genres and title not in _ENGLISH else 'en',
+                gracenote_id=_GRACENOTE.get(str(asset_id)),
             ))
         return out
 
