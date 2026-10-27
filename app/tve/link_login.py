@@ -33,7 +33,7 @@ from .adobe_pass import TVEAuthError, TVENotAuthorizedError, TVEPendingAuthError
 logger = logging.getLogger(__name__)
 
 STATUS_KEY = 'tve:link-login:status'
-LINK_FAMILIES = ('legacy', 'nbc', 'tcm', 'fox', 'amcn', 'discovery', 'versant', 'univision', 'disney', 'tennis', 'dazn', 'cspan', 'sundance', 'cnn', 'nesn', 'monumental', 'altitude', 'motv')
+LINK_FAMILIES = ('legacy', 'nbc', 'tcm', 'fox', 'amcn', 'discovery', 'versant', 'univision', 'disney', 'tennis', 'dazn', 'cspan', 'sundance', 'cnn', 'nesn', 'monumental', 'altitude', 'motv', 'snp')
 _PER_TARGET_TIMEOUT = 10 * 60
 _POLL_SECONDS = 3.0
 _POLL_MAX_SECONDS = 15.0
@@ -858,6 +858,90 @@ class _Sundance:
         return 'authorized'
 
 
+class _Snp:
+    """SportsNet Pittsburgh — Adobe v2 under the ATTSPORTSNET requestor, driven
+    by DICE like _Sundance: log in to the SNP account (email/password from the
+    source settings), sign in at Adobe with the account's profile id as the
+    device, then trade the Adobe client's token for an SNP session that
+    carries the TV-provider licence."""
+    error_key = 'snp'
+
+    def __init__(self, account, mso_id: str, requestor_id: str | None):
+        from ..models import Source
+        self.account, self.mso_id = account, mso_id
+        self.source = Source.query.filter_by(name='sportsnet_pittsburgh_tve').first()
+        if not self.source or not self.source.is_enabled:
+            raise TVEAuthError('Enable the SportsNet Pittsburgh TVE source before signing in to it.')
+        cfg = self.source.config or {}
+        self.email, self.password = cfg.get('email') or '', cfg.get('password') or ''
+        if not self.email or not self.password:
+            raise TVEAuthError('Enter your SNP email and password in the SportsNet Pittsburgh TVE source '
+                               'settings first.')
+
+    def targets(self):
+        return ['SportsNet Pittsburgh']
+
+    def start(self, label):
+        from ..scrapers import sportsnet_pittsburgh_tve as snp
+        user = snp.login(self.email, self.password)
+        device = snp.profile_id(user['authorisationToken'])
+        if not device:
+            raise TVEAuthError('SportsNet Pittsburgh: the SNP sign-in has no profile id.')
+        saved = (self.account.config or {}).get('snp_auth') or {}
+        if saved.get('mso_id') != self.mso_id or saved.get('device_id') != device:
+            saved = {}
+        client = snp.adobe_client(device, saved)
+        if client.client_id and client.client_secret:
+            client.refresh_access_token()
+        else:
+            client._client_creds = None
+            client._register_client()
+        data = client._post(
+            f'{snp.ADOBE_API}/api/v2/{snp.REQUESTOR_ID}/sessions',
+            data={'mvpd': self.mso_id, 'redirectUrl': snp.REDIRECT_URL, 'domainName': snp.SITE},
+            headers={**client._bearer_headers(), 'Content-Type': 'application/x-www-form-urlencoded'},
+        ).json()
+        ctx = {'user': user['authorisationToken'], 'client': client, 'device': device,
+               'profile_url': f'{snp.ADOBE_API}/api/v2/{snp.REQUESTOR_ID}/profiles/{self.mso_id}'}
+        if data.get('reasonType') == 'authenticated':
+            return None, ctx
+        if not data.get('url'):
+            raise TVEAuthError('SportsNet Pittsburgh: Adobe did not return a sign-in URL.')
+        return snp.ADOBE_API + data['url'], ctx
+
+    def poll(self, ctx):
+        from ..scrapers import sportsnet_pittsburgh_tve as snp
+        client = ctx['client']
+        r = client.session.get(ctx['profile_url'], headers=client._bearer_headers(), timeout=20)
+        if r.status_code == 401:
+            client.refresh_access_token()
+            return None
+        if not r.ok or not ((r.json() or {}).get('profiles') or {}).get(self.mso_id):
+            return None
+        creds = {'client_id': client.client_id, 'client_secret': client.client_secret}
+        return snp.exchange_adobe(ctx['user'], creds, client.access_token, self.mso_id)
+
+    def save(self, ctx, session):
+        from ..extensions import db
+        from ..scrapers import sportsnet_pittsburgh_tve as snp
+
+        if not snp.has_tv_provider(session['authorisationToken']):
+            raise TVENotAuthorizedError('your package doesn\'t include SportsNet Pittsburgh')
+        client = ctx['client']
+        captured_at = int(time.time())
+        cfg = dict(self.account.config or {})
+        cfg['snp_auth'] = {'mso_id': self.mso_id, 'refresh_token': session['refreshToken'],
+                           'client_id': client.client_id, 'client_secret': client.client_secret,
+                           'access_token': client.access_token, 'device_id': ctx['device'],
+                           'captured_at': captured_at}
+        self.account.config = cfg
+        db.session.commit()
+        scraper = snp.SportsNetPittsburghTVEScraper(config=dict(self.source.config or {}))
+        scraper._save_session({'auth': session['authorisationToken'], 'refresh': session['refreshToken'],
+                               'signed_in_at': captured_at})
+        return 'authorized'
+
+
 class _Dazn:
     """DAZN — two links, one after the other: DAZN's own "sign in with your
     phone" pairing (dazn.com/signin/device/<id>, opened where the user is
@@ -1222,7 +1306,8 @@ _ADAPTERS = {'legacy': _Legacy, 'nbc': _Nbc, 'tcm': _Tcm, 'fox': _Fox, 'amcn': _
              'discovery': _Discovery, 'versant': _Versant, 'univision': _Univision,
              'disney': _Disney, 'tennis': _Tennis, 'dazn': _Dazn, 'cspan': _Cspan,
              'sundance': _Sundance, 'cnn': _Cnn, 'nesn': _Nesn,
-             'monumental': _Monumental, 'altitude': _Altitude, 'motv': _MyOutdoorTV}
+             'monumental': _Monumental, 'altitude': _Altitude, 'motv': _MyOutdoorTV,
+             'snp': _Snp}
 
 
 # ── job ──────────────────────────────────────────────────────────────────────

@@ -25,7 +25,7 @@ SHARED_DISPLAY_NAME = 'TV Provider'
 SEPARATE_SIGNIN_SOURCES = frozenset({
     'nbc_tve', 'fox_tve', 'warner_tve', 'aenetworks_tve', 'amcn_tve', 'discovery_tve', 'versant_tve',
     'univision_tve', 'disney_tve', 'tennis_tve', 'dazn_tve', 'cspan_tve', 'sundance_tve', 'cnn_tve', 'nesn_tve',
-    'monumental_tve', 'altitude_tve', 'myoutdoortv_tve',
+    'monumental_tve', 'altitude_tve', 'myoutdoortv_tve', 'sportsnet_pittsburgh_tve',
 })
 
 # What a source's sign-in leaves behind outside its account row. All of it is
@@ -58,6 +58,7 @@ SIGNIN_STATE = {
     'monumental_tve': {'cache': ('monumental_session', 'monumental_playback'), 'account': ('monumental_mvpd_auth',)},
     'altitude_tve': {'cache': ('altitude_session', 'altitude_playback'), 'account': ('altitude_mvpd_auth',)},
     'myoutdoortv_tve': {'cache': ('motv_session', 'motv_playback'), 'account': ('motv_mvpd_auth',)},
+    'sportsnet_pittsburgh_tve': {'cache': ('snp_session', 'snp_streams'), 'account': ('snp_auth',)},
 }
 
 # The keys sign-in status and errors are recorded under (tve_last_error,
@@ -94,6 +95,7 @@ _NETWORK_KEY_SOURCES = {
     'monumental': 'monumental_tve',
     'altitude': 'altitude_tve',
     'motv': 'myoutdoortv_tve',
+    'snp': 'sportsnet_pittsburgh_tve',
 }
 
 

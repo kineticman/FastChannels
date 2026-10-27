@@ -167,7 +167,7 @@ def tve_network_status_route():
 _TVE_SOURCE_NAMES = ('aenetworks_tve', 'fox_tve', 'discovery_tve', 'amcn_tve', 'warner_tve', 'nbc_tve',
                      'versant_tve', 'univision_tve', 'disney_tve', 'tennis_tve', 'dazn_tve', 'cspan_tve',
                      'sundance_tve', 'cnn_tve', 'nesn_tve', 'monumental_tve', 'altitude_tve',
-                     'myoutdoortv_tve')
+                     'myoutdoortv_tve', 'sportsnet_pittsburgh_tve')
 
 # FOX One is a Premium source with its own settings (sign-in method,
 # separate login, home ZIP); a TVE reset only drops the sign-in it got from
@@ -237,7 +237,8 @@ def tve_reset():
                                             'nesn_session', 'nesn_playback',
                                             'monumental_session', 'monumental_playback',
                                             'altitude_session', 'altitude_playback',
-                                            'motv_session', 'motv_playback')),
+                                            'motv_session', 'motv_playback',
+                                            'snp_session', 'snp_streams')),
             ),
         ).delete(synchronize_session=False)
 

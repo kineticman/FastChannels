@@ -732,6 +732,10 @@ def _get_playback_info(ch, fast_mode=True, browser=False):
     if ch.source and ch.source.name in VIEWLIFT_SOURCES and ch.source_channel_id:
         from urllib.parse import quote as _quote
         preview_url = f'/play/{ch.source.name}/{_quote(ch.source_channel_id, safe="")}/dash.mpd'
+    if (ch.source and ch.source.name == 'sportsnet_pittsburgh_tve' and ch.source_channel_id
+            and (ch.stream_type or '').lower() == 'dash'):
+        from urllib.parse import quote as _quote
+        preview_url = f'/play/sportsnet_pittsburgh_tve/{_quote(ch.source_channel_id, safe="")}/dash.mpd'
     if ch.source and ch.source.name == 'vix' and ch.source_channel_id:
         from urllib.parse import quote as _quote
         # A browser can't fetch ViX's segments (CORS is vix.com-only), so the

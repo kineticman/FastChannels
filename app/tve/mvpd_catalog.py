@@ -46,7 +46,7 @@ CONFIG_URL = 'https://sp.auth.adobe.com/adobe-services/config/{}'
 ADOBE_REQUESTORS = (
     'AETV', 'HISTORY', 'LIFETIME', 'FYI', 'TBS', 'TNT', 'truTV', 'TCM', 'CNN',
     'AMC', 'BBCA', 'IFC', 'WETV', 'SUNDANCE', 'nbcentertainment', 'sparkmedia',
-    'NESNGO', 'CSNMidAtlantic', 'Altitude', 'MyOutdoorTV', 'fbc-fox', 'foxnews', 'foxbusiness', 'univision', 'tceverywhere',
+    'NESNGO', 'CSNMidAtlantic', 'Altitude', 'MyOutdoorTV', 'ATTSPORTSNET', 'fbc-fox', 'foxnews', 'foxbusiness', 'univision', 'tceverywhere',
     'Gotham', 'C-SPAN', 'dtci', 'DisneyChannels', 'ESPN',
 )
 DISCOVERY = 'discovery'

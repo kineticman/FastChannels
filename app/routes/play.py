@@ -1811,6 +1811,14 @@ def viewlift_tve_dash(source: str, channel_id: str):
     return play(source, _unquote(channel_id))
 
 
+@play_bp.route('/play/sportsnet_pittsburgh_tve/<channel_id>/dash.mpd')
+def sportsnet_pittsburgh_tve_dash(channel_id: str):
+    """SNP+ (a DASH event) under a .mpd name for FastChannels Player, like
+    versant_tve_dash. SNP itself is HLS and plays from the .m3u8 URL."""
+    from urllib.parse import unquote as _unquote
+    return play('sportsnet_pittsburgh_tve', _unquote(channel_id))
+
+
 @play_bp.route('/play/vix/<channel_id>/dash.mpd')
 def vix_dash(channel_id: str):
     """ViX under a .mpd name for FastChannels Player, like versant_tve_dash.
