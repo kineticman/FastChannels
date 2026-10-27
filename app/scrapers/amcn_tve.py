@@ -34,8 +34,8 @@ logger = logging.getLogger(__name__)
 # AMC Networks TVE scraper.
 #
 # Validated direct-HLS family members: AMC, BBC America, IFC, and WE tv.
-# Sundance TV is intentionally excluded: the current web app uses DICE/IMG and
-# returns DRM-protected HLS, so it needs a separate EPG/DRM-bridge integration.
+# SundanceTV plays from this same backend, but lives in sundance_tve.py: its
+# TV-provider sign-in goes through Sundance's DICE app, which also has its guide.
 
 SCHEME = 'amcn-tve://'
 API_BASE = 'https://gw.cds.amcn.com'

@@ -21,22 +21,20 @@ Key facts established by probing:
   POST /v2/token/refresh {refreshToken} with the old token as Bearer. Refresh
   answers 429 when called again within a few minutes, so the session is
   shared through Redis and only one worker refreshes at a time.
-- Playback: /v2/stream/event/<id> → playerUrlCallback → {hls, hlsWidevine,
-  dash}, all encrypted (no clear variant). The URL token (hdnea) lasts about
-  40 seconds. The DASH manifest has relative segment URLs that need that
-  token, so it dies with it; the HLS master instead hands its child playlists
-  a ~24-hour hdntl token in their URLs. So this plays hlsWidevine (fMP4,
-  SAMPLE-AES-CTR, Widevine) through FastChannels Player.
-- License: POST shield-drm.onvesper.com/api/v2/license with
-  Authorization: Bearer <drm.jwtToken> and X-DRM-INFO: base64 JSON
-  {"system": ...}. The site's code has two enums for the system name, so the
-  license call tries both (see post_license_request).
+- DICE's own streams (/v2/stream/event/<id> → hls, hlsWidevine, dash) are
+  all encrypted. But AMC Networks' older TVE backend still serves Sundance
+  like AMC/IFC/WE tv/BBC America (see amcn_tve.py), in clear HLS up to 1080p
+  — Channels DVR plays it this way. Found 2026-10-26: network sundancetv,
+  livestream 6398689080112. It takes an Adobe short media token for
+  SUNDANCE, which the DICE-driven sign-in already provides: Adobe v1
+  /authorize + /tokens/media with the saved Adobe client, and the Sundance
+  profile id (the token's pro.id) as the Adobe device id. AMCN then wants
+  unauth → refresh → mvpd-auth with the Adobe userId, and
+  /playback-id/api/v1/livestream/<id> answers with Brightcove SSAI HLS.
+  So DICE is only used for the sign-in, the device id and the guide.
 - Guide: /v4/epg/content/programmes?channelId=1254 only reaches about 8 hours
   ahead, so the channel also carries Gracenote 71280 (SundanceTV HD, the ID
   DirecTV and Spectrum both use) for a full guide.
-
-Not verified: the DRM token carries def=sd for a BROWSER session, which may
-cap the picture below the stream's 720p.
 """
 from __future__ import annotations
 
@@ -46,6 +44,7 @@ import logging
 import os
 import re
 import time
+import uuid
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urlencode
 
@@ -55,6 +54,7 @@ from .base import BaseScraper, ChannelData, ConfigField, ProgramData
 from ..gracenote_map import resolve_gracenote
 from ..tve.accounts import tve_account_for
 from ..tve.adobe_pass import TVEAuthError, TVENotAuthorizedError, refresh_adobe_client_token
+from . import amcn_tve
 
 logger = logging.getLogger(__name__)
 
@@ -68,10 +68,6 @@ REALM = 'dce.sundance'
 ADOBE_API = 'https://api.auth.adobe.com'
 REQUESTOR_ID = 'SUNDANCE'
 REDIRECT_URL = f'{SITE}/providers/success'
-_LICENSE_URL = 'https://shield-drm.onvesper.com/api/v2/license'
-# The site's two names for Widevine in X-DRM-INFO. The license server took
-# com.widevine.alpha (WIDEVINE: 400) on 2026-10-19; the other stays as a fallback.
-_DRM_SYSTEMS = ('com.widevine.alpha', 'WIDEVINE')
 # Known ids, for when the live list can't be read.
 _DEFAULT_EVENT = '284832'
 _EPG_CHANNEL = '1254'
@@ -82,7 +78,13 @@ _LOGO = '/static/logos/sundance/sundance.png'
 _SESSION_KEY = 'sundance_tve:session'
 _LOCK_KEY = 'sundance_tve:refresh_lock'
 _TOKEN_MARGIN = 60
-_STREAM_MAX_AGE = 20  # the master URL's hdnea lasts ~40s from issue
+_ADOBE_TOKEN_MAX_AGE = 5 * 3600  # Adobe client tokens last ~6h
+# AMC Networks' channel for SundanceTV. service_group_id is unconfirmed (the
+# web app that sent it is gone) but AMCN accepted it for every call.
+_AMCN_CHANNEL = amcn_tve.AMCNChannel(
+    channel_id='sundancetv', name='SundanceTV', slug='sundancetv', requestor_id=REQUESTOR_ID,
+    domain='sundancetv.com', service_group_id='2', livestream_id='6398689080112', logo_url='',
+)
 _GUIDE_HOURS = 24
 
 
@@ -206,8 +208,6 @@ class SundanceTVEScraper(BaseScraper):
     is_premium = True
     scrape_interval = 240  # the guide only reaches ~8 hours ahead
     stream_audit_enabled = True
-    license_url = _LICENSE_URL
-    all_channels_require_drm_bridge = True
 
     config_schema = [
         ConfigField('email', 'Sundance email', placeholder='you@example.com',
@@ -390,74 +390,115 @@ class SundanceTVEScraper(BaseScraper):
 
     # ── playback ─────────────────────────────────────────────────────────────
 
-    def audit_resolve(self, raw_url: str) -> str:
-        # Validate entitlement, then hand back the opaque URL: the stream is
-        # Widevine either way, and its URL token only lasts ~40 seconds.
-        self.resolve(raw_url)
-        return raw_url
-
     def resolve(self, raw_url: str) -> str:
         if not raw_url.startswith(SCHEME):
             raise ValueError(f'Unsupported SundanceTV stream URL: {raw_url}')
-        event = raw_url[len(SCHEME):].strip('/')
-        streams = dict(self.cache.get('sundance_streams') or {})
-        cached = streams.get(_EPG_CHANNEL) or {}
-        if cached.get('event') == event and time.time() - float(cached.get('at') or 0) < _STREAM_MAX_AGE:
-            return cached['url']
-        token = self._token()
-        r = self.session.get(f'{API}/v2/stream/event/{event}', headers={'Authorization': f'Bearer {token}'},
-                             timeout=20)
-        callback = _json(r).get('playerUrlCallback')
-        if not callback:
-            if r.status_code == 403:
-                raise TVENotAuthorizedError(f'SundanceTV: Sundance refused the stream ({_reason(r) or "no access"}).')
-            raise RuntimeError(f'SundanceTV: no stream: HTTP {r.status_code} {_reason(r)}')
-        p = self.session.get(callback, headers={'Authorization': f'Bearer {token}'}, timeout=20)
-        variant = _json(p).get('hlsWidevine') or {}
-        if not variant.get('url'):
-            raise RuntimeError(f'SundanceTV: no Widevine HLS stream: HTTP {p.status_code}')
-        streams[_EPG_CHANNEL] = {'event': event, 'url': variant['url'], 'at': time.time(),
-                                 'drm_token': (variant.get('drm') or {}).get('jwtToken'),
-                                 'license': (variant.get('drm') or {}).get('url') or _LICENSE_URL}
-        self._update_cache('sundance_streams', streams)
-        return variant['url']
+        _, auth = self._auth()
+        if not auth.get('client_id'):
+            raise self._sign_in_needed('SundanceTV: not signed in yet — use "Sign in" for SundanceTV under '
+                                       'Settings → TV Everywhere.')
+        state = dict(self.cache.get('sundance_streams') or {})
+        if state.get('signed_in_at') != auth.get('captured_at'):
+            state = {'signed_in_at': auth.get('captured_at')}  # a new sign-in: start over
+        media_token = self._adobe_media_token(auth, state)
+        mso = auth.get('mso_id') or ''
+        token = self._amcn_token(state, mso)
+        hdrs = amcn_tve._amcn_headers(
+            _AMCN_CHANNEL, token=token, device_id=state['amcn_device'], entitlement='mvpd-auth',
+            adobe_id=state['adobe_user'], mvpd=mso, feature_flags=amcn_tve._jwt_payload(token).get('feature_flags'))
+        self._update_cache('sundance_streams', state)
+        r = self.session.post(
+            f'{amcn_tve.API_BASE}/playback-id/api/v1/livestream/{_AMCN_CHANNEL.livestream_id}',
+            json={'adobeShortMediaToken': media_token, 'hba': False,
+                  'adtags': {'lat': 0, 'url': _AMCN_CHANNEL.live_url, 'playerWidth': 1920, 'playerHeight': 1080}},
+            headers=hdrs, timeout=30)
+        if r.status_code in (401, 403):
+            # A stale AMCN token: drop it so the next tune starts over.
+            state.pop('amcn_token', None)
+            self._update_cache('sundance_streams', state)
+        r.raise_for_status()
+        hls = amcn_tve._find_hls_source(r.json())
+        if not hls:
+            raise RuntimeError('SundanceTV: AMC Networks answered without an HLS stream.')
+        return hls
 
-    @classmethod
-    def get_license_url(cls, config: dict, channel_id: str | None = None) -> str | None:
-        return ((config.get('sundance_streams') or {}).get(_EPG_CHANNEL) or {}).get('license') or cls.license_url
+    def _adobe_media_token(self, auth: dict, state: dict) -> str:
+        """Adobe's short media token for SUNDANCE, from the TV-provider
+        sign-in saved for this Sundance profile."""
+        if not state.get('adobe_device'):
+            # The profile id never changes, so an expired session token still has it.
+            stored = self._stored_session(auth).get('auth') or self._token()
+            state['adobe_device'] = (claims(stored).get('pro') or {}).get('id') or ''
+            if not state['adobe_device']:
+                raise RuntimeError('SundanceTV: the Sundance session has no profile id.')
+        if not state.get('adobe_token') or time.time() - float(state.get('adobe_token_at') or 0) > _ADOBE_TOKEN_MAX_AGE:
+            state['adobe_token'] = refresh_adobe_client_token(auth['client_id'], auth.get('client_secret') or '')
+            state['adobe_token_at'] = time.time()
+        params = {'requestor': REQUESTOR_ID, 'deviceId': state['adobe_device']}
+        hdrs = {'Authorization': f'Bearer {state["adobe_token"]}', 'User-Agent': UA, 'Accept': 'application/json'}
+        if not state.get('adobe_user'):
+            r = requests.get(f'{ADOBE_API}/api/v1/tokens/authn', params=params, headers=hdrs, timeout=20)
+            if r.status_code in (403, 404, 410):
+                raise self._sign_in_needed(
+                    f'SundanceTV: the {auth.get("mso_id") or "TV provider"} sign-in has expired — sign in again '
+                    'under Settings → TV Everywhere.')
+            r.raise_for_status()
+            state['adobe_user'] = _json(r).get('userId') or ''
+        params['resource'] = REQUESTOR_ID
+        r = requests.get(f'{ADOBE_API}/api/v1/authorize', params=params, headers=hdrs, timeout=20)
+        if r.status_code == 403:
+            raise TVENotAuthorizedError(f'SundanceTV: Adobe did not authorize SundanceTV for {auth.get("mso_id")}.')
+        if r.status_code in (404, 410):
+            state.pop('adobe_user', None)
+            raise self._sign_in_needed(
+                f'SundanceTV: the {auth.get("mso_id") or "TV provider"} sign-in has expired — sign in again '
+                'under Settings → TV Everywhere.')
+        r.raise_for_status()
+        r = requests.get(f'{ADOBE_API}/api/v1/tokens/media', params=params, headers=hdrs, timeout=20)
+        r.raise_for_status()
+        token = _json(r).get('serializedToken')
+        if not token:
+            raise TVEAuthError('SundanceTV: Adobe returned no media token.')
+        return token
 
-    @classmethod
-    def prepare_license_request(
-        cls, challenge: bytes, config: dict, channel_id: str | None = None, **kwargs,
-    ) -> tuple[bytes, dict]:
-        token = ((config.get('sundance_streams') or {}).get(_EPG_CHANNEL) or {}).get('drm_token')
-        headers_ = {'Content-Type': 'application/octet-stream', 'User-Agent': UA, 'Origin': SITE,
-                    'Referer': SITE + '/', 'X-DRM-INFO': _drm_info(_DRM_SYSTEMS[0])}
-        if token:
-            headers_['Authorization'] = f'Bearer {token}'
-        return challenge, headers_
-
-    @classmethod
-    def post_license_request(cls, license_url: str, body: bytes, headers: dict, timeout: int = 15):
-        r = requests.post(license_url, data=body, headers=headers, timeout=timeout)
-        if r.status_code in (400, 403) and headers.get('X-DRM-INFO') == _drm_info(_DRM_SYSTEMS[0]):
-            retry = requests.post(license_url, data=body, timeout=timeout,
-                                  headers={**headers, 'X-DRM-INFO': _drm_info(_DRM_SYSTEMS[1])})
-            logger.info('[sundance_tve] license: %s answered %s, %s answered %s', _DRM_SYSTEMS[0], r.status_code,
-                        _DRM_SYSTEMS[1], retry.status_code)
-            if retry.ok:
-                return retry
-        return r
+    def _amcn_token(self, state: dict, mso: str) -> str:
+        """AMC Networks' mvpd-auth bearer: unauth → refresh → mvpd-auth,
+        reused until it's near expiry."""
+        token = state.get('amcn_token') or ''
+        if token and float(amcn_tve._jwt_exp(token) or 0) - time.time() > _TOKEN_MARGIN:
+            return token
+        ch, adobe_id = _AMCN_CHANNEL, state['adobe_user']
+        device = state.get('amcn_device') or str(uuid.uuid4())
+        r = self.session.post(f'{amcn_tve.API_BASE}/auth-orchestration-id/api/v1/unauth', json={},
+                              headers=amcn_tve._amcn_headers(ch, device_id=device), timeout=20)
+        r.raise_for_status()
+        unauth = _json(r).get('data') or {}
+        device = amcn_tve._jwt_payload(unauth.get('access_token') or '').get('device-id') or device
+        r = self.session.post(
+            f'{amcn_tve.API_BASE}/auth-orchestration-id/api/v1/refresh', json={}, timeout=20,
+            headers=amcn_tve._amcn_headers(
+                ch, token=unauth.get('refresh_token') or unauth.get('access_token') or '', device_id=device,
+                adobe_id=adobe_id, mvpd=mso, cache_hash=unauth.get('cache_hash'),
+                user_cache_hash=unauth.get('user_cache_hash')))
+        r.raise_for_status()
+        refreshed = (_json(r).get('data') or {}).get('access_token') or ''
+        r = self.session.post(
+            f'{amcn_tve.API_BASE}/auth-orchestration-id/api/v1/mvpd-auth', json={}, timeout=20,
+            headers=amcn_tve._amcn_headers(
+                ch, token=refreshed, device_id=device, adobe_id=adobe_id, mvpd=mso,
+                feature_flags=amcn_tve._jwt_payload(refreshed).get('feature_flags')))
+        r.raise_for_status()
+        token = ((_json(r).get('data') or {}).get('access_token') or '').strip()
+        if not token:
+            raise TVEAuthError('SundanceTV: AMC Networks did not return a signed-in token.')
+        state['amcn_token'], state['amcn_device'] = token, device
+        return token
 
     @staticmethod
     def _sign_in_needed(message: str) -> TVEAuthError:
         from ..tve.signin_notice import mark_signin_needed
         mark_signin_needed(NETWORK_KEY, message)
         return TVEAuthError(message)
-
-
-def _drm_info(system: str) -> str:
-    return base64.b64encode(json.dumps({'system': system}).encode()).decode()
 
 
 def _json(r) -> dict:

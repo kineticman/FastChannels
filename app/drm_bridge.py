@@ -26,14 +26,15 @@ from . import fc_player_bridge
 # running real Chrome) could ever reach Cox TVE outside the browser.
 #
 # (Warner TVE was on this list until 2026-10, when it moved to Turner's clear
-# AES-128 feeds and stopped being a DRM source.)
+# AES-128 feeds and stopped being a DRM source; SundanceTV likewise left when it
+# moved to AMC Networks' clear HLS.)
 #
 # Shared by app/routes/play.py, app/routes/admin.py, app/routes/api_dvr.py,
 # app/generators/m3u.py, and app/worker.py — keep them all in sync via this single
 # source of truth.
 DRM_BRIDGE_TRUSTED_SOURCES = frozenset({
     'sling', 'nbc_tve', 'pbs', 'amazon_prime_free', 'directv', 'vidaa', 'philo', 'roku',
-    'fubo', 'spectrum', 'espn', 'versant_tve', 'vix', 'disney_tve', 'tennis_tve', 'dazn_tve', 'sundance_tve', 'cnn_tve', 'nesn_tve',
+    'fubo', 'spectrum', 'espn', 'versant_tve', 'vix', 'disney_tve', 'tennis_tve', 'dazn_tve', 'cnn_tve', 'nesn_tve',
 })
 
 
