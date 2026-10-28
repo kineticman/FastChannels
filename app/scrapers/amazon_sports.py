@@ -400,10 +400,13 @@ class AmazonSportsScraper(AmazonPrimeFreeScraper, BaseScraper):
                          'startIndex': index,
                          'journeyIngressContext': container.get('journeyIngressContext', '')}
                 # Amazon now and then answers a page with no entities but more
-                # to come; the same request moments later is complete.
-                for attempt in range(3):
+                # to come; the same request moments later is complete. One
+                # stall outlasted 3s of retries, so back off for up to 15s.
+                for attempt in range(5):
                     if attempt:
-                        time.sleep(attempt)
+                        logger.warning('[amazon-sports] empty page at %s index %d; retry %d',
+                                       container.get('title') or target, index, attempt)
+                        time.sleep(2 ** (attempt - 1))
                     page = self.get(self.PAGINATE_URL, params=query, headers=headers)
                     if not page or page.status_code != 200:
                         raise RuntimeError('Amazon sports pagination failed; refusing a partial scrape')
@@ -420,7 +423,8 @@ class AmazonSportsScraper(AmazonPrimeFreeScraper, BaseScraper):
                 if not data.get('hasMoreItems'):
                     break
                 if not entities:
-                    raise RuntimeError('Amazon sports pagination stalled')
+                    raise RuntimeError(f"Amazon sports pagination stalled at "
+                                       f"{container.get('title') or target!r} index {index}")
                 next_index = data.get('startIndex')
                 if not isinstance(next_index, int) or next_index <= index:
                     raise RuntimeError('Amazon sports pagination did not advance')
