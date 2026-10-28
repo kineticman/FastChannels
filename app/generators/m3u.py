@@ -286,6 +286,8 @@ def _build_channel_query(filters: dict, *, activity: str = 'active'):
             _match.append(Channel.language == language)
         if countries := filters.get('countries'):
             _match.append(Channel.country.in_(countries))
+        if sports := filters.get('sports'):
+            _match.append(Channel.sport.in_(sports))
         if gracenote := filters.get('gracenote'):
             if gracenote == 'has':
                 _match.append(db.and_(Channel.gracenote_id != None, Channel.gracenote_id != ''))
@@ -349,6 +351,8 @@ def _build_channel_stub_query(filters: dict):
             _match.append(Channel.language == language)
         if countries := filters.get('countries'):
             _match.append(Channel.country.in_(countries))
+        if sports := filters.get('sports'):
+            _match.append(Channel.sport.in_(sports))
         if gracenote := filters.get('gracenote'):
             if gracenote == 'has':
                 _match.append(db.and_(Channel.gracenote_id != None, Channel.gracenote_id != ''))
@@ -508,6 +512,8 @@ def feed_to_query_filters(feed_filters: dict) -> dict:
         f['languages'] = languages
     if countries := feed_filters.get('countries'):
         f['countries'] = countries
+    if sports := feed_filters.get('sports'):
+        f['sports'] = sports
     if gracenote := feed_filters.get('gracenote'):
         f['gracenote'] = gracenote
     if excluded_ids := feed_filters.get('excluded_channel_ids'):

@@ -257,6 +257,8 @@ class Channel(db.Model):
     went_inactive_at  = db.Column(db.DateTime(timezone=True), nullable=True)
     retire_at         = db.Column(db.DateTime(timezone=True), nullable=True)
     delete_at         = db.Column(db.DateTime(timezone=True), nullable=True)
+    sport             = db.Column(db.String(64), nullable=True)    # event's sport in app.sports' vocabulary; set by scraper
+    league            = db.Column(db.String(128), nullable=True)   # event's league as the source names it
     returned_at       = db.Column(db.DateTime(timezone=True), nullable=True)
     identity_changed_at = db.Column(db.DateTime(timezone=True), nullable=True)  # set by scraper when an enabled slot's content changed upstream (guide_key/name swap) — needs Gracenote review
     previous_name       = db.Column(db.String(256), nullable=True)  # the occupant's name before the last content swap (paired with identity_changed_at)
@@ -329,6 +331,8 @@ class Channel(db.Model):
             'last_seen_at':     self.last_seen_at.isoformat() if self.last_seen_at else None,
             'retire_at':       self.retire_at.isoformat() if self.retire_at else None,
             'delete_at':       self.delete_at.isoformat() if self.delete_at else None,
+            'sport':           self.sport,
+            'league':          self.league,
             'identity_changed_at': self.identity_changed_at.isoformat() if self.identity_changed_at else None,
             'previous_name':    self.previous_name,
             'previous_gracenote_id': self.previous_gracenote_id,
@@ -379,6 +383,7 @@ class Feed(db.Model):
       sources      list[str]  — Source.name values to include
       categories   list[str]  — channel category strings
       languages    list[str]  — ISO 639-1 codes
+      sports       list[str]  — app.sports names; channels without a sport don't match
       max_channels int        — cap on channels returned
     """
     __tablename__ = 'feeds'

@@ -536,6 +536,11 @@
                   <span class="badge-pill pill-teal">{{ c }}</span>
                 {% endfor %}
               {% endif %}
+              {% if f.get('sports') %}
+                {% for sp in f['sports'] %}
+                  <span class="badge-pill pill-green">{{ sp }}</span>
+                {% endfor %}
+              {% endif %}
               {% if f.get('gracenote') == 'has' %}
                 <span class="badge-pill pill-green">has gracenote</span>
               {% elif f.get('gracenote') == 'missing' %}
@@ -925,6 +930,18 @@
         {% endfor %}
       </div>
     </div>
+    {% if sports %}
+    <div class="field">
+      <label>Sports <span style="color:var(--text-dim);font-weight:400;text-transform:none">(event channels with one of these sports; leave all unchecked = include all)</span></label>
+      <div class="check-group" id="sports-group">
+        {% for sp in sports %}
+        <label class="check-item" id="sport-wrap-{{ loop.index }}">
+          <input type="checkbox" value="{{ sp }}" class="sport-cb"> {{ sp }}
+        </label>
+        {% endfor %}
+      </div>
+    </div>
+    {% endif %}
     {% if countries %}
     <div class="field">
       <label>Regions <span style="color:var(--text-dim);font-weight:400;text-transform:none">(leave all unchecked = include all)</span></label>
@@ -1113,8 +1130,9 @@ function renderChannelList() {
   const activeSources = new Set([...document.querySelectorAll('.src-cb:checked')].map(c => c.value));
   const activeCats    = new Set([...document.querySelectorAll('.cat-cb:checked')].map(c => c.value));
   const activeLangs   = new Set([...document.querySelectorAll('.lang-cb:checked')].map(c => c.value));
+  const activeSports  = new Set([...document.querySelectorAll('.sport-cb:checked')].map(c => c.value));
 
-  const hasFilters   = activeSources.size > 0 || activeCats.size > 0 || activeLangs.size > 0;
+  const hasFilters   = activeSources.size > 0 || activeCats.size > 0 || activeLangs.size > 0 || activeSports.size > 0;
   const explicitMode = _selectedChannelIds.size > 0;
   const excludeMode  = !explicitMode && hasFilters;
 
@@ -1216,6 +1234,7 @@ function getVisibleChannels() {
   const activeCats      = new Set([...document.querySelectorAll('.cat-cb:checked')].map(c => c.value));
   const activeLangs     = new Set([...document.querySelectorAll('.lang-cb:checked')].map(c => c.value));
   const activeCountries = new Set([...document.querySelectorAll('.country-cb:checked')].map(c => c.value));
+  const activeSports    = new Set([...document.querySelectorAll('.sport-cb:checked')].map(c => c.value));
   const gracenoteMode   = document.getElementById('f-gracenote').value;
   const eventMode       = document.getElementById('f-event').value;
 
@@ -1225,6 +1244,7 @@ function getVisibleChannels() {
     if (activeCats.size && !activeCats.has(ch.category)) return false;
     if (activeLangs.size && !activeLangs.has(ch.language)) return false;
     if (activeCountries.size && !activeCountries.has(ch.country)) return false;
+    if (activeSports.size && !activeSports.has(ch.sport)) return false;
     if (gracenoteMode === 'has' && !ch.gracenote_id) return false;
     if (gracenoteMode === 'missing' && ch.gracenote_id) return false;
     if (eventMode === '1' && !ch.is_event) return false;
@@ -1266,7 +1286,8 @@ function deselectAllChannels() {
     const activeSources = new Set([...document.querySelectorAll('.src-cb:checked')].map(c => c.value));
     const activeCats    = new Set([...document.querySelectorAll('.cat-cb:checked')].map(c => c.value));
     const activeLangs   = new Set([...document.querySelectorAll('.lang-cb:checked')].map(c => c.value));
-    const hasFilters    = activeSources.size > 0 || activeCats.size > 0 || activeLangs.size > 0;
+    const activeSports  = new Set([...document.querySelectorAll('.sport-cb:checked')].map(c => c.value));
+    const hasFilters    = activeSources.size > 0 || activeCats.size > 0 || activeLangs.size > 0 || activeSports.size > 0;
     if (hasFilters) {
       visible.forEach(ch => _excludedChannelIds.add(ch.id));
     }
@@ -1326,6 +1347,10 @@ async function openModal(feed = null) {
   });
   document.querySelectorAll('.country-cb').forEach(cb => {
     cb.checked = feed ? (feed.filters.countries || []).includes(cb.value) : false;
+    cb.closest('.check-item').classList.toggle('selected', cb.checked);
+  });
+  document.querySelectorAll('.sport-cb').forEach(cb => {
+    cb.checked = feed ? (feed.filters.sports || []).includes(cb.value) : false;
     cb.closest('.check-item').classList.toggle('selected', cb.checked);
   });
 
@@ -1470,6 +1495,7 @@ async function updateCountPreview() {
     (filters.categories || []).forEach(c => params.append('category', c));
     (filters.languages  || []).forEach(l => params.append('language', l));
     (filters.countries  || []).forEach(c => params.append('country', c));
+    (filters.sports     || []).forEach(s => params.append('sport', s));
     if (filters.gracenote) params.set('gracenote', filters.gracenote);
     if (filters.event) params.set('event', filters.event);
     try {
@@ -1494,7 +1520,7 @@ async function updateCountPreview() {
 }
 
 // Wire up live preview on checkbox changes
-document.querySelectorAll('.src-cb, .lang-cb, .country-cb').forEach(cb => {
+document.querySelectorAll('.src-cb, .lang-cb, .country-cb, .sport-cb').forEach(cb => {
   cb.addEventListener('change', () => {
     cb.closest('.check-item').classList.toggle('selected', cb.checked);
     renderChannelList();
@@ -1543,6 +1569,8 @@ function buildFilters() {
     if (langs.length) f.languages = langs;
     const countries = [...document.querySelectorAll('.country-cb:checked')].map(c => c.value);
     if (countries.length) f.countries = countries;
+    const sports = [...document.querySelectorAll('.sport-cb:checked')].map(c => c.value);
+    if (sports.length) f.sports = sports;
     const gracenote = document.getElementById('f-gracenote').value;
     if (gracenote) f.gracenote = gracenote;
     if (_excludedChannelIds.size > 0) f.excluded_channel_ids = [..._excludedChannelIds];

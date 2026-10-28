@@ -25,6 +25,7 @@ from urllib.parse import urlsplit
 
 import requests
 
+from ..sports import infer_sport
 from .base import (
     BaseScraper, ChannelData, ConfigField, ProgramData, ScrapeSkipError,
     infer_language_from_metadata, EVENT_CHANNEL_TAG,
@@ -332,6 +333,8 @@ def entries_to_channels(entries: list[M3UEntry], config: dict) -> list[ChannelDa
         ]
         if event_group_miss_limit(config, group) and EVENT_CHANNEL_TAG not in tags:
             tags.append(EVENT_CHANNEL_TAG)
+        # Playlists name no sport; an event's is inferred from its name and labels.
+        sport = infer_sport([entry.name, *tags]) if EVENT_CHANNEL_TAG in tags else None
         guide_title = entry.attr('tvc-guide-title')
         channels.append(ChannelData(
             source_channel_id=channel_id,
@@ -353,6 +356,7 @@ def entries_to_channels(entries: list[M3UEntry], config: dict) -> list[ChannelDa
             guide_key=entry.attr('tvg-id') or None,
             tags=tags,
             playlist_group=group,
+            sport=sport,
             # Shown in the placeholder guide blocks of a channel the XMLTV
             # doesn't cover, and passed on in our own M3U.
             description=entry.attr('tvc-guide-description', 'tvg-description') or None,

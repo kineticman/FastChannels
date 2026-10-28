@@ -36,6 +36,7 @@ from datetime import datetime, timedelta, timezone
 import requests
 
 from ..tve.adobe_pass import TVEAuthError
+from ..sports import normalize_sport, sport_for_league
 from .base import BaseScraper, ChannelData, ConfigField, ProgramData, StreamDeadError, EVENT_CHANNEL_TAG
 
 logger = logging.getLogger(__name__)
@@ -190,6 +191,17 @@ def _epoch_ms(value) -> datetime | None:
         return None
 
 
+def _item_sport(item: dict) -> str | None:
+    """The sport in a listing's category path, e.g. "Soccer" from
+    "Live Streaming/Sports/Soccer/EFL Cup"; None when there's no Sports level."""
+    path = [part.strip() for part in ((item.get('contentCANVideo') or {}).get('primaryCategoryName') or '').split('/')]
+    folded = [part.casefold() for part in path]
+    if 'sports' not in folded:
+        return None
+    rest = path[folded.index('sports') + 1:]
+    return rest[0] if rest and rest[0] else None
+
+
 def _jwt_exp(header_value: str) -> float:
     try:
         payload = header_value.split()[-1].split('.')[1]
@@ -309,6 +321,8 @@ class ParamountScraper(BaseScraper):
                 stream_type='hls',
                 guide_key=f'{EVENT_CHANNEL_PREFIX}{cid}',
                 tags=[EVENT_CHANNEL_TAG, 'Paramount+ Sports'],
+                sport=_item_sport(item),
+                league=league.get('channelName'),
                 gracenote_mode='off',
                 retire_at=end + timedelta(seconds=EVENT_END_GRACE_SECONDS),
                 delete_at=end + timedelta(seconds=EVENT_END_GRACE_SECONDS + 24 * 3600),
@@ -326,6 +340,7 @@ class ParamountScraper(BaseScraper):
                 continue
             thumb = (item.get('filePathThumb') or '').removeprefix('files/')
             league_name = league.get('channelName')
+            sport = normalize_sport(_item_sport(item)) or sport_for_league(league_name)
             programs.append(ProgramData(
                 source_channel_id=cid,
                 title=item.get('title') or league_name or 'Paramount+',
@@ -333,7 +348,7 @@ class ParamountScraper(BaseScraper):
                 end_time=end,
                 description=item.get('description') or None,
                 poster_url=_THUMBS + thumb if thumb else None,
-                category=';'.join(x for x in ('Sports Event', league_name) if x),
+                category=';'.join(x for x in ('Sports Event', sport, league_name) if x),
                 episode_title=league_name if league_name != item.get('title') else None,
                 is_live=True,
                 episode_id=str(item.get('id') or item['videoContentId']),

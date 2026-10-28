@@ -509,6 +509,8 @@ class NFLScraper(BaseScraper):
                     stream_type='hls',
                     guide_key=GAME_CHANNEL_PREFIX + item['externalId'],
                     tags=[EVENT_CHANNEL_TAG, 'NFL Games'],
+                    sport='Football',
+                    league='NFL',
                     gracenote_mode='off',
                     retire_at=end + timedelta(seconds=GAME_END_GRACE_SECONDS),
                     delete_at=end + timedelta(seconds=GAME_END_GRACE_SECONDS + 24 * 3600),

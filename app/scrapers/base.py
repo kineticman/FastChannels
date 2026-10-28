@@ -9,6 +9,8 @@ import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
+from ..sports import normalize_league, normalize_sport, sport_for_league
+
 logger = logging.getLogger(__name__)
 
 _SPANISH_LANGUAGE_MARKERS = (
@@ -367,7 +369,8 @@ class ChannelData:
                  guide_key=None, tags=None, description=None,
                  gracenote_mode=None, provider_number=None,
                  guide_title=None, guide_art=None, guide_block_minutes=None,
-                 retire_at=None, delete_at=None, playlist_group=None):
+                 retire_at=None, delete_at=None, playlist_group=None,
+                 sport=None, league=None):
         self.source_channel_id = source_channel_id
         self.name        = name
         self.stream_url  = stream_url
@@ -405,6 +408,10 @@ class ChannelData:
         # Optional lifecycle for event channels; permanent channels leave both unset.
         self.retire_at = retire_at
         self.delete_at = delete_at
+        # An event's sport, in app.sports' one vocabulary so feeds can filter
+        # on it across sources, and its league as the source names it.
+        self.league = (normalize_league(league) or '')[:128] or None
+        self.sport = (normalize_sport(sport) or sport_for_league(self.league) or '')[:64] or None
 
 
 class ProgramData:

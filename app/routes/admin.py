@@ -332,6 +332,8 @@ def _apply_admin_feed_membership_filters(query, feed: Feed):
         query = query.filter(Channel.language.in_(languages))
     elif language := filters.get('language'):
         query = query.filter(Channel.language == language)
+    if sports := filters.get('sports'):
+        query = query.filter(Channel.sport.in_(sports))
     if gracenote := filters.get('gracenote'):
         if gracenote == 'has':
             query = query.filter(Channel.gracenote_id != None, Channel.gracenote_id != '')
@@ -1712,6 +1714,13 @@ def feeds():
         .filter(Channel.is_active == True, Channel.country != None, Channel.country != '')\
         .distinct().order_by(Channel.country).all()
     countries = [r[0] for r in country_rows]
+    # Sports on current channels, plus any a feed already filters on, so a
+    # saved choice stays visible between events.
+    sport_rows = db.session.query(Channel.sport)\
+        .filter(Channel.is_active == True, Channel.sport != None, Channel.sport != '')\
+        .distinct().all()
+    sports = sorted({r[0] for r in sport_rows} | {s for f in feeds for s in (f.filters or {}).get('sports', [])},
+                    key=str.casefold)
     base_url   = public_base_url()
     default_feed = next((f for f in feeds if f.slug == 'default'), None)
     # Every feed has a chnum_start (app.chnum), so there is no placeholder to show.
@@ -1736,6 +1745,7 @@ def feeds():
     return render_template('admin/feeds.html',
                            feeds=feeds, sources=sources,
                            categories=categories, languages=languages, countries=countries,
+                           sports=sports,
                            base_url=base_url,
                            prismcast_enabled=app_settings.prismcast_capture_configured(),
                            fc_player_enabled=_fc_player_bridge.hdmi_bridge_active(app_settings),

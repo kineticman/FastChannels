@@ -30,6 +30,7 @@ from datetime import datetime, timedelta, timezone
 from bs4 import BeautifulSoup
 
 from .amazon_prime_free import AmazonPrimeFreeScraper
+from ..sports import infer_sport
 from .base import BaseScraper, ChannelData, ProgramData, EVENT_CHANNEL_TAG
 
 logger = logging.getLogger(__name__)
@@ -84,27 +85,14 @@ OTHER = 'Other'
 # Amazon tags some events with sport ids its sports gateway can't name
 # (volleyball, softball, billiards, horse racing...). Those are named from
 # the titles and synopses of every event sharing the id; the most matched
-# wins. Whole words, case-insensitive; field hockey is checked before hockey.
-_SPORT_KEYWORDS = (
-    (r'volleyball', 'Volleyball'), (r'softball', 'Softball'), (r'baseball|mlb', 'Baseball'),
-    (r'basketball|w?nba', 'Basketball'), (r'field hockey', 'Field Hockey'), (r'hockey|nhl|ahl|echl', 'Ice Hockey'),
-    (r'billiards?|snooker', 'Billiards'), (r'horse racing|thoroughbred|day at the races', 'Horse Racing'),
-    (r'lumberjacks?|timbersports', 'Timbersports'), (r'padel', 'Padel'), (r'pickleball', 'Pickleball'),
-    (r'lacrosse', 'Lacrosse'), (r'rugby', 'Rugby'), (r'cricket', 'Cricket'), (r'squash', 'Squash'),
-    (r'tennis', 'Tennis'), (r'golf', 'Golf'), (r'boxing', 'Boxing'), (r'darts', 'Darts'), (r'bowling', 'Bowling'),
-    (r'cycling|mountain bike|mtb', 'Cycling'), (r'soccer|mls|futbol', 'Soccer'), (r'football|nfl', 'Football'),
-)
-_SPORT_PATTERNS = [(re.compile(rf'\b(?:{pattern})\b', re.I), name) for pattern, name in _SPORT_KEYWORDS]
+# wins. Inferred names use Amazon's own spelling of the sports it does name,
+# so the source card's sport picker lists each sport once.
+_AMAZON_SPORT_NAMES = {'Hockey': 'Ice Hockey', 'MMA': 'Mixed Martial Arts', 'Motorsports': 'Motorsport'}
 
 
 def _infer_sport(texts: list[str]) -> str | None:
-    counts: dict[str, int] = {}
-    for text in texts:
-        for pattern, name in _SPORT_PATTERNS:
-            if pattern.search(text or ''):
-                counts[name] = counts.get(name, 0) + 1
-                break
-    return max(counts, key=counts.get) if counts else None
+    sport = infer_sport(texts)
+    return _AMAZON_SPORT_NAMES.get(sport, sport)
 
 
 def amazon_account_config() -> dict:
@@ -791,6 +779,8 @@ class AmazonSportsScraper(AmazonPrimeFreeScraper, BaseScraper):
                 stream_type='dash',
                 guide_key=group_id,
                 tags=[EVENT_CHANNEL_TAG, self.display_name, *access[:1]],
+                sport=selected['sport'],
+                league=selected['league'],
                 description=description,
                 gracenote_mode='off',
                 retire_at=end + timedelta(seconds=EVENT_END_GRACE_SECONDS),

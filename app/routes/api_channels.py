@@ -49,7 +49,7 @@ def list_channels():
         items = [{'id': ch.id, 'name': ch.name, 'source_name': ch.source.name,
                   'category': ch.category, 'language': ch.language,
                   'country': ch.country, 'gracenote_id': ch.gracenote_id,
-                  'is_event': is_event_channel(ch)}
+                  'sport': ch.sport, 'is_event': is_event_channel(ch)}
                  for ch in pag.items]
     else:
         items = [ch.to_dict() for ch in pag.items]

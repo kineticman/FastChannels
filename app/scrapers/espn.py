@@ -917,6 +917,8 @@ class ESPNScraper(BaseScraper):
                     stream_type='hls',
                     guide_key=EVENT_CHANNEL_PREFIX + airing_id,
                     tags=[EVENT_CHANNEL_TAG, EVENT_SERVICE_LABELS[service]],
+                    sport=sport,
+                    league=league,
                     gracenote_mode='off',
                     retire_at=end + timedelta(seconds=EVENT_END_GRACE_SECONDS),
                     delete_at=end + timedelta(seconds=EVENT_END_GRACE_SECONDS + 24 * 3600),

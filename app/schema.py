@@ -574,6 +574,11 @@ def ensure_runtime_schema() -> None:
                 conn.execute(text("ALTER TABLE channels ADD COLUMN retire_at DATETIME"))
             if "delete_at" not in ch_cols:
                 conn.execute(text("ALTER TABLE channels ADD COLUMN delete_at DATETIME"))
+            # Event sport/league; existing event channels fill in on their next scrape.
+            if "sport" not in ch_cols:
+                conn.execute(text("ALTER TABLE channels ADD COLUMN sport VARCHAR(64)"))
+            if "league" not in ch_cols:
+                conn.execute(text("ALTER TABLE channels ADD COLUMN league VARCHAR(128)"))
             if "returned_at" not in ch_cols:
                 conn.execute(text(
                     "ALTER TABLE channels ADD COLUMN returned_at DATETIME"

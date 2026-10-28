@@ -692,6 +692,8 @@ def _clean_filters(raw: dict) -> dict:
         out['languages'] = [str(language)]
     if countries := raw.get('countries'):
         out['countries'] = [str(c) for c in countries if c]
+    if sports := raw.get('sports'):
+        out['sports'] = [str(s) for s in sports if s]
     if gracenote := raw.get('gracenote'):
         if gracenote in ('has', 'missing'):
             out['gracenote'] = gracenote

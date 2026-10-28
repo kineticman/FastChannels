@@ -49,6 +49,7 @@ import requests
 
 from ..gracenote_map import resolve_gracenote
 from ..tve.adobe_pass import TVEAuthError, TVENotAuthorizedError
+from ..sports import infer_sport
 from .base import BaseScraper, ChannelData, ConfigField, ProgramData, EVENT_CHANNEL_TAG
 
 logger = logging.getLogger(__name__)
@@ -446,17 +447,22 @@ class CBSSportsScraper(BaseScraper):
             for event in self._game_items:
                 video = event['video']
                 start, end = _event_window(event)
-                title = (video.get('about') or {}).get('title') or 'CBS Sports'
+                about = video.get('about') or {}
+                props = video.get('properties') or {}
+                title = about.get('title') or 'CBS Sports'
                 network = video['network']
+                league = props.get('leagueDisplayName') or about.get('prefix')
                 channels.append(ChannelData(
                     source_channel_id=f'{EVENT_CHANNEL_PREFIX}{event["id"]}',
                     name=f'{EVENT_LABELS[network]} - {title}'[:256],
                     stream_url=f'{EVENT_SCHEME}{event["id"]}?net={network}&end={int(end.timestamp())}',
-                    logo_url=_image(video.get('about') or {}),
+                    logo_url=_image(about),
                     category='Sports',
                     stream_type='hls',
                     guide_key=f'{EVENT_CHANNEL_PREFIX}{event["id"]}',
                     tags=[EVENT_CHANNEL_TAG, 'CBS Sports Games'],
+                    sport=props.get('sport') or infer_sport([title, league or '']),
+                    league=league,
                     gracenote_mode='off',
                     retire_at=end + timedelta(seconds=EVENT_END_GRACE_SECONDS),
                     delete_at=end + timedelta(seconds=EVENT_END_GRACE_SECONDS + 24 * 3600),
