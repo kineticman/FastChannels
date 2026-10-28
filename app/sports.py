@@ -59,6 +59,13 @@ _SPORT_KEYWORDS = (
 )
 _SPORT_PATTERNS = [(re.compile(rf'\b(?:{pattern})\b', re.I), name) for pattern, name in _SPORT_KEYWORDS]
 
+# Offered by the feed editor even when no event of that sport is listed yet,
+# so a feed can be set up before its first game. Sources may report others.
+KNOWN_SPORTS = tuple(sorted(
+    {name for _, name in _SPORT_KEYWORDS} | {'Swimming', 'Track and Field', 'Wrestling'},
+    key=str.casefold,
+))
+
 
 def normalize_sport(name: str | None) -> str | None:
     """The canonical name for a source's sport label, or None for no sport."""

@@ -6,7 +6,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import contains_eager
 from ..extensions import db
 from ..models import Channel, Source, Feed, AppSettings
-from ..channel_tags import event_filter_clause
+from ..channel_tags import event_filter_clause, event_sport_clause
 from ..url import proxy_logo_url
 from ..scrapers import registry as _scraper_registry
 from ..drm_bridge import DRM_BRIDGE_TRUSTED_SOURCES
@@ -286,8 +286,8 @@ def _build_channel_query(filters: dict, *, activity: str = 'active'):
             _match.append(Channel.language == language)
         if countries := filters.get('countries'):
             _match.append(Channel.country.in_(countries))
-        if sports := filters.get('sports'):
-            _match.append(Channel.sport.in_(sports))
+        if (sport_clause := event_sport_clause(filters.get('sports'))) is not None:
+            _match.append(sport_clause)
         if gracenote := filters.get('gracenote'):
             if gracenote == 'has':
                 _match.append(db.and_(Channel.gracenote_id != None, Channel.gracenote_id != ''))
@@ -351,8 +351,8 @@ def _build_channel_stub_query(filters: dict):
             _match.append(Channel.language == language)
         if countries := filters.get('countries'):
             _match.append(Channel.country.in_(countries))
-        if sports := filters.get('sports'):
-            _match.append(Channel.sport.in_(sports))
+        if (sport_clause := event_sport_clause(filters.get('sports'))) is not None:
+            _match.append(sport_clause)
         if gracenote := filters.get('gracenote'):
             if gracenote == 'has':
                 _match.append(db.and_(Channel.gracenote_id != None, Channel.gracenote_id != ''))

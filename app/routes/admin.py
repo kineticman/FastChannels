@@ -18,7 +18,8 @@ from ..generators.m3u import (
     feed_to_query_filters,
 )
 from ..scrapers import registry as _scraper_registry
-from ..channel_tags import event_filter_clause
+from ..channel_tags import event_filter_clause, event_sport_clause
+from ..sports import KNOWN_SPORTS
 from ..drm_bridge import DRM_BRIDGE_TRUSTED_SOURCES
 from .. import fc_player_bridge as _fc_player_bridge
 from ..source_config import (
@@ -332,8 +333,8 @@ def _apply_admin_feed_membership_filters(query, feed: Feed):
         query = query.filter(Channel.language.in_(languages))
     elif language := filters.get('language'):
         query = query.filter(Channel.language == language)
-    if sports := filters.get('sports'):
-        query = query.filter(Channel.sport.in_(sports))
+    if (sport_clause := event_sport_clause(filters.get('sports'))) is not None:
+        query = query.filter(sport_clause)
     if gracenote := filters.get('gracenote'):
         if gracenote == 'has':
             query = query.filter(Channel.gracenote_id != None, Channel.gracenote_id != '')
@@ -1714,13 +1715,16 @@ def feeds():
         .filter(Channel.is_active == True, Channel.country != None, Channel.country != '')\
         .distinct().order_by(Channel.country).all()
     countries = [r[0] for r in country_rows]
-    # Sports on current channels, plus any a feed already filters on, so a
-    # saved choice stays visible between events.
-    sport_rows = db.session.query(Channel.sport)\
-        .filter(Channel.is_active == True, Channel.sport != None, Channel.sport != '')\
-        .distinct().all()
-    sports = sorted({r[0] for r in sport_rows} | {s for f in feeds for s in (f.filters or {}).get('sports', [])},
-                    key=str.casefold)
+    # Every sport app.sports knows, plus any a source reports or a feed saved,
+    # each with how many events are listed now: a feed can be set up for a
+    # sport before its next game is scheduled.
+    sport_counts = dict(db.session.query(Channel.sport, db.func.count(Channel.id)).join(Source)
+                        .filter(Channel.is_active == True, Channel.is_enabled == True,
+                                Source.is_enabled == True, Channel.sport != None, Channel.sport != '')
+                        .group_by(Channel.sport).all())
+    sport_names = set(KNOWN_SPORTS) | set(sport_counts) | {
+        s for f in feeds for s in (f.filters or {}).get('sports', [])}
+    sports = [(name, sport_counts.get(name, 0)) for name in sorted(sport_names, key=str.casefold)]
     base_url   = public_base_url()
     default_feed = next((f for f in feeds if f.slug == 'default'), None)
     # Every feed has a chnum_start (app.chnum), so there is no placeholder to show.

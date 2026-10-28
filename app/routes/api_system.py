@@ -8,7 +8,7 @@ _APP_START = _time.time()
 from flask import Blueprint, jsonify, request
 from ..extensions import db
 from ..models import Source, Channel, Program
-from ..channel_tags import event_filter_clause
+from ..channel_tags import event_filter_clause, event_sport_clause
 try:
     from croniter import croniter as _croniter
 except ImportError:
@@ -241,8 +241,8 @@ def stats():
         q = q.filter(Channel.language.in_(languages))
     if countries := request.args.getlist('country'):
         q = q.filter(Channel.country.in_(countries))
-    if sports := request.args.getlist('sport'):
-        q = q.filter(Channel.sport.in_(sports))
+    if (sport_clause := event_sport_clause(request.args.getlist('sport'))) is not None:
+        q = q.filter(sport_clause)
     if gracenote := request.args.get('gracenote'):
         if gracenote == 'has':
             q = q.filter(Channel.gracenote_id != None, Channel.gracenote_id != '')

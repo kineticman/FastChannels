@@ -196,18 +196,42 @@
     .help { font-size: 0.75rem; color: var(--text-dim); margin-top: 0.3rem; }
 
     /* Checkbox groups */
-    .check-group { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.4rem; max-height: 180px; overflow-y: auto; }
+    .check-group {
+      display: flex; flex-wrap: wrap; align-content: flex-start; gap: 0.4rem; margin-top: 0.4rem;
+      max-height: 168px; overflow-y: auto; padding: 0.5rem;
+      border: 1px solid var(--surface-5); border-radius: 8px; background: var(--bg);
+    }
     .check-item {
       display: flex; align-items: center; gap: 0.4rem;
-      background: var(--bg); border: 1px solid var(--surface-5); border-radius: 6px;
+      background: var(--surface); border: 1px solid var(--surface-5); border-radius: 6px;
       padding: 0.3rem 0.65rem; cursor: pointer; font-size: 0.82rem;
       transition: border-color 0.15s;
     }
+    /* Chips are <label>s inside .field: undo the section-heading label style. */
+    .field .check-item {
+      display: inline-flex; margin: 0; text-transform: none; letter-spacing: normal;
+      font-weight: 400; color: var(--text); line-height: 1.3;
+    }
+    .check-item input { margin: 0; }
     .check-item:hover { border-color: var(--text-dim); }
     .check-item input { accent-color: var(--accent); cursor: pointer; }
     .check-item.selected { border-color: var(--accent); background: var(--accent-bg-soft); }
     .check-item .src-count { color: var(--text-dim); font-size: 0.7rem; font-variant-numeric: tabular-nums; }
     .check-item .src-count.zero { color: var(--warning-soft); }
+    .check-item .src-count.idle { opacity: 0.5; }
+    .field-box {
+      border: 1px solid var(--border); border-radius: 10px;
+      background: color-mix(in srgb, var(--bg) 35%, transparent);
+      padding: 0.5rem 1rem 0.25rem; margin: 0 0 1rem; min-width: 0;
+    }
+    .field-box legend {
+      font-size: 0.85rem; font-weight: 600; color: var(--text); padding: 0 0.4rem; margin-left: -0.4rem;
+    }
+    .field-box .field:last-child { margin-bottom: 0.75rem; }
+    .field-box .box-intro { margin: 0.1rem 0 0.8rem; line-height: 1.45; }
+    .label-note { color: var(--text-dim); font-weight: 400; text-transform: none; letter-spacing: normal; margin-left: 0.3rem; }
+    #sports-field.off { opacity: 0.45; pointer-events: none; }
+    .sports-mix-note { color: var(--warning-soft); }
     .ch-src-hint {
       font-size: 0.75rem; color: var(--warning-soft); line-height: 1.45;
       padding: 0.35rem 0.5rem; border-radius: 4px; margin-bottom: 0.15rem;
@@ -538,7 +562,7 @@
               {% endif %}
               {% if f.get('sports') %}
                 {% for sp in f['sports'] %}
-                  <span class="badge-pill pill-green">{{ sp }}</span>
+                  <span class="badge-pill pill-green">sport: {{ sp }}</span>
                 {% endfor %}
               {% endif %}
               {% if f.get('gracenote') == 'has' %}
@@ -550,7 +574,7 @@
             {% if f.get('event') == '1' %}
               <span class="badge-pill pill-green">events only</span>
             {% elif f.get('event') == '0' %}
-              <span class="badge-pill pill-gray">non-event channels</span>
+              <span class="badge-pill pill-gray">no events</span>
             {% endif %}
             {% if f.get('excluded_channel_ids') %}
               <span class="badge-pill pill-red">−{{ f['excluded_channel_ids']|length }} excluded</span>
@@ -890,99 +914,117 @@
 
     <div class="modal-cols">
     <div class="modal-col-def">
-    <div class="field">
-      <label>Feed Name <span style="color:var(--danger)">*</span></label>
-      <input type="text" id="f-name" placeholder="e.g. Sports, News, Pluto Everything">
-    </div>
-    <div class="field">
-      <label>Description</label>
-      <input type="text" id="f-desc" placeholder="Optional note">
-    </div>
-    <div class="field">
-      <label>Sources <span style="color:var(--text-dim);font-weight:400;text-transform:none">(leave all unchecked = include all)</span></label>
-      <div class="check-group" id="sources-group">
-        {% for s in sources %}
-        {% set sc = source_counts.get(s.name, {}) %}
-        <label class="check-item" id="src-wrap-{{ s.name }}" {% if not sc.get('eligible') %}title="No channels from this source are currently eligible for feeds"{% endif %}>
-          <input type="checkbox" value="{{ s.name }}" class="src-cb"> {{ s.display_name }}
-          <span class="src-count {% if not sc.get('eligible') %}zero{% endif %}">{{ sc.get('eligible', 0) }}</span>
-        </label>
-        {% endfor %}
+    <fieldset class="field-box">
+      <legend>Feed</legend>
+      <div class="field">
+        <label for="f-name">Name <span style="color:var(--danger)">*</span></label>
+        <input type="text" id="f-name" placeholder="e.g. Sports, News, Pluto Everything">
       </div>
-    </div>
-    <div class="field">
-      <label>Categories <span style="color:var(--text-dim);font-weight:400;text-transform:none">(leave all unchecked = include all)</span></label>
-      <div class="check-group" id="categories-group">
-        {% for c in categories %}
-        <label class="check-item" id="cat-wrap-{{ loop.index }}">
-          <input type="checkbox" value="{{ c }}" class="cat-cb"> {{ c }}
-        </label>
-        {% endfor %}
+      <div class="field">
+        <label for="f-desc">Description</label>
+        <input type="text" id="f-desc" placeholder="Optional note">
       </div>
-    </div>
-    <div class="field">
-      <label>Languages <span style="color:var(--text-dim);font-weight:400;text-transform:none">(leave all unchecked = include all)</span></label>
-      <div class="check-group" id="languages-group">
-        {% for l in languages %}
-        <label class="check-item" id="lang-wrap-{{ l.code }}">
-          <input type="checkbox" value="{{ l.code }}" class="lang-cb"> {{ l.label }}
-        </label>
-        {% endfor %}
+    </fieldset>
+
+    <fieldset class="field-box">
+      <legend>Which channels</legend>
+      <div class="help box-intro">Every list left unchecked includes everything. Checked items in one list are alternatives; the lists narrow each other.</div>
+      <div class="field">
+        <label>Sources</label>
+        <div class="check-group" id="sources-group">
+          {% for s in sources %}
+          {% set sc = source_counts.get(s.name, {}) %}
+          <label class="check-item" id="src-wrap-{{ s.name }}" {% if not sc.get('eligible') %}title="No channels from this source are currently eligible for feeds"{% endif %}>
+            <input type="checkbox" value="{{ s.name }}" class="src-cb"> {{ s.display_name }}
+            <span class="src-count {% if not sc.get('eligible') %}zero{% endif %}">{{ sc.get('eligible', 0) }}</span>
+          </label>
+          {% endfor %}
+        </div>
       </div>
-    </div>
-    {% if sports %}
-    <div class="field">
-      <label>Sports <span style="color:var(--text-dim);font-weight:400;text-transform:none">(event channels with one of these sports; leave all unchecked = include all)</span></label>
-      <div class="check-group" id="sports-group">
-        {% for sp in sports %}
-        <label class="check-item" id="sport-wrap-{{ loop.index }}">
-          <input type="checkbox" value="{{ sp }}" class="sport-cb"> {{ sp }}
-        </label>
-        {% endfor %}
+      <div class="field">
+        <label>Categories</label>
+        <div class="check-group" id="categories-group">
+          {% for c in categories %}
+          <label class="check-item" id="cat-wrap-{{ loop.index }}">
+            <input type="checkbox" value="{{ c }}" class="cat-cb"> {{ c }}
+          </label>
+          {% endfor %}
+        </div>
       </div>
-    </div>
-    {% endif %}
-    {% if countries %}
-    <div class="field">
-      <label>Regions <span style="color:var(--text-dim);font-weight:400;text-transform:none">(leave all unchecked = include all)</span></label>
-      <div class="check-group" id="countries-group">
-        {% for c in countries %}
-        <label class="check-item" id="country-wrap-{{ c }}">
-          <input type="checkbox" value="{{ c }}" class="country-cb"> {{ c }}
-        </label>
-        {% endfor %}
+      <div class="field">
+        <label>Languages</label>
+        <div class="check-group" id="languages-group">
+          {% for l in languages %}
+          <label class="check-item" id="lang-wrap-{{ l.code }}">
+            <input type="checkbox" value="{{ l.code }}" class="lang-cb"> {{ l.label }}
+          </label>
+          {% endfor %}
+        </div>
       </div>
-    </div>
-    {% endif %}
-    <div class="field">
-      <label>Events</label>
-      <select id="f-event">
-        <option value="">All channels</option>
-        <option value="1">Events only</option>
-        <option value="0">Non-event channels</option>
-      </select>
-      <div class="help">Events enter or leave the feed as their source refreshes. This choice also limits manually selected and pinned channels. ESPN events use bridge playback, so check this feed's bridge M3U when its standard M3U is empty.</div>
-    </div>
-    <div class="field">
-      <label>Gracenote Coverage</label>
-      <select id="f-gracenote">
-        <option value="">Any channels</option>
-        <option value="has">Has Gracenote ID only</option>
-        <option value="missing">Missing Gracenote ID only</option>
-      </select>
-      <div class="help">Useful when you want a feed that is only Gracenote-capable or only XMLTV-backed.</div>
-    </div>
-    <div class="field">
-      <label>Max Channels</label>
-      <input type="number" id="f-max" min="1" max="9999" placeholder="750 recommended for Channels DVR">
-      <div class="help">Leave blank for no limit. Channels DVR degrades above ~750.</div>
-    </div>
-    <div class="field">
-      <label>Starting Channel Number <span style="color:var(--text-dim);font-weight:400;text-transform:none">(tvg-chno)</span></label>
-      <input type="number" id="f-chnum" min="1" placeholder="auto" oninput="checkChnumConflict(); onChnumInputForOrder()">
-      <div class="help" id="f-chnum-help">Leave blank to get a free block of numbers. This feed's channels are numbered from here.</div>
-      <div id="f-chnum-ranges" style="margin-top:6px;font-size:0.78rem;color:var(--text-soft);line-height:1.6"></div>
-    </div>
+      {% if countries %}
+      <div class="field">
+        <label>Regions</label>
+        <div class="check-group" id="countries-group">
+          {% for c in countries %}
+          <label class="check-item" id="country-wrap-{{ c }}">
+            <input type="checkbox" value="{{ c }}" class="country-cb"> {{ c }}
+          </label>
+          {% endfor %}
+        </div>
+      </div>
+      {% endif %}
+      <div class="field">
+        <label for="f-gracenote">Gracenote coverage</label>
+        <select id="f-gracenote">
+          <option value="">Any channels</option>
+          <option value="has">Has Gracenote ID only</option>
+          <option value="missing">Missing Gracenote ID only</option>
+        </select>
+        <div class="help">Useful when you want a feed that is only Gracenote-capable or only XMLTV-backed.</div>
+      </div>
+    </fieldset>
+
+    <fieldset class="field-box" id="events-box">
+      <legend>Events</legend>
+      <div class="help box-intro">Single-game channels (ESPN, Amazon Sports, Paramount+, CBS Sports and NFL games, and playlist event groups) that come and go as each game is scheduled and ends.</div>
+      <div class="field">
+        <label for="f-event">Include</label>
+        <select id="f-event">
+          <option value="">Events and 24/7 channels</option>
+          <option value="1">Events only</option>
+          <option value="0">No events (24/7 channels only)</option>
+        </select>
+        <div class="help">This also limits channels you select by hand or pin. ESPN and Amazon events use bridge playback, so look in this feed's bridge M3U when its standard M3U is empty.</div>
+      </div>
+      <div class="field" id="sports-field">
+        <label>Sports <span class="label-note">none checked = events of any sport</span></label>
+        <div class="check-group" id="sports-group">
+          {% for sp, n in sports %}
+          <label class="check-item" id="sport-wrap-{{ loop.index }}" title="{{ n }} event{{ '' if n == 1 else 's' }} listed now">
+            <input type="checkbox" value="{{ sp }}" class="sport-cb"> {{ sp }}
+            <span class="src-count{% if not n %} idle{% endif %}">{{ n }}</span>
+          </label>
+          {% endfor %}
+        </div>
+        <div class="help" id="sports-help">Set Include to a choice with events to pick sports; checking a sport while it's events and 24/7 channels switches it to events only. The numbers are events listed right now; a sport at 0 still picks up games once they're scheduled.</div>
+        <div class="help sports-mix-note" id="sports-mix-note" hidden>Include is set to events and 24/7 channels, so this feed also takes every 24/7 channel the filters above allow, not just these sports' games.</div>
+      </div>
+    </fieldset>
+
+    <fieldset class="field-box">
+      <legend>Numbering</legend>
+      <div class="field">
+        <label for="f-chnum">Starting channel number <span class="label-note">tvg-chno</span></label>
+        <input type="number" id="f-chnum" min="1" placeholder="auto" oninput="checkChnumConflict(); onChnumInputForOrder()">
+        <div class="help" id="f-chnum-help">Leave blank to get a free block of numbers. This feed's channels are numbered from here.</div>
+        <div id="f-chnum-ranges" style="margin-top:6px;font-size:0.78rem;color:var(--text-soft);line-height:1.6"></div>
+      </div>
+      <div class="field">
+        <label for="f-max">Max channels</label>
+        <input type="number" id="f-max" min="1" max="9999" placeholder="750 recommended for Channels DVR">
+        <div class="help">Leave blank for no limit. Channels DVR degrades above ~750.</div>
+      </div>
+    </fieldset>
     <div class="count-preview" id="count-preview"></div>
     </div><!-- /modal-col-def -->
 
@@ -1130,7 +1172,7 @@ function renderChannelList() {
   const activeSources = new Set([...document.querySelectorAll('.src-cb:checked')].map(c => c.value));
   const activeCats    = new Set([...document.querySelectorAll('.cat-cb:checked')].map(c => c.value));
   const activeLangs   = new Set([...document.querySelectorAll('.lang-cb:checked')].map(c => c.value));
-  const activeSports  = new Set([...document.querySelectorAll('.sport-cb:checked')].map(c => c.value));
+  const activeSports  = new Set([...document.querySelectorAll('.sport-cb:checked:not(:disabled)')].map(c => c.value));
 
   const hasFilters   = activeSources.size > 0 || activeCats.size > 0 || activeLangs.size > 0 || activeSports.size > 0;
   const explicitMode = _selectedChannelIds.size > 0;
@@ -1234,7 +1276,7 @@ function getVisibleChannels() {
   const activeCats      = new Set([...document.querySelectorAll('.cat-cb:checked')].map(c => c.value));
   const activeLangs     = new Set([...document.querySelectorAll('.lang-cb:checked')].map(c => c.value));
   const activeCountries = new Set([...document.querySelectorAll('.country-cb:checked')].map(c => c.value));
-  const activeSports    = new Set([...document.querySelectorAll('.sport-cb:checked')].map(c => c.value));
+  const activeSports    = new Set([...document.querySelectorAll('.sport-cb:checked:not(:disabled)')].map(c => c.value));
   const gracenoteMode   = document.getElementById('f-gracenote').value;
   const eventMode       = document.getElementById('f-event').value;
 
@@ -1244,7 +1286,7 @@ function getVisibleChannels() {
     if (activeCats.size && !activeCats.has(ch.category)) return false;
     if (activeLangs.size && !activeLangs.has(ch.language)) return false;
     if (activeCountries.size && !activeCountries.has(ch.country)) return false;
-    if (activeSports.size && !activeSports.has(ch.sport)) return false;
+    if (activeSports.size && ch.is_event && !activeSports.has(ch.sport)) return false;
     if (gracenoteMode === 'has' && !ch.gracenote_id) return false;
     if (gracenoteMode === 'missing' && ch.gracenote_id) return false;
     if (eventMode === '1' && !ch.is_event) return false;
@@ -1286,7 +1328,7 @@ function deselectAllChannels() {
     const activeSources = new Set([...document.querySelectorAll('.src-cb:checked')].map(c => c.value));
     const activeCats    = new Set([...document.querySelectorAll('.cat-cb:checked')].map(c => c.value));
     const activeLangs   = new Set([...document.querySelectorAll('.lang-cb:checked')].map(c => c.value));
-    const activeSports  = new Set([...document.querySelectorAll('.sport-cb:checked')].map(c => c.value));
+    const activeSports  = new Set([...document.querySelectorAll('.sport-cb:checked:not(:disabled)')].map(c => c.value));
     const hasFilters    = activeSources.size > 0 || activeCats.size > 0 || activeLangs.size > 0 || activeSports.size > 0;
     if (hasFilters) {
       visible.forEach(ch => _excludedChannelIds.add(ch.id));
@@ -1319,7 +1361,8 @@ async function openModal(feed = null) {
     ? 'This feed\'s channels are numbered from here. Raising it renumbers the channels below the new start; every other channel keeps its number.'
     : 'Leave blank to get a free block of numbers. This feed\'s channels are numbered from here.';
   document.getElementById('f-gracenote').value = feed ? (feed.filters.gracenote || '') : '';
-  document.getElementById('f-event').value = feed ? (feed.filters.event || '') : '';
+  // New feeds start without events; an existing feed keeps what it saved.
+  document.getElementById('f-event').value = feed ? (feed.filters.event || '') : '0';
   document.getElementById('modal-status').textContent = '';
   document.getElementById('ch-search').value  = '';
 
@@ -1353,6 +1396,7 @@ async function openModal(feed = null) {
     cb.checked = feed ? (feed.filters.sports || []).includes(cb.value) : false;
     cb.closest('.check-item').classList.toggle('selected', cb.checked);
   });
+  syncSportsField();
 
   document.getElementById('modal-overlay').classList.add('open');
   document.getElementById('f-name').focus();
@@ -1520,7 +1564,7 @@ async function updateCountPreview() {
 }
 
 // Wire up live preview on checkbox changes
-document.querySelectorAll('.src-cb, .lang-cb, .country-cb, .sport-cb').forEach(cb => {
+document.querySelectorAll('.src-cb, .lang-cb, .country-cb').forEach(cb => {
   cb.addEventListener('change', () => {
     cb.closest('.check-item').classList.toggle('selected', cb.checked);
     renderChannelList();
@@ -1544,7 +1588,37 @@ document.getElementById('f-gracenote').addEventListener('change', () => {
   markOrderStale();
 });
 
+// Sports narrow events, so they mean nothing when the feed has none.
+function syncSportsField() {
+  const mode = document.getElementById('f-event').value;
+  const off = mode === '0';
+  document.getElementById('sports-field').classList.toggle('off', off);
+  document.querySelectorAll('.sport-cb').forEach(cb => { cb.disabled = off; });
+  // A sport plus "Events and 24/7 channels" is a deliberate mix; say so,
+  // since the channel list then still shows every 24/7 channel.
+  const anySport = document.querySelector('.sport-cb:checked:not(:disabled)');
+  document.getElementById('sports-mix-note').hidden = !(anySport && mode === '');
+}
+
+// Ticking a first sport means "games of this sport", so a feed still set to
+// events and 24/7 channels switches to events only. Setting it back keeps the mix.
+document.querySelectorAll('.sport-cb').forEach(cb => {
+  cb.addEventListener('change', () => {
+    cb.closest('.check-item').classList.toggle('selected', cb.checked);
+    const event = document.getElementById('f-event');
+    if (cb.checked && event.value === ''
+        && document.querySelectorAll('.sport-cb:checked:not(:disabled)').length === 1) {
+      event.value = '1';
+    }
+    syncSportsField();
+    renderChannelList();
+    schedulePreview();
+    markOrderStale();
+  });
+});
+
 document.getElementById('f-event').addEventListener('change', () => {
+  syncSportsField();
   renderChannelList();
   schedulePreview();
   markOrderStale();
@@ -1569,7 +1643,7 @@ function buildFilters() {
     if (langs.length) f.languages = langs;
     const countries = [...document.querySelectorAll('.country-cb:checked')].map(c => c.value);
     if (countries.length) f.countries = countries;
-    const sports = [...document.querySelectorAll('.sport-cb:checked')].map(c => c.value);
+    const sports = [...document.querySelectorAll('.sport-cb:checked:not(:disabled)')].map(c => c.value);
     if (sports.length) f.sports = sports;
     const gracenote = document.getElementById('f-gracenote').value;
     if (gracenote) f.gracenote = gracenote;

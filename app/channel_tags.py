@@ -1,6 +1,6 @@
 """SQL predicates for exact tags stored as comma-separated channel text."""
 
-from sqlalchemy import func, literal
+from sqlalchemy import func, literal, or_
 
 from .models import Channel
 from .scrapers.base import EVENT_CHANNEL_TAG
@@ -28,3 +28,12 @@ def event_filter_clause(value):
     if value == '0':
         return ~event_channel_clause()
     return None
+
+
+def event_sport_clause(sports):
+    """A feed's sports narrow its events only: an event matches when its sport
+    is one of these, and a channel that isn't an event is left to the other
+    filters. None when no sport is chosen."""
+    if not sports:
+        return None
+    return or_(~event_channel_clause(), Channel.sport.in_(sports))
