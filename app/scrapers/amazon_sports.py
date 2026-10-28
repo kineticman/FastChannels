@@ -325,8 +325,9 @@ class AmazonSportsScraper(AmazonPrimeFreeScraper, BaseScraper):
     stream_audit_enabled = False
     audit_requires_config = []
     license_url = 'https://atv-ps.amazon.com/playback/drm/GetWidevineLicense'
-    # Envelope-bound manifests; keep well inside the envelope's life.
-    _STREAM_URL_TTL = 90
+    # One session per viewing (see resolve()); the dash proxy re-resolves
+    # sooner if the manifest stops loading.
+    _STREAM_URL_TTL = 5400
     # Detail-page envelopes carry a 15-minute expiry; on 2026-10-28 a game
     # died with PlaybackEnvelope.Expired 15 minutes in.
     _ENVELOPE_TTL = 600
@@ -874,7 +875,15 @@ class AmazonSportsScraper(AmazonPrimeFreeScraper, BaseScraper):
         if not raw_url.startswith('primefree://'):
             return super().resolve(raw_url)
         group_id = raw_url[len('primefree://'):]
+        # Keeps the envelope fresh for the license proxy.
         self._ensure_live_action(group_id)
+        # Each GetLivePlaybackResources call opens a new session whose ad
+        # periods are timed differently, so a player handed a second session
+        # mid-stream sees contradicting manifests and stalls. Keep the first
+        # session's manifest; the dash proxy evicts it if it stops loading.
+        cached = self._stream_url_cache.get(self._stream_cache_key(group_id))
+        if cached and cached.get('expires_at', 0) > time.time():
+            return cached['url']
         url = super().resolve(raw_url)
         if url is None and self._drop_envelope(group_id):
             # Amazon refused the envelope early (e.g. PlaybackEnvelope.Expired):
