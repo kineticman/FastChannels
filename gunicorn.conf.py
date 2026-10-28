@@ -103,7 +103,7 @@ _SUCCESS_SUPPRESS_RE = re.compile(
     r'|(?:GET|HEAD) /play/vix/[^/]+/(?:seg\?|browser\.mpd\?s=)'
     r'|(?:GET|HEAD) /play/paramount/[^/]+/(?:variant\.m3u8|key)\?url='
     r'|(?:GET|HEAD) /play/warner_tve/[^/]+/(?:variant\.m3u8|key|segment\.ts)\?url=')
-_DASH_RE = re.compile(r'(?:GET|HEAD) /play/(amazon_prime_free|cox|philo|sling|pbs|vidaa|fubo|dazn_tve)/[^/]+/dash\.mpd')
+_DASH_RE = re.compile(r'(?:GET|HEAD) /play/(amazon_prime_free|amazon_sports|cox|philo|sling|pbs|vidaa|fubo|dazn_tve)/[^/]+/dash\.mpd')
 # DirecTV/cox use path-form license URLs (/license/<id>), while vidaa/fubo/sling use
 # query-form URLs (/license?channel_id=<id>) — matched via the separator below. Sling's
 # fire on every tune, block-boundary swap, and FC Player ad-gap rejoin.
