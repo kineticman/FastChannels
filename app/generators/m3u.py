@@ -1,12 +1,13 @@
 import logging
 import re
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from urllib.parse import quote as _url_quote
 from sqlalchemy import func
 from sqlalchemy.orm import contains_eager
 from ..extensions import db
 from ..models import Channel, Source, Feed, AppSettings
-from ..channel_tags import event_filter_clause
+from ..channel_tags import AUTO_EVENT_REASONS, EVENT_RETIRED_REASON, event_filter_clause
 from ..url import proxy_logo_url
 from ..scrapers import registry as _scraper_registry
 from ..drm_bridge import DRM_BRIDGE_TRUSTED_SOURCES
@@ -58,6 +59,9 @@ _WIN1252_REMAP = str.maketrans({
 })
 
 _CHNUM_NAMESPACE_BLOCK = 10000
+# Days a channel that dropped out of output keeps its number reserved for its
+# return (see _held_number_query).
+NUMBER_HOLD_DAYS = 7
 _MASTER_GRACENOTE_START = 100000
 _FEED_NAMESPACE_BASE = 200000
 _REGION_LABEL_SOURCES = {"pluto", "samsung", "tcl"}
@@ -601,6 +605,61 @@ def _provider_number_sources() -> set[str]:
     return names
 
 
+def _held_number_query(columns):
+    """Channels out of output that still hold their number for a while.
+
+    A channel that drops out because its source stopped listing it (a short
+    page, a free preview ending, a flap) usually comes back within days, and
+    its number should be waiting. Allocators treat these numbers as taken until
+    NUMBER_HOLD_DAYS after it went inactive. A channel the user turned off holds
+    nothing, and neither does a finished event: neither is expected back.
+    """
+    cutoff = datetime.now(timezone.utc) - timedelta(days=NUMBER_HOLD_DAYS)
+    return (
+        db.session.query(*columns)
+        .select_from(Channel)
+        .join(Source)
+        .filter(
+            Channel.is_active == False,
+            Channel.went_inactive_at.isnot(None),
+            Channel.went_inactive_at >= cutoff,
+            Channel.number.isnot(None),
+            Channel.stream_url != None,
+            Source.is_enabled == True,
+            Source.epg_only == False,
+            db.or_(
+                Channel.is_enabled == True,
+                Channel.disable_reason.in_(
+                    [r for r in AUTO_EVENT_REASONS if r != EVENT_RETIRED_REASON]),
+            ),
+        )
+    )
+
+
+def held_channel_ids() -> set[int]:
+    return {cid for (cid,) in _held_number_query([Channel.id]).all()}
+
+
+def _held_numbers(exclude: set | None = None) -> set[int]:
+    """Numbers held for channels out of output (see _held_number_query), less
+    any in `exclude` -- numbers channels in output already have, which keep
+    them: a hold never takes a number away from a channel that is showing."""
+    held = {n for (n,) in _held_number_query([Channel.number]).all()}
+    return held - exclude if exclude else held
+
+
+def _locked_numbers() -> set[int]:
+    """Every whole-number lock, whether or not its channel is in output.
+
+    Unlike a hold, a lock wins: the master allocators treat these as taken
+    even for a channel already on that number, so the locked channel never
+    shares it -- including across the standard / Gracenote split, where the
+    lock and the holder are numbered in different passes. (Turning a locked
+    channel off keeps its number free for its return, too.)"""
+    return {n for (n,) in db.session.query(Channel.number)
+            .filter(Channel.number_pinned == True, Channel.number.isnot(None)).all()}
+
+
 def _reserved_provider_numbers() -> set[int]:
     """Integer provider numbers of every active, enabled, unpinned channel in an
     opted-in source. Allocators treat these as taken. Sub-channels ("305.1")
@@ -728,13 +787,17 @@ def _assign_sequential(unassigned, cursor, used_numbers, out):
     return cursor
 
 
-def _build_source_chnum_map(channels):
+def _build_source_chnum_map(channels, reserved: set[int] | None = None):
     """
     Build a channel-number assignment map using Source.chnum_start values.
 
     Channels from sources with chnum_start configured are renumbered sequentially
     starting from that value.  Channels from sources without chnum_start fall back
     to their existing Channel.number (unchanged from scraper output).
+
+    `reserved` numbers are never handed to a channel that doesn't already
+    have them (the master allocator passes the Gracenote channels' numbers,
+    numbered separately); a channel here that has one keeps it.
 
     Returns:
         chnum_map  – dict[channel_id -> int]
@@ -806,7 +869,9 @@ def _build_source_chnum_map(channels):
     # sticky auto numbers: keep them when still valid and free, only allocate
     # fresh values for channels that are new, missing a number, or now conflict.
     chnum_map: dict[int, int] = {}
-    used_numbers: set[int] = set(pinned_numbers) | _reserved_provider_numbers()
+    own_numbers = {ch.number for ch in channels}
+    used_numbers: set[int] = (set(pinned_numbers) | _reserved_provider_numbers() | _locked_numbers()
+                              | _held_numbers(own_numbers) | ((reserved or set()) - own_numbers))
     global_cursor = global_start  # tracks next number for ungrouped sources
     # Backstop cursor for the no-config-at-all branch below — only ever draws
     # from here for a channel with no number at all, never to reassign one
@@ -823,15 +888,17 @@ def _build_source_chnum_map(channels):
         ),
     )
 
+    # Two passes: every source keeps its existing numbers first, then the
+    # channels without one draw new numbers. Doing both per source let a new
+    # channel in an earlier source take a number a later source's channel
+    # already had, moving that channel.
+    unassigned_by_source: dict[str, list] = {}
     for src in ordered_sources:
         chs = by_source[src]
         if src in source_starts:
-            start = source_starts[src]
-            unassigned = _partition_unassigned(chs, start, used_numbers, chnum_map)
-            _assign_sequential(unassigned, start, used_numbers, chnum_map)
+            min_value = source_starts[src]
         elif global_cursor is not None:
-            unassigned = _partition_unassigned(chs, global_start, used_numbers, chnum_map)
-            global_cursor = _assign_sequential(unassigned, global_cursor, used_numbers, chnum_map)
+            min_value = global_start
         else:
             # Neither this source nor AppSettings has a chnum_start configured.
             # Docstring above promises these channels "fall back to their
@@ -843,7 +910,16 @@ def _build_source_chnum_map(channels):
             # any genuinely-unassigned channel from the fallback cursor instead
             # of a configured one — a channel that already has a number never
             # gets reassigned just because this branch exists.
-            unassigned = _partition_unassigned(chs, None, used_numbers, chnum_map)
+            min_value = None
+        unassigned_by_source[src] = _partition_unassigned(chs, min_value, used_numbers, chnum_map)
+
+    for src in ordered_sources:
+        unassigned = unassigned_by_source[src]
+        if src in source_starts:
+            _assign_sequential(unassigned, source_starts[src], used_numbers, chnum_map)
+        elif global_cursor is not None:
+            global_cursor = _assign_sequential(unassigned, global_cursor, used_numbers, chnum_map)
+        else:
             fallback_cursor = _assign_sequential(unassigned, fallback_cursor, used_numbers, chnum_map)
 
     return chnum_map, warnings
@@ -897,6 +973,11 @@ def _build_feed_chnum_map(channels, feed_chnum_start: int,
         for cid, num in stored_numbers.items():
             if cid not in channel_ids:
                 used_numbers.add(num)
+
+    # Locks are channel-wide, so a locked channel outside this batch (turned
+    # off, or in the other partition) keeps its number free for its return.
+    # Added after the stored pass: a member already on that number keeps it.
+    used_numbers |= _locked_numbers()
 
     # Second pass: assign fresh sequential numbers to new/displaced channels.
     used_numbers |= reserved
@@ -955,14 +1036,27 @@ def _sort_by_assigned_chnum(channels, chnum_map: dict) -> None:
 
 def _build_sticky_gn_chnum_map(gn_channels, gn_start: int, used_numbers: set) -> dict:
     """
-    Assign channel numbers to Gracenote channels starting at gn_start, with
-    the same stickiness guarantee as standard channels: existing Channel.number
-    is kept if it's >= gn_start and not already taken.  New/displaced channels
-    fill in sequentially.
+    Assign channel numbers to Gracenote channels, with the same stickiness
+    guarantee as standard channels: existing Channel.number is kept if it's not
+    already taken. New/displaced channels fill in sequentially from gn_start.
+
+    Kept numbers are not floored at gn_start: gn_start is just above the
+    highest standard number, so it moves whenever a channel loses or gains a
+    Gracenote ID (a channel keeps its number across that), and a gn_start
+    floor then renumbered every Gracenote channel below the new start.
     """
     result = {}
     unassigned = []
-    used_numbers |= _reserved_provider_numbers()
+    used_numbers |= (_reserved_provider_numbers() | _locked_numbers()
+                     | _held_numbers({ch.number for ch in gn_channels}))
+    # A kept number still has to clear the floor _build_source_chnum_map
+    # applies (the source's chnum_start, else the global start), or the
+    # mixed playlists, which number both groups through that function,
+    # would show a different number than the one stored.
+    try:
+        global_start = AppSettings.get().effective_global_chnum_start()
+    except Exception:
+        global_start = None
     sorted_channels = sorted(
         gn_channels,
         key=lambda c: (c.number is None, c.number or 0, (c.name or '').lower()),
@@ -972,7 +1066,8 @@ def _build_sticky_gn_chnum_map(gn_channels, gn_start: int, used_numbers: set) ->
             result[ch.id] = ch.number
             used_numbers.add(ch.number)
             continue
-        if ch.number is not None and ch.number >= gn_start and ch.number not in used_numbers:
+        floor = ch.source.chnum_start or global_start
+        if _is_usable_number(ch, ch.number, min_value=floor) and ch.number not in used_numbers:
             result[ch.id] = ch.number
             used_numbers.add(ch.number)
         else:

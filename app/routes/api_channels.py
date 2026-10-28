@@ -245,11 +245,25 @@ def update_channel(channel_id):
                  if num == target_number and cid != ch.id),
                 None,
             )
+            where = 'the Default feed'
+            # A lock is channel-wide, so check every numbered feed too (each
+            # numbers independently of Default). The master /m3u numbering is
+            # not checked: when Default has its own start nobody sees it, and
+            # the lock simply wins there, moving that playlist's holder.
+            if holder_id is None:
+                from .feeds_api import _displayed_feed_chnum_map
+                for feed in Feed.query.filter(Feed.is_enabled == True, Feed.chnum_start != None,
+                                              Feed.slug != 'default').all():
+                    holder_id = next((cid for cid, num in _displayed_feed_chnum_map(feed).items()
+                                      if num == target_number and cid != ch.id), None)
+                    if holder_id is not None:
+                        where = f'the {feed.name} feed'
+                        break
             if holder_id is not None:
                 holder = Channel.query.get(holder_id)
                 raise ValueError(
                     f'Channel number {target_number} is currently in use by '
-                    f'"{holder.name if holder else holder_id}" in the Default feed. '
+                    f'"{holder.name if holder else holder_id}" in {where}. '
                     'Choose a different number.'
                 )
             # Or a number a source emits as its own provider number (e.g. DirecTV

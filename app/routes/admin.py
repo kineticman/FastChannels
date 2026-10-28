@@ -149,7 +149,8 @@ def _duplicate_name_sets() -> tuple[set[str], set[str], set[int]]:
 
 def _source_scheme_chnum_map(std_channels, gn_channels) -> dict[int, int]:
     """Sequential numbering keyed off Source order — the 'no chnum_start' scheme."""
-    full_map, _ = _build_source_chnum_map(std_channels) if std_channels else ({}, [])
+    gn_numbers = {ch.number for ch in gn_channels if ch.number is not None}
+    full_map, _ = _build_source_chnum_map(std_channels, gn_numbers) if std_channels else ({}, [])
     if gn_channels:
         gn_start = (max(full_map.values()) + 1) if full_map else 1
         full_map.update(_build_sticky_gn_chnum_map(gn_channels, gn_start, set(full_map.values())))

@@ -2121,7 +2121,26 @@ def _refresh_xml_artifacts_job(only_keys: set[str] | None = None) -> None:
         # the pool without closing the parent's connections (SQLAlchemy's
         # documented post-fork recipe).
         db.engine.dispose(close=False)
+        _settle_channel_numbers()
         _refresh_xml_artifacts(only_keys)
+
+
+def _settle_channel_numbers() -> None:
+    """Store the numbers this rebuild is about to hand out.
+
+    Enabling a channel (singly, in bulk, from the duplicates page or the DVR
+    API) only queues a rebuild. Until its number is saved, each playlist would
+    number it on its own from just the channels in that playlist, so it could
+    get a number a channel elsewhere (say a bridge-only source) already has,
+    and a different one per playlist. Saving here numbers it once against
+    everything in output. Failing to save must not stop the rebuild.
+    """
+    try:
+        _refresh_auto_channel_numbers()
+        db.session.commit()
+    except Exception as exc:  # noqa: BLE001
+        db.session.rollback()
+        logger.warning('[chnum] could not save channel numbers before the rebuild: %s', exc)
 
 
 def _refresh_xml_artifacts_subprocess(timeout_seconds: int = 1800, only_keys: set[str] | None = None) -> None:
@@ -2659,6 +2678,48 @@ def _resolved_logo_url(existing_logo: str | None, incoming_logo: str | None, cac
     return current
 
 
+def _release_claimed_numbers(live_channels, live_ids: set[int], held_ids: set[int]) -> None:
+    """Clear Channel.number on channels out of output whose number is taken.
+
+    A channel out of output keeps its number only while nobody else has it.
+    Once a channel in output holds that number, the absent one lets go, so
+    coming back it gets a fresh number instead of taking this one back (ties
+    between two channels with the same number are broken by name, so the one
+    returning could otherwise win and move the incumbent). Absent channels
+    sharing a number with each other keep it on one: a held channel first,
+    then the most recently gone. Locked numbers are never cleared.
+    """
+    from app.generators.m3u import _reserved_provider_numbers
+
+    claimed = {ch.number for ch in live_channels if ch.number is not None}
+    claimed |= _reserved_provider_numbers()
+    absent = (
+        Channel.query
+        .filter(
+            Channel.number.isnot(None),
+            db.or_(Channel.number_pinned == False, Channel.number_pinned == None),
+            db.or_(Channel.pinned_chno.is_(None), Channel.pinned_chno == ''),
+        )
+        .all()
+    )
+    absent = [ch for ch in absent if ch.id not in live_ids]
+    absent.sort(key=lambda ch: (
+        ch.id not in held_ids,
+        -(ch.went_inactive_at.timestamp() if ch.went_inactive_at else 0),
+        ch.id,
+    ))
+    released = 0
+    for ch in absent:
+        if ch.number in claimed:
+            ch.number = None
+            released += 1
+        else:
+            claimed.add(ch.number)
+    if released:
+        logger.info('[chnum] released %d number(s) held by channels out of output '
+                    'and now used by another channel', released)
+
+
 def _refresh_auto_channel_numbers() -> None:
     """Assign stable automatic numbers to non-pinned active channels.
 
@@ -2667,8 +2728,10 @@ def _refresh_auto_channel_numbers() -> None:
     where possible and only fills gaps for channels that are new or invalid.
 
     Standard and Gracenote channels share a single contiguous block for the
-    master (source-based) numbering: standard channels first, then Gracenote
-    channels starting immediately after the highest standard number.
+    master (source-based) numbering: standard channels first, then new
+    Gracenote channels starting immediately after the highest standard number.
+    A channel that gains or loses a Gracenote ID keeps its number, so the two
+    groups can interleave; neither pass hands out a number the other holds.
 
     For feeds with an explicit chnum_start, all channels (standard and Gracenote)
     share one unified number pool persisted in FeedChannelNumber.  A channel keeps
@@ -2678,6 +2741,7 @@ def _refresh_auto_channel_numbers() -> None:
     from app.generators.m3u import (
         _build_source_chnum_map, _build_sticky_gn_chnum_map,
         _build_feed_chnum_map, _selected_channel_stubs, feed_to_query_filters,
+        held_channel_ids,
     )
     from app.models import Feed, FeedChannelNumber
 
@@ -2700,7 +2764,8 @@ def _refresh_auto_channel_numbers() -> None:
     std_channels = [ch for ch in all_channels if not (ch.gracenote_id or '').strip()]
     gn_channels  = [ch for ch in all_channels if (ch.gracenote_id or '').strip()]
 
-    std_map, _ = _build_source_chnum_map(std_channels) if std_channels else ({}, [])
+    gn_numbers = {ch.number for ch in gn_channels if ch.number is not None}
+    std_map, _ = _build_source_chnum_map(std_channels, gn_numbers) if std_channels else ({}, [])
 
     gn_map = {}
     if gn_channels:
@@ -2715,8 +2780,11 @@ def _refresh_auto_channel_numbers() -> None:
         if ch.number != next_number:
             ch.number = next_number
 
-    # Persist feed-specific channel numbers for feeds with explicit chnum_start.
     all_channel_ids = {ch.id for ch in all_channels}
+    held_ids = held_channel_ids()
+    _release_claimed_numbers(all_channels, all_channel_ids, held_ids)
+
+    # Persist feed-specific channel numbers for feeds with explicit chnum_start.
     feeds_with_chnum = Feed.query.filter(
         Feed.chnum_start != None,
         Feed.is_enabled == True,
@@ -2750,10 +2818,17 @@ def _refresh_auto_channel_numbers() -> None:
             else:
                 db.session.add(FeedChannelNumber(feed_id=feed.id, channel_id=channel_id, number=number))
 
-        # Remove stale rows for channels no longer in this feed.
+        # Remove stale rows for channels no longer in this feed. A held
+        # channel's row stays so it gets its number back on return (it's
+        # reserved meanwhile as a number outside the batch), unless a member
+        # has the same number: the member keeps it, the absent channel lets go.
+        member_numbers = set(new_map.values())
         for channel_id, fcn in existing_fcn.items():
-            if channel_id not in feed_channel_ids:
-                db.session.delete(fcn)
+            if channel_id in feed_channel_ids:
+                continue
+            if channel_id in held_ids and fcn.number not in member_numbers:
+                continue
+            db.session.delete(fcn)
 
 
 _IDENTITY_STOPWORDS = {
