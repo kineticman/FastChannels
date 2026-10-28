@@ -12,6 +12,7 @@ from ..extensions import db
 from ..models import Channel, Program, AppSettings, Feed
 from ..scrapers import registry
 from ..scrapers.playlist import is_playlist_source
+from ..scrapers.amazon_prime_free import AMAZON_DRM_SOURCES
 from ..scrapers.base import EVENT_CHANNEL_TAG, StreamDeadError
 from ..channel_tags import is_event_channel
 from ..hls import (
@@ -299,7 +300,7 @@ def inspect_channel(channel_id):
     _scraper_cls = registry.get(source.name)
     if getattr(ch, 'requires_drm_bridge', False) and _scraper_cls:
         _bridge_stream_type = (getattr(ch, 'stream_type', '') or '').strip().lower()
-        if _bridge_stream_type == 'dash' or source.name in {'amazon_prime_free', 'philo', 'roku'}:
+        if _bridge_stream_type == 'dash' or source.name in {*AMAZON_DRM_SOURCES, 'philo', 'roku'}:
             return _inspect_drm_bridge(ch, source, _scraper_cls)
 
     # Resolve the stream URL directly — avoids a self-referential HTTP request to the
@@ -696,10 +697,11 @@ def _get_playback_info(ch, fast_mode=True, browser=False):
     # our server-side manifest proxy which strips that restriction.
     if (
         not preview_url
-        or (ch.source and ch.source.name == 'amazon_prime_free')
+        or (ch.source and ch.source.name in AMAZON_DRM_SOURCES)
     ) and ch.source_channel_id:
         from urllib.parse import quote as _quote
-        preview_url = f'/play/amazon_prime_free/{_quote(ch.source_channel_id, safe="")}/dash.mpd'
+        _amazon_source = ch.source.name if ch.source and ch.source.name in AMAZON_DRM_SOURCES else 'amazon_prime_free'
+        preview_url = f'/play/{_amazon_source}/{_quote(ch.source_channel_id, safe="")}/dash.mpd'
 
     # Roku DRM → the DASH+Widevine variant. Set last so no earlier proxy special-case
     # (which all target other sources) clobbers it. Roku's MPD CDN is CORS-open and

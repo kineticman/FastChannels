@@ -18,6 +18,10 @@ from ..gracenote_map import resolve_gracenote
 
 logger = logging.getLogger(__name__)
 
+# Sources played through the Amazon DASH manifest proxy and Widevine license
+# proxy (/play/<source>/<id>/dash.mpd, /play/<source>/license).
+AMAZON_DRM_SOURCES = frozenset({'amazon_prime_free', 'amazon_sports'})
+
 
 class AmazonPrimeFreeScraper(BaseScraper):
     """

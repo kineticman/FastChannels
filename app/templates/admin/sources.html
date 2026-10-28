@@ -1283,7 +1283,7 @@
                    data-source-name="{{ source.name }}"
                    data-config-required="{{ 'true' if config_required.get(source.name) else 'false' }}">
 
-                {% if source.name in ('amazon_prime_free', 'sling') %}
+                {% if source.name in ('amazon_prime_free', 'amazon_sports', 'sling') %}
                 <div class="drm-note">⚠ All streams from this source are DRM-protected and will not play on most clients.</div>
                 {% endif %}
 
@@ -3315,8 +3315,8 @@
           return;
         }
 
-        // ESPN's and Paramount+'s visible settings are rendered separately from their hidden schemas.
-        if (!schema.length && sourceName !== 'espn' && sourceName !== 'paramount' && !cfg.tve_signin) {
+        // ESPN's, Paramount+'s and Amazon Sports' visible settings are rendered separately from their hidden schemas.
+        if (!schema.length && !['espn', 'paramount', 'amazon_sports'].includes(sourceName) && !cfg.tve_signin) {
           if (badge) {
             badge.textContent = 'Auto';
             badge.className = 'config-badge auto';
@@ -4121,6 +4121,14 @@
     // Checkbox clicks update rows in place, so the list keeps its scroll
     // position and focus; only mode/service changes rebuild it.
     const _espnOpenSports = {};
+    // Other event sources reuse this picker (Amazon Sports): which preview
+    // events count, in place of ESPN's service checkboxes.
+    const _eventSourceFilter = {};
+
+    function _espnEventVisible(sourceId, event, services) {
+      const filter = _eventSourceFilter[sourceId];
+      return filter ? filter(event) : event.services.some(s => services.includes(s));
+    }
 
     function _espnSelectedServices(sourceId) {
       const keys = {
@@ -4366,7 +4374,7 @@
       const policy = _espnEventPolicy[sourceId];
       const preview = _espnEventPreview[sourceId];
       const services = _espnSelectedServices(sourceId);
-      const events = preview ? preview.events.filter(e => e.services.some(s => services.includes(s))) : [];
+      const events = preview ? preview.events.filter(e => _espnEventVisible(sourceId, e, services)) : [];
       const listed = policy.hide_likely_shows ? events.filter(e => !e.likely_show) : events;
       const bySport = new Map();
       const add = (sport, league, n) => {
@@ -4407,7 +4415,7 @@
       const policy = _espnEventPolicy[sourceId];
       const box = document.getElementById(`espn-filter-${sourceId}`);
       if (!policy || !box) return;
-      box.classList.toggle('is-off', !_espnSelectedServices(sourceId).length);
+      box.classList.toggle('is-off', !_eventSourceFilter[sourceId] && !_espnSelectedServices(sourceId).length);
       const list = document.getElementById(`espn-sports-${sourceId}`);
       list.hidden = policy.sport_mode !== 'selected';
       if (!list.hidden) {
@@ -4471,7 +4479,7 @@
       const sports = Object.entries(policy.sports).sort((a, b) => a[0].localeCompare(b[0]));
       picked.classList.toggle('is-empty', policy.sport_mode === 'selected' && !sports.length);
       picked.innerHTML = policy.sport_mode === 'all'
-        ? 'Every sport and league, including ones ESPN adds later.'
+        ? 'Every sport and league, including ones added later.'
         : sports.length
           ? sports.map(([name, rule]) => `<span class="espn-chip">${escapeHtml(name)}${rule.league_mode === 'selected'
               ? ` <small>· ${escapeHtml(rule.leagues.join(', '))}</small>` : ''}</span>`).join('')
@@ -4484,7 +4492,8 @@
       }
       const {events} = _espnCatalog(sourceId);
       const included = events.filter(e => _espnEventIncluded(e, policy)).length;
-      match.innerHTML = `<strong>${included}</strong> of ${events.length} events in the next ${preview.window_hours}h`;
+      match.innerHTML = `<strong>${included}</strong> of ${events.length} events`
+        + (preview.window_hours ? ` in the next ${preview.window_hours}h` : '');
     }
 
     function espnSetSportMode(sourceId, mode) {
@@ -4537,6 +4546,173 @@
       }
       _espnSyncSport(sourceId, sportIndex);
       _espnSyncSummary(sourceId);
+    }
+
+    // ── Amazon Sports ───────────────────────────────────────────────────
+    // The saved filter adds access to the ESPN picker's sport/league policy:
+    //   {access_mode: 'entitled'|'selected', access: [subscription, ...], ...}
+    // 'entitled' follows what Amazon says this account can play; preview
+    // events carry their access labels (what they play through, or what
+    // would unlock them) and whether this account is entitled.
+    function renderAmazonSportsConfig(sourceId, cfg) {
+      const info = (cfg && cfg.amazon_sports) || {};
+      const policy = JSON.parse(JSON.stringify(info.event_filter
+        || {access_mode: 'entitled', access: [], sport_mode: 'all', sports: {}}));
+      policy.teams = [];
+      _espnEventPolicy[sourceId] = policy;
+      _espnTeamLeague[sourceId] = null;
+      _eventSourceFilter[sourceId] = event => _amazonSportsAccessAllows(sourceId, event);
+      setTimeout(() => amazonSportsInit(sourceId), 0);
+      const account = info.signed_in
+        ? '<span class="espn-auth-state signed-in">&#10003; Signed in</span>'
+        : '<span class="espn-auth-state">Not signed in — sign in on the Amazon Prime Free source</span>';
+      return `
+        <div class="config-title">Amazon Sports Settings</div>
+        <div class="config-note">Uses the Amazon sign-in from the Amazon Prime Free source; that source doesn't need to be on. ${account}</div>
+        <div class="espn-events" id="espn-events-${sourceId}">
+          <div class="espn-events-head">
+            <div class="config-subtitle">Event channels</div>
+            <span class="espn-match" id="espn-match-${sourceId}" aria-live="polite"></span>
+          </div>
+          <div class="config-note">
+            Adds live and upcoming Prime Video sports events as temporary channels, with Amazon's own start and
+            predicted end. Channels retire two hours after the predicted end (later if the event runs over) and are
+            deleted a day later. Playback uses the DRM bridge.
+          </div>
+          <div class="espn-filter">
+            <div class="espn-mode" role="radiogroup" aria-label="Subscriptions">
+              <span class="espn-mode-label">Subscriptions</span>
+              <label><input type="radio" name="amzs-access-mode-${sourceId}" value="entitled"
+                     ${policy.access_mode !== 'selected' ? 'checked' : ''}
+                     onchange="amazonSportsSetAccessMode(${sourceId}, this.value)">What my Amazon account can play</label>
+              <label><input type="radio" name="amzs-access-mode-${sourceId}" value="selected"
+                     ${policy.access_mode === 'selected' ? 'checked' : ''}
+                     onchange="amazonSportsSetAccessMode(${sourceId}, this.value)">Only the ones I pick</label>
+            </div>
+            <div class="espn-picked" id="amzs-access-picked-${sourceId}"></div>
+            <div class="espn-sport-list" id="amzs-access-${sourceId}" hidden></div>
+          </div>
+          <div class="espn-filter" id="espn-filter-${sourceId}" style="margin-top:0.7rem">
+            <div class="espn-mode" role="radiogroup" aria-label="Sports">
+              <span class="espn-mode-label">Sports</span>
+              <label><input type="radio" name="espn-mode-${sourceId}" value="all"
+                     ${policy.sport_mode === 'all' ? 'checked' : ''}
+                     onchange="espnSetSportMode(${sourceId}, this.value)">All, including new ones</label>
+              <label><input type="radio" name="espn-mode-${sourceId}" value="selected"
+                     ${policy.sport_mode === 'selected' ? 'checked' : ''}
+                     onchange="espnSetSportMode(${sourceId}, this.value)">Only the ones I pick</label>
+            </div>
+            <div class="espn-picked" id="espn-picked-${sourceId}"></div>
+            <div class="espn-sport-list" id="espn-sports-${sourceId}" hidden></div>
+          </div>
+        </div>
+        <div class="config-actions">
+          <span class="config-status" id="config-status-${sourceId}"></span>
+          <button class="btn btn-run" type="button" onclick="saveSourceConfig(${sourceId})">Save settings</button>
+        </div>`;
+    }
+
+    function _amazonSportsAccessAllows(sourceId, event) {
+      const policy = _espnEventPolicy[sourceId];
+      if (policy.access_mode !== 'selected') return !!event.entitled;
+      const picked = new Set(policy.access.map(name => name.toLocaleLowerCase()));
+      return (event.access || []).some(label => picked.has(label.toLocaleLowerCase()));
+    }
+
+    // Every subscription the last scrape saw, with its event count and
+    // whether this account plays through it; saved picks no longer listed
+    // stay visible so they can be unticked.
+    function _amazonSportsAccessCatalog(sourceId) {
+      const preview = _espnEventPreview[sourceId];
+      const labels = new Map();
+      for (const e of (preview && preview.events) || []) {
+        for (const label of e.access || []) {
+          if (!labels.has(label)) labels.set(label, {count: 0, entitled: false});
+          const entry = labels.get(label);
+          entry.count += 1;
+          entry.entitled ||= (e.playable_access || []).includes(label);
+        }
+      }
+      for (const label of _espnEventPolicy[sourceId].access) {
+        if (![...labels.keys()].some(l => l.toLocaleLowerCase() === label.toLocaleLowerCase())) {
+          labels.set(label, {count: 0, entitled: false});
+        }
+      }
+      return [...labels].sort((a, b) => (b[1].entitled - a[1].entitled) || a[0].localeCompare(b[0]));
+    }
+
+    function amazonSportsInit(sourceId) {
+      _espnEventPreview[sourceId] = undefined;
+      amazonSportsRefresh(sourceId);
+      fetch(`/api/sources/${sourceId}/amazon-sports-preview`)
+        .then(r => r.json().then(d => { if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`); return d; }))
+        .then(data => { _espnEventPreview[sourceId] = data; amazonSportsRefresh(sourceId); })
+        .catch(err => {
+          _espnEventPreview[sourceId] = null;
+          const match = document.getElementById(`espn-match-${sourceId}`);
+          if (match) match.textContent = 'Event counts unavailable';
+          for (const id of [`amzs-access-${sourceId}`, `espn-sports-${sourceId}`]) {
+            const list = document.getElementById(id);
+            if (list) list.innerHTML = `<div class="espn-list-note">${escapeHtml(err.message)}</div>`;
+          }
+          amazonSportsRefresh(sourceId);
+        });
+    }
+
+    function amazonSportsRefresh(sourceId) {
+      const policy = _espnEventPolicy[sourceId];
+      const list = document.getElementById(`amzs-access-${sourceId}`);
+      const picked = document.getElementById(`amzs-access-picked-${sourceId}`);
+      if (!policy || !list || !picked) return;
+      const preview = _espnEventPreview[sourceId];
+      const catalog = _amazonSportsAccessCatalog(sourceId);
+      const mine = catalog.filter(([, entry]) => entry.entitled).map(([label]) => label);
+      list.hidden = policy.access_mode !== 'selected';
+      if (policy.access_mode !== 'selected') {
+        picked.classList.remove('is-empty');
+        picked.innerHTML = preview
+          ? (mine.length ? `Your account plays: ${mine.map(l => `<span class="espn-chip">${escapeHtml(l)}</span>`).join('')}`
+                         : 'Amazon lists no events this account can play right now.')
+          : '';
+      } else {
+        picked.classList.toggle('is-empty', !policy.access.length);
+        picked.innerHTML = policy.access.length
+          ? policy.access.map(l => `<span class="espn-chip">${escapeHtml(l)}</span>`).join('')
+          : 'No subscriptions picked — no event channels will be added.';
+        if (preview === undefined) {
+          list.innerHTML = '<div class="espn-list-note">Loading subscriptions…</div>';
+        } else if (preview) {
+          const chosen = new Set(policy.access.map(l => l.toLocaleLowerCase()));
+          list.innerHTML = catalog.length ? catalog.map(([label, entry], i) => `
+            <div class="espn-sport"><div class="espn-sport-row">
+              <label><input type="checkbox" ${chosen.has(label.toLocaleLowerCase()) ? 'checked' : ''}
+                     onchange="amazonSportsToggleAccess(${sourceId}, ${i}, this.checked)">
+                ${escapeHtml(label)} <span class="espn-count">${entry.count}</span></label>
+              <span class="espn-count">${entry.entitled ? 'on your account' : 'not on your account'}</span>
+            </div></div>`).join('') : '<div class="espn-list-note">No events right now.</div>';
+          _amazonSportsCatalog[sourceId] = catalog;
+        }
+      }
+      espnEventsRefresh(sourceId);
+    }
+    const _amazonSportsCatalog = {};
+
+    function amazonSportsSetAccessMode(sourceId, mode) {
+      const policy = _espnEventPolicy[sourceId];
+      policy.access_mode = mode;
+      // Start a pick list from what the account already plays.
+      if (mode === 'selected' && !policy.access.length) {
+        policy.access = _amazonSportsAccessCatalog(sourceId).filter(([, entry]) => entry.entitled).map(([label]) => label);
+      }
+      amazonSportsRefresh(sourceId);
+    }
+
+    function amazonSportsToggleAccess(sourceId, index, checked) {
+      const policy = _espnEventPolicy[sourceId];
+      const label = _amazonSportsCatalog[sourceId][index][0];
+      const others = policy.access.filter(l => l.toLocaleLowerCase() !== label.toLocaleLowerCase());
+      policy.access = checked ? [...others, label] : others;
+      amazonSportsRefresh(sourceId);
     }
 
     async function espnTveStart(sourceId) {
@@ -6069,6 +6245,8 @@
         return renderViewLiftConfig(sourceId, sourceName, schema, values, cfg);
       } else if (sourceName === 'espn') {
         return renderEspnConfig(sourceId, schema, values, cfg);
+      } else if (sourceName === 'amazon_sports') {
+        return renderAmazonSportsConfig(sourceId, cfg);
       } else if (sourceName === 'nfl') {
         return renderNflConfig(sourceId, schema, values, cfg);
       } else if (sourceName === 'cbs_sports') {
@@ -6252,7 +6430,7 @@
         }
         payload[key] = keyFields[0].value;
       });
-      if (getSourceName(sourceId) === 'espn' && _espnEventPolicy[sourceId]) {
+      if (['espn', 'amazon_sports'].includes(getSourceName(sourceId)) && _espnEventPolicy[sourceId]) {
         payload.event_filter = _espnEventPolicy[sourceId];
       }
 

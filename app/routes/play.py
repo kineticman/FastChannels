@@ -76,6 +76,7 @@ _CSPAN_PROXY_SESSION = _requests.Session()
 _CSPAN_PROXY_SESSION.headers.update(_CSPAN_CDN_HEADERS)
 
 
+from ..scrapers.amazon_prime_free import AMAZON_DRM_SOURCES
 from ..scrapers.base import StreamDeadError
 from ..tve.adobe_pass import TVEAuthError, TVENotAuthorizedError
 from .tasks import trigger_channel_auto_disable
@@ -1577,9 +1578,10 @@ def stirr_segment_proxy():
 
 
 @play_bp.route('/play/amazon_prime_free/<channel_id>/dash.mpd')
+@play_bp.route('/play/amazon_sports/<channel_id>/dash.mpd')
 def amazon_dash_proxy(channel_id: str):
     """
-    DASH manifest proxy for Amazon Prime Free channels.
+    DASH manifest proxy for Amazon Prime Free channels and Amazon Sports events.
 
     Amazon's CDN allows only Origin: https://www.amazon.com, so browsers
     can't fetch the MPD directly.  This endpoint proxies the manifest through
@@ -1588,21 +1590,22 @@ def amazon_dash_proxy(channel_id: str):
     The endpoint is polled every 5 s by Shaka for live content updates.
     """
     from urllib.parse import unquote as _unquote, urljoin as _urljoin, quote as _quote
-    from ..scrapers.amazon_prime_free import AmazonPrimeFreeScraper
+    source_name = request.path.split('/')[2]
+    scraper_cls = registry.get(source_name)
     raw_id = _unquote(channel_id)
     channel = (
         Channel.query
         .join(Source)
-        .filter(Source.name == 'amazon_prime_free', Channel.source_channel_id == raw_id)
+        .filter(Source.name == source_name, Channel.source_channel_id == raw_id)
         .first()
     )
-    if not channel:
+    if not channel or not scraper_cls:
         abort(404)
 
     config = dict(channel.source.config or {})
     if request.args.get('hd') == '1':
-        config['_amazon_max_video_resolution'] = AmazonPrimeFreeScraper._NATIVE_MAX_VIDEO_RESOLUTION
-    scraper = AmazonPrimeFreeScraper(config=config)
+        config['_amazon_max_video_resolution'] = scraper_cls._NATIVE_MAX_VIDEO_RESOLUTION
+    scraper = scraper_cls(config=config)
     dash_url = scraper.resolve(channel.stream_url)
 
     if scraper._pending_config_updates:
@@ -2763,16 +2766,16 @@ def license_proxy(source_name: str, channel_id: str | None = None):
     # classmethods that read playback envelopes see them — they moved out of config.
     cfg = {**(source.config or {}), **load_source_cache(source.id)}
     channel_id = channel_id or request.args.get('channel_id') or None
-    if source_name == 'amazon_prime_free' and request.args.get('hd') == '1':
+    if source_name in AMAZON_DRM_SOURCES and request.args.get('hd') == '1':
         cfg['_amazon_max_video_resolution'] = scraper_cls._NATIVE_MAX_VIDEO_RESOLUTION
     amazon_pe_fingerprint = None
-    if source_name == 'amazon_prime_free':
+    if source_name in AMAZON_DRM_SOURCES:
         if not channel_id:
             return jsonify({'error': 'Amazon license request is missing channel_id.'}), 400
         pe = scraper_cls._channel_pe_for(cfg, channel_id)
         if not pe:
             logger.warning('[amazon-license] no current playback envelope for %s', channel_id[:40])
-            return jsonify({'error': 'Amazon Free playback is unavailable for this channel.'}), 503
+            return jsonify({'error': f'{scraper_cls.display_name} playback is unavailable for this channel.'}), 503
         # A refreshed envelope must be used by both the SHT request and the
         # license body in this request, even before the next carousel scrape.
         pe_entry = (cfg.get('channel_pe') or {}).get(channel_id) or {}
@@ -2792,7 +2795,7 @@ def license_proxy(source_name: str, channel_id: str | None = None):
     # invocation because sht_cache is never written anywhere.  Cache the token in
     # Redis so repeated license renewals skip the PRS round-trip.
     sht = None
-    if channel_id and source_name == 'amazon_prime_free':
+    if channel_id and source_name in AMAZON_DRM_SOURCES:
         rdb = _amazon_sht_redis()
         cap = cfg.get('_amazon_max_video_resolution') or scraper_cls._MAX_VIDEO_RESOLUTION
         _sht_key = f'amz_sht:{source_name}:{channel_id}:{cap}:{amazon_pe_fingerprint}'
@@ -3537,11 +3540,11 @@ def play_fc_player_bridge(source_name: str, channel_id: str):
 
     info = _get_playback_info(channel, fast_mode=False)
     manifest_url = info.get('preview_url') or info.get('play_url') or ''
-    if source_name == 'amazon_prime_free':
+    if source_name in AMAZON_DRM_SOURCES:
         from urllib.parse import quote as _quote
         encoded_id = _quote(channel.source_channel_id, safe='')
-        manifest_url = f'/play/amazon_prime_free/{encoded_id}/dash.mpd?hd=1'
-        license_url = (f'{request.host_url.rstrip("/")}/play/amazon_prime_free/license'
+        manifest_url = f'/play/{source_name}/{encoded_id}/dash.mpd?hd=1'
+        license_url = (f'{request.host_url.rstrip("/")}/play/{source_name}/license'
                        f'?channel_id={encoded_id}&hd=1')
     else:
         license_url = info.get('license_url') or None

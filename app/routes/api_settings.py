@@ -535,11 +535,12 @@ def bridge_live_test():
         info = _get_playback_info(channel, fast_mode=False)
         manifest_url = info.get('preview_url') or info.get('play_url') or ''
         license_url = info.get('license_url') or None
-        if channel.source.name == 'amazon_prime_free':
+        from ..scrapers.amazon_prime_free import AMAZON_DRM_SOURCES
+        if channel.source.name in AMAZON_DRM_SOURCES:
             from urllib.parse import quote as _quote
             encoded_id = _quote(channel.source_channel_id, safe='')
-            manifest_url = f'/play/amazon_prime_free/{encoded_id}/dash.mpd?hd=1'
-            license_url = (f'{request.host_url.rstrip("/")}/play/amazon_prime_free/license'
+            manifest_url = f'/play/{channel.source.name}/{encoded_id}/dash.mpd?hd=1'
+            license_url = (f'{request.host_url.rstrip("/")}/play/{channel.source.name}/license'
                            f'?channel_id={encoded_id}&hd=1')
         if manifest_url.startswith('/'):
             manifest_url = urljoin(request.host_url, manifest_url.lstrip('/'))

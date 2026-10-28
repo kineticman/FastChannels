@@ -33,7 +33,7 @@ from . import fc_player_bridge
 # app/generators/m3u.py, and app/worker.py — keep them all in sync via this single
 # source of truth.
 DRM_BRIDGE_TRUSTED_SOURCES = frozenset({
-    'sling', 'nbc_tve', 'pbs', 'amazon_prime_free', 'directv', 'vidaa', 'philo', 'roku',
+    'sling', 'nbc_tve', 'pbs', 'amazon_prime_free', 'amazon_sports', 'directv', 'vidaa', 'philo', 'roku',
     'fubo', 'spectrum', 'espn', 'versant_tve', 'vix', 'disney_tve', 'tennis_tve', 'dazn_tve', 'cnn_tve', 'nesn_tve',
     'monumental_tve', 'altitude_tve', 'myoutdoortv_tve', 'sportsnet_pittsburgh_tve',
 })

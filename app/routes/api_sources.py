@@ -502,6 +502,8 @@ def get_source_config(source_id):
                          'signed_in_at': saved.get('signed_in_at'),
                          'event_filter': _espn_event_filter(saved) or {'sport_mode': 'all', 'sports': {}, 'teams': []},
                          **_espn_tve_info(saved)}
+    if source.name == 'amazon_sports':
+        extra['amazon_sports'] = _amazon_sports_info(saved)
     if source.name == 'nfl':
         extra['nfl'] = _nfl_signin_info(saved)
     if source.name == 'cbs_sports':
@@ -573,6 +575,42 @@ def espn_event_preview(source_id):
     cutoff = _time.time() - EVENT_END_GRACE_SECONDS
     events = [e for e in summary.get('events') or [] if not e.get('end') or e['end'] > cutoff]
     return jsonify({'window_hours': 48, 'fetched_at': summary.get('fetched_at'), 'events': events})
+
+
+@sources_bp.route('/sources/<int:source_id>/amazon-sports-preview')
+def amazon_sports_preview(source_id):
+    """Events the last scrape found, before filters, for the Amazon Sports
+    card's subscription and sport/league picker. There is no live fallback:
+    a scrape is a few hundred Amazon requests."""
+    source = Source.query.get_or_404(source_id)
+    if source.name != 'amazon_sports':
+        return jsonify({'error': 'Not an Amazon Sports source'}), 404
+    from ..config_store import load_source_cache
+    from ..scrapers.amazon_sports import EVENT_PREVIEW_CACHE_KEY
+    summary = load_source_cache(source.id).get(EVENT_PREVIEW_CACHE_KEY)
+    if not isinstance(summary, dict):
+        return jsonify({'error': 'Run a scrape to list the events, subscriptions and sports Amazon has.'}), 404
+    events = [e for e in summary.get('events') or [] if not e.get('end') or e['end'] > _time.time()]
+    return jsonify({'window_hours': summary.get('window_hours'), 'fetched_at': summary.get('fetched_at'),
+                    'events': events})
+
+
+def _amazon_sports_event_filter(cfg: dict) -> dict | None:
+    from ..scrapers.amazon_sports import clean_event_filter
+    try:
+        return clean_event_filter(cfg.get('event_filter'))
+    except ValueError:
+        return None
+
+
+def _amazon_sports_info(saved: dict) -> dict:
+    """What the Amazon Sports card needs: whether the Amazon Free source it
+    borrows a session from is signed in, and the saved filter."""
+    from ..scrapers.amazon_sports import ACCOUNT_SOURCE, amazon_account_config, clean_event_filter
+    account = Source.query.filter_by(name=ACCOUNT_SOURCE).first()
+    return {'signed_in': bool(amazon_account_config().get('cookie_header')),
+            'account_source_id': account.id if account else None,
+            'event_filter': _amazon_sports_event_filter(saved) or clean_event_filter(None)}
 
 
 def _espn_tv_provider() -> tuple[str, str]:
@@ -666,6 +704,12 @@ def save_source_config(source_id):
             current['event_filter'] = clean_event_filter(data['event_filter'])
         except ValueError as exc:
             return jsonify({'error': str(exc)}), 422
+    if source.name == 'amazon_sports' and 'event_filter' in data:
+        from ..scrapers.amazon_sports import clean_event_filter
+        try:
+            current['event_filter'] = clean_event_filter(data['event_filter'])
+        except ValueError as exc:
+            return jsonify({'error': str(exc)}), 422
     # If login credentials changed, purge any cached auth state so the next run
     # is forced through a fresh login. Otherwise scrapers that cache auth in
     # config keep authenticating as the *old* account — the new credentials are
@@ -746,6 +790,8 @@ def save_source_config(source_id):
         or _espn_event_filter(old) != _espn_event_filter(current)
     )
     espn_any_events = any(_toggle_enabled(current, key) for key in espn_event_keys)
+    amazon_sports_filter_changed = source.name == 'amazon_sports' and (
+        _amazon_sports_event_filter(old) != _amazon_sports_event_filter(current))
     if source.name == 'espn' and espn_any_events and not hasattr(Channel, 'retire_at'):
         return jsonify({'error': 'ESPN events require a FastChannels image rebuild and restart.'}), 503
     if creds_changed or sling_subscription_changed:
@@ -876,6 +922,9 @@ def save_source_config(source_id):
         full_scrape_queued = True
     elif espn_events_changed and source.is_enabled and espn_any_events:
         trigger_scrape('espn', force_full=True)
+        full_scrape_queued = True
+    elif amazon_sports_filter_changed and source.is_enabled:
+        trigger_scrape('amazon_sports', force_full=True)
         full_scrape_queued = True
     elif networks_reenabled and source.is_enabled:
         trigger_scrape(source.name, force_full=True)

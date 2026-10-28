@@ -67,6 +67,12 @@ def is_source_config_complete(source_name: str, scraper_cls, values: dict | None
             'amazon_email', 'cookie_header',
         ))
 
+    # Amazon Sports has no sign-in of its own; it uses the Amazon Free
+    # source's session.
+    if source_name == 'amazon_sports':
+        from .scrapers.amazon_sports import amazon_account_config
+        return bool(amazon_account_config().get('cookie_header'))
+
     # DirecTV has two sign-in methods: saved email + password, or a code
     # sign-in session (app/scrapers/directv_device_auth.py), which stores neither.
     if source_name == 'directv':
