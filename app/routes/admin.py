@@ -9,17 +9,12 @@ from sqlalchemy import select, case, func, or_
 from sqlalchemy.orm import load_only, defer
 from ..extensions import db
 from .. import admin_auth
-from ..models import Source, Channel, Feed, FeedChannelNumber, AppSettings, Program
+from ..models import Source, Channel, Feed, AppSettings, Program
 from ..generators.m3u import (
     _build_channel_query,
-    _build_feed_chnum_map,
-    _build_source_chnum_map,
-    _build_sticky_gn_chnum_map,
     apply_provider_numbers,
     _drm_bridge_query_filters,
     _has_gracenote_claim,
-    _selected_channel_stubs,
-    feed_namespace_start,
     feed_to_query_filters,
 )
 from ..scrapers import registry as _scraper_registry
@@ -147,49 +142,13 @@ def _duplicate_name_sets() -> tuple[set[str], set[str], set[int]]:
     return duplicate_names, possible_names, gn_duplicate_ids
 
 
-def _source_scheme_chnum_map(std_channels, gn_channels) -> dict[int, int]:
-    """Sequential numbering keyed off Source order — the 'no chnum_start' scheme."""
-    gn_numbers = {ch.number for ch in gn_channels if ch.number is not None}
-    full_map, _ = _build_source_chnum_map(std_channels, gn_numbers) if std_channels else ({}, [])
-    if gn_channels:
-        gn_start = (max(full_map.values()) + 1) if full_map else 1
-        full_map.update(_build_sticky_gn_chnum_map(gn_channels, gn_start, set(full_map.values())))
-    return full_map
-
-
 def _default_feed_chnum_map_full() -> dict[int, int]:
-    """The default feed's resolved chnum map for every channel, unfiltered.
-
-    Number every enabled channel with the default feed's numbering scheme
-    (chnum_start / sticky assignment), not just channels that happen to
-    match the default feed's own membership filters — otherwise a channel
-    excluded from that filter (but still shown on this admin page) gets no
-    entry here and renders as a blank dash, even though it's numbered fine
-    in whichever feed actually generates the user's CDVR/M3U import.
-    """
+    """The numbers the Default feed shows, by channel id (the master numbers
+    when the Default feed is off). Channels the Default feed leaves out have
+    no entry here and show a dash."""
+    from ..chnum import MASTER_SCOPE, read_scope
     default_feed = Feed.query.filter_by(slug='default', is_enabled=True).first()
-    std_channels = _selected_channel_stubs({}, gracenote=False)
-    gn_channels  = _selected_channel_stubs({}, gracenote=True)
-
-    if default_feed and default_feed.chnum_start is not None:
-        stored_numbers = {
-            row.channel_id: row.number
-            for row in FeedChannelNumber.query.filter_by(feed_id=default_feed.id).all()
-        }
-        all_stubs = sorted(
-            std_channels + gn_channels,
-            key=lambda ch: (ch.number is None, ch.number or 0, (ch.name or '').lower()),
-        )
-        return (
-            _build_feed_chnum_map(
-                all_stubs,
-                default_feed.chnum_start,
-                stored_numbers=stored_numbers,
-            )
-            if all_stubs else {}
-        )
-
-    return _source_scheme_chnum_map(std_channels, gn_channels)
+    return read_scope(default_feed.id if default_feed else MASTER_SCOPE)
 
 
 def _provider_numbered_ids(items) -> set[int]:
@@ -1755,12 +1714,8 @@ def feeds():
     countries = [r[0] for r in country_rows]
     base_url   = public_base_url()
     default_feed = next((f for f in feeds if f.slug == 'default'), None)
-    # chnum_start is now the single source of truth for all feeds including default.
-    # Show the auto-assigned namespace as placeholder for feeds without an explicit value.
+    # Every feed has a chnum_start (app.chnum), so there is no placeholder to show.
     feed_chnum_placeholder = {}
-    for feed in feeds:
-        if feed.chnum_start is None and feed.slug != 'default':
-            feed_chnum_placeholder[feed.id] = feed_namespace_start(feed, gracenote=False)
     feed_split_counts = {
         feed.id: _feed_split_counts(feed)
         for feed in feeds

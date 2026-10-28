@@ -7,7 +7,7 @@ from flask import Blueprint, jsonify, request
 from sqlalchemy.exc import OperationalError
 from ..extensions import db
 from ..generators.m3u import get_global_chnum_overlaps, _selected_channel_stubs, feed_to_query_filters
-from ..models import Channel, Feed, FeedChannelNumber, Source
+from ..models import AppSettings, Channel, Feed, Source
 from ..channel_tags import event_filter_clause
 from ..url import public_base_url
 from ..xml_cache import delete_xml_artifact, invalidate_xml_cache
@@ -47,38 +47,6 @@ def _safe_flush():
 
 
 GUIDE_MODES = ('split', 'mixed')
-
-
-def _promote_to_unified_pool(feed: Feed) -> None:
-    """Give a feed without a chnum_start one, keeping the numbers it has now.
-
-    A mixed-guide feed is one playlist, so it needs one sticky number pool
-    (FeedChannelNumber). Without a chnum_start the standard and Gracenote
-    playlists are numbered by position in two separate blocks; snapshot those
-    numbers into the pool and start the feed at the lowest of them, so going
-    mixed renumbers nothing and later channel changes stop shifting everything
-    after them.
-    """
-    from ..generators.m3u import (
-        _selected_channels, _resolve_app_chnum_map,
-        feed_namespace_start, feed_gracenote_start,
-    )
-    q_filters = feed_to_query_filters(feed.filters or {})
-    std_start = feed_namespace_start(feed, gracenote=False)
-    numbers: dict[int, int] = {}
-    for gracenote, start in ((False, std_start), (True, feed_gracenote_start(feed))):
-        channels = _selected_channels(q_filters, gracenote=gracenote)
-        num_map, _ = _resolve_app_chnum_map(channels, namespace_start=start)
-        pinned = {ch.id for ch in channels if ch.number_pinned and ch.number is not None}
-        numbers.update({cid: num for cid, num in num_map.items() if cid not in pinned})
-
-    feed.chnum_start = min([std_start, *numbers.values()])
-    existing = {r.channel_id: r for r in FeedChannelNumber.query.filter_by(feed_id=feed.id).all()}
-    for cid, num in numbers.items():
-        if cid in existing:
-            existing[cid].number = num
-        else:
-            db.session.add(FeedChannelNumber(feed_id=feed.id, channel_id=cid, number=num))
 
 
 def _slugify(text: str) -> str:
@@ -124,7 +92,6 @@ def channel_membership():
 @feeds_api_bp.route('/chnum-ranges', methods=['GET'])
 def chnum_ranges():
     """Return the occupied channel number ranges for the master M3U and every enabled feed."""
-    from ..generators.m3u import _build_channel_query, feed_namespace_start
     ranges = []
     exclude_id = request.args.get('exclude_id', type=int)
 
@@ -140,10 +107,7 @@ def chnum_ranges():
         total_count = std_count + gn_count
         if total_count == 0:
             continue
-        if feed.chnum_start:
-            start = feed.chnum_start
-        else:
-            start = feed_namespace_start(feed, gracenote=False)
+        start = feed.chnum_start or 0
         ranges.append({
             'feed_id':   feed.id,
             'feed_name': feed.name,
@@ -184,9 +148,9 @@ def preview_order():
       - order (optional): explicit channel-id sequence to overlay, so the UI can
         preview an unsaved drag-drop ordering merged with current membership.
     """
+    from ..chnum import plan_numbers, scope_rows
     from ..generators.m3u import (
-        _build_feed_chnum_map, build_manual_order_map, feed_namespace_start,
-        apply_provider_numbers, chnum_sort_key,
+        build_manual_order_map, apply_provider_numbers, chnum_sort_key,
     )
     data = request.get_json() or {}
     filters = _clean_filters(data.get('filters') or {})
@@ -197,11 +161,15 @@ def preview_order():
     explicit_start = _parse_chnum_start(data.get('chnum_start'))
     start = explicit_start
     if start is None and feed is not None:
-        start = feed.chnum_start or feed_namespace_start(feed, gracenote=False)
+        start = feed.chnum_start
     if start is None:
         start = 1000
 
     stubs, gn_ids = _feed_member_stubs(q_filters)
+    # The feed's rows: a saved feed previews what it shows, and an edit to
+    # its filters or start previews what the next settle would make of them.
+    rows = scope_rows(feed.id) if feed is not None else {}
+    held = {n for n, released_at in rows.values() if released_at is not None}
 
     order_ids = data.get('order') or []
     if order_ids:
@@ -209,32 +177,15 @@ def preview_order():
             order_ids = [int(i) for i in order_ids]
         except (TypeError, ValueError):
             return jsonify({'error': 'order must contain integer channel ids'}), 400
-        num_map = build_manual_order_map(stubs, order_ids, start)
+        num_map = build_manual_order_map(stubs, order_ids, start, reserved=held)
         # Members the overlaid order doesn't cover get appended after it.
         placed_ids = set(order_ids)
     else:
-        stored = {}
-        if feed is not None:
-            stored = {
-                r.channel_id: r.number
-                for r in FeedChannelNumber.query.filter_by(feed_id=feed.id).all()
-            }
-        if feed is not None and explicit_start is None and feed.chnum_start is None:
-            # An implicit-start feed displays separate standard and Gracenote
-            # number blocks. Preview those same blocks instead of numbering
-            # both partitions from the standard block's start.
-            std = [ch for ch in stubs if ch.id not in gn_ids]
-            gn = [ch for ch in stubs if ch.id in gn_ids]
-            num_map = {
-                **_build_feed_chnum_map(std, start),
-                **_build_feed_chnum_map(gn, feed_namespace_start(feed, gracenote=True)),
-            }
-        else:
-            num_map = _build_feed_chnum_map(stubs, start, stored_numbers=stored)
-        # With a saved number pool, members that have no stored number are
-        # slotted into whatever numbers are free (gaps first, then the end).
-        # No pool means everything is numbered fresh, so nothing is "new".
-        placed_ids = set(stored) if stored else None
+        num_map = plan_numbers(stubs, start, rows)
+        # With saved numbers, members that have none are slotted into whatever
+        # numbers are free (gaps first, then the end). No rows means everything
+        # is numbered fresh, so nothing is "new".
+        placed_ids = {cid for cid, (_, released_at) in rows.items() if released_at is None} or None
     app_map = num_map
     num_map = apply_provider_numbers(stubs, num_map)
     # Rows whose number is fixed outside this feed's ordering (a provider number
@@ -270,11 +221,12 @@ def preview_order():
 def set_channel_order(feed_id):
     """
     Persist a manual drag-drop ordering as this feed's channel numbers by
-    rewriting its FeedChannelNumber pool sequentially from chnum_start.
-    The sticky-number refresh preserves these on later scrapes; channels that
-    newly match the filters append after the ordered block.
+    rewriting its rows (app.chnum) sequentially from chnum_start. The settle
+    step keeps them; channels that newly match the filters get the lowest
+    free numbers.
     """
-    from ..generators.m3u import build_manual_order_map, feed_namespace_start
+    from ..chnum import clear_rows, replace_rows, scope_rows
+    from ..generators.m3u import available_feed_start, build_manual_order_map
     feed = Feed.query.get_or_404(feed_id)
     if feed.slug in SYSTEM_FEED_SLUGS:
         return jsonify({'error': 'Built-in feeds cannot be reordered.'}), 403
@@ -290,30 +242,25 @@ def set_channel_order(feed_id):
 
     baseline_warnings = set(get_global_chnum_overlaps())
 
-    # A manual order needs a durable explicit start — the namespace auto-start
-    # shifts when feeds are added/renamed, which would drop stored numbers below
-    # the new floor and silently shred the user's ordering.
     if 'chnum_start' in data:
         explicit = _parse_chnum_start(data['chnum_start'])
         if explicit is not None:
             feed.chnum_start = explicit
     if feed.chnum_start is None:
-        feed.chnum_start = feed_namespace_start(feed, gracenote=False)
+        feed.chnum_start = available_feed_start(feed)
 
     q_filters = feed_to_query_filters(feed.filters or {})
     stubs, _ = _feed_member_stubs(q_filters)
-    num_map = build_manual_order_map(stubs, order_ids, feed.chnum_start)
-
-    existing = {r.channel_id: r for r in FeedChannelNumber.query.filter_by(feed_id=feed.id).all()}
-    for cid, num in num_map.items():
-        if cid in existing:
-            if existing[cid].number != num:
-                existing[cid].number = num
-        else:
-            db.session.add(FeedChannelNumber(feed_id=feed.id, channel_id=cid, number=num))
-    for cid, row in existing.items():
-        if cid not in num_map:
-            db.session.delete(row)
+    # Rows of channels out of the feed: held ones keep their numbers (the
+    # order skips them); the rest go, as the next settle would drop them.
+    member_ids = {ch.id for ch in stubs}
+    rows = scope_rows(feed.id)
+    clear_rows(feed.id, [cid for cid, (_, released_at) in rows.items()
+                         if cid not in member_ids and released_at is None])
+    held = {n for cid, (n, released_at) in rows.items()
+            if cid not in member_ids and released_at is not None}
+    num_map = build_manual_order_map(stubs, order_ids, feed.chnum_start, reserved=held)
+    replace_rows(feed.id, num_map)
 
     err = _safe_flush()
     if err:
@@ -331,33 +278,11 @@ def set_channel_order(feed_id):
 
 def _displayed_feed_chnum_map(feed: Feed) -> dict[int, int]:
     """Return the app numbers currently shown in a feed's playlists."""
-    from ..generators.m3u import _build_feed_chnum_map, feed_namespace_start
-
     if feed.slug == 'default':
         from .admin import _default_feed_chnum_map_full
         return _default_feed_chnum_map_full()
-
-    q_filters = feed_to_query_filters(feed.filters or {})
-    stored = (
-        {row.channel_id: row.number
-         for row in FeedChannelNumber.query.filter_by(feed_id=feed.id).all()}
-        if feed.chnum_start is not None else None
-    )
-    # Match the standard and Gracenote output paths. With an explicit start,
-    # both partitions use the same stored pool; otherwise each has its own
-    # namespace and no stored assignments.
-    std = _selected_channel_stubs(q_filters, gracenote=False)
-    gn = _selected_channel_stubs(q_filters, gracenote=True)
-    return {
-        **_build_feed_chnum_map(
-            std, feed.chnum_start or feed_namespace_start(feed, gracenote=False),
-            stored_numbers=stored,
-        ),
-        **_build_feed_chnum_map(
-            gn, feed.chnum_start or feed_namespace_start(feed, gracenote=True),
-            stored_numbers=stored,
-        ),
-    }
+    from ..chnum import read_scope
+    return read_scope(feed.id)
 
 
 @feeds_api_bp.route('/<int:feed_id>/chnum-lock-all', methods=['POST'])
@@ -470,9 +395,8 @@ def create_feed():
         # Both guide partitions draw from the same sticky number pool.
         from ..generators.m3u import available_feed_start
         feed.chnum_start = available_feed_start(feed)
-    # A new chnum_start feed needs its FeedChannelNumber store populated before
-    # the overlap check / XML refresh, so its std and gracenote M3Us draw from one
-    # unified pool instead of both numbering from chnum_start and colliding.
+    # Number the new feed before the overlap check / XML refresh: playlists
+    # only read numbers, they never assign them.
     if feed.chnum_start is not None:
         from ..worker import _refresh_auto_channel_numbers
         _refresh_auto_channel_numbers()
@@ -527,33 +451,26 @@ def update_feed(feed_id):
         if 'is_enabled' in data:
             feed.is_enabled = bool(data['is_enabled'])
 
-    # A mixed feed is numbered from one sticky pool, which needs a start.
-    # Clearing it would mean re-deriving every number from scratch.
-    if ('chnum_start' in data and _parse_chnum_start(data['chnum_start']) is None
-            and feed.chnum_start is not None
-            and data.get('guide_mode', feed.guide_mode) == 'mixed'):
-        db.session.rollback()
-        return jsonify({'error': 'A feed in mixed guide mode needs a Channel Number Start. '
-                                 'Change it to another number, or switch the feed back to '
-                                 'separate playlists first.'}), 400
-
-    if 'chnum_start' in data:
-        feed.chnum_start = _parse_chnum_start(data['chnum_start'])
+    # Every feed numbers from a start (app.chnum); a blank one keeps the
+    # current start. Numbers below a new start move up at the settle below.
+    new_start = _parse_chnum_start(data['chnum_start']) if 'chnum_start' in data else None
+    if new_start is not None:
+        feed.chnum_start = new_start
+        if feed.slug == 'default':
+            # The master playlists start where the Default feed does.
+            AppSettings.get().master_chnum_start = new_start
+    if feed.chnum_start is None:
+        from ..generators.m3u import available_feed_start
+        feed.chnum_start = available_feed_start(feed)
     if 'guide_mode' in data:
         feed.guide_mode = data['guide_mode']
-    # A mixed feed always numbers from one sticky pool (see _promote_to_unified_pool).
-    if feed.guide_mode == 'mixed' and feed.chnum_start is None:
-        _promote_to_unified_pool(feed)
 
     err = _safe_flush()  # make changes visible to overlap check
     if err:
         return err
-    # Changing chnum_start or filters alters which channels this feed numbers and
-    # from where.  For unified-pool (chnum_start) feeds the std and gracenote M3Us
-    # rely on the persisted FeedChannelNumber store to avoid colliding with each
-    # other, so the store must be rebuilt BEFORE we regenerate XML or check for
-    # overlaps — otherwise both partitions number sequentially from chnum_start
-    # and every gracenote channel collides with a standard one.
+    # Changing chnum_start or filters alters which channels this feed numbers
+    # and from where. Playlists only read numbers, so settle them BEFORE we
+    # regenerate XML or check for overlaps.
     if any(k in data for k in ('chnum_start', 'filters', 'is_enabled', 'guide_mode')):
         from ..worker import _refresh_auto_channel_numbers
         _refresh_auto_channel_numbers()
@@ -575,9 +492,12 @@ def update_feed(feed_id):
 
 
 def _reset_default_channel_numbers() -> None:
-    """Force a fresh global/master numbering pass for channels affected by the master start."""
+    """Renumber the master playlists afresh for channels the master start
+    places (unlocked channels of sources without their own start, and every
+    Gracenote channel); the next settle numbers them again."""
+    from ..chnum import GRACENOTE_SCOPES, MASTER_SCOPE, clear_rows
     channels = (
-        Channel.query
+        db.session.query(Channel.id)
         .join(Source)
         .filter(
             Channel.is_active == True,
@@ -593,29 +513,20 @@ def _reset_default_channel_numbers() -> None:
         )
         .all()
     )
-    for channel in channels:
-        channel.number = None
+    clear_rows(MASTER_SCOPE, [cid for (cid,) in channels])
+    for scope_id in GRACENOTE_SCOPES:
+        clear_rows(scope_id)
+    AppSettings.get().master_gracenote_chnum_start = None
 
 
 @feeds_api_bp.route('/<int:feed_id>/reset-channel-numbers', methods=['POST'])
 def reset_feed_channel_numbers(feed_id):
+    from ..chnum import clear_rows
     feed = Feed.query.get_or_404(feed_id)
 
     if feed.slug == 'default':
         _reset_default_channel_numbers()
-        # The default feed can also carry an explicit chnum_start, in which case
-        # it has its own FeedChannelNumber store driving its playlist numbers.
-        # Nulling master Channel.number alone leaves that store untouched, and
-        # _refresh_auto_channel_numbers keeps the old sticky numbers (>= chnum_start)
-        # — making the reset a no-op for this feed.  Clear it so it rebuilds fresh.
-        if feed.chnum_start is not None:
-            for row in FeedChannelNumber.query.filter_by(feed_id=feed.id).all():
-                db.session.delete(row)
-    else:
-        if feed.chnum_start is None:
-            return jsonify({'error': 'Set a Channel Number Start before resetting this feed.'}), 400
-        for row in FeedChannelNumber.query.filter_by(feed_id=feed.id).all():
-            db.session.delete(row)
+    clear_rows(feed.id)
 
     err = _safe_flush()
     if err:
@@ -641,6 +552,8 @@ def delete_feed(feed_id):
     if feed.slug in SYSTEM_FEED_SLUGS:
         return jsonify({'error': 'Built-in feeds cannot be deleted.'}), 403
     slug = feed.slug
+    from ..chnum import clear_rows
+    clear_rows(feed.id)
     db.session.delete(feed)
     err = _safe_commit()
     if err:

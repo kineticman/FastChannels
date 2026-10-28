@@ -6,8 +6,7 @@ from ..generators.m3u import (
     generate_m3u,
     generate_gracenote_m3u,
     generate_mixed_m3u,
-    feed_namespace_start,
-    feed_gracenote_start,
+    feed_number_kwargs,
     feed_to_query_filters,
     _MASTER_GRACENOTE_START,
     generate_prismcast_m3u,
@@ -190,15 +189,11 @@ def m3u_gracenote():
     Supports the same ?source=, ?category=, ?language=, ?search= filters
     as the standard /m3u endpoint.
     """
-    from ..models import Feed
     base_url     = public_base_url()
     filters      = _filters()
     if filters:
-        # feed_gracenote_start runs a full channel query + chnum-map build —
-        # only pay for it on the uncached filtered path, never when serving
-        # the prebuilt artifact below.
-        default_feed = Feed.query.filter_by(slug='default').first()
-        gn_start     = feed_gracenote_start(default_feed) if default_feed else _MASTER_GRACENOTE_START
+        # namespace_start without a feed numbers from the master Gracenote rows.
+        gn_start     = _MASTER_GRACENOTE_START
         content = generate_gracenote_m3u(filters, base_url=base_url, namespace_start=gn_start)
         return Response(content, mimetype='application/x-mpegurl',
                         headers={'Content-Disposition': 'attachment; filename="fastchannels-gracenote.m3u"'})
@@ -449,7 +444,7 @@ def m3u_prismcast_gracenote():
     """Gracenote-guide variant of the PrismCast M3U: only channels with a
     Gracenote ID, emitted with tvc-guide-stationid so Channels DVR routes guide
     data through Gracenote. DRM channels still bridge through PrismCast."""
-    from ..models import AppSettings, Feed
+    from ..models import AppSettings
     settings = AppSettings.get()
     prismcast_url = (settings.effective_prismcast_url() or '').strip().rstrip('/')
     if not settings.prismcast_capture_configured():
@@ -458,8 +453,7 @@ def m3u_prismcast_gracenote():
     filters  = _filters()
     if filters:
         inner        = (settings.effective_prismcast_inner_url() or base_url).strip().rstrip('/')
-        default_feed = Feed.query.filter_by(slug='default').first()
-        gn_start     = feed_gracenote_start(default_feed) if default_feed else _MASTER_GRACENOTE_START
+        gn_start     = _MASTER_GRACENOTE_START
         content = generate_prismcast_m3u(filters, base_url=base_url,
                                          prismcast_url=prismcast_url, inner_base_url=inner,
                                          namespace_start=gn_start, gracenote=True)
@@ -531,10 +525,7 @@ def feed_m3u_prismcast_ts(slug):
     base_url = public_base_url()
     inner = (settings.effective_prismcast_inner_url() or base_url).strip().rstrip('/')
     filters = feed_to_query_filters(feed.filters or {})
-    if feed.chnum_start is not None:
-        kw = {'feed_chnum_start': feed.chnum_start, 'feed_id': feed.id}
-    else:
-        kw = {'namespace_start': feed_namespace_start(feed, gracenote=False)}
+    kw = feed_number_kwargs(feed)
     content = generate_prismcast_m3u(filters, base_url=base_url,
                                      prismcast_url=prismcast_url, inner_base_url=inner,
                                      ts=True, **kw)
@@ -661,7 +652,7 @@ def m3u_fc_player_ah4c_gracenote():
     """Gracenote-guide variant of the ah4c-routed FastChannels Player bridge M3U:
     only channels with a Gracenote ID, emitted with tvc-guide-stationid, entries
     pointing at ah4c's /play/tuner/<channel>."""
-    from ..models import AppSettings, Feed
+    from ..models import AppSettings
     settings = AppSettings.get()
     ah4c_url = (settings.effective_fc_player_bridge_ah4c_url() or '').strip()
     if not _ah4c_bridge_ready():
@@ -669,8 +660,7 @@ def m3u_fc_player_ah4c_gracenote():
     base_url = public_base_url()
     filters  = _filters()
     if filters:
-        default_feed = Feed.query.filter_by(slug='default').first()
-        gn_start     = feed_gracenote_start(default_feed) if default_feed else _MASTER_GRACENOTE_START
+        gn_start     = _MASTER_GRACENOTE_START
         content = generate_fc_player_m3u(filters, base_url=base_url, ah4c_base_url=ah4c_url,
                                           namespace_start=gn_start, gracenote=True)
         return Response(content, mimetype='application/x-mpegurl',
@@ -695,14 +685,12 @@ def m3u_fc_player_gracenote():
     """Gracenote-guide variant of the FastChannels Player bridge M3U: only channels
     with a Gracenote ID, emitted with tvc-guide-stationid."""
     from .. import fc_player_bridge
-    from ..models import Feed
     if not _fc_player_bridge_ready():
         return _fc_player_not_configured()
     base_url = public_base_url()
     filters  = _filters()
     if filters:
-        default_feed = Feed.query.filter_by(slug='default').first()
-        gn_start     = feed_gracenote_start(default_feed) if default_feed else _MASTER_GRACENOTE_START
+        gn_start     = _MASTER_GRACENOTE_START
         content = generate_fc_player_m3u(filters, base_url=base_url,
                                           namespace_start=gn_start, gracenote=True)
         return Response(content, mimetype='application/x-mpegurl',

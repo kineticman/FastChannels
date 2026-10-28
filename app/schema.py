@@ -75,6 +75,13 @@ def _merge_source_name(conn, old_name: str, new_name: str) -> None:
                         "old_channel_id": old_channel_id,
                     },
                 )
+                if conn.execute(text(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='channel_numbers'"
+                )).fetchone():
+                    conn.execute(
+                        text("DELETE FROM channel_numbers WHERE channel_id = :channel_id"),
+                        {"channel_id": old_channel_id},
+                    )
                 conn.execute(
                     text("DELETE FROM channels WHERE id = :channel_id"),
                     {"channel_id": old_channel_id},
@@ -165,6 +172,33 @@ def ensure_runtime_schema() -> None:
             conn.execute(text(
                 "ALTER TABLE feeds ADD COLUMN guide_mode VARCHAR(16) NOT NULL DEFAULT 'split'"
             ))
+
+        # channel_numbers: the one store of channel numbers (app/chnum.py). No
+        # foreign key on scope_id: 0, -1 and -2 are the master scopes, the rest
+        # feed ids. Created here and not only by db.create_all() so the unique
+        # index exists on every install. The app_settings columns hold the
+        # master starts and whether the one-time seed below has run.
+        conn.execute(text(
+            "CREATE TABLE IF NOT EXISTS channel_numbers ("
+            " scope_id INTEGER NOT NULL,"
+            " channel_id INTEGER NOT NULL REFERENCES channels(id) ON DELETE CASCADE,"
+            " number INTEGER NOT NULL,"
+            " released_at DATETIME,"
+            " PRIMARY KEY (scope_id, channel_id),"
+            " CONSTRAINT uq_channel_numbers_scope_number UNIQUE (scope_id, number)"
+            ")"
+        ))
+        conn.execute(text(
+            "CREATE INDEX IF NOT EXISTS ix_channel_numbers_channel_id ON channel_numbers (channel_id)"
+        ))
+        tables.add("channel_numbers")
+        if "app_settings" in tables:
+            as_cols = {row[1] for row in conn.execute(text("PRAGMA table_info(app_settings)"))}
+            for col, ddl in (("master_chnum_start", "INTEGER"),
+                             ("master_gracenote_chnum_start", "INTEGER"),
+                             ("chnum_seeded_at", "DATETIME")):
+                if col not in as_cols:
+                    conn.execute(text(f"ALTER TABLE app_settings ADD COLUMN {col} {ddl}"))
 
         # source_cache: key/value home for large regenerable scraper caches that
         # used to bloat Source.config (see models.SourceCache). Fresh installs get
@@ -870,6 +904,9 @@ def ensure_runtime_schema() -> None:
                                 "DELETE FROM feed_channel_numbers WHERE channel_id = :l"
                             ), {"l": _loser})
                             conn.execute(text(
+                                "DELETE FROM channel_numbers WHERE channel_id = :l"
+                            ), {"l": _loser})
+                            conn.execute(text(
                                 "DELETE FROM channels WHERE id = :l"
                             ), {"l": _loser})
                             _deduped += 1
@@ -934,7 +971,7 @@ def ensure_runtime_schema() -> None:
                 "AND (c.name = 'Spectrum' OR c.name GLOB 'Spectrum[0-9]*')"
             )).fetchall()]
             if promo_ids:
-                for table in ("programs", "feed_channel_numbers"):
+                for table in ("programs", "feed_channel_numbers", "channel_numbers"):
                     if table in tables:
                         conn.execute(text(
                             f"DELETE FROM {table} WHERE channel_id IN ({','.join(map(str, promo_ids))})"
@@ -1039,3 +1076,8 @@ def ensure_runtime_schema() -> None:
                 " AND source_id IN (SELECT id FROM sources WHERE scrape_interval = 0)"
             )
         )
+
+    # Channel numbers move to channel_numbers once, seeded from what the
+    # previous numbering serves. ORM use is safe here: every column above exists.
+    from .chnum import seed_channel_numbers
+    seed_channel_numbers()

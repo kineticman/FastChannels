@@ -438,12 +438,38 @@ class FeedChannelNumber(db.Model):
     __table_args__ = (db.Index('ix_feed_channel_numbers_feed_id', 'feed_id'),)
 
 
+class ChannelNumber(db.Model):
+    """A channel's number in one numbering scope -- the only record of it.
+
+    scope_id is a feed id, or one of the master scopes (0, -1, -2, see
+    app.chnum), so it has no foreign key. released_at is set
+    while the channel is out of the scope and its number is held for it.
+    Written only by app.chnum. (FeedChannelNumber is the previous store, left
+    untouched so a downgrade still finds its numbers.)
+    """
+    __tablename__ = 'channel_numbers'
+
+    scope_id    = db.Column(db.Integer, primary_key=True, autoincrement=False)
+    channel_id  = db.Column(db.Integer, db.ForeignKey('channels.id', ondelete='CASCADE'),
+                            primary_key=True, autoincrement=False)
+    number      = db.Column(db.Integer, nullable=False)
+    released_at = db.Column(db.DateTime, nullable=True)
+
+    __table_args__ = (
+        db.UniqueConstraint('scope_id', 'number', name='uq_channel_numbers_scope_number'),
+        db.Index('ix_channel_numbers_channel_id', 'channel_id'),
+    )
+
+
 class AppSettings(db.Model):
     """Single-row global settings table (always id=1)."""
     __tablename__ = 'app_settings'
 
     id                   = db.Column(db.Integer, primary_key=True)
     global_chnum_start   = db.Column(db.Integer, nullable=True)  # master tvg-chno start for ungrouped sources
+    master_chnum_start   = db.Column(db.Integer, nullable=True)  # where new master numbers start (follows the Default feed's start); None = keep scraper numbers, new ones from 5000
+    master_gracenote_chnum_start = db.Column(db.Integer, nullable=True)  # where new /m3u/gracenote numbers start; None = above the master numbers
+    chnum_seeded_at      = db.Column(db.DateTime, nullable=True)  # channel_numbers seeded from the previous numbering (app.chnum.seed_channel_numbers)
     channels_dvr_url     = db.Column(db.Text, nullable=True)     # e.g. http://192.168.1.x:8089
     public_base_url      = db.Column(db.Text, nullable=True)     # e.g. http://192.168.1.x:5523
     timezone_name        = db.Column(db.String(64), nullable=True)  # IANA timezone, e.g. America/New_York

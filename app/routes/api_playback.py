@@ -34,8 +34,7 @@ from ..generators.m3u import (
     _parse_gracenote_id,
     _selected_channel_stubs,
     _resolve_chnum_map,
-    feed_gracenote_start,
-    feed_namespace_start,
+    feed_number_kwargs,
 )
 
 playback_bp = Blueprint('api_playback', __name__)
@@ -74,24 +73,7 @@ def _channel_feed_summaries(ch: Channel) -> list[dict]:
             status = 'filtered'
 
         selected = _selected_channel_stubs(q_filters, gracenote=gracenote_output)
-        if feed.chnum_start is not None:
-            chnum_map, _ = _resolve_chnum_map(
-                selected,
-                feed_chnum_start=feed.chnum_start,
-                feed_id=feed.id,
-            )
-        elif feed.slug == 'default' and gracenote_output:
-            chnum_map, _ = _resolve_chnum_map(
-                selected,
-                namespace_start=feed_gracenote_start(feed),
-            )
-        elif feed.slug == 'default':
-            chnum_map, _ = _resolve_chnum_map(selected)
-        else:
-            chnum_map, _ = _resolve_chnum_map(
-                selected,
-                namespace_start=feed_namespace_start(feed, gracenote=gracenote_output),
-            )
+        chnum_map, _ = _resolve_chnum_map(selected, **feed_number_kwargs(feed))
 
         result.append({
             'feed_id': feed.id,

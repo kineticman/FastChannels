@@ -863,8 +863,10 @@ def save_source_config(source_id):
     event_deleted = 0
     if espn_events_changed and not espn_any_events:
         from ..models import FeedChannelNumber
+        from ..chnum import delete_channel_rows
         for ch in source.channels.filter(Channel.source_channel_id.like('airing:%')).all():
             FeedChannelNumber.query.filter_by(channel_id=ch.id).delete(synchronize_session=False)
+            delete_channel_rows([ch.id])
             db.session.delete(ch)
             event_deleted += 1
     # NFL and CBS Sports game channels: turning them off removes them now.
@@ -874,8 +876,10 @@ def save_source_config(source_id):
         _toggle_enabled(old, game_toggle) != _toggle_enabled(current, game_toggle))
     if games_changed and not _toggle_enabled(current, game_toggle):
         from ..models import FeedChannelNumber
+        from ..chnum import delete_channel_rows
         for ch in source.channels.filter(Channel.source_channel_id.like(f'{game_prefix}%')).all():
             FeedChannelNumber.query.filter_by(channel_id=ch.id).delete(synchronize_session=False)
+            delete_channel_rows([ch.id])
             db.session.delete(ch)
             event_deleted += 1
 
@@ -885,6 +889,7 @@ def save_source_config(source_id):
     networks_reenabled = False
     if source.name == 'free_networks':
         from ..models import FeedChannelNumber
+        from ..chnum import delete_channel_rows
         from ..scrapers.free_networks import FreeNetworksScraper
         old_off = FreeNetworksScraper.disabled_networks(old)
         new_off = FreeNetworksScraper.disabled_networks(current)
@@ -892,6 +897,7 @@ def save_source_config(source_id):
         for key in new_off - old_off:
             for ch in source.channels.filter(Channel.source_channel_id.like(f'{key}.%')).all():
                 FeedChannelNumber.query.filter_by(channel_id=ch.id).delete(synchronize_session=False)
+                delete_channel_rows([ch.id])
                 db.session.delete(ch)
                 event_deleted += 1
 

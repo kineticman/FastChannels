@@ -42,5 +42,7 @@ def restore_event(channel, reason: str) -> bool:
 
 def delete_event(channel) -> None:
     """Remove an event and its feed number; Program rows cascade with Channel."""
+    from .chnum import delete_channel_rows
     FeedChannelNumber.query.filter_by(channel_id=channel.id).delete(synchronize_session=False)
+    delete_channel_rows([channel.id])
     db.session.delete(channel)

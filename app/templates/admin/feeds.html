@@ -629,7 +629,7 @@
               <button class="btn btn-ghost" type="button" onclick="resetFeedChnums({{ feed.id }}, '{{ feed.name|e }}', false, this)" title="Clears this feed's sticky channel-number assignments and regenerates them sequentially from the saved Channel Number Start.">Reset Channel Numbers</button>
               <button class="btn btn-ghost" type="button" onclick="lockAllFeedChnums({{ feed.id }}, '{{ feed.name|e }}', this)" title="Locks channel numbers globally. Stops if a shared channel has a different number in another feed.">🔒 Lock All</button>
             </div>
-            <div class="help">Leave blank to auto-assign (currently {{ feed_chnum_placeholder.get(feed.id, 'auto') }}). Set a value to number all channels in this feed sequentially from here.</div>
+            <div class="help">This feed's channels are numbered from here. Raising it renumbers the channels below the new start; every other channel keeps its number.</div>
             <div id="chnum-conflict-{{ feed.id }}" style="margin-top:4px;font-size:0.78rem;line-height:1.6"></div>
           </div>
           <span class="save-status" id="chnum-status-{{ feed.id }}"></span>
@@ -963,7 +963,7 @@
     <div class="field">
       <label>Starting Channel Number <span style="color:var(--text-dim);font-weight:400;text-transform:none">(tvg-chno)</span></label>
       <input type="number" id="f-chnum" min="1" placeholder="auto" oninput="checkChnumConflict(); onChnumInputForOrder()">
-      <div class="help" id="f-chnum-help">Leave blank to auto-assign. Set a value to number all channels in this feed sequentially from here.</div>
+      <div class="help" id="f-chnum-help">Leave blank to get a free block of numbers. This feed's channels are numbered from here.</div>
       <div id="f-chnum-ranges" style="margin-top:6px;font-size:0.78rem;color:var(--text-soft);line-height:1.6"></div>
     </div>
     <div class="count-preview" id="count-preview"></div>
@@ -1294,8 +1294,9 @@ async function openModal(feed = null) {
   document.getElementById('f-chnum').value    = feed ? (feed.chnum_start || '') : '';
   const chnumPh = feed ? (FEED_CHNUM_PLACEHOLDER[feed.id] ?? 'auto') : 'auto';
   document.getElementById('f-chnum').placeholder = String(chnumPh);
-  document.getElementById('f-chnum-help').textContent =
-    `Leave blank to auto-assign (currently ${chnumPh}). Set a value to number all channels in this feed sequentially from here.`;
+  document.getElementById('f-chnum-help').textContent = feed
+    ? 'This feed\'s channels are numbered from here. Raising it renumbers the channels below the new start; every other channel keeps its number.'
+    : 'Leave blank to get a free block of numbers. This feed\'s channels are numbered from here.';
   document.getElementById('f-gracenote').value = feed ? (feed.filters.gracenote || '') : '';
   document.getElementById('f-event').value = feed ? (feed.filters.event || '') : '';
   document.getElementById('modal-status').textContent = '';

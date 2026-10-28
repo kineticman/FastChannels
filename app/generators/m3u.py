@@ -1,13 +1,12 @@
 import logging
 import re
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
 from urllib.parse import quote as _url_quote
 from sqlalchemy import func
 from sqlalchemy.orm import contains_eager
 from ..extensions import db
 from ..models import Channel, Source, Feed, AppSettings
-from ..channel_tags import AUTO_EVENT_REASONS, EVENT_RETIRED_REASON, event_filter_clause
+from ..channel_tags import event_filter_clause
 from ..url import proxy_logo_url
 from ..scrapers import registry as _scraper_registry
 from ..drm_bridge import DRM_BRIDGE_TRUSTED_SOURCES
@@ -59,22 +58,11 @@ _WIN1252_REMAP = str.maketrans({
 })
 
 _CHNUM_NAMESPACE_BLOCK = 10000
-# Days a channel that dropped out of output keeps its number reserved for its
-# return (see _held_number_query).
-NUMBER_HOLD_DAYS = 7
+# Passed as namespace_start (without a feed) to number a playlist from the
+# master Gracenote numbers; any value does, this one is the historical start.
 _MASTER_GRACENOTE_START = 100000
 _FEED_NAMESPACE_BASE = 200000
 _REGION_LABEL_SOURCES = {"pluto", "samsung", "tcl"}
-
-# Backstop cursor for _build_source_chnum_map's no-config-at-all branch: mints a
-# number for a channel that has never had ANY number (not from pinning, not
-# preserved, nothing) when neither the default feed's chnum_start nor
-# MASTER_CHANNEL_NUMBER_START is set. Never used to reassign a channel that
-# already has some number, however it got there — only to keep a genuinely
-# never-numbered channel from staying permanently blank. Matches the value
-# schema.py seeds fresh installs' default feed chnum_start with, so a number
-# from here reads the same as one from that seed if anyone goes looking.
-_UNCONFIGURED_CHNUM_FALLBACK_START = 5000
 
 # Gracenote ID prefixes recognised by Channels DVR
 _GRACENOTE_PREFIX_RE = re.compile(r'^(\d+|(EP|SH|MV|SP|TR)\d+)$')
@@ -460,23 +448,10 @@ def _selected_channels(filters: dict | None = None, *, gracenote: bool | None = 
     return _apply_guide_partition(channels, gracenote, filters.get('max_channels'))
 
 
-def feed_namespace_start(feed: Feed, *, gracenote: bool) -> int:
-    idx = (
-        Feed.query
-        .filter(Feed.is_enabled == True, Feed.slug < feed.slug)
-        .count()
-    )
-    base = _FEED_NAMESPACE_BASE + (idx * _CHNUM_NAMESPACE_BLOCK * 2)
-    return base + (_CHNUM_NAMESPACE_BLOCK if gracenote else 0)
-
-
 def available_feed_start(feed: Feed) -> int:
-    """Find an unused automatic number block for a new unified-pool feed.
-
-    Namespace positions depend on feed slugs, while a mixed feed saves its
-    starting number. Check the actual numbers of existing feeds after the new
-    feed is visible, so an older mixed feed cannot occupy the proposed block.
-    """
+    """Find an unused number block for a new feed: the first 20000-wide
+    block from 200000 where this feed's channels would not take a number
+    another feed shows."""
     filters = feed_to_query_filters(feed.filters or {})
     channels = (_selected_channel_stubs(filters, gracenote=False)
                 + _selected_channel_stubs(filters, gracenote=True))
@@ -490,12 +465,7 @@ def available_feed_start(feed: Feed) -> int:
         other_filters = feed_to_query_filters(other.filters or {})
         for gracenote in (False, True):
             selected = _selected_channel_stubs(other_filters, gracenote=gracenote)
-            start = None if other.chnum_start is not None else feed_namespace_start(other, gracenote=gracenote)
-            numbers, _ = _resolve_chnum_map(
-                selected, feed_chnum_start=other.chnum_start,
-                namespace_start=start,
-                feed_id=other.id if other.chnum_start is not None else None,
-            )
+            numbers, _ = _resolve_chnum_map(selected, **feed_number_kwargs(other))
             for channel in selected:
                 number = numbers.get(channel.id)
                 if number is not None:
@@ -510,28 +480,6 @@ def available_feed_start(feed: Feed) -> int:
                for channel_id, number in numbers.items()):
             return candidate
         candidate += _CHNUM_NAMESPACE_BLOCK * 2
-
-
-def feed_gracenote_start(feed: Feed) -> int:
-    """
-    Starting channel number for a feed's Gracenote namespace M3U.
-
-    Only used for feeds without an explicit chnum_start (namespace-based numbering).
-    Feeds with chnum_start use a unified pool (FeedChannelNumber) shared by both
-    the standard and Gracenote M3Us, so this function is not called for them.
-    """
-    filters = feed_to_query_filters(feed.filters or {})
-
-    if feed.slug == 'default':
-        std_channels = _selected_channels(filters, gracenote=False)
-        if not std_channels:
-            return AppSettings.get().effective_global_chnum_start() or 1
-        chnum_map, _ = _build_source_chnum_map(std_channels)
-        if not chnum_map:
-            return AppSettings.get().effective_global_chnum_start() or 1
-        return max(chnum_map.values()) + 1
-    else:
-        return feed_namespace_start(feed, gracenote=True)
 
 
 def feed_to_query_filters(feed_filters: dict) -> dict:
@@ -577,12 +525,11 @@ def feed_to_query_filters(feed_filters: dict) -> dict:
 # DirecTV channel numbers" toggle) to have each channel's stored
 # Channel.provider_number ("213", "305.1") emitted as its tvg-chno instead of
 # the app-assigned number. Two rules keep that from producing duplicates:
-#   * the integer provider numbers are reserved in every allocator below, so no
-#     other channel is ever auto-assigned one of them (a pinned number is still
-#     honoured -- any clash then shows up in get_global_chnum_overlaps);
+#   * the integer provider numbers are reserved by the allocator (app.chnum), so
+#     no other channel is ever auto-assigned one of them (a pinned number is
+#     still honoured -- any clash then shows up in get_global_chnum_overlaps);
 #   * the override itself is applied in _resolve_chnum_map, i.e. only to output,
-#     never to the numbers the worker persists (Channel.number /
-#     FeedChannelNumber).
+#     never to the stored numbers (channel_numbers).
 
 def _provider_number_sources() -> set[str]:
     """Names of enabled sources that opted into provider numbering. One small
@@ -603,61 +550,6 @@ def _provider_number_sources() -> set[str]:
         except Exception:
             continue
     return names
-
-
-def _held_number_query(columns):
-    """Channels out of output that still hold their number for a while.
-
-    A channel that drops out because its source stopped listing it (a short
-    page, a free preview ending, a flap) usually comes back within days, and
-    its number should be waiting. Allocators treat these numbers as taken until
-    NUMBER_HOLD_DAYS after it went inactive. A channel the user turned off holds
-    nothing, and neither does a finished event: neither is expected back.
-    """
-    cutoff = datetime.now(timezone.utc) - timedelta(days=NUMBER_HOLD_DAYS)
-    return (
-        db.session.query(*columns)
-        .select_from(Channel)
-        .join(Source)
-        .filter(
-            Channel.is_active == False,
-            Channel.went_inactive_at.isnot(None),
-            Channel.went_inactive_at >= cutoff,
-            Channel.number.isnot(None),
-            Channel.stream_url != None,
-            Source.is_enabled == True,
-            Source.epg_only == False,
-            db.or_(
-                Channel.is_enabled == True,
-                Channel.disable_reason.in_(
-                    [r for r in AUTO_EVENT_REASONS if r != EVENT_RETIRED_REASON]),
-            ),
-        )
-    )
-
-
-def held_channel_ids() -> set[int]:
-    return {cid for (cid,) in _held_number_query([Channel.id]).all()}
-
-
-def _held_numbers(exclude: set | None = None) -> set[int]:
-    """Numbers held for channels out of output (see _held_number_query), less
-    any in `exclude` -- numbers channels in output already have, which keep
-    them: a hold never takes a number away from a channel that is showing."""
-    held = {n for (n,) in _held_number_query([Channel.number]).all()}
-    return held - exclude if exclude else held
-
-
-def _locked_numbers() -> set[int]:
-    """Every whole-number lock, whether or not its channel is in output.
-
-    Unlike a hold, a lock wins: the master allocators treat these as taken
-    even for a channel already on that number, so the locked channel never
-    shares it -- including across the standard / Gracenote split, where the
-    lock and the holder are numbered in different passes. (Turning a locked
-    channel off keeps its number free for its return, too.)"""
-    return {n for (n,) in db.session.query(Channel.number)
-            .filter(Channel.number_pinned == True, Channel.number.isnot(None)).all()}
 
 
 def _reserved_provider_numbers() -> set[int]:
@@ -736,257 +628,8 @@ def chnum_sort_key(value):
         return (0, float('inf'))
 
 
-def _is_usable_number(ch, candidate: int | None, *, min_value: int | None) -> bool:
-    if candidate is None:
-        return False
-    if min_value is not None and candidate < min_value:
-        return False
-    return True
-
-
-def _partition_unassigned(chs, min_value, used_numbers, out):
-    """
-    Split `chs` into channels whose existing Channel.number can be claimed
-    directly (recorded into `out`/`used_numbers` immediately) and those still
-    needing a fresh sequential number (returned as a list).
-
-    A pinned channel always keeps its number. A non-pinned channel keeps its
-    existing number only if `_is_usable_number` accepts it (non-null and
-    >= min_value) and no earlier channel already claimed it.
-    """
-    unassigned = []
-    for ch in chs:
-        if getattr(ch, 'number_pinned', False) and ch.number is not None:
-            out[ch.id] = ch.number
-            used_numbers.add(ch.number)
-            continue
-        if _is_usable_number(ch, ch.number, min_value=min_value) and ch.number not in used_numbers:
-            out[ch.id] = ch.number
-            used_numbers.add(ch.number)
-        else:
-            unassigned.append(ch)
-    return unassigned
-
-
-def _assign_sequential(unassigned, cursor, used_numbers, out):
-    """
-    Assign each channel in `unassigned` the next number >= cursor that isn't
-    in `used_numbers`, in order, recording into `out`/`used_numbers`.
-
-    Returns the cursor position to resume from — callers that share one
-    cursor across multiple calls (e.g. the same global/fallback cursor
-    reused for each source in turn) pass the returned value back in as the
-    next call's `cursor`.
-    """
-    for ch in unassigned:
-        while cursor in used_numbers:
-            cursor += 1
-        out[ch.id] = cursor
-        used_numbers.add(cursor)
-        cursor += 1
-    return cursor
-
-
-def _build_source_chnum_map(channels, reserved: set[int] | None = None):
-    """
-    Build a channel-number assignment map using Source.chnum_start values.
-
-    Channels from sources with chnum_start configured are renumbered sequentially
-    starting from that value.  Channels from sources without chnum_start fall back
-    to their existing Channel.number (unchanged from scraper output).
-
-    `reserved` numbers are never handed to a channel that doesn't already
-    have them (the master allocator passes the Gracenote channels' numbers,
-    numbered separately); a channel here that has one keeps it.
-
-    Returns:
-        chnum_map  – dict[channel_id -> int]
-        warnings   – list of human-readable overlap warning strings
-    """
-    def _channel_sort_key(ch):
-        return (
-            ch.number is None,
-            ch.number if ch.number is not None else 0,
-            (ch.name or '').lower(),
-            ch.source_channel_id or '',
-        )
-
-    # Group channels by source, then sort each source's channels independently.
-    # This keeps the global tvg-chno blocks stable even when the mixed query
-    # order shifts as scrapers add/remove channels in other sources.
-    by_source: dict[str, list] = {}
-    source_starts: dict[str, int] = {}
-    source_labels: dict[str, str] = {}
-    for ch in channels:
-        src = ch.source.name
-        if src not in by_source:
-            by_source[src] = []
-            source_labels[src] = ch.source.display_name or ch.source.name or src
-            if ch.source.chnum_start:
-                source_starts[src] = ch.source.chnum_start
-        by_source[src].append(ch)
-
-    for src in by_source:
-        by_source[src].sort(key=_channel_sort_key)
-
-    # Detect overlaps between configured sources
-    warnings: list[str] = []
-    configured = [
-        (src, source_starts[src], len(by_source[src]))
-        for src in source_starts
-    ]
-    for i in range(len(configured)):
-        for j in range(i + 1, len(configured)):
-            a_name, a_start, a_count = configured[i]
-            b_name, b_start, b_count = configured[j]
-            a_end = a_start + a_count
-            b_end = b_start + b_count
-            if a_start < b_end and b_start < a_end:
-                overlap_lo = max(a_start, b_start)
-                overlap_hi = min(a_end, b_end) - 1
-                warnings.append(
-                    f"'{a_name}' (ch {a_start}–{a_end - 1}, {a_count} channels) overlaps "
-                    f"'{b_name}' (ch {b_start}–{b_end - 1}, {b_count} channels) "
-                    f"at ch {overlap_lo}–{overlap_hi}"
-                )
-
-    # Read global fallback start (sources without their own chnum_start)
-    global_start = None
-    try:
-        settings = AppSettings.get()
-        global_start = settings.effective_global_chnum_start()
-    except Exception:
-        pass
-
-    # Collect all pinned numbers up front so assignment can never displace them.
-    pinned_numbers: set[int] = set()
-    for src_chs in by_source.values():
-        for ch in src_chs:
-            if getattr(ch, 'number_pinned', False) and ch.number is not None:
-                pinned_numbers.add(ch.number)
-
-    # Assign numbers. Existing non-pinned Channel.number values are treated as
-    # sticky auto numbers: keep them when still valid and free, only allocate
-    # fresh values for channels that are new, missing a number, or now conflict.
-    chnum_map: dict[int, int] = {}
-    own_numbers = {ch.number for ch in channels}
-    used_numbers: set[int] = (set(pinned_numbers) | _reserved_provider_numbers() | _locked_numbers()
-                              | _held_numbers(own_numbers) | ((reserved or set()) - own_numbers))
-    global_cursor = global_start  # tracks next number for ungrouped sources
-    # Backstop cursor for the no-config-at-all branch below — only ever draws
-    # from here for a channel with no number at all, never to reassign one
-    # that already has some number. Shared across every source that falls into
-    # that branch so two such channels can't collide with each other.
-    fallback_cursor = _UNCONFIGURED_CHNUM_FALLBACK_START
-    ordered_sources = sorted(
-        by_source,
-        key=lambda src: (
-            src not in source_starts,
-            source_starts.get(src, 0),
-            source_labels.get(src, src).lower(),
-            src,
-        ),
-    )
-
-    # Two passes: every source keeps its existing numbers first, then the
-    # channels without one draw new numbers. Doing both per source let a new
-    # channel in an earlier source take a number a later source's channel
-    # already had, moving that channel.
-    unassigned_by_source: dict[str, list] = {}
-    for src in ordered_sources:
-        chs = by_source[src]
-        if src in source_starts:
-            min_value = source_starts[src]
-        elif global_cursor is not None:
-            min_value = global_start
-        else:
-            # Neither this source nor AppSettings has a chnum_start configured.
-            # Docstring above promises these channels "fall back to their
-            # existing Channel.number (unchanged from scraper output)" — but
-            # until this branch existed, they were silently skipped entirely
-            # (missing tvg-chno in the real M3U, blank Ch# in the admin list).
-            # Same shape as the two branches above, just with no floor on what
-            # counts as a valid existing number (min_value=None) and drawing
-            # any genuinely-unassigned channel from the fallback cursor instead
-            # of a configured one — a channel that already has a number never
-            # gets reassigned just because this branch exists.
-            min_value = None
-        unassigned_by_source[src] = _partition_unassigned(chs, min_value, used_numbers, chnum_map)
-
-    for src in ordered_sources:
-        unassigned = unassigned_by_source[src]
-        if src in source_starts:
-            _assign_sequential(unassigned, source_starts[src], used_numbers, chnum_map)
-        elif global_cursor is not None:
-            global_cursor = _assign_sequential(unassigned, global_cursor, used_numbers, chnum_map)
-        else:
-            fallback_cursor = _assign_sequential(unassigned, fallback_cursor, used_numbers, chnum_map)
-
-    return chnum_map, warnings
-
-
-def _build_feed_chnum_map(channels, feed_chnum_start: int,
-                          stored_numbers: dict[int, int] | None = None):
-    """
-    Sticky sequential numbering for a feed-level chnum_start.
-
-    Pinned channels keep their stored number.  Non-pinned channels keep their
-    previously-assigned feed number from `stored_numbers` (persisted in
-    FeedChannelNumber) if it is >= feed_chnum_start and still free.  Only new
-    or displaced channels get freshly assigned sequential numbers.
-
-    `stored_numbers` may contain entries for channels outside `channels` (e.g.
-    the other M3U partition when called for only the std or gracenote subset).
-    Those numbers are reserved before the cursor runs so new channels never
-    receive a number already claimed by the other partition.
-    """
-    used_numbers: set[int] = set()
-    result: dict[int, int] = {}
-    unassigned = []
-    channel_ids = {ch.id for ch in channels}
-    reserved = _reserved_provider_numbers()
-
-    # First pass: pinned channels claim their numbers before anything else, so
-    # a lock always beats another channel's stored number regardless of list
-    # order (otherwise an earlier channel's sticky number silently wins and the
-    # lock is ignored).
-    for ch in channels:
-        if getattr(ch, 'number_pinned', False) and ch.number is not None and ch.number not in used_numbers:
-            result[ch.id] = ch.number
-            used_numbers.add(ch.number)
-
-    # Then preserve valid stored assignments.
-    for ch in channels:
-        if ch.id in result:
-            continue
-        stored = stored_numbers.get(ch.id) if stored_numbers else None
-        if (stored is not None and stored >= feed_chnum_start
-                and stored not in used_numbers and stored not in reserved):
-            result[ch.id] = stored
-            used_numbers.add(stored)
-        else:
-            unassigned.append(ch)
-
-    # Reserve numbers held by channels outside this batch (e.g. the other
-    # M3U partition — std vs gracenote) so the cursor never steps on them.
-    if stored_numbers:
-        for cid, num in stored_numbers.items():
-            if cid not in channel_ids:
-                used_numbers.add(num)
-
-    # Locks are channel-wide, so a locked channel outside this batch (turned
-    # off, or in the other partition) keeps its number free for its return.
-    # Added after the stored pass: a member already on that number keeps it.
-    used_numbers |= _locked_numbers()
-
-    # Second pass: assign fresh sequential numbers to new/displaced channels.
-    used_numbers |= reserved
-    _assign_sequential(unassigned, feed_chnum_start, used_numbers, result)
-
-    return result
-
-
-def build_manual_order_map(channels, order_ids: list[int], start: int) -> dict[int, int]:
+def build_manual_order_map(channels, order_ids: list[int], start: int,
+                           reserved: set[int] = frozenset()) -> dict[int, int]:
     """
     Number `channels` sequentially from `start` following an explicit
     user-chosen `order_ids` sequence (drag-drop ordering from the feed modal).
@@ -996,6 +639,8 @@ def build_manual_order_map(channels, order_ids: list[int], start: int) -> dict[i
     absent from `order_ids` (e.g. newly matched by the filters since the order
     was captured) are appended after the ordered block in master-number order.
     Ids in `order_ids` that are no longer feed members are ignored.
+    `reserved` numbers are skipped too (numbers held for channels out of the
+    feed, see app.chnum).
     """
     by_id = {ch.id: ch for ch in channels}
     ordered = [by_id[cid] for cid in order_ids if cid in by_id]
@@ -1011,7 +656,7 @@ def build_manual_order_map(channels, order_ids: list[int], start: int) -> dict[i
         if getattr(ch, 'number_pinned', False) and ch.number is not None:
             result[ch.id] = ch.number
             used.add(ch.number)
-    used |= _reserved_provider_numbers()
+    used |= _reserved_provider_numbers() | set(reserved)
     cursor = start
     for ch in ordered:
         if ch.id in result:
@@ -1034,84 +679,74 @@ def _sort_by_assigned_chnum(channels, chnum_map: dict) -> None:
     channels.sort(key=lambda c: chnum_sort_key(chnum_map.get(c.id)) + ((c.name or '').lower(),))
 
 
-def _build_sticky_gn_chnum_map(gn_channels, gn_start: int, used_numbers: set) -> dict:
-    """
-    Assign channel numbers to Gracenote channels, with the same stickiness
-    guarantee as standard channels: existing Channel.number is kept if it's not
-    already taken. New/displaced channels fill in sequentially from gn_start.
-
-    Kept numbers are not floored at gn_start: gn_start is just above the
-    highest standard number, so it moves whenever a channel loses or gains a
-    Gracenote ID (a channel keeps its number across that), and a gn_start
-    floor then renumbered every Gracenote channel below the new start.
-    """
-    result = {}
-    unassigned = []
-    used_numbers |= (_reserved_provider_numbers() | _locked_numbers()
-                     | _held_numbers({ch.number for ch in gn_channels}))
-    # A kept number still has to clear the floor _build_source_chnum_map
-    # applies (the source's chnum_start, else the global start), or the
-    # mixed playlists, which number both groups through that function,
-    # would show a different number than the one stored.
-    try:
-        global_start = AppSettings.get().effective_global_chnum_start()
-    except Exception:
-        global_start = None
-    sorted_channels = sorted(
-        gn_channels,
-        key=lambda c: (c.number is None, c.number or 0, (c.name or '').lower()),
-    )
-    for ch in sorted_channels:
-        if getattr(ch, 'number_pinned', False) and ch.number is not None:
-            result[ch.id] = ch.number
-            used_numbers.add(ch.number)
-            continue
-        floor = ch.source.chnum_start or global_start
-        if _is_usable_number(ch, ch.number, min_value=floor) and ch.number not in used_numbers:
-            result[ch.id] = ch.number
-            used_numbers.add(ch.number)
-        else:
-            unassigned.append(ch)
-    _assign_sequential(unassigned, gn_start, used_numbers, result)
-    return result
-
-
 def _resolve_chnum_map(channels, *, feed_chnum_start: int = None,
-                       namespace_start: int = None, feed_id: int = None):
+                       namespace_start: int = None, feed_id: int = None,
+                       bridge: bool = False):
     """Resolved tvg-chno for output, including provider-native numbers."""
     chnum_map, warnings = _resolve_app_chnum_map(
         channels, feed_chnum_start=feed_chnum_start,
-        namespace_start=namespace_start, feed_id=feed_id,
+        namespace_start=namespace_start, feed_id=feed_id, bridge=bridge,
     )
     return apply_provider_numbers(channels, chnum_map), warnings
 
 
+def feed_number_kwargs(feed: Feed) -> dict:
+    """The generator keyword arguments that number a playlist from a feed's rows."""
+    return {'feed_chnum_start': feed.chnum_start, 'feed_id': feed.id}
+
+
 def _resolve_app_chnum_map(channels, *, feed_chnum_start: int = None,
-                           namespace_start: int = None, feed_id: int = None):
-    if namespace_start is not None:
-        stored_numbers: dict[int, int] = {}
-        if feed_id is not None:
-            from app.models import FeedChannelNumber
-            rows = FeedChannelNumber.query.filter_by(feed_id=feed_id).all()
-            stored_numbers = {r.channel_id: r.number for r in rows}
-        return _build_feed_chnum_map(channels, namespace_start, stored_numbers=stored_numbers), []
-    if feed_chnum_start is not None:
-        stored_numbers = {}
-        if feed_id is not None:
-            from app.models import FeedChannelNumber
-            rows = FeedChannelNumber.query.filter_by(feed_id=feed_id).all()
-            stored_numbers = {r.channel_id: r.number for r in rows}
-        return _build_feed_chnum_map(channels, feed_chnum_start, stored_numbers=stored_numbers), []
-    return _build_source_chnum_map(channels)
+                           namespace_start: int = None, feed_id: int = None,
+                           bridge: bool = False):
+    """App-assigned numbers for a playlist's channels, read from channel_numbers
+    (app.chnum): feed_id selects that feed's rows, namespace_start alone the
+    master Gracenote rows (the bridge ones for a bridge playlist), neither the
+    master rows. A channel without a row
+    (turned on since the last settle) goes unnumbered until the rebuild's
+    settle step. feed_chnum_start without feed_id numbers an unsaved feed for
+    a preview, storing nothing."""
+    from ..chnum import (
+        MASTER_BRIDGE_GRACENOTE_SCOPE, MASTER_GRACENOTE_SCOPE, MASTER_SCOPE,
+        plan_numbers, read_scope,
+    )
+    if feed_id is None and feed_chnum_start is not None:
+        return plan_numbers(channels, feed_chnum_start), []
+    if feed_id is not None:
+        scope = feed_id
+    elif namespace_start is not None:
+        scope = MASTER_BRIDGE_GRACENOTE_SCOPE if bridge else MASTER_GRACENOTE_SCOPE
+    else:
+        scope = MASTER_SCOPE
+    stored = read_scope(scope)
+    return {ch.id: stored[ch.id] for ch in channels if ch.id in stored}, []
 
 
 def get_chnum_overlaps() -> list[str]:
     """
-    Return a list of overlap warning strings for the current source configuration.
-    Used by the admin UI to surface misconfiguration.
+    Warnings for sources whose channel number starts (Source.chnum_start) put
+    their blocks on top of each other. Used by the admin UI.
     """
-    channels = _selected_channel_stubs({}, gracenote=None)
-    _, warnings = _build_source_chnum_map(channels)
+    counts: dict[str, int] = {}
+    starts: dict[str, int] = {}
+    for ch in _selected_channel_stubs({}, gracenote=None):
+        src = ch.source.name
+        counts[src] = counts.get(src, 0) + 1
+        if ch.source.chnum_start:
+            starts[src] = ch.source.chnum_start
+    configured = sorted((src, start, counts[src]) for src, start in starts.items())
+    warnings: list[str] = []
+    for i in range(len(configured)):
+        for j in range(i + 1, len(configured)):
+            a_name, a_start, a_count = configured[i]
+            b_name, b_start, b_count = configured[j]
+            a_end = a_start + a_count
+            b_end = b_start + b_count
+            if a_start < b_end and b_start < a_end:
+                warnings.append(
+                    f"'{a_name}' (ch {a_start}–{a_end - 1}, {a_count} channels) overlaps "
+                    f"'{b_name}' (ch {b_start}–{b_end - 1}, {b_count} channels) "
+                    f"at ch {max(a_start, b_start)}–{min(a_end, b_end) - 1}"
+                )
     return warnings
 
 
@@ -1131,11 +766,27 @@ def get_global_chnum_overlaps() -> list[str]:
     # single number range and so must be cross-checked against each other.
     unified_pairs:  list[tuple[tuple, tuple]] = []
 
-    master_standard = _selected_channel_stubs({}, gracenote=False)
+    # Bridge-only channels are in the bridge playlists, not /m3u.
+    bridge_ids = {cid for (cid,) in _build_channel_query({}, activity='drm_bridge')
+                  .with_entities(Channel.id).all()}
+    master_standard = [ch for ch in _selected_channel_stubs({}, gracenote=False)
+                       if ch.id not in bridge_ids]
     master_standard_map, _ = _resolve_chnum_map(master_standard)
     master_outputs.append(('master /m3u', master_standard, master_standard_map))
 
-    master_gracenote = _selected_channel_stubs({}, gracenote=True)
+    # The bridge playlists are added alongside these in split guide mode.
+    master_bridge = [ch for ch in _selected_channel_stubs({}, gracenote=False)
+                     if ch.id in bridge_ids]
+    master_bridge_map, _ = _resolve_chnum_map(master_bridge)
+    master_outputs.append(('master bridge playlists', master_bridge, master_bridge_map))
+    master_bridge_gn = [ch for ch in _selected_channel_stubs({}, gracenote=True)
+                        if ch.id in bridge_ids]
+    master_bridge_gn_map, _ = _resolve_chnum_map(
+        master_bridge_gn, namespace_start=_MASTER_GRACENOTE_START, bridge=True)
+    master_outputs.append(('master Gracenote bridge playlists', master_bridge_gn, master_bridge_gn_map))
+
+    master_gracenote = [ch for ch in _selected_channel_stubs({}, gracenote=True)
+                        if ch.id not in bridge_ids]
     master_gracenote_map, _ = _resolve_chnum_map(
         master_gracenote,
         namespace_start=_MASTER_GRACENOTE_START,
@@ -1147,23 +798,11 @@ def get_global_chnum_overlaps() -> list[str]:
         filters = feed_to_query_filters(feed.filters or {})
 
         std_channels = _selected_channel_stubs(filters, gracenote=False)
-        std_ns = None if feed.chnum_start is not None else feed_namespace_start(feed, gracenote=False)
-        std_map, _ = _resolve_chnum_map(
-            std_channels,
-            feed_chnum_start=feed.chnum_start,
-            namespace_start=std_ns,
-            feed_id=feed.id if feed.chnum_start is not None else None,
-        )
+        std_map, _ = _resolve_chnum_map(std_channels, **feed_number_kwargs(feed))
         std_out = (f'feed {feed.slug} /m3u', std_channels, std_map)
 
         gn_channels = _selected_channel_stubs(filters, gracenote=True)
-        gn_ns = None if feed.chnum_start is not None else feed_namespace_start(feed, gracenote=True)
-        gn_map, _ = _resolve_chnum_map(
-            gn_channels,
-            feed_chnum_start=feed.chnum_start if feed.chnum_start is not None else None,
-            namespace_start=gn_ns,
-            feed_id=feed.id if feed.chnum_start is not None else None,
-        )
+        gn_map, _ = _resolve_chnum_map(gn_channels, **feed_number_kwargs(feed))
         gn_out = (f'feed {feed.slug} /m3u/gracenote', gn_channels, gn_map)
         if getattr(feed, 'guide_mode', None) == 'mixed':
             # One playlist carries both halves, so each half has to stay clear
@@ -1176,8 +815,7 @@ def get_global_chnum_overlaps() -> list[str]:
             std_feed_outputs.append(std_out)
             gn_feed_outputs.append(gn_out)
 
-        if feed.chnum_start is not None:
-            unified_pairs.append((std_out, gn_out))
+        unified_pairs.append((std_out, gn_out))
 
     warnings: list[str] = []
 
@@ -1211,13 +849,13 @@ def get_global_chnum_overlaps() -> list[str]:
     # 10k blocks and a user adds both halves of a feed, not halves of two feeds.
     _check(std_feed_outputs)
     _check(gn_feed_outputs)
-    # Within a single chnum_start feed, std and gracenote channels DO share one
+    # Within a feed, std and gracenote channels DO share one
     # unified pool, so a number used on both sides is a real collision.
     for std_out, gn_out in unified_pairs:
         _check([std_out, gn_out])
 
     # Two channels locked (number_pinned) to the same number never show up as
-    # a literal duplicate above — _build_feed_chnum_map / _build_source_chnum_map
+    # a literal duplicate above — the allocator (app.chnum)
     # silently bump the losing channel to a fresh number in every output, so the
     # per-output duplicate check above never sees the collision. Check the raw
     # pin state directly so a locked conflict doesn't stay invisible outside the
@@ -1446,6 +1084,7 @@ def generate_fc_player_m3u(filters: dict = None, base_url: str = None,
         feed_chnum_start=feed_chnum_start,
         namespace_start=namespace_start,
         feed_id=feed_id if feed_chnum_start is not None else None,
+        bridge=True,
     )
     if feed_chnum_start is None and namespace_start is None:
         for w in warnings:
@@ -1974,6 +1613,7 @@ def generate_prismcast_m3u(filters: dict = None, base_url: str = None, *,
         feed_chnum_start=feed_chnum_start,
         namespace_start=namespace_start,
         feed_id=feed_id if feed_chnum_start is not None else None,
+        bridge=True,
     )
     if feed_chnum_start is None and namespace_start is None:
         for w in warnings:

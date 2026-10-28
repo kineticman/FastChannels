@@ -1814,7 +1814,7 @@ def _refresh_xml_artifacts(only_keys: set[str] | None = None) -> None:
     (they're built on their next request instead). `only_keys` builds just
     those artifacts — the on-request path — with no idle check or sweep.
     """
-    from app.generators.m3u import generate_gracenote_m3u, generate_m3u, generate_native_m3u, generate_mixed_m3u, generate_combined_ah4c_m3u, generate_prismcast_m3u, generate_fc_player_m3u, feed_gracenote_start, feed_namespace_start, feed_to_query_filters, _MASTER_GRACENOTE_START
+    from app.generators.m3u import generate_gracenote_m3u, generate_m3u, generate_native_m3u, generate_mixed_m3u, generate_combined_ah4c_m3u, generate_prismcast_m3u, generate_fc_player_m3u, feed_number_kwargs, feed_to_query_filters, _MASTER_GRACENOTE_START
     from app import fc_player_bridge as _fc_player_bridge
     from app.generators.xmltv import write_xmltv
 
@@ -1863,8 +1863,8 @@ def _refresh_xml_artifacts(only_keys: set[str] | None = None) -> None:
                 'master-fc-player-ah4c-m3u',
                 lambda fp: fp.write(generate_fc_player_m3u({}, base_url=base_url, ah4c_base_url=ah4c_url)),
             ))
-        default_feed = Feed.query.filter_by(slug='default').first()
-        default_gn_start = feed_gracenote_start(default_feed) if default_feed else _MASTER_GRACENOTE_START
+        # namespace_start without a feed numbers from the master Gracenote rows.
+        default_gn_start = _MASTER_GRACENOTE_START
         m3u_artifacts.append((
             'master-gracenote-m3u',
             lambda fp: fp.write(generate_gracenote_m3u({}, base_url=base_url, namespace_start=default_gn_start)),
@@ -1909,10 +1909,7 @@ def _refresh_xml_artifacts(only_keys: set[str] | None = None) -> None:
                     native=True,
                 ),
             ))
-            if feed.chnum_start is not None:
-                std_kw = {'feed_chnum_start': feed.chnum_start, 'feed_id': feed.id}
-            else:
-                std_kw = {'namespace_start': feed_namespace_start(feed, gracenote=False)}
+            std_kw = feed_number_kwargs(feed)
             m3u_artifacts.append((
                 f'feed-{feed.slug}-m3u',
                 lambda fp, filters=filters, std_kw=std_kw: fp.write(
@@ -1998,10 +1995,7 @@ def _refresh_xml_artifacts(only_keys: set[str] | None = None) -> None:
                                                    ah4c_base_url=ah4c_url, **std_kw)
                         ),
                     ))
-            if feed.chnum_start is not None:
-                gn_kw = {'feed_chnum_start': feed.chnum_start, 'feed_id': feed.id}
-            else:
-                gn_kw = {'namespace_start': feed_gracenote_start(feed)}
+            gn_kw = feed_number_kwargs(feed)
             m3u_artifacts.append((
                 f'feed-{feed.slug}-gracenote-m3u',
                 lambda fp, filters=filters, gn_kw=gn_kw: fp.write(
@@ -2255,7 +2249,9 @@ def run_gracenote_clear_all():
 def _purge_source_channels_and_programs(source) -> tuple[int, int]:
     """Delete all channels and programs belonging to `source`. Batches the
     channel-id IN-clause to stay under SQLite's default variable limit."""
+    from app.chnum import delete_channel_rows
     ch_ids = [row[0] for row in source.channels.with_entities(Channel.id).all()]
+    delete_channel_rows(ch_ids)
     deleted_programs = 0
     _ID_BATCH = 900
     for i in range(0, len(ch_ids), _ID_BATCH):
@@ -2678,157 +2674,11 @@ def _resolved_logo_url(existing_logo: str | None, incoming_logo: str | None, cac
     return current
 
 
-def _release_claimed_numbers(live_channels, live_ids: set[int], held_ids: set[int]) -> None:
-    """Clear Channel.number on channels out of output whose number is taken.
-
-    A channel out of output keeps its number only while nobody else has it.
-    Once a channel in output holds that number, the absent one lets go, so
-    coming back it gets a fresh number instead of taking this one back (ties
-    between two channels with the same number are broken by name, so the one
-    returning could otherwise win and move the incumbent). Absent channels
-    sharing a number with each other keep it on one: a held channel first,
-    then the most recently gone. Locked numbers are never cleared.
-    """
-    from app.generators.m3u import _reserved_provider_numbers
-
-    claimed = {ch.number for ch in live_channels if ch.number is not None}
-    claimed |= _reserved_provider_numbers()
-    absent = (
-        Channel.query
-        .filter(
-            Channel.number.isnot(None),
-            db.or_(Channel.number_pinned == False, Channel.number_pinned == None),
-            db.or_(Channel.pinned_chno.is_(None), Channel.pinned_chno == ''),
-        )
-        .all()
-    )
-    absent = [ch for ch in absent if ch.id not in live_ids]
-    absent.sort(key=lambda ch: (
-        ch.id not in held_ids,
-        -(ch.went_inactive_at.timestamp() if ch.went_inactive_at else 0),
-        ch.id,
-    ))
-    released = 0
-    for ch in absent:
-        if ch.number in claimed:
-            ch.number = None
-            released += 1
-        else:
-            claimed.add(ch.number)
-    if released:
-        logger.info('[chnum] released %d number(s) held by channels out of output '
-                    'and now used by another channel', released)
-
-
 def _refresh_auto_channel_numbers() -> None:
-    """Assign stable automatic numbers to non-pinned active channels.
-
-    Channel.number is system-managed unless the user pins it. Scraper-supplied
-    numbers are ignored; this allocator preserves existing non-pinned numbers
-    where possible and only fills gaps for channels that are new or invalid.
-
-    Standard and Gracenote channels share a single contiguous block for the
-    master (source-based) numbering: standard channels first, then new
-    Gracenote channels starting immediately after the highest standard number.
-    A channel that gains or loses a Gracenote ID keeps its number, so the two
-    groups can interleave; neither pass hands out a number the other holds.
-
-    For feeds with an explicit chnum_start, all channels (standard and Gracenote)
-    share one unified number pool persisted in FeedChannelNumber.  A channel keeps
-    its assigned number when its Gracenote status changes — it just moves between
-    the standard and Gracenote M3U files without being renumbered.
-    """
-    from app.generators.m3u import (
-        _build_source_chnum_map, _build_sticky_gn_chnum_map,
-        _build_feed_chnum_map, _selected_channel_stubs, feed_to_query_filters,
-        held_channel_ids,
-    )
-    from app.models import Feed, FeedChannelNumber
-
-    with db.session.no_autoflush:
-        all_channels = (
-            Channel.query
-            .join(Source)
-            .filter(
-                Channel.is_active == True,
-                Channel.is_enabled == True,
-                Source.is_enabled == True,
-                Source.epg_only == False,
-                Channel.stream_url != None,
-            )
-            .all()
-        )
-    if not all_channels:
-        return
-
-    std_channels = [ch for ch in all_channels if not (ch.gracenote_id or '').strip()]
-    gn_channels  = [ch for ch in all_channels if (ch.gracenote_id or '').strip()]
-
-    gn_numbers = {ch.number for ch in gn_channels if ch.number is not None}
-    std_map, _ = _build_source_chnum_map(std_channels, gn_numbers) if std_channels else ({}, [])
-
-    gn_map = {}
-    if gn_channels:
-        gn_start = (max(std_map.values()) + 1) if std_map else (AppSettings.get().effective_global_chnum_start() or 1)
-        gn_map = _build_sticky_gn_chnum_map(gn_channels, gn_start, set(std_map.values()))
-
-    chnum_map = {**std_map, **gn_map}
-    for ch in all_channels:
-        if ch.number_pinned:
-            continue
-        next_number = chnum_map.get(ch.id)
-        if ch.number != next_number:
-            ch.number = next_number
-
-    all_channel_ids = {ch.id for ch in all_channels}
-    held_ids = held_channel_ids()
-    _release_claimed_numbers(all_channels, all_channel_ids, held_ids)
-
-    # Persist feed-specific channel numbers for feeds with explicit chnum_start.
-    feeds_with_chnum = Feed.query.filter(
-        Feed.chnum_start != None,
-        Feed.is_enabled == True,
-    ).all()
-    for feed in feeds_with_chnum:
-        filters = feed_to_query_filters(feed.filters or {})
-        with db.session.no_autoflush:
-            std_stubs = _selected_channel_stubs(filters, gracenote=False)
-            gn_stubs  = _selected_channel_stubs(filters, gracenote=True)
-        # Sort the combined list by master number so GN and non-GN interleave
-        # by position rather than arriving as two separate blocks.
-        all_stubs = sorted(
-            std_stubs + gn_stubs,
-            key=lambda ch: (ch.number is None, ch.number or 0, (ch.name or '').lower()),
-        )
-        feed_channel_ids = {s.id for s in all_stubs}
-
-        # Load existing stored numbers for stickiness.
-        stored = {
-            fcn.channel_id: fcn.number
-            for fcn in FeedChannelNumber.query.filter_by(feed_id=feed.id).all()
-        }
-        new_map   = _build_feed_chnum_map(all_stubs, feed.chnum_start, stored_numbers=stored)
-
-        # Upsert new assignments.
-        existing_fcn = {fcn.channel_id: fcn for fcn in FeedChannelNumber.query.filter_by(feed_id=feed.id).all()}
-        for channel_id, number in new_map.items():
-            if channel_id in existing_fcn:
-                if existing_fcn[channel_id].number != number:
-                    existing_fcn[channel_id].number = number
-            else:
-                db.session.add(FeedChannelNumber(feed_id=feed.id, channel_id=channel_id, number=number))
-
-        # Remove stale rows for channels no longer in this feed. A held
-        # channel's row stays so it gets its number back on return (it's
-        # reserved meanwhile as a number outside the batch), unless a member
-        # has the same number: the member keeps it, the absent channel lets go.
-        member_numbers = set(new_map.values())
-        for channel_id, fcn in existing_fcn.items():
-            if channel_id in feed_channel_ids:
-                continue
-            if channel_id in held_ids and fcn.number not in member_numbers:
-                continue
-            db.session.delete(fcn)
+    """Settle channel numbers (app.chnum.settle): the one place numbers are
+    assigned. Flushes; the caller commits."""
+    from app.chnum import settle
+    settle()
 
 
 _IDENTITY_STOPWORDS = {
