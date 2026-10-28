@@ -327,6 +327,9 @@ class AmazonSportsScraper(AmazonPrimeFreeScraper, BaseScraper):
     license_url = 'https://atv-ps.amazon.com/playback/drm/GetWidevineLicense'
     # Envelope-bound manifests; keep well inside the envelope's life.
     _STREAM_URL_TTL = 90
+    # Detail-page envelopes carry a 15-minute expiry; on 2026-10-28 a game
+    # died with PlaybackEnvelope.Expired 15 minutes in.
+    _ENVELOPE_TTL = 600
     phase_timeouts = {'init': 30, 'bootstrap': 60, 'channels': 300, 'epg': 60}
 
     SPORTS_URL = 'https://www.amazon.com/gp/video/sports'
@@ -841,9 +844,11 @@ class AmazonSportsScraper(AmazonPrimeFreeScraper, BaseScraper):
     @classmethod
     def _channel_pe_for(cls, config: dict, title_id: str) -> str | None:
         entry = (config.get('channel_pe') or {}).get(title_id) or {}
-        # A stale or missing envelope waits for the next scrape; minting one
-        # separately for the manifest and the license would mix sessions.
-        if time.time() - float(entry.get('fetched_at') or 0) > 7200:
+        # Event envelopes expire 15 minutes after Amazon issues them, so a
+        # stale one is fetched again from the detail page (_ensure_live_action)
+        # rather than minted separately, which would mix the manifest's and
+        # the license's sessions.
+        if time.time() - float(entry.get('fetched_at') or 0) > cls._ENVELOPE_TTL:
             return None
         return entry.get('pe')
 
@@ -866,9 +871,28 @@ class AmazonSportsScraper(AmazonPrimeFreeScraper, BaseScraper):
         return super().prepare_license_request(challenge, _with_account(config), channel_id, sht)
 
     def resolve(self, raw_url: str) -> str:
-        if raw_url.startswith('primefree://'):
-            self._ensure_live_action(raw_url[len('primefree://'):])
-        return super().resolve(raw_url)
+        if not raw_url.startswith('primefree://'):
+            return super().resolve(raw_url)
+        group_id = raw_url[len('primefree://'):]
+        self._ensure_live_action(group_id)
+        url = super().resolve(raw_url)
+        if url is None and self._drop_envelope(group_id):
+            # Amazon refused the envelope early (e.g. PlaybackEnvelope.Expired):
+            # fetch a new one now so the player's next poll doesn't fail.
+            self._ensure_live_action(group_id)
+            url = super().resolve(raw_url)
+        return url
+
+    def _drop_envelope(self, group_id: str) -> bool:
+        """Forget a refused envelope so _ensure_live_action fetches another,
+        at most once a minute."""
+        entry = (self.cache.get('channel_pe') or {}).get(group_id)
+        if not entry or time.time() - float(entry.get('fetched_at') or 0) < 60:
+            return False
+        stale = {**entry, 'fetched_at': 0}
+        self._channel_pe[group_id] = stale
+        self._update_cache('channel_pe', {**(self.cache.get('channel_pe') or {}), group_id: stale})
+        return True
 
     def _ensure_live_action(self, group_id: str) -> None:
         """A game that kicked off after the last scrape has no envelope yet:
