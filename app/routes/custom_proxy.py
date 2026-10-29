@@ -237,6 +237,37 @@ def _absolutize_hls_manifest(manifest_text: str, manifest_url: str) -> str:
     return '\n'.join(lines)
 
 
+def _custom_host_allowed(channel, url: str) -> bool:
+    """True if url's host shares a domain root with the channel's stored stream URL.
+
+    Keeps the custom proxies from being used as open proxies.
+    """
+    seg_host = urlsplit(url).netloc
+    try:
+        stored_host = urlsplit(channel.stream_url or '').netloc
+
+        def _root(h: str) -> str:
+            parts = h.split('.')
+            return '.'.join(parts[-2:]) if len(parts) >= 2 else h
+
+        host_ok = (
+            not stored_host
+            or seg_host == stored_host
+            or _root(seg_host) == _root(stored_host)
+        )
+    except Exception:
+        host_ok = True  # parse failure — fail open rather than break playback
+        stored_host = '?'
+    if not host_ok:
+        logger.warning('[custom-seg-proxy] host mismatch seg=%s stored=%s', seg_host, stored_host)
+    return host_ok
+
+
+# An audio rendition with its own playlist (EXT-X-MEDIA:TYPE=AUDIO ... URI=):
+# the variants carry no sound, so the master can't be flattened to one variant.
+_SEPARATE_AUDIO_RE = re.compile(r'^#EXT-X-MEDIA:(?=.*\bTYPE=AUDIO\b).*\bURI="', re.MULTILINE)
+
+
 def _custom_proxy_headers(channel, extra_headers: dict | None = None) -> dict:
     """
     Build request headers for custom-channel proxy fetches.
@@ -476,16 +507,41 @@ def custom_manifest_proxy(channel_id: str):
         stream_url = channel.stream_url
 
     proxy_hdrs = _custom_proxy_headers(channel, custom_headers)
+    base_url = request.host_url.rstrip('/')
+    encoded_id = _quote(raw_id, safe='')
+
+    # pl= is one media playlist (a variant or rendition) of a master served
+    # whole, below; it skips the master lookup and the variant cache.
+    pl = request.args.get('pl', '')
+    if pl:
+        pl_parts = urlsplit(pl)
+        if pl_parts.scheme != 'https' or not pl_parts.netloc:
+            abort(400)
+        if _PRIVATE_IP_RE.match(pl_parts.netloc.split(':')[0]):
+            logger.warning('[custom-proxy] blocked SSRF attempt to: %s', pl_parts.netloc)
+            abort(403)
+        if not _custom_host_allowed(channel, pl):
+            abort(403)
 
     # For master playlists: look up the cached variant URL from Redis so ALL gunicorn
     # workers use the same Wowza worker ID (chunklist_w<id>) across polls.  Every
     # master request returns a random worker with its own EXT-X-MEDIA-SEQUENCE counter;
     # if two workers each get a different worker ID, the client sees the sequence
     # alternate between independent counters → backward jumps → stream drop.
-    rdb = _custom_variant_redis()
+    rdb = None if pl else _custom_variant_redis()
     rkey = _custom_variant_key(channel.id, stream_url) if rdb else None
     text: str | None = None
     effective_url: str = stream_url
+
+    if pl:
+        try:
+            pl_r = _requests.get(pl, headers=proxy_hdrs, timeout=10)
+            pl_r.raise_for_status()
+        except Exception as e:
+            logger.warning('[custom-proxy] media playlist fetch failed for %s: %s', raw_id, e)
+            return _unavailable_response()
+        text = pl_r.text
+        effective_url = pl_r.url
 
     cached_variant_url = rdb.get(rkey) if rdb and rkey else None
     if cached_variant_url:
@@ -551,6 +607,32 @@ def custom_manifest_proxy(channel_id: str):
         text = master_r.text
         effective_url = master_r.url
 
+        # A master whose audio lives in its own playlist is served whole, every
+        # playlist through pl=: one variant alone has no sound.  YouTube
+        # (googlevideo) keeps the flattened best variant it has always had.
+        if (
+            '#EXT-X-STREAM-INF' in text
+            and _SEPARATE_AUDIO_RE.search(text)
+            and not urlsplit(effective_url).netloc.endswith('googlevideo.com')
+        ):
+            def _pl_url(ref: str) -> str:
+                url = f'{base_url}/play/custom/{encoded_id}/proxy.m3u8?pl={_quote(urljoin(effective_url, ref), safe="")}'
+                return url + '&browser=1' if browser_preview else url
+
+            lines = []
+            for line in text.splitlines():
+                stripped = line.strip()
+                if stripped and not stripped.startswith('#'):
+                    line = _pl_url(stripped)
+                elif 'URI="' in line:
+                    line = re.sub(r'URI="([^"]+)"', lambda m: f'URI="{_pl_url(m.group(1))}"', line)
+                lines.append(line)
+            return Response(
+                '\n'.join(lines),
+                mimetype='application/vnd.apple.mpegurl',
+                headers={'Cache-Control': 'no-cache'},
+            )
+
         # If it's a master playlist, resolve and store the variant URL in Redis
         if '#EXT-X-STREAM-INF' in text:
             best = _pick_best_hls_variant(text, effective_url)
@@ -590,15 +672,22 @@ def custom_manifest_proxy(channel_id: str):
     # and the extra proxy hop can introduce 403s.  Browser previews (browser=1)
     # are the exception: the browser enforces CORS that googlevideo doesn't
     # satisfy, so the segments must come back same-origin through our proxy.
-    base_url = request.host_url.rstrip('/')
     variant_base = effective_url.rsplit('/', 1)[0] + '/'
-    encoded_id = _quote(raw_id, safe='')
     proxy_segments = bool(getattr(channel, 'proxy_segments', False)) or browser_preview
+
+    def _seg_url(abs_url: str) -> str:
+        if proxy_segments:
+            return f'{base_url}/play/custom/segment?url={_quote(abs_url, safe="")}&src={encoded_id}'
+        return abs_url
 
     lines = []
     for line in text.splitlines():
         stripped = line.strip()
-        if stripped and not stripped.startswith('#'):
+        if stripped.startswith('#') and 'URI="' in stripped:
+            # Init segments and keys (EXT-X-MAP / EXT-X-KEY): left relative,
+            # they would resolve against this proxy's URL and 404.
+            line = re.sub(r'URI="([^"]+)"', lambda m: f'URI="{_seg_url(urljoin(variant_base, m.group(1)))}"', line)
+        elif stripped and not stripped.startswith('#'):
             abs_url = stripped if stripped.startswith('http') else urljoin(variant_base, stripped)
             # ViewTV mrouter URLs are cross-domain 302 redirects to the real segment.
             # Many players won't follow cross-domain segment redirects and drop.
@@ -608,10 +697,7 @@ def custom_manifest_proxy(channel_id: str):
                 _seg = (_parse_qs(_us(abs_url).query).get('seg') or [''])[0]
                 if _seg:
                     abs_url = _seg
-            if proxy_segments:
-                line = f'{base_url}/play/custom/segment?url={_quote(abs_url, safe="")}&src={encoded_id}'
-            else:
-                line = abs_url
+            line = _seg_url(abs_url)
         lines.append(line)
 
     body = '\n'.join(lines)
@@ -766,28 +852,10 @@ def custom_segment_proxy():
     if not channel:
         abort(404)
 
-    # Validate segment host shares a domain root with the stored stream URL
-    # to prevent this endpoint being used as an open proxy.  The abort() must
-    # live OUTSIDE the try — abort() raises an HTTPException, and a bare except
-    # here would swallow it and fail the guard open.
+    # The abort() must stay outside any try — abort() raises an HTTPException,
+    # and a bare except would swallow it and fail the guard open.
     seg_host = parsed.netloc
-    try:
-        stored_host = urlsplit(channel.stream_url or '').netloc
-
-        def _root(h: str) -> str:
-            parts = h.split('.')
-            return '.'.join(parts[-2:]) if len(parts) >= 2 else h
-
-        host_ok = (
-            not stored_host
-            or seg_host == stored_host
-            or _root(seg_host) == _root(stored_host)
-        )
-    except Exception:
-        host_ok = True  # parse failure — fail open rather than break playback
-        stored_host = '?'
-    if not host_ok:
-        logger.warning('[custom-seg-proxy] host mismatch seg=%s stored=%s', seg_host, stored_host)
+    if not _custom_host_allowed(channel, url):
         abort(403)
 
     # Network/timeout errors → 502.  A non-200 from the CDN is relayed with its
