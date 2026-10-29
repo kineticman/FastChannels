@@ -948,6 +948,62 @@
     .modal p strong { color: var(--danger); }
     .modal-actions { display: flex; justify-content: flex-end; gap: 0.75rem; }
 
+    /* Channel catalog modal */
+    .catalog-box { width: 780px; max-width: 95vw; height: 86vh; padding: 1.35rem 1.5rem 1.1rem; }
+    .catalog-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; flex-shrink: 0; }
+    .catalog-title { color: var(--text-strong); font-size: 1.05rem; font-weight: 700; margin: 0; }
+    .catalog-sub { color: var(--text-muted); font-size: 0.78rem; margin-top: 0.2rem; }
+    .catalog-search {
+      width: 100%; margin-top: 0.9rem; flex-shrink: 0; background: var(--bg); border: 1px solid var(--border);
+      border-radius: 7px; padding: 0.5rem 0.75rem; color: var(--text); font-size: 0.85rem; outline: none;
+    }
+    .catalog-search:focus { border-color: var(--focus-accent); }
+    .catalog-tabs { display: flex; flex-wrap: wrap; gap: 0.35rem; margin-top: 0.7rem; flex-shrink: 0; }
+    .catalog-tab {
+      background: none; border: 1px solid var(--border); border-radius: 999px; color: var(--text-soft);
+      font-size: 0.76rem; font-weight: 600; padding: 0.28rem 0.7rem; cursor: pointer;
+    }
+    .catalog-tab:hover { color: var(--text); }
+    .catalog-tab.active { background: var(--accent-bg); border-color: var(--accent-strong); color: var(--accent-soft); }
+    .catalog-tab-count { opacity: 0.65; font-weight: 500; margin-left: 0.2rem; }
+    .catalog-note { color: var(--text-muted); font-size: 0.76rem; line-height: 1.4; margin-top: 0.6rem; flex-shrink: 0; }
+    .catalog-body { flex: 1; min-height: 0; overflow-y: auto; margin-top: 0.8rem; padding-right: 0.25rem; }
+    .catalog-group { margin-bottom: 1.1rem; }
+    .catalog-group-head {
+      display: flex; align-items: baseline; justify-content: space-between; gap: 0.75rem;
+      position: sticky; top: 0; background: var(--surface); padding: 0.2rem 0 0.4rem; z-index: 1;
+    }
+    .catalog-group-title { font-size: 0.72rem; font-weight: 700; color: var(--text-soft); text-transform: uppercase; letter-spacing: 0.06em; }
+    .catalog-group-title span { color: var(--text-muted); font-weight: 500; letter-spacing: 0; text-transform: none; margin-left: 0.35rem; }
+    .catalog-select-all { background: none; border: none; color: var(--accent-soft); font-size: 0.74rem; font-weight: 600; cursor: pointer; padding: 0; }
+    .catalog-select-all:disabled { color: var(--text-muted); cursor: default; }
+    .catalog-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 0.35rem; }
+    .catalog-item {
+      display: flex; align-items: center; gap: 0.7rem; padding: 0.5rem 0.6rem; border-radius: 8px;
+      border: 1px solid var(--border); cursor: pointer; min-width: 0; transition: background .12s, border-color .12s;
+    }
+    .catalog-item:hover { background: color-mix(in srgb, var(--border) 45%, transparent); }
+    .catalog-item.selected { border-color: var(--accent-strong); background: var(--accent-bg); }
+    .catalog-item.added { opacity: 0.5; cursor: default; }
+    .catalog-item.added:hover { background: none; }
+    .catalog-item input { accent-color: var(--accent-strong); flex-shrink: 0; cursor: inherit; }
+    .catalog-logo {
+      width: 38px; height: 38px; border-radius: 6px; flex-shrink: 0; background: var(--bg);
+      display: flex; align-items: center; justify-content: center; overflow: hidden;
+      color: var(--text-muted); font-size: 0.8rem; font-weight: 700;
+    }
+    .catalog-logo img { width: 100%; height: 100%; object-fit: contain; }
+    .catalog-text { flex: 1; min-width: 0; }
+    .catalog-name { font-size: 0.85rem; font-weight: 600; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .catalog-meta { font-size: 0.73rem; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .catalog-badge { font-size: 0.7rem; font-weight: 600; color: var(--text-muted); white-space: nowrap; }
+    .catalog-empty { color: var(--text-muted); font-size: 0.84rem; text-align: center; padding: 2.5rem 0; }
+    .catalog-foot {
+      display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; flex-shrink: 0;
+      padding-top: 0.75rem; margin-top: 0.5rem; border-top: 1px solid var(--border);
+    }
+    .catalog-status { font-size: 0.78rem; font-weight: 500; color: var(--text-soft); min-width: 0; }
+
     /* EPG-only toggle */
     .epg-only-wrap { margin-top: 0.5rem; }
     .epg-only-wrap label { font-size: 0.74rem; color: var(--text-dim); cursor: pointer; user-select: none; display: inline-flex; align-items: center; gap: 0.35rem; }
@@ -1502,18 +1558,25 @@
   </div>
 
   <!-- Channel Catalog Modal -->
-  <div class="modal-overlay" id="channel-catalog-modal">
-    <div class="modal-box" style="width:620px;max-width:95vw;max-height:90vh;display:flex;flex-direction:column;padding:1.5rem 1.75rem;">
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1.25rem;">
-        <h2 style="font-size:1.05rem;font-weight:700;margin:0;">Channel Catalog</h2>
+  <div class="modal-overlay" id="channel-catalog-modal" onclick="if (event.target === this) closeChannelCatalog()">
+    <div class="modal-box catalog-box">
+      <div class="catalog-head">
+        <div>
+          <h2 class="catalog-title">Channel Catalog</h2>
+          <div class="catalog-sub" id="catalog-sub">Free streams you can add as custom channels.</div>
+        </div>
         <button class="btn btn-cancel btn-sm" onclick="closeChannelCatalog()">✕</button>
       </div>
-      <div id="catalog-body" style="flex:1;overflow-y:auto;min-height:0;">
-        <div style="color:var(--text-muted);font-size:.84rem;">Loading…</div>
+      <input type="search" class="catalog-search" id="catalog-search" placeholder="Search by name, town or state…"
+             oninput="_catalogQuery = this.value; renderCatalog()">
+      <div class="catalog-tabs" id="catalog-tabs"></div>
+      <div class="catalog-note" id="catalog-note" hidden></div>
+      <div class="catalog-body" id="catalog-body">
+        <div class="catalog-empty">Loading…</div>
       </div>
-      <div style="display:flex;align-items:center;justify-content:space-between;gap:.75rem;padding-top:.75rem;margin-top:.75rem;border-top:1px solid var(--border);">
-        <span id="catalog-status" style="font-size:.78rem;font-weight:500;color:var(--text-soft);"></span>
-        <div style="display:flex;gap:.75rem;">
+      <div class="catalog-foot">
+        <span class="catalog-status" id="catalog-status"></span>
+        <div style="display:flex;gap:.75rem;flex-shrink:0;">
           <button class="btn btn-cancel btn-sm" onclick="closeChannelCatalog()">Cancel</button>
           <button class="btn btn-run btn-sm" id="catalog-add-btn" onclick="addCatalogSelected()" disabled>Add Selected</button>
         </div>
@@ -7290,76 +7353,162 @@
     // ── Channel Catalog ──────────────────────────────────────────────────────
 
     let _catalogData = null;
+    let _catalogByUrl = {};
+    let _catalogSection = 'All';
+    let _catalogQuery = '';
+    const _catalogSelected = new Set();   // stream_urls
+
+    const _CATALOG_SECTION_NOTES = {
+      'Free Streams': 'Single free channels from networks and their own sites. Player-page links are resolved to the live stream each time they play.',
+      'YouTube Live': '24/7 news and live channels on YouTube, resolved to the live stream each time they play.',
+      'Community TV': 'Public, education and government access channels streamed by their local operators. No guide data, and some only broadcast part of the day.',
+    };
 
     async function openChannelCatalog() {
       document.getElementById('channel-catalog-modal').classList.add('open');
       document.getElementById('catalog-status').textContent = '';
-      document.getElementById('catalog-add-btn').disabled = true;
-      const body = document.getElementById('catalog-body');
-      body.innerHTML = '<div style="color:var(--text-muted);font-size:.84rem;">Loading…</div>';
-
+      document.getElementById('catalog-search').value = '';
+      _catalogQuery = '';
+      _catalogSection = 'All';
+      _catalogSelected.clear();
+      updateCatalogAddBtn();
+      document.getElementById('catalog-body').innerHTML = '<div class="catalog-empty">Loading…</div>';
       try {
-        const r = await fetch('/api/custom-channels/catalog', {cache: 'no-store'});
-        _catalogData = await r.json();
-        renderCatalog(_catalogData);
+        await _loadCatalog();
+        renderCatalog();
       } catch (e) {
-        body.innerHTML = `<div style="color:var(--danger);font-size:.84rem;">Failed to load catalog: ${e.message}</div>`;
+        document.getElementById('catalog-body').innerHTML =
+          `<div class="catalog-empty" style="color:var(--danger);">Failed to load catalog: ${_esc(e.message)}</div>`;
       }
+    }
+
+    async function _loadCatalog() {
+      const r = await fetch('/api/custom-channels/catalog', {cache: 'no-store'});
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      _catalogData = await r.json();
+      _catalogByUrl = {};
+      _catalogData.forEach(g => g.channels.forEach(ch => { _catalogByUrl[ch.stream_url] = ch; }));
     }
 
     function closeChannelCatalog() {
       document.getElementById('channel-catalog-modal').classList.remove('open');
     }
 
-    function renderCatalog(groups) {
-      const body = document.getElementById('catalog-body');
-      if (!groups.length) {
-        body.innerHTML = '<div style="color:var(--text-muted);font-size:.84rem;">No channels in catalog.</div>';
-        return;
-      }
+    function setCatalogSection(section) {
+      _catalogSection = section;
+      renderCatalog();
+      document.getElementById('catalog-body').scrollTop = 0;
+    }
+
+    function _catalogVisible(group) {
+      const terms = _catalogQuery.toLowerCase().split(/\s+/).filter(Boolean);
+      return group.channels.filter(ch => {
+        const hay = `${ch.name} ${ch.note || ''} ${ch.category || ''} ${group.network}`.toLowerCase();
+        return terms.every(t => hay.includes(t));
+      });
+    }
+
+    function renderCatalog() {
+      const groups = _catalogData || [];
+      const all = groups.flatMap(g => g.channels);
+      const added = all.filter(ch => ch.already_added).length;
+      document.getElementById('catalog-sub').textContent =
+        `${all.length} free channels you can add as custom channels` + (added ? ` · ${added} already added` : '');
+
+      const sections = [];
+      groups.forEach(g => {
+        const name = g.section || 'Other';
+        let s = sections.find(x => x.name === name);
+        if (!s) sections.push(s = {name, count: 0});
+        s.count += g.channels.length;
+      });
+      document.getElementById('catalog-tabs').innerHTML = [{name: 'All', count: all.length}, ...sections].map(s =>
+        `<button class="catalog-tab${s.name === _catalogSection ? ' active' : ''}" onclick="setCatalogSection('${_esc(s.name)}')">` +
+        `${_esc(s.name)}<span class="catalog-tab-count">${s.count}</span></button>`).join('');
+
+      const note = document.getElementById('catalog-note');
+      note.textContent = _CATALOG_SECTION_NOTES[_catalogSection] || '';
+      note.hidden = !note.textContent;
 
       let html = '';
-      groups.forEach(group => {
-        html += `<div style="margin-bottom:1.25rem;">
-          <div style="font-size:.72rem;font-weight:700;color:var(--text-soft);text-transform:uppercase;letter-spacing:.06em;margin-bottom:.6rem;">${group.network}</div>`;
-
-        group.channels.forEach((ch, i) => {
-          const key = `${group.network}__${i}`;
-          const disabled = ch.already_added ? 'disabled' : '';
-          const opacity = ch.already_added ? 'opacity:.45;' : '';
+      groups.forEach((group, gi) => {
+        if (_catalogSection !== 'All' && (group.section || 'Other') !== _catalogSection) return;
+        const visible = _catalogVisible(group);
+        if (!visible.length) return;
+        html += `<div class="catalog-group" data-group="${gi}">
+          <div class="catalog-group-head">
+            <div class="catalog-group-title">${_esc(group.network)}<span>${visible.length}</span></div>
+            <button class="catalog-select-all" onclick="toggleCatalogGroup(${gi})"></button>
+          </div>
+          <div class="catalog-grid">`;
+        visible.forEach(ch => {
+          const sel = _catalogSelected.has(ch.stream_url);
+          const meta = [ch.note || ch.category, ch.redetect_on_play ? 'resolved at play' : ''].filter(Boolean).join(' · ');
+          const initials = ch.name.replace(/[^A-Za-z0-9 ]/g, '').split(/\s+/).map(w => w[0]).join('').slice(0, 2).toUpperCase();
           html += `
-          <label style="display:flex;align-items:center;gap:.85rem;padding:.6rem .5rem;border-radius:7px;cursor:${ch.already_added ? 'default' : 'pointer'};${opacity}transition:background .12s;"
-                 onmouseover="if(!${ch.already_added}) this.style.background='color-mix(in srgb, var(--border) 50%, transparent)'"
-                 onmouseout="this.style.background=''">
-            <input type="checkbox" data-catalog-key="${key}" ${disabled}
-                   style="accent-color:var(--accent-strong);cursor:${ch.already_added ? 'default' : 'pointer'};flex-shrink:0;"
-                   onchange="updateCatalogAddBtn()">
-            <img src="${ch.logo_url || ''}" alt="" style="width:40px;height:40px;object-fit:contain;border-radius:5px;flex-shrink:0;background:var(--bg);"
-                 onerror="this.style.display='none'">
-            <div style="flex:1;min-width:0;">
-              <div style="font-size:.87rem;font-weight:600;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${ch.name}</div>
-              <div style="font-size:.74rem;color:var(--text-muted);">${ch.category || ''}${ch.redetect_on_play ? ' · live stream' : ''}</div>
-            </div>
-            ${ch.already_added ? '<span style="font-size:.72rem;font-weight:600;color:var(--text-muted);white-space:nowrap;">Already added</span>' : ''}
-          </label>`;
+            <label class="catalog-item${ch.already_added ? ' added' : ''}${sel ? ' selected' : ''}" title="${_esc(ch.stream_url)}">
+              <input type="checkbox" data-url="${_esc(ch.stream_url)}" ${sel ? 'checked' : ''} ${ch.already_added ? 'disabled' : ''}
+                     onchange="toggleCatalogItem(this)">
+              <span class="catalog-logo">${ch.logo_url
+                ? `<img src="${_esc(ch.logo_url)}" alt="" loading="lazy" onerror="this.replaceWith(document.createTextNode('${_esc(initials)}'))">`
+                : _esc(initials)}</span>
+              <span class="catalog-text">
+                <span class="catalog-name" style="display:block;">${_esc(ch.name)}</span>
+                <span class="catalog-meta" style="display:block;">${_esc(meta)}</span>
+              </span>
+              ${ch.already_added ? '<span class="catalog-badge">Added</span>' : ''}
+            </label>`;
         });
-
-        html += '</div>';
+        html += '</div></div>';
       });
 
-      body.innerHTML = html;
+      const body = document.getElementById('catalog-body');
+      body.innerHTML = html || `<div class="catalog-empty">${groups.length ? 'No channels match.' : 'No channels in catalog.'}</div>`;
+      body.querySelectorAll('.catalog-group').forEach(_syncCatalogGroupButton);
+      updateCatalogAddBtn();
+    }
+
+    function _catalogGroupOpen(gi) {
+      // Channels in the group that are shown and can still be added.
+      return _catalogVisible(_catalogData[gi]).filter(ch => !ch.already_added);
+    }
+
+    function _syncCatalogGroupButton(groupEl) {
+      const open = _catalogGroupOpen(+groupEl.dataset.group);
+      const btn = groupEl.querySelector('.catalog-select-all');
+      btn.disabled = !open.length;
+      btn.textContent = !open.length ? 'All added'
+        : open.every(ch => _catalogSelected.has(ch.stream_url)) ? 'Clear' : 'Select all';
+    }
+
+    function toggleCatalogItem(cb) {
+      if (cb.checked) _catalogSelected.add(cb.dataset.url);
+      else _catalogSelected.delete(cb.dataset.url);
+      cb.closest('.catalog-item').classList.toggle('selected', cb.checked);
+      _syncCatalogGroupButton(cb.closest('.catalog-group'));
+      updateCatalogAddBtn();
+    }
+
+    function toggleCatalogGroup(gi) {
+      const open = _catalogGroupOpen(gi);
+      const selectAll = !open.every(ch => _catalogSelected.has(ch.stream_url));
+      open.forEach(ch => selectAll ? _catalogSelected.add(ch.stream_url) : _catalogSelected.delete(ch.stream_url));
+      const body = document.getElementById('catalog-body');
+      const top = body.scrollTop;
+      renderCatalog();
+      body.scrollTop = top;
     }
 
     function updateCatalogAddBtn() {
-      const checked = document.querySelectorAll('#catalog-body input[type=checkbox]:checked').length;
+      const n = _catalogSelected.size;
       const btn = document.getElementById('catalog-add-btn');
-      btn.disabled = checked === 0;
-      btn.textContent = checked > 0 ? `Add ${checked} Channel${checked > 1 ? 's' : ''}` : 'Add Selected';
+      btn.disabled = n === 0;
+      btn.textContent = n > 0 ? `Add ${n} Channel${n > 1 ? 's' : ''}` : 'Add Selected';
     }
 
     async function addCatalogSelected() {
-      const checkboxes = document.querySelectorAll('#catalog-body input[type=checkbox]:checked');
-      if (!checkboxes.length) return;
+      const chosen = [..._catalogSelected].map(url => _catalogByUrl[url]).filter(Boolean);
+      if (!chosen.length) return;
 
       const btn = document.getElementById('catalog-add-btn');
       const status = document.getElementById('catalog-status');
@@ -7367,26 +7516,14 @@
       status.textContent = 'Adding…';
       status.style.color = 'var(--text-soft)';
 
-      // Build a flat lookup: key → channel object
-      const lookup = {};
-      (_catalogData || []).forEach(group => {
-        group.channels.forEach((ch, i) => {
-          lookup[`${group.network}__${i}`] = ch;
-        });
-      });
-
-      const payload = [];
-      for (const cb of checkboxes) {
-        const ch = lookup[cb.dataset.catalogKey];
-        if (ch) payload.push({
-          name: ch.name,
-          stream_url: ch.stream_url,
-          logo_url: ch.logo_url || null,
-          category: ch.category || null,
-          language: ch.language || 'en',
-          redetect_on_play: ch.redetect_on_play || false,
-        });
-      }
+      const payload = chosen.map(ch => ({
+        name: ch.name,
+        stream_url: ch.stream_url,
+        logo_url: ch.logo_url || null,
+        category: ch.category || null,
+        language: ch.language || 'en',
+        redetect_on_play: ch.redetect_on_play || false,
+      }));
 
       let added = 0;
       try {
@@ -7412,16 +7549,15 @@
         return;
       }
 
-      status.textContent = `${added} channel${added > 1 ? 's' : ''} added`;
+      status.textContent = `${added} channel${added === 1 ? '' : 's'} added`;
       status.style.color = 'var(--accent)';
+      _catalogSelected.clear();
       setTimeout(closeChannelCatalog, 800);
 
       _refreshCustomSourceCount();
       loadCustomChannelList();
       // Re-render with updated already_added state
-      const r2 = await fetch('/api/custom-channels/catalog', {cache: 'no-store'}).catch(() => null);
-      if (r2) { _catalogData = await r2.json(); renderCatalog(_catalogData); }
-      btn.disabled = false;
+      try { await _loadCatalog(); renderCatalog(); } catch (e) { /* modal is closing anyway */ }
     }
 
     // ── Custom channel stream preview ─────────────────────────────────────────

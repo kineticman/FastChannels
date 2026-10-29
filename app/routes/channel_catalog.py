@@ -1,12 +1,19 @@
 # Pre-configured channel catalog — add entries here to make them available
 # in the admin "Browse Channel Catalog" modal under Custom Channels.
 #
+# Groups are shown under tabs by "section"; "network" is the group heading.
 # Each channel needs: name, stream_url, logo_url, category, language.
+# "note" is an optional one-line description shown in the modal only.
 # Set redetect_on_play=True for any source whose stream URL is a player
 # page (stream detector resolves the real URL at play time).
+#
+# Community TV: public, educational and government access channels streamed
+# by their own operators (Cablecast and TelVue hosts), found via iptv-org's
+# US list and checked to segment level on 2026-10-29. No guide data.
 
 CHANNEL_CATALOG = [
     {
+        "section": "Free Streams",
         "network": "KTLA",
         "channels": [
             {
@@ -20,6 +27,7 @@ CHANNEL_CATALOG = [
         ],
     },
     {
+        "section": "Free Streams",
         "network": "Kaloopy",
         "channels": [
             {
@@ -33,6 +41,7 @@ CHANNEL_CATALOG = [
         ],
     },
     {
+        "section": "Free Streams",
         "network": "myAEW",
         "channels": [
             {
@@ -45,6 +54,7 @@ CHANNEL_CATALOG = [
         ],
     },
     {
+        "section": "Free Streams",
         "network": "Heartland+",
         "channels": [
             {
@@ -77,7 +87,8 @@ CHANNEL_CATALOG = [
         # Free 24/7 live channels delivered as YouTube live streams. The
         # stream_detector YouTube fast path resolves these at play time; all
         # verified live + DRM-free.
-        "network": "Free News & Live (YouTube)",
+        "section": "YouTube Live",
+        "network": "News & Live",
         "channels": [
             {
                 "name": "Al Jazeera English",
@@ -166,6 +177,504 @@ CHANNEL_CATALOG = [
                 "category": "News",
                 "language": "en",
                 "redetect_on_play": True,
+            },
+        ],
+    },
+    {
+        "section": "Community TV",
+        "network": "Florida",
+        "channels": [
+            {
+                "name": "COStv Sebastian",
+                "note": "Sebastian · Government",
+                "stream_url": "https://irctv.cablecast.tv/live/stream-1/live.m3u8",
+                "logo_url": "https://i.imgur.com/IVqjCRE.png",
+                "category": "Local News",
+                "language": "en",
+            },
+            {
+                "name": "St. Lucie Public Schools",
+                "note": "St. Lucie County · Education",
+                "stream_url": "https://reflect-stlucie-ps-fl.cablecast.tv/live-1/live/stream-1/WIFI-1896k-720p.m3u8",
+                "logo_url": "https://i.imgur.com/wnB0fWG.png",
+                "category": "Local News",
+                "language": "en",
+            },
+        ],
+    },
+    {
+        "section": "Community TV",
+        "network": "Illinois",
+        "channels": [
+            {
+                "name": "Access 4 Springfield",
+                "note": "Springfield · Public access",
+                "stream_url": "https://reflect-channel18vod-springfield-il-us.cablecast.tv/live-16/live/stream-4/live.m3u8",
+                "logo_url": "https://i.imgur.com/DQu3gES.png",
+                "category": "Local News",
+                "language": "en",
+            },
+            {
+                "name": "Channel 18 Springfield",
+                "note": "Springfield · Government",
+                "stream_url": "https://reflect-channel18vod-springfield-il-us.cablecast.tv/live-13/live/stream-1/live.m3u8",
+                "logo_url": "https://i.imgur.com/au07aLr.png",
+                "category": "Local News",
+                "language": "en",
+            },
+        ],
+    },
+    {
+        "section": "Community TV",
+        "network": "Maryland",
+        "channels": [
+            {
+                "name": "Montgomery Channel",
+                "note": "Montgomery County · Public access",
+                "stream_url": "https://reflect-montgomerycommunitymedia.cablecast.tv/live-11/live/stream-4/live.m3u8",
+                "logo_url": "https://i.imgur.com/mU1Ixfj.png",
+                "category": "Local News",
+                "language": "en",
+            },
+            {
+                "name": "Montgomery Access 19",
+                "note": "Montgomery County · Public access",
+                "stream_url": "https://reflect-montgomerycommunitymedia.cablecast.tv/live-8/live/stream-3/live.m3u8",
+                "logo_url": "https://i.imgur.com/7F4LJMT.png",
+                "category": "Local News",
+                "language": "en",
+            },
+        ],
+    },
+    {
+        "section": "Community TV",
+        "network": "Massachusetts",
+        "channels": [
+            {
+                "name": "BMC-HD Belmont",
+                "note": "Belmont · Public access",
+                "stream_url": "https://livestream.telvue.com/belmontmedia4/f7b44cfafd5c52223d5498196c8a2e7b.sdp/playlist.m3u8",
+                "logo_url": "https://i.imgur.com/c9LiTz0.png",
+                "category": "Local News",
+                "language": "en",
+            },
+            {
+                "name": "BATV Billerica Public",
+                "note": "Billerica · Public access",
+                "stream_url": "https://livestream.telvue.com/billerica1/f7b44cfafd5c52223d5498196c8a2e7b.sdp/playlist.m3u8",
+                "logo_url": "https://i.imgur.com/zKQMDsu.png",
+                "category": "Local News",
+                "language": "en",
+            },
+            {
+                "name": "BATV Billerica Educational",
+                "note": "Billerica · Education",
+                "stream_url": "https://livestream.telvue.com/billerica2/f7b44cfafd5c52223d5498196c8a2e7b.sdp/playlist.m3u8",
+                "logo_url": "https://i.imgur.com/eDoJqtg.png",
+                "category": "Local News",
+                "language": "en",
+            },
+            {
+                "name": "BATV Billerica Government",
+                "note": "Billerica · Government",
+                "stream_url": "https://livestream.telvue.com/billerica3/f7b44cfafd5c52223d5498196c8a2e7b.sdp/playlist.m3u8",
+                "logo_url": "https://i.imgur.com/4MdSstx.png",
+                "category": "Local News",
+                "language": "en",
+            },
+            {
+                "name": "Best of BATV",
+                "note": "Billerica · Public access",
+                "stream_url": "https://livestream.telvue.com/billerica4/f7b44cfafd5c52223d5498196c8a2e7b.sdp/playlist.m3u8",
+                "logo_url": "https://i.imgur.com/TUMiKCX.png",
+                "category": "Local News",
+                "language": "en",
+            },
+            {
+                "name": "BIG Brookline Community",
+                "note": "Brookline · Public access",
+                "stream_url": "https://reflect-brookline-interactive-group.cablecast.tv/live-4/live/stream-1/live.m3u8",
+                "logo_url": "https://i.imgur.com/6HDMVBB.png",
+                "category": "Local News",
+                "language": "en",
+            },
+            {
+                "name": "BIG Brookline Civic",
+                "note": "Brookline · Government",
+                "stream_url": "https://reflect-brookline-interactive-group.cablecast.tv/live-5/live/stream-2/live.m3u8",
+                "logo_url": "https://i.imgur.com/6HDMVBB.png",
+                "category": "Local News",
+                "language": "en",
+            },
+            {
+                "name": "AFTV Framingham",
+                "note": "Framingham · Public access",
+                "stream_url": "https://livestream.telvue.com/accframingham1/f7b44cfafd5c52223d5498196c8a2e7b.sdp/playlist.m3u8",
+                "logo_url": "https://i.imgur.com/UoiUwFj.png",
+                "category": "Local News",
+                "language": "en",
+            },
+            {
+                "name": "HCTV Hudson Public Access",
+                "note": "Hudson · Public access",
+                "stream_url": "https://reflect-hudsonctv.cablecast.tv/live-26/live/stream-5/live.m3u8",
+                "logo_url": "https://i.imgur.com/bVbpgiD.png",
+                "category": "Local News",
+                "language": "en",
+            },
+            {
+                "name": "HCTV Hudson Education",
+                "note": "Hudson · Education",
+                "stream_url": "https://reflect-hudsonctv.cablecast.tv/live-26/live/stream-1/live.m3u8",
+                "logo_url": "https://i.imgur.com/bVbpgiD.png",
+                "category": "Local News",
+                "language": "en",
+            },
+            {
+                "name": "HCTV Hudson Government",
+                "note": "Hudson · Government",
+                "stream_url": "https://reflect-hudsonctv.cablecast.tv/live-26/live/stream-2/live.m3u8",
+                "logo_url": "https://i.imgur.com/bVbpgiD.png",
+                "category": "Local News",
+                "language": "en",
+            },
+            {
+                "name": "LexMedia LGTV",
+                "note": "Lexington · Government",
+                "stream_url": "https://livestream.telvue.com/lexmedia3/f7b44cfafd5c52223d5498196c8a2e7b.sdp/lexmedia3/stream1/playlist.m3u8",
+                "logo_url": "https://i.imgur.com/d5w2pT4.png",
+                "category": "Local News",
+                "language": "en",
+            },
+            {
+                "name": "Natick Public Access",
+                "note": "Natick · Public access",
+                "stream_url": "https://livestream.telvue.com/natickpegasus2/f7b44cfafd5c52223d5498196c8a2e7b.sdp/playlist.m3u8",
+                "logo_url": "https://i.imgur.com/G4a3gW0.png",
+                "category": "Local News",
+                "language": "en",
+            },
+            {
+                "name": "Natick Education",
+                "note": "Natick · Education",
+                "stream_url": "https://livestream.telvue.com/natickpegasus1/f7b44cfafd5c52223d5498196c8a2e7b.sdp/playlist.m3u8",
+                "logo_url": "https://i.imgur.com/VKU9qwy.png",
+                "category": "Local News",
+                "language": "en",
+            },
+            {
+                "name": "Natick Government",
+                "note": "Natick · Government",
+                "stream_url": "https://livestream.telvue.com/natickpegasus3/f7b44cfafd5c52223d5498196c8a2e7b.sdp/playlist.m3u8",
+                "logo_url": "https://i.imgur.com/eA2WSXa.png",
+                "category": "Local News",
+                "language": "en",
+            },
+        ],
+    },
+    {
+        "section": "Community TV",
+        "network": "Michigan",
+        "channels": [
+            {
+                "name": "AccessVision 16",
+                "note": "Battle Creek · Public access",
+                "stream_url": "https://livestream.telvue.com/accvision1/f7b44cfafd5c52223d5498196c8a2e7b.sdp/playlist.m3u8",
+                "logo_url": "https://i.imgur.com/vi4TCdb.png",
+                "category": "Local News",
+                "language": "en",
+            },
+            {
+                "name": "AccessVision 17",
+                "note": "Battle Creek · Government",
+                "stream_url": "https://livestream.telvue.com/accvision2/f7b44cfafd5c52223d5498196c8a2e7b.sdp/playlist.m3u8",
+                "logo_url": "https://i.imgur.com/vi4TCdb.png",
+                "category": "Local News",
+                "language": "en",
+            },
+            {
+                "name": "Detroit City Channel 10",
+                "note": "Detroit · Government",
+                "stream_url": "https://reflect-detroit-vod.cablecast.tv/live-2/live/stream-6/live.m3u8",
+                "logo_url": "https://i.imgur.com/zAdcg9m.png",
+                "category": "Local News",
+                "language": "en",
+            },
+            {
+                "name": "Detroit Channel 21",
+                "note": "Detroit · Public access",
+                "stream_url": "https://reflect-detroit-vod.cablecast.tv/live-9/live/stream-4/live.m3u8",
+                "logo_url": "https://i.imgur.com/yXXEGKg.png",
+                "category": "Local News",
+                "language": "en",
+            },
+            {
+                "name": "Detroit Channel 22",
+                "note": "Detroit · Education",
+                "stream_url": "https://reflect-detroit-vod.cablecast.tv/live-3/live/stream-3/live.m3u8",
+                "logo_url": "https://i.imgur.com/zAdcg9m.png",
+                "category": "Local News",
+                "language": "en",
+            },
+            {
+                "name": "Detroit Channel 68",
+                "note": "Detroit · Public access",
+                "stream_url": "https://reflect-detroit-vod.cablecast.tv/live-10/live/stream-5/live.m3u8",
+                "logo_url": "https://i.imgur.com/zAdcg9m.png",
+                "category": "Local News",
+                "language": "en",
+            },
+            {
+                "name": "Monroe Community Media",
+                "note": "Monroe · Public access",
+                "stream_url": "https://reflect-monroe-public-access.cablecast.tv/live-3/live/live.m3u8",
+                "logo_url": "https://i.imgur.com/gS4x0uX.png",
+                "category": "Local News",
+                "language": "en",
+            },
+            {
+                "name": "Monroe Community Media Education",
+                "note": "Monroe · Education",
+                "stream_url": "https://reflect-monroe-public-access.cablecast.tv/live-4/live/live.m3u8",
+                "logo_url": "https://i.imgur.com/gS4x0uX.png",
+                "category": "Local News",
+                "language": "en",
+            },
+            {
+                "name": "City of Monroe Government",
+                "note": "Monroe · Government",
+                "stream_url": "https://reflect-monroe-mi-ci.cablecast.tv/live-1/live/live.m3u8",
+                "logo_url": "https://i.imgur.com/U5fZkCN.jpeg",
+                "category": "Local News",
+                "language": "en",
+            },
+        ],
+    },
+    {
+        "section": "Community TV",
+        "network": "Minnesota",
+        "channels": [
+            {
+                "name": "CCX Media",
+                "note": "Northwest Hennepin County · Public access",
+                "stream_url": "https://reflect-ccx.cablecast.tv/live-9/live/stream-1/live.m3u8",
+                "logo_url": "https://i.imgur.com/1hHW3IK.png",
+                "category": "Local News",
+                "language": "en",
+            },
+        ],
+    },
+    {
+        "section": "Community TV",
+        "network": "New Hampshire",
+        "channels": [
+            {
+                "name": "Access Nashua",
+                "note": "Nashua · Public access",
+                "stream_url": "https://livestream.telvue.com/nashuanh1/f7b44cfafd5c52223d5498196c8a2e7b.sdp/playlist.m3u8",
+                "logo_url": "https://i.imgur.com/iv9Vfcb.png",
+                "category": "Local News",
+                "language": "en",
+            },
+            {
+                "name": "Nashua ETV 22",
+                "note": "Nashua · Education",
+                "stream_url": "https://livestream.telvue.com/nashuanh2/f7b44cfafd5c52223d5498196c8a2e7b.sdp/playlist.m3u8",
+                "logo_url": "https://i.imgur.com/iv9Vfcb.png",
+                "category": "Local News",
+                "language": "en",
+            },
+            {
+                "name": "Nashua Government TV 16",
+                "note": "Nashua · Government",
+                "stream_url": "https://livestream.telvue.com/nashuanh3/f7b44cfafd5c52223d5498196c8a2e7b.sdp/playlist.m3u8",
+                "logo_url": "https://i.imgur.com/iv9Vfcb.png",
+                "category": "Local News",
+                "language": "en",
+            },
+            {
+                "name": "DerryTV 17",
+                "note": "Derry · Government",
+                "stream_url": "https://livestream.telvue.com/derrynh1/f7b44cfafd5c52223d5498196c8a2e7b.sdp/playlist.m3u8",
+                "logo_url": "https://i.imgur.com/MRR6UL3.png",
+                "category": "Local News",
+                "language": "en",
+            },
+            {
+                "name": "DerryTV 23",
+                "note": "Derry · Education",
+                "stream_url": "https://livestream.telvue.com/derrynh2/f7b44cfafd5c52223d5498196c8a2e7b.sdp/playlist.m3u8",
+                "logo_url": "https://i.imgur.com/MRR6UL3.png",
+                "category": "Local News",
+                "language": "en",
+            },
+        ],
+    },
+    {
+        "section": "Community TV",
+        "network": "New York",
+        "channels": [
+            {
+                "name": "BronxNet Omni",
+                "note": "Bronx · Public access",
+                "stream_url": "https://reflect-stream-bronxnet.cablecast.tv/live-16/live/stream-1/live.m3u8",
+                "logo_url": "https://i.imgur.com/PF71rdZ.png",
+                "category": "Local News",
+                "language": "en",
+            },
+            {
+                "name": "BronxNet Inform",
+                "note": "Bronx · Local news & public affairs",
+                "stream_url": "https://reflect-stream-bronxnet.cablecast.tv/live-8/live/stream-4/live.m3u8",
+                "logo_url": "https://i.imgur.com/PF71rdZ.png",
+                "category": "Local News",
+                "language": "en",
+            },
+            {
+                "name": "BronxNet Culture",
+                "note": "Bronx · Arts & culture",
+                "stream_url": "https://reflect-stream-bronxnet.cablecast.tv/live-7/live/stream-3/live.m3u8",
+                "logo_url": "https://i.imgur.com/PF71rdZ.png",
+                "category": "Local News",
+                "language": "en",
+            },
+            {
+                "name": "BronxNet Arts",
+                "note": "Bronx · Arts & culture",
+                "stream_url": "https://reflect-stream-bronxnet.cablecast.tv/live-19/live/stream-2/live.m3u8",
+                "logo_url": "https://i.imgur.com/PF71rdZ.png",
+                "category": "Local News",
+                "language": "en",
+            },
+            {
+                "name": "BronxNet Inspire",
+                "note": "Bronx · Faith",
+                "stream_url": "https://reflect-stream-bronxnet.cablecast.tv/live-18/live/stream-7/live.m3u8",
+                "logo_url": "https://i.imgur.com/PF71rdZ.png",
+                "category": "Local News",
+                "language": "en",
+            },
+        ],
+    },
+    {
+        "section": "Community TV",
+        "network": "Oregon",
+        "channels": [
+            {
+                "name": "RVTV Prime",
+                "note": "Southern Oregon · Public access",
+                "stream_url": "https://livestream.telvue.com/roguevalleycmttv1/f7b44cfafd5c52223d5498196c8a2e7b.sdp/playlist.m3u8",
+                "logo_url": "https://i.imgur.com/0Qd9Ic7.png",
+                "category": "Local News",
+                "language": "en",
+            },
+            {
+                "name": "RVTV Civic",
+                "note": "Southern Oregon · Government",
+                "stream_url": "https://livestream.telvue.com/roguevalleycmttv2/f7b44cfafd5c52223d5498196c8a2e7b.sdp/playlist.m3u8",
+                "logo_url": "https://i.imgur.com/cTLhQjo.png",
+                "category": "Local News",
+                "language": "en",
+            },
+            {
+                "name": "RVTV Voices",
+                "note": "Southern Oregon · Public access",
+                "stream_url": "https://livestream.telvue.com/roguevalleycmttv3/f7b44cfafd5c52223d5498196c8a2e7b.sdp/playlist.m3u8",
+                "logo_url": "https://i.imgur.com/kOGQBZj.png",
+                "category": "Local News",
+                "language": "en",
+            },
+            {
+                "name": "RVTV Grants Pass",
+                "note": "Grants Pass · Public access",
+                "stream_url": "https://livestream.telvue.com/roguevalleycmttv4/f7b44cfafd5c52223d5498196c8a2e7b.sdp/playlist.m3u8",
+                "logo_url": "https://i.imgur.com/Vpv0P6t.png",
+                "category": "Local News",
+                "language": "en",
+            },
+            {
+                "name": "Willamette Falls Media",
+                "note": "Oregon City · Public access",
+                "stream_url": "https://reflect-greater-clackamas-county-tv.cablecast.tv/live-7/live/stream-4/live.m3u8",
+                "logo_url": "https://i.imgur.com/KwlFyem.png",
+                "category": "Local News",
+                "language": "en",
+            },
+        ],
+    },
+    {
+        "section": "Community TV",
+        "network": "Pennsylvania",
+        "channels": [
+            {
+                "name": "PhillyCAM",
+                "note": "Philadelphia · Public access",
+                "stream_url": "https://livestream.telvue.com/phillycam1/f7b44cfafd5c52223d5498196c8a2e7b.sdp/playlist.m3u8",
+                "logo_url": "https://i.imgur.com/ENOr31n.png",
+                "category": "Local News",
+                "language": "en",
+            },
+            {
+                "name": "PHLgovTV",
+                "note": "Philadelphia · Government",
+                "stream_url": "https://livestream.telvue.com/ctyphiladelphia1/f7b44cfafd5c52223d5498196c8a2e7b.sdp/playlist.m3u8",
+                "logo_url": "https://i.imgur.com/BmNc3hu.png",
+                "category": "Local News",
+                "language": "en",
+            },
+            {
+                "name": "TUTV Temple University",
+                "note": "Philadelphia · Education",
+                "stream_url": "https://livestream.telvue.com/templeuni1/f7b44cfafd5c52223d5498196c8a2e7b.sdp/playlist.m3u8",
+                "logo_url": "https://i.imgur.com/At0BPeA.png",
+                "category": "Local News",
+                "language": "en",
+            },
+            {
+                "name": "Berks Community TV",
+                "note": "Reading · Public access",
+                "stream_url": "https://livestream.telvue.com/berkscmttv2/f7b44cfafd5c52223d5498196c8a2e7b.sdp/playlist.m3u8",
+                "logo_url": "https://i.imgur.com/vQ6a4VL.png",
+                "category": "Local News",
+                "language": "en",
+            },
+        ],
+    },
+    {
+        "section": "Community TV",
+        "network": "Vermont",
+        "channels": [
+            {
+                "name": "CVTV 192",
+                "note": "Central Vermont · Public access",
+                "stream_url": "https://livestream.telvue.com/cvtv2/f7b44cfafd5c52223d5498196c8a2e7b.sdp/playlist.m3u8",
+                "logo_url": "https://i.imgur.com/loGNYCc.png",
+                "category": "Local News",
+                "language": "en",
+            },
+            {
+                "name": "CVTV 194",
+                "note": "Central Vermont · Government",
+                "stream_url": "https://livestream.telvue.com/cvtv1/f7b44cfafd5c52223d5498196c8a2e7b.sdp/playlist.m3u8",
+                "logo_url": "https://i.imgur.com/loGNYCc.png",
+                "category": "Local News",
+                "language": "en",
+            },
+            {
+                "name": "MRVTV 44",
+                "note": "Mad River Valley · Public access",
+                "stream_url": "https://livestream.telvue.com/madrivervalleytv1/f7b44cfafd5c52223d5498196c8a2e7b.sdp/playlist.m3u8",
+                "logo_url": "https://i.imgur.com/QZcENP2.png",
+                "category": "Local News",
+                "language": "en",
+            },
+            {
+                "name": "MRVTV 45",
+                "note": "Mad River Valley · Government",
+                "stream_url": "https://livestream.telvue.com/madrivervalleytv2/f7b44cfafd5c52223d5498196c8a2e7b.sdp/playlist.m3u8",
+                "logo_url": "https://i.imgur.com/QZcENP2.png",
+                "category": "Local News",
+                "language": "en",
             },
         ],
     },
