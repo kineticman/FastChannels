@@ -215,16 +215,35 @@ def inactive_channel_count(source_id):
     return jsonify({'count': count, 'source': source.name, 'days': days})
 
 
+_DELETE_BATCH = 200
+
+
+def _delete_channels_in_batches(ids: list[int]) -> None:
+    """Delete channels with their programs and numbers, committing per batch.
+
+    Deleting through the ORM loaded every program row of every channel and
+    deleted them one at a time, all in one transaction, holding SQLite's
+    database-wide writer lock for as long as that took: long enough on a big
+    purge to fail other writers' 30s busy_timeout (issue #86). Set-based
+    deletes in short transactions let other writers in between batches."""
+    from ..chnum import delete_channel_rows
+    from ..models import FeedChannelNumber, Program
+    for i in range(0, len(ids), _DELETE_BATCH):
+        batch = ids[i:i + _DELETE_BATCH]
+        delete_channel_rows(batch)
+        FeedChannelNumber.query.filter(FeedChannelNumber.channel_id.in_(batch)).delete(synchronize_session=False)
+        Program.query.filter(Program.channel_id.in_(batch)).delete(synchronize_session=False)
+        Channel.query.filter(Channel.id.in_(batch)).delete(synchronize_session=False)
+        db.session.commit()
+
+
 @sources_bp.route('/sources/<int:source_id>/delete-inactive', methods=['POST'])
 def delete_inactive_channels(source_id):
     source = Source.query.get_or_404(source_id)
     days = int((request.get_json() or {}).get('days', 7))
-    orphans = _orphan_query(source, days).all()
-    count = len(orphans)
-    for ch in orphans:
-        db.session.delete(ch)
-    db.session.commit()
-    return jsonify({'deleted': count, 'source': source.name})
+    ids = [row[0] for row in _orphan_query(source, days).with_entities(Channel.id).all()]
+    _delete_channels_in_batches(ids)
+    return jsonify({'deleted': len(ids), 'source': source.name})
 
 
 @sources_bp.route('/channels/inactive-count')
@@ -264,16 +283,13 @@ def delete_inactive_channels_global():
     from datetime import timedelta
     days = int((request.get_json() or {}).get('days', 14))
     cutoff = datetime.now(timezone.utc) - timedelta(days=days)
-    orphans = Channel.query.filter(
+    ids = [row[0] for row in Channel.query.filter(
         Channel.is_active == False,
         Channel.scrape_pinned == False,
         db.or_(Channel.last_seen_at == None, Channel.last_seen_at < cutoff),
-    ).all()
-    count = len(orphans)
-    for ch in orphans:
-        db.session.delete(ch)
-    db.session.commit()
-    return jsonify({'deleted': count, 'days': days})
+    ).with_entities(Channel.id).all()]
+    _delete_channels_in_batches(ids)
+    return jsonify({'deleted': len(ids), 'days': days})
 
 
 @sources_bp.route('/sources/<int:source_id>/audit-status')
