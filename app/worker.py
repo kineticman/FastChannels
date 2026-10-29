@@ -898,6 +898,18 @@ def run_stream_audit(source_name: str, scope: str = 'linear'):
                 Channel.disable_reason.like('DRM:%'),
             )
         )
+        # Channels the source's own filter leaves out are listed in the report
+        # with its reason, so the modal doesn't look like it lost them.
+        _narrowed = scraper.audit_candidates(audit_candidates)
+        skipped_by_source = []
+        if _narrowed is not audit_candidates:
+            _kept_ids = {cid for (cid,) in _narrowed.with_entities(Channel.id)}
+            skipped_by_source = [
+                {'id': cid, 'name': name, 'status': 'skipped', 'reason': scraper_cls.audit_skip_reason}
+                for cid, name in audit_candidates.with_entities(Channel.id, Channel.name).order_by(Channel.name)
+                if cid not in _kept_ids
+            ]
+        audit_candidates = _narrowed
         skipped_events = 0
         if scope == 'linear':
             skipped_events = audit_candidates.filter(event_channel_clause()).count()
@@ -937,7 +949,7 @@ def run_stream_audit(source_name: str, scope: str = 'linear'):
         consecutive_transient_errors = 0  # resolve-timeout detector
         aborted_reason = None  # set just before any early-abort break below
         scanned = 0
-        report_channels = []
+        report_channels = list(skipped_by_source)
         _audit_ignore_4xx = getattr(scraper_cls, 'audit_ignore_4xx', False)
         _audit_ignore_vod = getattr(scraper_cls, 'audit_ignore_vod', False)
 
@@ -1545,6 +1557,7 @@ def run_stream_audit(source_name: str, scope: str = 'linear'):
                 'total': scanned if aborted_reason else total,
                 'channel_count': total, 'aborted_reason': aborted_reason,
                 'scope': scope, 'skipped_events': skipped_events,
+                'skipped_by_source': len(skipped_by_source),
                 'not_in_output': not_in_output,
                 'checked': checked, 'flagged': flagged, 'bridged': bridged,
                 'dead': dead, 'vod': vod, 'not_authorized': not_authorized, 'errors': errors, 'skipped_403': skipped_403,

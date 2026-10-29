@@ -594,6 +594,7 @@ class BaseScraper(ABC):
     min_scrape_interval: int = 30
     max_scrape_interval: int = 10080
     stream_audit_enabled: bool = False  # opt-in; enable Stream Audit (health + DRM scan) for this source
+    stream_audit_in_audit_all: bool = True  # False = only its own Audit button runs it, not Audit All Sources
     # The play proxy re-fetches the resolved manifest in the background after
     # its 302 (DRM/dead check + resolution badge). Off for upstreams that hand
     # the playback session to whoever fetched the manifest last (Zeam), where
@@ -768,6 +769,13 @@ class BaseScraper(ABC):
     def resolve(self, raw_url: str) -> str:
         """Override to resolve raw stored URLs to playable URLs at request time."""
         return raw_url
+
+    # Shown beside each channel audit_candidates() leaves out.
+    audit_skip_reason: str = 'Not checked by this source\'s audit'
+
+    def audit_candidates(self, query):
+        """Override to narrow the Channel query a stream audit checks."""
+        return query
 
     @classmethod
     def uses_provider_numbers(cls, config: dict | None) -> bool:

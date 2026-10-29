@@ -148,7 +148,8 @@ def stream_audit_all():
     queued = []
     for src in sources:
         cls = registry.get(src.name)
-        if cls and getattr(cls, 'stream_audit_enabled', False):
+        if (cls and getattr(cls, 'stream_audit_enabled', False)
+                and getattr(cls, 'stream_audit_in_audit_all', True)):
             trigger_stream_audit(src.name)
             queued.append({'id': src.id, 'name': src.name})
     return jsonify({'status': 'queued', 'sources': queued, 'count': len(queued)})

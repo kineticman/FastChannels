@@ -19,7 +19,10 @@ class CustomScraper(BaseScraper):
     source_name = 'custom'
     display_name = 'Custom Channels'
     scrape_interval = 0          # never auto-scraped (scheduler skips interval=0)
-    stream_audit_enabled = True  # Audit button only; nothing schedules it
+    # Audit button only: not part of Audit All Sources, and nothing schedules it.
+    stream_audit_enabled = True
+    stream_audit_in_audit_all = False
+    audit_skip_reason = 'Added from a page: detected fresh each time it plays'
     config_schema = []
 
     def fetch_channels(self) -> list[ChannelData]:
@@ -31,16 +34,21 @@ class CustomScraper(BaseScraper):
     def resolve(self, raw_url: str) -> str:
         return raw_url
 
-    def audit_resolve(self, raw_url: str) -> str:
-        """Check a custom channel the way the play proxy plays it.
+    def audit_candidates(self, query):
+        """Direct stream links only. A channel added from a page (YouTube,
+        Twitch, a web player) is detected afresh each time it plays, and a
+        part-time stream between broadcasts would read as dead, so the audit
+        leaves those alone."""
+        from ..models import Channel
+        return query.filter(Channel.page_url.is_(None))
 
-        A channel added from a page (YouTube, a web player) stores the last
-        stream found there, which expires, so its page is detected afresh; a
-        page with no stream left is dead. The channel's stored headers
-        (Referer, User-Agent) go on the session the audit fetches the manifest
-        with, so a stream that needs them isn't read as a 403. Streams that
-        aren't a manifest are probed here and returned as an opaque URL, which
-        the audit takes as confirmed.
+    def audit_resolve(self, raw_url: str) -> str:
+        """Check a direct custom channel with its stored headers.
+
+        The channel's headers (Referer, User-Agent) go on the session the audit
+        fetches the manifest with, so a stream that needs them isn't read as a
+        403. Streams that aren't a manifest are probed here and returned as an
+        opaque URL, which the audit takes as confirmed.
         """
         from ..models import Channel, Source
 
@@ -50,25 +58,19 @@ class CustomScraper(BaseScraper):
         ch = (Channel.query.join(Source)
               .filter(Source.name == self.source_name, Channel.stream_url == raw_url)
               .first())
-        url, headers = raw_url, dict((ch.custom_headers if ch else None) or {})
-        if ch is not None and ch.page_url:
-            from ..routes.custom_proxy import _redetect_custom_stream_with_info
-            url, headers, info = _redetect_custom_stream_with_info(ch, ttl=0)
-            if info.get('path') == 'detect-failed':
-                raise StreamDeadError(f"No stream found on {ch.page_url}: {info.get('error') or 'detection failed'}")
-
         # _-prefixed keys are internal flags, never sent upstream.
-        headers = {k: v for k, v in headers.items() if not k.startswith('_')}
+        headers = {k: v for k, v in ((ch.custom_headers if ch else None) or {}).items()
+                   if not k.startswith('_')}
         self.session.headers.clear()
         self.session.headers.update(self._audit_base_headers)
         self.session.headers.update(headers)
 
         from .stream_detector import StreamDetector
-        stream_type = ((ch.stream_type if ch else None) or StreamDetector.infer_stream_type(url) or 'hls').lower()
+        stream_type = ((ch.stream_type if ch else None) or StreamDetector.infer_stream_type(raw_url) or 'hls').lower()
         if stream_type in _AUDIT_MANIFEST_TYPES:
-            return url
+            return raw_url
 
-        with self.session.get(url, timeout=15, stream=True, allow_redirects=True) as r:
+        with self.session.get(raw_url, timeout=15, stream=True, allow_redirects=True) as r:
             if r.status_code in (404, 410):
                 raise StreamDeadError(f'HTTP {r.status_code}')
             r.raise_for_status()

@@ -915,6 +915,7 @@
     .audit-row-reason.not-authorized { color: var(--danger); }
     .audit-row-reason.drm          { color: var(--warning); }
     .audit-row-reason.rate-limited { color: var(--warning); }
+    .audit-row-reason.skipped      { color: var(--text-muted); font-weight: 500; }
     .btn-audit-reenable {
       background: var(--accent-bg); color: var(--accent-soft); border: none; border-radius: 4px;
       padding: 0.18rem 0.5rem; font-size: 0.72rem; cursor: pointer; white-space: nowrap;
@@ -2376,6 +2377,7 @@
             result.total       ? (result.aborted_reason && result.channel_count ? `${result.total} of ${result.channel_count} scanned` : `${result.total} scanned`) + (result.not_in_output ? ` (${result.not_in_output} not in output)` : '') : null,
             result.scope ? (result.scope === 'all' ? 'all channels' : 'linear only') : null,
             result.skipped_events ? `${result.skipped_events} event channels skipped` : null,
+            result.skipped_by_source ? `${result.skipped_by_source} skipped` : null,
             `<span class="aud-ok">${ok} ok</span>`,
             result.dead        ? `<span class="aud-dead">${result.dead} dead</span>`               : null,
             result.vod         ? `<span class="aud-vod">${result.vod} VOD</span>`                  : null,
@@ -2402,6 +2404,7 @@
           const unauthorized = report.channels.filter(c => c.status === 'not-authorized');
           const limited = report.channels.filter(c => c.status === 'rate-limited');
           const errors  = report.channels.filter(c => c.status === 'error');
+          const skipped = report.channels.filter(c => c.status === 'skipped');
 
           const formatReasonText = (reason, status) => {
             const text = String(reason || '').trim();
@@ -2411,6 +2414,7 @@
             if (status === 'not-authorized') return 'Not authorized';
             if (status === 'drm') return 'DRM';
             if (status === 'drm_bridge') return text ? `${text} (bridged)` : 'Bridged';
+            if (status === 'skipped') return text;
             const httpMatch = text.match(/^HTTP\s+(\d{3})(?::\s*(.*))?$/i);
             if (httpMatch) return `HTTP ${httpMatch[1]}`;
             const embeddedHttp = text.match(/\bHTTP\s+(\d{3})\b/i);
@@ -2438,6 +2442,10 @@
           html += renderGroup('Bridged — DRM detected, kept active via a configured capture path', bridged, false);
           html += renderGroup('Blocked — geo/location or rate-limited, not a session problem', limited, false);
           html += renderGroup('Errors', errors, false);
+          if (skipped.length === report.channels.length && result && result.checked > 0) {
+            html += `<div class="audit-no-results" style="color:var(--success-soft);padding:0.75rem 0;">✓ All ${result.total || result.checked} checked channels are healthy.</div>`;
+          }
+          html += renderGroup('Skipped — not checked', skipped, false);
           html += `</div>`;
           _lastRecheckIds[sourceId] = limited.map(c => c.id).filter(Boolean);
         } else if (!result) {
@@ -2710,6 +2718,7 @@
                                 + (r.not_in_output ? ` (${r.not_in_output} not in output)` : ''));
       if (r.scope)            bits.push(r.scope === 'all' ? 'all channels' : 'linear only');
       if (r.skipped_events)   bits.push(`${r.skipped_events} events skipped`);
+      if (r.skipped_by_source) bits.push(`${r.skipped_by_source} skipped`);
       if (r.checked != null)  bits.push(`${ok} ok`);
       if (r.dead)             bits.push(`${r.dead} dead`);
       if (r.vod)              bits.push(`${r.vod} VOD`);
