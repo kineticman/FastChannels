@@ -1357,6 +1357,7 @@
       category:   {{ category_filter  | tojson }},
       language:   {{ language_filter  | tojson }},
       country:    {{ country_filter   | tojson }},
+      sport:      {{ sport_filter     | tojson }},
       search:     {{ search           | tojson }},
       drm:        {{ drm_filter       | tojson }},
       enabled:    {{ enabled_filter   | tojson }},
@@ -1411,8 +1412,8 @@
           <button type="button" class="btn-resolve-dupes" onclick="openResolveDupesModal()">⚡ Resolve Dupes</button>
         </div>
       </div>
-      {% set _adv_count = (1 if feed_filter else 0) + (1 if category_filter else 0) + (1 if enabled_filter else 0) + (1 if presence_filter else 0) + (1 if drm_filter else 0) + (1 if language_filter else 0) + (1 if country_filter else 0) + (1 if gracenote_filter else 0) + (1 if gracenote_mode_filter else 0) + (1 if duplicates_filter else 0) + (1 if new_filter else 0) + (1 if epg_filter else 0) + (1 if resolution_filter else 0) + (1 if featured_filter else 0) + (1 if event_filter in ('0', '1') else 0) %}
-      <details class="toolbar-advanced" id="toolbar-advanced" {% if feed_filter or category_filter or enabled_filter or presence_filter or drm_filter or language_filter or country_filter or gracenote_filter or gracenote_mode_filter or duplicates_filter or new_filter or epg_filter or resolution_filter or featured_filter or event_filter in ('0', '1') %}open{% endif %}>
+      {% set _adv_count = (1 if feed_filter else 0) + (1 if category_filter else 0) + (1 if enabled_filter else 0) + (1 if presence_filter else 0) + (1 if drm_filter else 0) + (1 if language_filter else 0) + (1 if country_filter else 0) + (1 if sport_filter else 0) + (1 if gracenote_filter else 0) + (1 if gracenote_mode_filter else 0) + (1 if duplicates_filter else 0) + (1 if new_filter else 0) + (1 if epg_filter else 0) + (1 if resolution_filter else 0) + (1 if featured_filter else 0) + (1 if event_filter in ('0', '1') else 0) %}
+      <details class="toolbar-advanced" id="toolbar-advanced" {% if feed_filter or category_filter or enabled_filter or presence_filter or drm_filter or language_filter or country_filter or sport_filter or gracenote_filter or gracenote_mode_filter or duplicates_filter or new_filter or epg_filter or resolution_filter or featured_filter or event_filter in ('0', '1') %}open{% endif %}>
         <summary>More filters{% if _adv_count %} <span class="filter-adv-badge">{{ _adv_count }}</span>{% endif %}</summary>
         <div class="toolbar-secondary">
           <div class="filter-group">
@@ -1507,6 +1508,17 @@
               <option value="">All Regions</option>
               {% for c, count in countries %}
               <option value="{{ c }}" {% if country_filter == c %}selected{% endif %}>{{ c }} ({{ count }})</option>
+              {% endfor %}
+            </select>
+          </div>
+          {% endif %}
+          {% if sports or sport_filter %}
+          <div class="filter-group">
+            <label class="filter-label" for="sport-filter">Sport</label>
+            <select id="sport-filter" name="sport">
+              <option value="">All Sports</option>
+              {% for sp, count in sports %}
+              <option value="{{ sp }}" {% if sport_filter == sp %}selected{% endif %}>{{ sp }} ({{ count }})</option>
               {% endfor %}
             </select>
           </div>
@@ -1630,6 +1642,9 @@
       {% if country_filter %}
       <span class="filter-chip"><strong>Region</strong>{{ country_filter }}</span>
       {% endif %}
+      {% if sport_filter %}
+      <span class="filter-chip"><strong>Sport</strong>{{ sport_filter }}</span>
+      {% endif %}
       {% if gracenote_filter %}
       <span class="filter-chip"><strong>Gracenote ID</strong>{% if gracenote_filter == '1' %}Has Gracenote ID{% elif gracenote_filter == '0' %}Missing Gracenote ID{% endif %}</span>
       {% endif %}
@@ -1653,7 +1668,7 @@
       {% if event_filter in ('0', '1') %}
       <span class="filter-chip"><strong>Events</strong>{{ 'Events only' if event_filter == '1' else 'Non-event channels' }}</span>
       {% endif %}
-      {% if not (search or source_filter or feed_filter or category_filter or enabled_filter or review_filter or presence_filter or drm_filter or language_filter or country_filter or gracenote_filter or gracenote_mode_filter or duplicates_filter in ('1', 'unique') or new_filter in ('1','3','7','14') or epg_filter or featured_filter or event_filter in ('0', '1')) %}
+      {% if not (search or source_filter or feed_filter or category_filter or enabled_filter or review_filter or presence_filter or drm_filter or language_filter or country_filter or sport_filter or gracenote_filter or gracenote_mode_filter or duplicates_filter in ('1', 'unique') or new_filter in ('1','3','7','14') or epg_filter or featured_filter or event_filter in ('0', '1')) %}
       <span class="filter-chip"><strong>View</strong>All channels</span>
       {% endif %}
       <button type="button" class="btn-hide-disabled{% if enabled_filter == '1' %} active{% endif %}" onclick="toggleHideDisabled()">{% if enabled_filter == '1' %}◉ Hiding disabled{% else %}○ Hide disabled{% endif %}</button>
@@ -1684,6 +1699,8 @@
       <button class="btn-cancel"  onclick="clearSelection()">Cancel</button>
     </div>
 
+    {# Sport is set on events only, so the column shows only when this page lists some. #}
+    {% set show_sport_col = sport_filter or (channels.items | selectattr('sport') | first) %}
     <div class="section">
       <table>
         <thead>
@@ -1763,6 +1780,16 @@
                 {% endfor %}
               </select>
             </th>
+            {% if show_sport_col %}
+            <th>
+              <select class="col-filter-select{% if sport_filter %} col-filter-active{% endif %}" onchange="filterBy('sport', this.value)" title="Filter events by sport">
+                <option value="">Sport</option>
+                {% for sp, count in sports %}
+                <option value="{{ sp }}" {% if sport_filter == sp %}selected{% endif %}>{{ sp }}</option>
+                {% endfor %}
+              </select>
+            </th>
+            {% endif %}
             <th class="sortable {% if sort_by == 'number' %}active{% endif %}" onclick="sortBy('number')" title="Actual tvg-chno from the Default feed">Ch# <span class="sort-arrow">{% if sort_by == 'number' %}{{ '▲' if sort_dir == 'asc' else '▼' }}{% else %}⇅{% endif %}</span></th>
             <th>Gracenote ID</th>
             <th class="actions-col">Actions</th>
@@ -1821,6 +1848,9 @@
                     onclick="openLangModal({{ ch.id }})">{{ ch.language_override or ch.language or '—' }}</span>
             </td>
             <td style="color:var(--text-muted);font-size:0.8rem">{{ ch.country or '—' }}</td>
+            {% if show_sport_col %}
+            <td style="color:var(--text-muted);font-size:0.8rem;white-space:nowrap"{% if ch.league %} title="{{ ch.league }}"{% endif %}>{{ ch.sport or '—' }}</td>
+            {% endif %}
             <td class="chnum-cell{% if ch.number_pinned or ch.pinned_chno %} chnum-pinned{% endif %}{% if ch.id in chnum_conflicts %} chnum-conflict{% endif %}{% if ch.id in provider_numbered %} chnum-provider{% endif %}"
                 data-chnum-cell="1"
                 data-channel-id="{{ ch.id }}"
@@ -2343,6 +2373,7 @@
                 ${escapeHtml(ch.source_display_name || 'Unknown source')}
                 ${ch.country ? ` · ${escapeHtml(ch.country)}` : ''}
                 ${ch.category ? ` · ${escapeHtml(ch.category)}` : ''}
+                ${ch.sport ? ` · ${escapeHtml(ch.sport)}${ch.league ? ` (${escapeHtml(ch.league)})` : ''}` : ''}
                 ${ch.language ? ` · ${escapeHtml(ch.language)}` : ''}
               </div>
               ${(ch.tags && ch.tags.length > 1) ? `<div style="margin-top:0.3rem;font-size:0.78rem;color:var(--text-dim)">${ch.tags.map(t => escapeHtml(t)).join(' · ')}</div>` : ''}

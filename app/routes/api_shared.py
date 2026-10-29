@@ -150,6 +150,8 @@ def _apply_channel_filters(q, filters: dict | None = None):
             q = q.filter(not_(or_(manual_mode, off_mode)))
     if country := filters.get('country'):
         q = q.filter(Channel.country == country)
+    if sport := filters.get('sport'):
+        q = q.filter(Channel.sport == sport)
     if filters.get('featured') == '1':
         q = q.filter(or_(Channel.tags.ilike('%featured%'), Channel.content_swap_count > 0))
     if (event_clause := event_filter_clause(filters.get('event'))) is not None:

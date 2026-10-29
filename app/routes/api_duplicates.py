@@ -125,10 +125,10 @@ def channel_feed_membership(channel_id):
     result = []
     for feed in feeds:
         filters = feed.filters or {}
-        if (filters.get('event') == '1' and not is_event) or (filters.get('event') == '0' and is_event):
+        pinned   = channel_id in (filters.get('pinned_channel_ids')   or [])
+        if not pinned and ((filters.get('event') == '1' and not is_event) or (filters.get('event') == '0' and is_event)):
             result.append({'feed_id': feed.id, 'status': 'absent', 'feed_channel_number': None})
             continue
-        pinned   = channel_id in (filters.get('pinned_channel_ids')   or [])
         excluded = channel_id in (filters.get('excluded_channel_ids') or [])
         if pinned:
             status = 'pinned'

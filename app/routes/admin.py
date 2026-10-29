@@ -11,6 +11,7 @@ from ..extensions import db
 from .. import admin_auth
 from ..models import Source, Channel, Feed, AppSettings, Program
 from ..generators.m3u import (
+    _apply_event_filter,
     _build_channel_query,
     apply_provider_numbers,
     _drm_bridge_query_filters,
@@ -314,8 +315,7 @@ def _network_facets(source_channel_ids):
 def _apply_admin_feed_membership_filters(query, feed: Feed):
     """Apply a feed's membership rules without forcing enabled/active output constraints."""
     filters = feed_to_query_filters(feed.filters or {})
-    if (event_clause := event_filter_clause(filters.get('event'))) is not None:
-        query = query.filter(event_clause)
+    query = _apply_event_filter(query, filters)
     if channel_ids := filters.get('channel_ids'):
         # A channel pinned into the feed but absent from its explicit whitelist should
         # still count as a member here — same gap as the M3U/EPG generators had (see
@@ -325,21 +325,30 @@ def _apply_admin_feed_membership_filters(query, feed: Feed):
             channel_ids = list(set(channel_ids) | set(pinned_ids))
         query = query.filter(Channel.id.in_(channel_ids))
         return query
+    match = []
     if sources := filters.get('source'):
-        query = query.filter(Source.name.in_(sources))
+        match.append(Source.name.in_(sources))
     if categories := filters.get('category'):
-        query = query.filter(Channel.category.in_(categories))
+        match.append(Channel.category.in_(categories))
     if languages := filters.get('languages'):
-        query = query.filter(Channel.language.in_(languages))
+        match.append(Channel.language.in_(languages))
     elif language := filters.get('language'):
-        query = query.filter(Channel.language == language)
+        match.append(Channel.language == language)
+    if countries := filters.get('countries'):
+        match.append(Channel.country.in_(countries))
     if (sport_clause := event_sport_clause(filters.get('sports'))) is not None:
-        query = query.filter(sport_clause)
+        match.append(sport_clause)
     if gracenote := filters.get('gracenote'):
         if gracenote == 'has':
-            query = query.filter(Channel.gracenote_id != None, Channel.gracenote_id != '')
+            match.append(db.and_(Channel.gracenote_id != None, Channel.gracenote_id != ''))
         elif gracenote == 'missing':
-            query = query.filter((Channel.gracenote_id == None) | (Channel.gracenote_id == ''))
+            match.append((Channel.gracenote_id == None) | (Channel.gracenote_id == ''))
+    # Pins join past the match filters, as in the feed's own playlists.
+    if match:
+        match_expr = db.and_(*match)
+        if pinned_ids := filters.get('pinned_channel_ids'):
+            match_expr = db.or_(match_expr, Channel.id.in_(pinned_ids))
+        query = query.filter(match_expr)
     if excluded_ids := filters.get('excluded_channel_ids'):
         query = query.filter(Channel.id.notin_(excluded_ids))
     return query
@@ -958,6 +967,7 @@ def channels():
     gracenote_mode_filter = request.args.get('gracenote_mode', '')
     language_filter  = request.args.get('language', '')
     country_filter   = request.args.get('country', '')
+    sport_filter     = request.args.get('sport', '')
     category_filter  = [c for c in request.args.getlist('category') if c.strip()]
     duplicates_filter = request.args.get('duplicates', '')
     new_filter       = request.args.get('new', '')
@@ -1065,6 +1075,9 @@ def channels():
     q_before_country = q  # snapshot for country facet (exclude own filter)
     if country_filter:
         q = q.filter(Channel.country == country_filter)
+    q_before_sport = q  # snapshot for sport facet (exclude own filter)
+    if sport_filter:
+        q = q.filter(Channel.sport == sport_filter)
     q_before_category = q  # snapshot for category facet (exclude own filter)
     if (cat_clause := _category_clause(category_filter)) is not None:
         q = q.filter(cat_clause)
@@ -1205,6 +1218,13 @@ def channels():
         .order_by(Channel.country).all()
     countries = [(c, cnt) for c, cnt in country_rows]
 
+    sport_facet_ids = q_before_sport.with_entities(Channel.id).scalar_subquery()
+    sport_rows = db.session.query(Channel.sport, db.func.count(Channel.id))\
+        .filter(Channel.id.in_(sport_facet_ids), Channel.sport != None, Channel.sport != '')\
+        .group_by(Channel.sport)\
+        .order_by(Channel.sport).all()
+    sports = [(sp, cnt) for sp, cnt in sport_rows]
+
     networks = []
     if source_filter == 'free_networks':
         networks = _network_facets(
@@ -1255,7 +1275,7 @@ def channels():
     filter_qs = urlencode({k: v for k, v in {
         'feed': feed_filter, 'source': source_filter, 'network': network_filter, 'search': search,
         'enabled': enabled_filter, 'review': review_filter, 'presence': presence_filter, 'drm': drm_filter,
-        'language': language_filter, 'country': country_filter,
+        'language': language_filter, 'country': country_filter, 'sport': sport_filter,
         'gracenote': gracenote_filter, 'gracenote_mode': gracenote_mode_filter,
         'category': category_filter, 'duplicates': duplicates_filter,
         'new': new_filter,
@@ -1280,6 +1300,7 @@ def channels():
                            language_filter=language_filter, languages=languages,
                            en_count=en_count, non_en_count=non_en_count,
                            country_filter=country_filter, countries=countries,
+                           sport_filter=sport_filter, sports=sports,
                            category_filter=category_filter, categories=categories,
                            missing_category_count=missing_category_count,
                            duplicates_filter=duplicates_filter,

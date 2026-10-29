@@ -206,6 +206,17 @@ def _drm_bridge_query_filters(filters: dict) -> dict:
     return filters
 
 
+def _apply_event_filter(query, filters: dict):
+    """Include (events only / no events) limits the matched channels; a pin
+    joins regardless, as it does past the other filters."""
+    event_clause = event_filter_clause(filters.get('event'))
+    if event_clause is None:
+        return query
+    if pinned_ids := filters.get('pinned_channel_ids'):
+        event_clause = db.or_(event_clause, Channel.id.in_(pinned_ids))
+    return query.filter(event_clause)
+
+
 def _build_channel_query(filters: dict, *, activity: str = 'active'):
     """Shared filtered query for channels.
 
@@ -270,8 +281,7 @@ def _build_channel_query(filters: dict, *, activity: str = 'active'):
         Source.epg_only    == False,
         Channel.stream_url != None,
     )
-    if (event_clause := event_filter_clause(filters.get('event'))) is not None:
-        query = query.filter(event_clause)
+    query = _apply_event_filter(query, filters)
     if channel_ids := filters.get('channel_ids'):
         query = query.filter(Channel.id.in_(channel_ids))
     else:
@@ -335,8 +345,7 @@ def _build_channel_stub_query(filters: dict):
         Source.epg_only == False,
         Channel.stream_url != None,
     )
-    if (event_clause := event_filter_clause(filters.get('event'))) is not None:
-        query = query.filter(event_clause)
+    query = _apply_event_filter(query, filters)
     if channel_ids := filters.get('channel_ids'):
         query = query.filter(Channel.id.in_(channel_ids))
     else:
@@ -445,9 +454,7 @@ def _selected_channels(filters: dict | None = None, *, gracenote: bool | None = 
         existing_ids = {ch.id for ch in channels}
         extra_ids = [i for i in pinned_ids if i not in existing_ids]
         if extra_ids:
-            channels = list(channels) + _build_channel_query({
-                'channel_ids': extra_ids, 'event': filters.get('event'),
-            }).all()
+            channels = list(channels) + _build_channel_query({'channel_ids': extra_ids}).all()
 
     return _apply_guide_partition(channels, gracenote, filters.get('max_channels'))
 

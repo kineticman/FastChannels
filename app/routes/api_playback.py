@@ -49,11 +49,11 @@ def _channel_feed_summaries(ch: Channel) -> list[dict]:
 
     for feed in feeds:
         filters = feed.filters or {}
-        if filters.get('event') == '1' and not is_event_channel(ch):
-            continue
-        if filters.get('event') == '0' and is_event_channel(ch):
-            continue
         pinned = channel_id in (filters.get('pinned_channel_ids') or [])
+        if not pinned and filters.get('event') == '1' and not is_event_channel(ch):
+            continue
+        if not pinned and filters.get('event') == '0' and is_event_channel(ch):
+            continue
         excluded = channel_id in (filters.get('excluded_channel_ids') or [])
         if excluded and not pinned:
             continue
