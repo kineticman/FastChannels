@@ -1699,8 +1699,6 @@
       <button class="btn-cancel"  onclick="clearSelection()">Cancel</button>
     </div>
 
-    {# Sport is set on events only, so the column shows only when this page lists some. #}
-    {% set show_sport_col = sport_filter or (channels.items | selectattr('sport') | first) %}
     <div class="section">
       <table>
         <thead>
@@ -1780,16 +1778,6 @@
                 {% endfor %}
               </select>
             </th>
-            {% if show_sport_col %}
-            <th>
-              <select class="col-filter-select{% if sport_filter %} col-filter-active{% endif %}" onchange="filterBy('sport', this.value)" title="Filter events by sport">
-                <option value="">Sport</option>
-                {% for sp, count in sports %}
-                <option value="{{ sp }}" {% if sport_filter == sp %}selected{% endif %}>{{ sp }}</option>
-                {% endfor %}
-              </select>
-            </th>
-            {% endif %}
             <th class="sortable {% if sort_by == 'number' %}active{% endif %}" onclick="sortBy('number')" title="Actual tvg-chno from the Default feed">Ch# <span class="sort-arrow">{% if sort_by == 'number' %}{{ '▲' if sort_dir == 'asc' else '▼' }}{% else %}⇅{% endif %}</span></th>
             <th>Gracenote ID</th>
             <th class="actions-col">Actions</th>
@@ -1848,9 +1836,6 @@
                     onclick="openLangModal({{ ch.id }})">{{ ch.language_override or ch.language or '—' }}</span>
             </td>
             <td style="color:var(--text-muted);font-size:0.8rem">{{ ch.country or '—' }}</td>
-            {% if show_sport_col %}
-            <td style="color:var(--text-muted);font-size:0.8rem;white-space:nowrap"{% if ch.league %} title="{{ ch.league }}"{% endif %}>{{ ch.sport or '—' }}</td>
-            {% endif %}
             <td class="chnum-cell{% if ch.number_pinned or ch.pinned_chno %} chnum-pinned{% endif %}{% if ch.id in chnum_conflicts %} chnum-conflict{% endif %}{% if ch.id in provider_numbered %} chnum-provider{% endif %}"
                 data-chnum-cell="1"
                 data-channel-id="{{ ch.id }}"
