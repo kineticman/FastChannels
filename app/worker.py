@@ -878,6 +878,7 @@ def run_stream_audit(source_name: str, scope: str = 'linear'):
         # auditing so a prior generic audit or manual state drift cannot leave
         # channels out of the bridge feed.
         _sync_intrinsic_drm_bridge(source)
+        db.session.commit()
 
         channels_query = source.channels
         if hasattr(Channel, 'retire_at'):
@@ -1514,6 +1515,12 @@ def run_stream_audit(source_name: str, scope: str = 'linear'):
                 consecutive_errors += 1
 
             finally:
+                # Commit each channel's result before checking the next one. The
+                # implicit transaction holds SQLite's database-wide writer lock
+                # from the first write to commit, and committing every 25 channels
+                # held it across 25 channels' network checks (10-25s on Pluto), long
+                # enough on a slower source to fail other writers (issue #86).
+                db.session.commit()
                 if i % 25 == 0:
                     source.last_audited_at = datetime.now(timezone.utc)
                     db.session.commit()
@@ -1639,6 +1646,9 @@ def run_stream_audit_recheck(source_name: str, channel_ids: list):
         recheck_results = {}  # channel_id → {'status', 'reason'} or None if ok
 
         for i, ch in enumerate(channels, 1):
+            # The previous channel's result, committed before this one's network
+            # check so the writer lock isn't held across them (see run_stream_audit).
+            db.session.commit()
             try:
                 _resolve = getattr(scraper, 'audit_resolve', scraper.resolve)
                 try:
