@@ -1242,8 +1242,8 @@
               <div class="drm-heads-up" id="drm-heads-up-{{ source.id }}" hidden></div>
               {% if not is_custom %}
               <div class="scrape-status" id="scrape-status-{{ source.id }}"></div>
-              <div class="audit-status" id="audit-status-{{ source.id }}"></div>
               {% endif %}
+              <div class="audit-status" id="audit-status-{{ source.id }}"></div>
               <div class="mobile-toggle-wrap">
                 <label class="toggle" id="mobile-toggle-{{ source.id }}">
                   <input type="checkbox" {% if source.is_enabled %}checked{% endif %}
@@ -1272,11 +1272,12 @@
             </td>
 
             <td class="col-actions">
-              {% if not is_custom %}
               <div class="dash-actions">
+                {% if not is_custom %}
                 <button class="btn btn-run btn-sm" data-label="Scrape" onclick="run({{ source.id }}, this)"
                         {% if not source.is_enabled %}disabled{% endif %}
                         title="Fetch the latest channel list and guide data now.">Scrape</button>
+                {% endif %}
                 {% if audit_enabled.get(source.name) %}
                 <button class="btn btn-audit btn-sm" data-label="Audit"
                         onclick='openAuditModal({{ source.id }}, {{ source.display_name | tojson }})'
@@ -1284,7 +1285,6 @@
                         title="Check linear stream health and DRM. You can include scheduled events in the audit modal.">Audit</button>
                 {% endif %}
               </div>
-              {% endif %}
               {# Mobile-only configure button — hidden on desktop via CSS #}
               {% if is_custom %}
               <button class="btn btn-configure btn-sm configure-btn-display mobile-configure"
