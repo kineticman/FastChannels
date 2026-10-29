@@ -15,10 +15,11 @@ class Config:
     )
     SQLALCHEMY_TRACK_MODIFICATIONS = False
     TEMPLATES_AUTO_RELOAD = os.environ.get('FLASK_DEBUG', '0') == '1'
-    # isolation_level=None: use SQLite autocommit / deferred transactions so
-    # gunicorn workers never issue BEGIN IMMEDIATE (which serialises all
-    # connections behind a write lock).  WAL mode handles concurrency; readers
-    # and writers proceed without blocking each other.
+    # isolation_level=None leaves pysqlite in its legacy mode (not autocommit):
+    # it opens a deferred transaction at the first INSERT/UPDATE/DELETE and holds
+    # the database-wide writer lock until commit, so keep write transactions
+    # short (app/db_lock_watch.py logs long ones). WAL lets readers proceed
+    # alongside the one writer.
     SQLALCHEMY_ENGINE_OPTIONS = {
         'isolation_level': None,
         'connect_args': {'check_same_thread': False, 'timeout': 30},
