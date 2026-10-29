@@ -69,7 +69,7 @@ def _scraper(channel: Channel):
 def _persist(channel: Channel, scraper) -> None:
     if getattr(scraper, '_pending_config_updates', None):
         try:
-            persist_source_config_updates(channel.source_id, scraper._pending_config_updates)
+            persist_source_config_updates(channel.source_id, scraper._pending_config_updates, wait=False)
         except Exception as exc:  # noqa: BLE001
             from ..extensions import db
             db.session.rollback()

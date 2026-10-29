@@ -703,6 +703,27 @@ def _ensure_cox_device_fingerprint(account) -> str:
 _ADOBE_CLIENT_CREDS_TTL_SECONDS = 6 * 60 * 60
 
 
+def commit_token_cache(what: str) -> bool:
+    """Commit a cached-token write without letting a busy database fail the caller.
+
+    These rows only save a later resolve some Adobe round trips; the caller
+    already has the token in hand. Waiting the full 30s busy_timeout behind
+    another writer (or failing on it) used to fail the play itself — issue #86.
+    """
+    from sqlalchemy.exc import OperationalError
+    from ..config_store import short_busy_timeout
+    from ..extensions import db
+    try:
+        with short_busy_timeout():
+            db.session.commit()
+        return True
+    except OperationalError as exc:
+        db.session.rollback()
+        logger.warning('[adobe-pass] database busy; did not save %s (continuing without it): %s',
+                       what, exc.orig)
+        return False
+
+
 def load_cached_adobe_client_creds(account, requestor_id: str) -> dict | None:
     """Get-or-None a still-fresh (client_id, client_secret, access_token)
     this account already registered with Adobe for `requestor_id`.
@@ -727,7 +748,6 @@ def load_cached_adobe_client_creds(account, requestor_id: str) -> dict | None:
 def save_adobe_client_creds(account, requestor_id: str, client_id: str, client_secret: str, access_token: str) -> None:
     if not client_id or not access_token:
         return
-    from ..extensions import db
     cfg = dict(account.config or {})
     all_creds = dict(cfg.get('adobe_client_creds') or {})
     all_creds[requestor_id] = {
@@ -738,7 +758,7 @@ def save_adobe_client_creds(account, requestor_id: str, client_id: str, client_s
     }
     cfg['adobe_client_creds'] = all_creds
     account.config = cfg
-    db.session.commit()
+    commit_token_cache(f'{requestor_id} Adobe client')
 
 
 def refresh_adobe_client_token(client_id: str, client_secret: str) -> str:
@@ -788,13 +808,12 @@ def _save_mvpd_authn_token(account, requestor_id: str, authn_token: str) -> None
     if not authn_token:
         return
     from time import time as _wall_time
-    from ..extensions import db
     cfg = dict(account.config or {})
     mvpd_authn = dict(cfg.get('mvpd_authn') or {})
     mvpd_authn[requestor_id] = {'authn_token': authn_token, 'captured_at': int(_wall_time())}
     cfg['mvpd_authn'] = mvpd_authn
     account.config = cfg
-    db.session.commit()
+    commit_token_cache(f'{requestor_id} authn token')
 
 
 def _save_mvpd_authz_token(account, requestor_id: str, authz_token: str) -> None:
@@ -806,13 +825,12 @@ def _save_mvpd_authz_token(account, requestor_id: str, authz_token: str) -> None
     if not authz_token:
         return
     from time import time as _wall_time
-    from ..extensions import db
     cfg = dict(account.config or {})
     mvpd_authz = dict(cfg.get('mvpd_authz') or {})
     mvpd_authz[requestor_id] = {'authz_token': authz_token, 'captured_at': int(_wall_time())}
     cfg['mvpd_authz'] = mvpd_authz
     account.config = cfg
-    db.session.commit()
+    commit_token_cache(f'{requestor_id} authz token')
 
 
 def save_xfinity_cookie_jar(account, cookie_jar: dict) -> None:

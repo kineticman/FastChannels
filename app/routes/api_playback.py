@@ -184,12 +184,12 @@ def _inspect_drm_bridge(ch, source, scraper_cls):
     finally:
         if scraper._pending_config_updates:
             try:
-                persist_source_config_updates(source.id, scraper._pending_config_updates)
+                persist_source_config_updates(source.id, scraper._pending_config_updates, wait=False)
             except Exception:
                 db.session.rollback()
         if getattr(scraper, '_pending_cache_updates', None):
             try:
-                persist_source_cache_updates(source.id, scraper._pending_cache_updates)
+                persist_source_cache_updates(source.id, scraper._pending_cache_updates, wait=False)
             except Exception:
                 db.session.rollback()
 
@@ -302,6 +302,7 @@ def inspect_channel(channel_id):
                     persist_source_config_updates(
                         source.id,
                         scraper._pending_config_updates,
+                        wait=False,
                     )
                 except Exception:
                     db.session.rollback()
@@ -310,6 +311,7 @@ def inspect_channel(channel_id):
                     persist_source_cache_updates(
                         source.id,
                         scraper._pending_cache_updates,
+                        wait=False,
                     )
                 except Exception:
                     db.session.rollback()

@@ -1610,12 +1610,12 @@ def amazon_dash_proxy(channel_id: str):
 
     if scraper._pending_config_updates:
         try:
-            persist_source_config_updates(channel.source_id, scraper._pending_config_updates)
+            persist_source_config_updates(channel.source_id, scraper._pending_config_updates, wait=False)
         except Exception:
             pass
     if getattr(scraper, '_pending_cache_updates', None):
         try:
-            persist_source_cache_updates(channel.source_id, scraper._pending_cache_updates)
+            persist_source_cache_updates(channel.source_id, scraper._pending_cache_updates, wait=False)
         except Exception:
             pass
 
@@ -1639,7 +1639,7 @@ def amazon_dash_proxy(channel_id: str):
             fresh_url = scraper.resolve(channel.stream_url)
             if getattr(scraper, '_pending_cache_updates', None):
                 try:
-                    persist_source_cache_updates(channel.source_id, scraper._pending_cache_updates)
+                    persist_source_cache_updates(channel.source_id, scraper._pending_cache_updates, wait=False)
                 except Exception:
                     pass
             if fresh_url and fresh_url.startswith('http') and fresh_url != dash_url:
@@ -1723,12 +1723,12 @@ def roku_dash_proxy(channel_id: str):
         # request — can read the per-session URL just resolved here.
         if getattr(scraper, '_pending_cache_updates', None):
             try:
-                persist_source_cache_updates(channel.source_id, scraper._pending_cache_updates)
+                persist_source_cache_updates(channel.source_id, scraper._pending_cache_updates, wait=False)
             except Exception:
                 pass
         if scraper._pending_config_updates:
             try:
-                persist_source_config_updates(channel.source_id, scraper._pending_config_updates)
+                persist_source_config_updates(channel.source_id, scraper._pending_config_updates, wait=False)
             except Exception:
                 pass
 
@@ -1778,12 +1778,12 @@ def spectrum_dash_proxy(channel_id: str):
     finally:
         if getattr(scraper, '_pending_cache_updates', None):
             try:
-                persist_source_cache_updates(channel.source_id, scraper._pending_cache_updates)
+                persist_source_cache_updates(channel.source_id, scraper._pending_cache_updates, wait=False)
             except Exception:
                 pass
         if scraper._pending_config_updates:
             try:
-                persist_source_config_updates(channel.source_id, scraper._pending_config_updates)
+                persist_source_config_updates(channel.source_id, scraper._pending_config_updates, wait=False)
             except Exception:
                 pass
 
@@ -1877,7 +1877,7 @@ def vix_browser_dash(channel_id: str):
             scraper = scraper_cls(config={**(channel.source.config or {}), **load_source_cache(channel.source.id)})
             mpd_url = scraper.resolve(channel.stream_url)
             if scraper._pending_cache_updates:
-                persist_source_cache_updates(channel.source.id, scraper._pending_cache_updates)
+                persist_source_cache_updates(channel.source.id, scraper._pending_cache_updates, wait=False)
             r = _requests.get(mpd_url, timeout=(5, 15))
         except Exception as e:
             logger.warning('[vix-browser] resolve failed for %s: %s', raw_id, e)
@@ -2008,7 +2008,7 @@ def _dazn_stream(channel_id: str):
     finally:
         if getattr(scraper, '_pending_cache_updates', None):
             try:
-                persist_source_cache_updates(channel.source_id, scraper._pending_cache_updates)
+                persist_source_cache_updates(channel.source_id, scraper._pending_cache_updates, wait=False)
             except Exception:
                 pass
     return channel, stream
@@ -2164,12 +2164,12 @@ def fubo_dash_proxy(channel_id: str):
     finally:
         if getattr(scraper, '_pending_cache_updates', None):
             try:
-                persist_source_cache_updates(channel.source_id, scraper._pending_cache_updates)
+                persist_source_cache_updates(channel.source_id, scraper._pending_cache_updates, wait=False)
             except Exception:
                 pass
         if scraper._pending_config_updates:
             try:
-                persist_source_config_updates(channel.source_id, scraper._pending_config_updates)
+                persist_source_config_updates(channel.source_id, scraper._pending_config_updates, wait=False)
             except Exception:
                 pass
 
@@ -2263,12 +2263,12 @@ def philo_dash_proxy(channel_id: str):
         # request — can read the per-session token just resolved here.
         if getattr(scraper, '_pending_cache_updates', None):
             try:
-                persist_source_cache_updates(channel.source_id, scraper._pending_cache_updates)
+                persist_source_cache_updates(channel.source_id, scraper._pending_cache_updates, wait=False)
             except Exception:
                 pass
         if scraper._pending_config_updates:
             try:
-                persist_source_config_updates(channel.source_id, scraper._pending_config_updates)
+                persist_source_config_updates(channel.source_id, scraper._pending_config_updates, wait=False)
             except Exception:
                 pass
 
@@ -2417,12 +2417,12 @@ def sling_dash_proxy(channel_id: str):
         finally:
             if getattr(scraper, '_pending_cache_updates', None):
                 try:
-                    persist_source_cache_updates(channel.source_id, scraper._pending_cache_updates)
+                    persist_source_cache_updates(channel.source_id, scraper._pending_cache_updates, wait=False)
                 except Exception:
                     pass
             if scraper._pending_config_updates:
                 try:
-                    persist_source_config_updates(channel.source_id, scraper._pending_config_updates)
+                    persist_source_config_updates(channel.source_id, scraper._pending_config_updates, wait=False)
                 except Exception:
                     pass
             next_boundary = getattr(scraper, 'last_schedule_next', None)
@@ -2578,12 +2578,12 @@ def pbs_dash_proxy(channel_id: str):
     finally:
         if getattr(scraper, '_pending_cache_updates', None):
             try:
-                persist_source_cache_updates(channel.source_id, scraper._pending_cache_updates)
+                persist_source_cache_updates(channel.source_id, scraper._pending_cache_updates, wait=False)
             except Exception:
                 pass
         if scraper._pending_config_updates:
             try:
-                persist_source_config_updates(channel.source_id, scraper._pending_config_updates)
+                persist_source_config_updates(channel.source_id, scraper._pending_config_updates, wait=False)
             except Exception:
                 pass
 
@@ -2676,12 +2676,12 @@ def nbc_tve_dash_proxy(channel_id: str):
     finally:
         if getattr(scraper, '_pending_cache_updates', None):
             try:
-                persist_source_cache_updates(channel.source_id, scraper._pending_cache_updates)
+                persist_source_cache_updates(channel.source_id, scraper._pending_cache_updates, wait=False)
             except Exception:
                 pass
         if scraper._pending_config_updates:
             try:
-                persist_source_config_updates(channel.source_id, scraper._pending_config_updates)
+                persist_source_config_updates(channel.source_id, scraper._pending_config_updates, wait=False)
             except Exception:
                 pass
 
@@ -2887,9 +2887,9 @@ def license_proxy(source_name: str, channel_id: str | None = None):
             fresh_scraper.expire_cached_dash(channel_id)
             fresh_scraper.resolve(f'philo://{channel_id}')
             if getattr(fresh_scraper, '_pending_cache_updates', None):
-                persist_source_cache_updates(source.id, fresh_scraper._pending_cache_updates)
+                persist_source_cache_updates(source.id, fresh_scraper._pending_cache_updates, wait=False)
             if getattr(fresh_scraper, '_pending_config_updates', None):
-                persist_source_config_updates(source.id, fresh_scraper._pending_config_updates)
+                persist_source_config_updates(source.id, fresh_scraper._pending_config_updates, wait=False)
             cfg = {**(source.config or {}), **load_source_cache(source.id)}
             body, headers = scraper_cls.prepare_license_request(
                 challenge, cfg, channel_id=channel_id, sht=sht)
@@ -2918,9 +2918,9 @@ def license_proxy(source_name: str, channel_id: str | None = None):
             fresh_scraper.resolve(channel.stream_url if channel and channel.stream_url
                                   else f'spectrum://{channel_id}')
             if getattr(fresh_scraper, '_pending_cache_updates', None):
-                persist_source_cache_updates(source.id, fresh_scraper._pending_cache_updates)
+                persist_source_cache_updates(source.id, fresh_scraper._pending_cache_updates, wait=False)
             if getattr(fresh_scraper, '_pending_config_updates', None):
-                persist_source_config_updates(source.id, fresh_scraper._pending_config_updates)
+                persist_source_config_updates(source.id, fresh_scraper._pending_config_updates, wait=False)
             cfg = {**(source.config or {}), **load_source_cache(source.id)}
             license_url = scraper_cls.get_license_url(cfg, channel_id=channel_id) or license_url
             body, headers = scraper_cls.prepare_license_request(
@@ -3212,6 +3212,7 @@ def play(source_name: str, channel_id: str):
                     persist_source_config_updates(
                         channel.source_id,
                         scraper._pending_config_updates,
+                        wait=False,
                     )
                 except Exception as ce:
                     db.session.rollback()
@@ -3221,6 +3222,7 @@ def play(source_name: str, channel_id: str):
                     persist_source_cache_updates(
                         channel.source_id,
                         scraper._pending_cache_updates,
+                        wait=False,
                     )
                 except Exception as ce:
                     db.session.rollback()
@@ -3444,7 +3446,7 @@ def play(source_name: str, channel_id: str):
                         persist_source_cache_updates(_source_id, {
                             'osm_session': None,
                             'stream_url_cache': None,
-                        })
+                        }, wait=False)
                     except Exception as e:
                         logger.warning('[play] failed to clear osm_session: %s', e)
                 return

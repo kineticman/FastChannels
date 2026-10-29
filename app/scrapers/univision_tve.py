@@ -42,7 +42,7 @@ import requests
 from .base import BaseScraper, ChannelData, ProgramData
 from ..gracenote_map import resolve_gracenote
 from ..tve.accounts import tve_account_for
-from ..tve.adobe_pass import MvpdCooldownMixin, TVEAuthError, TVENotAuthorizedError
+from ..tve.adobe_pass import MvpdCooldownMixin, TVEAuthError, TVENotAuthorizedError, commit_token_cache
 
 logger = logging.getLogger(__name__)
 
@@ -422,7 +422,7 @@ class UnivisionTVEScraper(MvpdCooldownMixin, BaseScraper):
         cfg = dict(account.config or {})
         cfg['univision_mvpd_auth'] = {**(cfg.get('univision_mvpd_auth') or {}), 'access_token': client.access_token}
         account.config = cfg
-        db.session.commit()
+        commit_token_cache('Univision Adobe access token')
 
     def _adobe_profile(self, client, mso_id: str, account) -> dict | None:
         url = f'{ADOBE_BASE}/api/v2/{REQUESTOR_ID}/profiles/{mso_id}'

@@ -16,7 +16,7 @@ import requests
 
 from .base import BaseScraper, ChannelData, ProgramData
 from ..gracenote_map import resolve_gracenote
-from ..tve.adobe_pass import MvpdCooldownMixin, TVENotAuthorizedError, is_transient_error
+from ..tve.adobe_pass import MvpdCooldownMixin, TVENotAuthorizedError, is_transient_error, commit_token_cache
 
 logger = logging.getLogger(__name__)
 
@@ -833,7 +833,7 @@ def _fox_sports_access_token(session: requests.Session, device_id: str) -> str:
                 cfg['fox_sports_access_token'] = token
                 cfg['fox_sports_access_token_exp'] = _jwt_exp(token) or (now + 3600)
                 account.config = cfg
-                db.session.commit()
+                commit_token_cache('FOX Sports access token')
                 logger.info('[fox-tve] refreshed expired FOX Sports token for saved %s sign-in', mso_id)
                 return token
             logger.warning('[fox-tve] saved %s sign-in no longer recognized by FOX', mso_id)
@@ -852,13 +852,13 @@ def _fox_sports_access_token(session: requests.Session, device_id: str) -> str:
             account.last_auth_status = 'ok'
             account.last_auth_message = f'FOX Sports MVPD token obtained through {mso_id}.'
             account.last_auth_at = datetime.now(timezone.utc)
-            db.session.commit()
+            commit_token_cache('FOX Sports access token')
             return token
         except Exception as exc:
             account.last_auth_status = 'error'
             account.last_auth_message = f'FOX Sports {mso_id} auth failed: {exc}'[:500]
             account.last_auth_at = datetime.now(timezone.utc)
-            db.session.commit()
+            commit_token_cache('FOX Sports auth status')
             # Surface this on the TVE settings page's per-network status line
             # (same mechanism the browser-assisted sign-in flows use), not
             # just the easily-overwritten account-wide last_auth_message —

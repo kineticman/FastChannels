@@ -2388,6 +2388,16 @@ def run_playlist_delete(source_id: int):
         _enqueue_xml_refresh_job()
 
 
+def run_deferred_persist(kind: str, source_id: int, updates: dict):
+    """A play-path config/cache write that found the database busy (see
+    app.config_store._defer_persist), made here with the normal wait."""
+    with flask_app.app_context():
+        persist = persist_source_config_updates if kind == 'config' else persist_source_cache_updates
+        if persist(source_id, updates):
+            logger.info('[config-store] saved deferred source %s %s update (%s)',
+                        source_id, kind, ', '.join(updates))
+
+
 def run_source_disable(source_id: int):
     """Background counterpart to update_source's disable path (app/routes/
     api.py) — flips is_enabled off, then runs the same cancel/purge/xml-

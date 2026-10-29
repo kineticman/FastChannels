@@ -68,7 +68,7 @@ import requests
 from .base import BaseScraper, ChannelData, ProgramData, null_placeholder_season_episode
 from ..gracenote_map import resolve_gracenote
 from ..tve.accounts import tve_account_for
-from ..tve.adobe_pass import MvpdCooldownMixin, TVEAuthError, TVENotAuthorizedError
+from ..tve.adobe_pass import MvpdCooldownMixin, TVEAuthError, TVENotAuthorizedError, commit_token_cache
 
 logger = logging.getLogger(__name__)
 
@@ -481,7 +481,7 @@ class ViewLiftTVEScraper(MvpdCooldownMixin, BaseScraper):
             cfg = dict(account.config or {})
             cfg[auth_key] = {**(cfg.get(auth_key) or {}), 'access_token': client.access_token}
             account.config = cfg
-            db.session.commit()
+            commit_token_cache(f'{self.key} Adobe access token')
             r = fetch()
         if not r.ok:
             return None

@@ -123,6 +123,7 @@ from ..tve.adobe_pass import (
     MvpdCooldownMixin,
     TVEAuthError,
     TVENotAuthorizedError,
+    commit_token_cache,
     load_cached_adobe_client_creds,
     save_adobe_client_creds,
 )
@@ -857,7 +858,7 @@ class NbcTveScraper(MvpdCooldownMixin, BaseScraper):
                         'client_secret': client.client_secret,
                     }
                     account.config = new_cfg
-                    db.session.commit()
+                    commit_token_cache('NBC Adobe profile')
         if not r.ok:
             logger.warning('[nbc_tve] saved %s sign-in rejected by Adobe: HTTP %s (%.1fh old)', mso_id, r.status_code, age_h)
             return None
@@ -968,18 +969,18 @@ class NbcTveScraper(MvpdCooldownMixin, BaseScraper):
                 'captured_at': int(time.time()),
             }
             account.config = new_cfg
-            db.session.commit()
+            commit_token_cache('NBC MVPD authorization')
         except TVENotAuthorizedError as exc:
             account.last_auth_status = 'error'
             account.last_auth_message = f'NBC TVE: {mso_id} is not authorized: {exc}'[:500]
             account.last_auth_at = datetime.now(timezone.utc)
-            db.session.commit()
+            commit_token_cache('NBC auth status')
             raise TVENotAuthorizedError(f'NBC TVE: {mso_id} is not authorized: {exc}') from exc
         except TVEAuthError as exc:
             account.last_auth_status = 'error'
             account.last_auth_message = f'NBC TVE: Adobe Pass auth failed: {exc}'[:500]
             account.last_auth_at = datetime.now(timezone.utc)
-            db.session.commit()
+            commit_token_cache('NBC auth status')
             # See fox_tve.py's _fox_sports_access_token() for why this also
             # needs the per-network status, not just the easily-overwritten
             # account-wide last_auth_message.

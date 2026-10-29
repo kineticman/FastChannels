@@ -59,7 +59,7 @@ import requests
 from .base import BaseScraper, ChannelData, ProgramData, null_placeholder_season_episode
 from ..gracenote_map import resolve_gracenote
 from ..tve.accounts import tve_account_for
-from ..tve.adobe_pass import MvpdCooldownMixin, TVEAuthError, TVENotAuthorizedError
+from ..tve.adobe_pass import MvpdCooldownMixin, TVEAuthError, TVENotAuthorizedError, commit_token_cache
 
 logger = logging.getLogger(__name__)
 
@@ -344,7 +344,7 @@ class VersantTVEScraper(MvpdCooldownMixin, BaseScraper):
             cfg = dict(account.config or {})
             cfg['versant_mvpd_auth'] = {**(cfg.get('versant_mvpd_auth') or {}), 'access_token': client.access_token}
             account.config = cfg
-            db.session.commit()
+            commit_token_cache('Versant Adobe access token')
             r = fetch()
         if not r.ok:
             return None
