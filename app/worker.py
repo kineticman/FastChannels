@@ -1740,8 +1740,10 @@ def run_stream_audit_recheck(source_name: str, channel_ids: list):
 
 
 def _make_progress_writer(source_name: str):
-    """Return a callable(phase, done=0, total=0) that writes scrape progress to Redis.
-    Phase 'done' deletes the key.  Silently no-ops if Redis is unavailable."""
+    """Return a callable(phase, done=0, total=0, detail=None) that writes scrape
+    progress to Redis. detail is a short label for what is running now (Free
+    Networks passes the network's name). Phase 'done' deletes the key.  Silently
+    no-ops if Redis is unavailable."""
     import json as _json
     key = f'scrape:progress:{source_name}'
     try:
@@ -1750,12 +1752,15 @@ def _make_progress_writer(source_name: str):
     except Exception:
         return lambda *a, **kw: None
 
-    def _write(phase: str, done: int = 0, total: int = 0):
+    def _write(phase: str, done: int = 0, total: int = 0, detail: str | None = None):
         try:
             if phase == 'done':
                 r.delete(key)
             else:
-                r.setex(key, 600, _json.dumps({'phase': phase, 'done': done, 'total': total}))
+                data = {'phase': phase, 'done': done, 'total': total}
+                if detail:
+                    data['detail'] = detail
+                r.setex(key, 600, _json.dumps(data))
         except Exception:
             pass
     return _write

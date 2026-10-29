@@ -223,6 +223,10 @@ class FreeNetworksScraper(BaseScraper):
             if over:
                 logger.warning('[%s] %s hit its %ds time limit — cut short', self.source_name, net.name, budget)
 
+    def _report(self, phase: str, done: int, total: int, net=None) -> None:
+        if self._progress_cb:
+            self._progress_cb(phase, done, total, detail=net.name if net else None)
+
     def memo(self, key, fn):
         """Per-run memo so channels() and programs() can share one fetch."""
         if key not in self._memo:
@@ -239,9 +243,9 @@ class FreeNetworksScraper(BaseScraper):
         last_good = dict(self.cache.get(_LAST_GOOD_CACHE_KEY) or {})
         last_good_changed = False
         run_t0 = time.monotonic()
-        for net in NETWORKS:
-            if net.key in disabled:
-                continue
+        enabled = [net for net in NETWORKS if net.key not in disabled]
+        for i, net in enumerate(enabled):
+            self._report('channels', i, len(enabled), net)
             t0 = time.monotonic()
             try:
                 chans = self._run_network(net, _CHANNELS_BUDGET_SECS, net.channels, self)
@@ -294,8 +298,14 @@ class FreeNetworksScraper(BaseScraper):
         native_total = borrowed_total = 0
         placeholders: dict[str, int] = {}
         run_t0 = time.monotonic()
+        # Progress counts channels, reported as each network starts, so the
+        # status names the network a slow guide (TRT's ~40s) is waiting on.
+        total = sum(len(pairs) for pairs in by_net.values())
+        done = 0
         for key, pairs in by_net.items():
             net = _BY_KEY[key]
+            self._report('epg', done, total, net)
+            done += len(pairs)
             t0 = time.monotonic()
             skipped = False
             try:
