@@ -41,6 +41,7 @@ from app.scrapers.playlist import is_playlist_source, event_group_miss_limit, li
 from app.scrapers.base import (
     EVENT_CHANNEL_TAG,
     StreamDeadError,
+    ScrapeRetrySoonError,
     ScrapeSkipError,
     is_ssl_handshake_failure,
     is_transient_network_error,
@@ -653,6 +654,7 @@ def run_scraper(source_name: str, force_full: bool = False):
                 elapsed = time.monotonic() - t0
                 logger.info('[%s] Scrape complete — %d channels, %d programs (%.1fs)',
                             source_name, len(channels), len(programs), elapsed)
+                _clear_scrape_retry(source_name)
                 logo_urls = [ch.logo_url for ch in channels if ch.logo_url]
                 if logo_urls:
                     # Publish the phase change immediately so the UI does not sit
@@ -662,10 +664,15 @@ def run_scraper(source_name: str, force_full: bool = False):
             _progress('done')
         except ScrapeSkipError as e:
             elapsed = time.monotonic() - t0
-            logger.warning('[%s] Scrape skipped after %.1fs: %s', source_name, elapsed, e)
+            message = str(e)
+            if isinstance(e, ScrapeRetrySoonError):
+                minutes = _schedule_scrape_retry(source_name)
+                message += (f' Keeping the current channels; trying again in {minutes} minutes.' if minutes
+                            else ' Keeping the current channels until the next scheduled scrape.')
+            logger.warning('[%s] Scrape skipped after %.1fs: %s', source_name, elapsed, message)
             db.session.rollback()
             _apply_scraper_config_updates(source, scraper)
-            source.last_error = str(e)
+            source.last_error = message
             db.session.commit()
             _progress('done')
         except ScrapePhaseTimeoutError as e:
@@ -3483,6 +3490,48 @@ def _upsert_programs(source, program_data_list, progress_cb=None):
             progress_cb('db', min(i + _CHUNK, total_rows), total_rows)
 
 
+# A scrape that ends in ScrapeRetrySoonError asks for an early retry: the
+# scraper worker stores when, and the scheduler (a separate process) enqueues
+# it then. A few tries, further apart each time, then the normal interval.
+_SCRAPE_RETRY_KEY = 'fastchannels:scrape_retry:{}'
+_SCRAPE_RETRY_MINUTES = (5, 10, 15)
+
+
+def _schedule_scrape_retry(source_name: str) -> int | None:
+    """Store the next early retry; its delay in minutes, or None when the
+    tries are used up."""
+    try:
+        r = redis.from_url(flask_app.config['REDIS_URL'])
+        key = _SCRAPE_RETRY_KEY.format(source_name)
+        attempt = int(r.hget(key, 'attempt') or 0)
+        if attempt >= len(_SCRAPE_RETRY_MINUTES):
+            return None
+        minutes = _SCRAPE_RETRY_MINUTES[attempt]
+        r.hset(key, mapping={'attempt': attempt + 1, 'at': time.time() + minutes * 60})
+        r.expire(key, 86400)
+        return minutes
+    except Exception as e:
+        logger.warning('[%s] Could not schedule an early retry: %s', source_name, e)
+        return None
+
+
+def _clear_scrape_retry(source_name: str) -> None:
+    try:
+        redis.from_url(flask_app.config['REDIS_URL']).delete(_SCRAPE_RETRY_KEY.format(source_name))
+    except Exception:
+        pass
+
+
+def _take_scrape_retry(r, source_name: str) -> bool:
+    """True once when a source's early retry is due. The attempt count stays
+    until a scrape succeeds."""
+    key = _SCRAPE_RETRY_KEY.format(source_name)
+    at = r.hget(key, 'at')
+    if at is None or float(at) > time.time():
+        return False
+    return bool(r.hdel(key, 'at'))
+
+
 # In-memory record of when each source was last enqueued, so we don't
 # double-queue a source that's still running (last_scraped_at not yet updated).
 _last_enqueued: dict[str, datetime] = {}
@@ -3619,11 +3668,14 @@ def _schedule_due_scrapes():
             candidates = [t for t in (last_scraped, last_queued) if t is not None]
             last = max(candidates) if candidates else None
 
-            if _is_source_due(source, now, last):
+            retry = _take_scrape_retry(r, source.name)
+            if retry or _is_source_due(source, now, last):
                 try:
                     q.enqueue('app.worker.run_scraper', source.name, job_timeout=3600, job_id=f'scrape-{source.name}')
                     _last_enqueued[source.name] = now
-                    if source.scrape_cron:
+                    if retry:
+                        logger.info('[scheduler] Enqueued %s (early retry)', source.name)
+                    elif source.scrape_cron:
                         logger.info('[scheduler] Enqueued %s (cron=%s)', source.name, source.scrape_cron)
                     else:
                         logger.info('[scheduler] Enqueued %s (interval=%dm, age=%s)',

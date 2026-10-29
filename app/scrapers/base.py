@@ -311,6 +311,11 @@ class ScrapeSkipError(Exception):
     """Raised when a scraper should skip the current run without treating it as a hard failure."""
 
 
+class ScrapeRetrySoonError(ScrapeSkipError):
+    """Skip this run and try again in a few minutes rather than at the next
+    interval: upstream answered, but with a gap that clears up on its own."""
+
+
 class ConfigField:
     """Declares a single config field a scraper needs from the UI."""
     def __init__(self, key: str, label: str, field_type: str = 'text',

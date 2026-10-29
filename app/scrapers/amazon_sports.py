@@ -31,7 +31,7 @@ from bs4 import BeautifulSoup
 
 from .amazon_prime_free import AmazonPrimeFreeScraper
 from ..sports import infer_sport, normalize_sport, sport_for_league
-from .base import BaseScraper, ChannelData, ProgramData, EVENT_CHANNEL_TAG
+from .base import BaseScraper, ChannelData, ProgramData, ScrapeRetrySoonError, EVENT_CHANNEL_TAG
 
 logger = logging.getLogger(__name__)
 
@@ -426,8 +426,10 @@ class AmazonSportsScraper(AmazonPrimeFreeScraper, BaseScraper):
                 if not data.get('hasMoreItems'):
                     break
                 if not entities:
-                    raise RuntimeError(f"Amazon sports pagination stalled at "
-                                       f"{container.get('title') or target!r} index {index}")
+                    # Seen to last a few minutes: the scheduler tries again soon.
+                    raise ScrapeRetrySoonError(
+                        f"Amazon's sports listing stopped partway ({container.get('title') or target!r} "
+                        f"after {index} events), so this scrape was skipped.")
                 next_index = data.get('startIndex')
                 if not isinstance(next_index, int) or next_index <= index:
                     raise RuntimeError('Amazon sports pagination did not advance')
