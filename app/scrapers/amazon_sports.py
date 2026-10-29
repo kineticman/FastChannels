@@ -30,7 +30,7 @@ from datetime import datetime, timedelta, timezone
 from bs4 import BeautifulSoup
 
 from .amazon_prime_free import AmazonPrimeFreeScraper
-from ..sports import infer_sport
+from ..sports import infer_sport, normalize_sport, sport_for_league
 from .base import BaseScraper, ChannelData, ProgramData, EVENT_CHANNEL_TAG
 
 logger = logging.getLogger(__name__)
@@ -93,6 +93,17 @@ _AMAZON_SPORT_NAMES = {'Hockey': 'Ice Hockey', 'MMA': 'Mixed Martial Arts', 'Mot
 def _infer_sport(texts: list[str]) -> str | None:
     sport = infer_sport(texts)
     return _AMAZON_SPORT_NAMES.get(sport, sport)
+
+
+def _title_league(title: str, sport: str | None) -> str | None:
+    """The league a title leads with when Amazon classifies none:
+    "QMJHL Hockey: Halifax vs Gatineau" is QMJHL Hockey. Only a short
+    prefix that names the event's own sport counts."""
+    prefix, sep, _ = (title or '').partition(':')
+    prefix = ' '.join(prefix.split())
+    if not sep or not prefix or len(prefix) > 40 or not sport:
+        return None
+    return prefix if sport_for_league(prefix) == normalize_sport(sport) else None
 
 
 def amazon_account_config() -> dict:
@@ -762,6 +773,9 @@ class AmazonSportsScraper(AmazonPrimeFreeScraper, BaseScraper):
             unexpected = [reason for reason in selected['blocked_reasons'] if reason not in _EXPECTED_REASONS]
             if unexpected:
                 description = f"Amazon reports this event can't play: {', '.join(unexpected)}. {description}".strip()
+            # The channel name and the source's league picker keep Amazon's
+            # own league, so names and saved picker filters don't change.
+            league = selected['league'] or _title_league(selected['title'], selected['sport'])
             metadata[group_id] = {
                 'playback_id': action.get('playbackID') if action else None,
                 'title': selected['title'], 'description': description, 'art': art,
@@ -771,7 +785,7 @@ class AmazonSportsScraper(AmazonPrimeFreeScraper, BaseScraper):
                 'entitled': selected['entitled'], 'entitled_via': selected['entitled_via'],
                 'unlock_offers': selected['unlock_offers'], 'can_play': selected['can_play'],
                 'blocked_reasons': selected['blocked_reasons'], 'access': access,
-                'sport': selected['sport'], 'league': selected['league'],
+                'sport': selected['sport'], 'league': league,
             }
             label = selected['league'] or selected['sport'] or self.display_name
             channels.append(ChannelData(
@@ -784,7 +798,7 @@ class AmazonSportsScraper(AmazonPrimeFreeScraper, BaseScraper):
                 guide_key=group_id,
                 tags=[EVENT_CHANNEL_TAG, self.display_name, *access[:1]],
                 sport=selected['sport'],
-                league=selected['league'],
+                league=league,
                 description=description,
                 gracenote_mode='off',
                 retire_at=end + timedelta(seconds=EVENT_END_GRACE_SECONDS),
