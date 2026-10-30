@@ -227,14 +227,16 @@ def _delete_channels_in_batches(ids: list[int]) -> None:
     purge to fail other writers' 30s busy_timeout (issue #86). Set-based
     deletes in short transactions let other writers in between batches."""
     from ..chnum import delete_channel_rows
+    from ..db_batches import delete_in_batches, yield_writer_lock
     from ..models import FeedChannelNumber, Program
     for i in range(0, len(ids), _DELETE_BATCH):
         batch = ids[i:i + _DELETE_BATCH]
+        delete_in_batches(Program, Program.channel_id.in_(batch))
         delete_channel_rows(batch)
         FeedChannelNumber.query.filter(FeedChannelNumber.channel_id.in_(batch)).delete(synchronize_session=False)
-        Program.query.filter(Program.channel_id.in_(batch)).delete(synchronize_session=False)
         Channel.query.filter(Channel.id.in_(batch)).delete(synchronize_session=False)
         db.session.commit()
+        yield_writer_lock()
 
 
 @sources_bp.route('/sources/<int:source_id>/delete-inactive', methods=['POST'])

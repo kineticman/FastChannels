@@ -31,6 +31,7 @@ from app.config_store import (
     persist_source_cache_updates,
     load_source_cache,
 )
+from app.db_batches import WritePacer, delete_in_batches, yield_writer_lock
 from app.extensions import db
 from app.hls import inspect_hls_drm, parse_stream_info as _parse_stream_info, parse_dash_stream_info as _parse_dash_stream_info, WIDEVINE_UUID, PLAYREADY_UUID
 from app.models import Source, Channel, Program, Feed, AppSettings, SourceCache
@@ -2286,13 +2287,11 @@ def _purge_source_channels_and_programs(source) -> tuple[int, int]:
     channel-id IN-clause to stay under SQLite's default variable limit."""
     from app.chnum import delete_channel_rows
     ch_ids = [row[0] for row in source.channels.with_entities(Channel.id).all()]
-    delete_channel_rows(ch_ids)
     deleted_programs = 0
     _ID_BATCH = 900
     for i in range(0, len(ch_ids), _ID_BATCH):
-        deleted_programs += Program.query.filter(
-            Program.channel_id.in_(ch_ids[i:i + _ID_BATCH])
-        ).delete(synchronize_session=False)
+        deleted_programs += delete_in_batches(Program, Program.channel_id.in_(ch_ids[i:i + _ID_BATCH]))
+    delete_channel_rows(ch_ids)
     deleted_channels = source.channels.delete(synchronize_session=False)
     return deleted_channels or 0, deleted_programs
 
@@ -3258,6 +3257,7 @@ def _prune_old_programs(batch_size: int = 1000):
 
         if deleted < batch_size:
             break
+        yield_writer_lock()
 
     if total_deleted:
         logger.info('[worker] pruned %d expired EPG entries', total_deleted)
@@ -3343,6 +3343,7 @@ def _prune_bogus_programs(batch_size: int = 1000):
         ) or 0
         db.session.commit()
         total_deleted += deleted
+        yield_writer_lock()
 
     if total_deleted:
         logger.info('[worker] pruned %d bogus-timestamp EPG entries', total_deleted)
@@ -3488,14 +3489,17 @@ def _upsert_programs(source, program_data_list, progress_cb=None):
         window_to_ids.setdefault((win_start, win_end), []).append(channel_id)
 
     _ID_BATCH = 900  # stay under SQLite's default variable limit
+    pacer = WritePacer()
     for (win_start, win_end), ch_ids in window_to_ids.items():
         for i in range(0, len(ch_ids), _ID_BATCH):
-            Program.query.filter(
+            delete_in_batches(
+                Program,
                 Program.channel_id.in_(ch_ids[i:i + _ID_BATCH]),
                 Program.end_time   >  win_start,
                 Program.start_time <  win_end,
-            ).delete(synchronize_session=False)
-    db.session.commit()
+                pacer=pacer,
+            )
+    pacer.finish()
 
     rows = []
     for channel_id, pd_list in incoming_by_channel_id.items():
@@ -3518,14 +3522,16 @@ def _upsert_programs(source, program_data_list, progress_cb=None):
                 'series_id':         getattr(pd, 'series_id',    None),
                 'episode_id':        getattr(pd, 'episode_id',   None),
             })
-    # Commit in chunks so the write lock isn't held for the full batch.
-    _CHUNK = 2000
+    # Write in chunks so the write lock isn't held for the full batch.
+    _CHUNK = 500
     total_rows = len(rows)
+    pacer = WritePacer()
     for i in range(0, total_rows, _CHUNK):
         db.session.execute(Program.__table__.insert(), rows[i:i + _CHUNK])
-        db.session.commit()
+        pacer.wrote()
         if progress_cb:
             progress_cb('db', min(i + _CHUNK, total_rows), total_rows)
+    pacer.finish()
 
 
 # A scrape that ends in ScrapeRetrySoonError asks for an early retry: the
