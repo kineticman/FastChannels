@@ -9,6 +9,7 @@ with "database is locked" (issue #86). This names the code that held it.
 """
 import logging
 import os
+import threading
 import time
 import traceback
 
@@ -19,6 +20,7 @@ logger = logging.getLogger(__name__)
 _THRESHOLD_S = float(os.environ.get('FC_DB_LOCK_WARN_SECONDS', '5'))
 _WRITE_PREFIXES = ('INSERT', 'UPDATE', 'DELETE', 'REPLACE')
 _KEY = 'fc_write_began'
+_PENDING_KEY = 'fc_write_pending'
 _APP_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
@@ -48,32 +50,72 @@ def _context() -> str:
 
 
 def install(engine) -> None:
+    # Timed from before the first write, so one huge statement counts in full.
+    # That statement's time can include waiting for the lock, so it's logged
+    # separately. If it fails (it never got the lock), nothing was held.
+    @event.listens_for(engine, 'before_cursor_execute')
+    def _before_write(conn, cursor, statement, parameters, context, executemany):
+        info = conn.connection.info
+        if _KEY not in info and statement.lstrip().upper().startswith(_WRITE_PREFIXES):
+            info[_PENDING_KEY] = time.monotonic()
+
     @event.listens_for(engine, 'after_cursor_execute')
     def _note_first_write(conn, cursor, statement, parameters, context, executemany):
         info = conn.connection.info
-        if _KEY in info or not statement.lstrip().upper().startswith(_WRITE_PREFIXES):
-            return
-        info[_KEY] = (time.monotonic(), ' '.join(statement.split())[:100], _where(), _context())
+        t0 = info.pop(_PENDING_KEY, None)
+        if t0 is not None:
+            now = time.monotonic()
+            info[_KEY] = (t0, now - t0, ' '.join(statement.split())[:100], _where(), _context())
 
-    def _end(conn, how):
-        began = conn.connection.info.pop(_KEY, None)
-        if not began:
-            return
+    def _report(began, how, commit_s=0.0):
         held = time.monotonic() - began[0]
         if held >= _THRESHOLD_S:
-            t0, stmt, where, ctx = began
-            logger.warning('[db-lock] write transaction held the lock %.1fs (%s): began at %s with %r; '
-                           '%s at %s', held, ctx, where, stmt, how, _where())
+            t0, first_s, stmt, where, ctx = began
+            logger.warning('[db-lock] write transaction held the lock up to %.1fs (%s; first statement %.1fs, '
+                           'which may include waiting for the lock; commit %.1fs): began at %s with %r; %s at %s',
+                           held, ctx, first_s, commit_s, where, stmt, how, _where())
 
-    event.listen(engine, 'commit', lambda conn: _end(conn, 'committed'))
-    event.listen(engine, 'rollback', lambda conn: _end(conn, 'rolled back'))
+    def _take(info):
+        info.pop(_PENDING_KEY, None)
+        return info.pop(_KEY, None)
+
+    # The engine's commit event fires before the commit runs, and on a slow disk
+    # the commit (fsync) is the slow part, so the report waits for do_commit.
+    # The event and do_commit run back to back with nothing to yield to another
+    # greenlet, so a thread-local (greenlet-local under gevent) carries it across.
+    committing = threading.local()
+
+    @event.listens_for(engine, 'commit')
+    def _on_commit(conn):
+        committing.began = _take(conn.connection.info)
+
+    do_commit = engine.dialect.do_commit
+
+    def _timed_do_commit(dbapi_connection):
+        began, committing.began = getattr(committing, 'began', None), None
+        t0 = time.monotonic()
+        try:
+            do_commit(dbapi_connection)
+        finally:
+            if began:
+                _report(began, 'committed', time.monotonic() - t0)
+
+    engine.dialect.do_commit = _timed_do_commit
+
+    @event.listens_for(engine, 'rollback')
+    def _on_rollback(conn):
+        began = _take(conn.connection.info)
+        if began:
+            _report(began, 'rolled back')
 
     # A connection returned to the pool mid-transaction is rolled back there,
     # without the engine-level rollback event.
     @event.listens_for(engine, 'reset')
-    def _on_reset(dbapi_connection, connection_record, *args):
+    def _on_reset(dbapi_connection, connection_record, reset_state):
+        connection_record.info.pop(_PENDING_KEY, None)
         began = connection_record.info.pop(_KEY, None)
         if began and time.monotonic() - began[0] >= _THRESHOLD_S:
-            t0, stmt, where, ctx = began
-            logger.warning('[db-lock] write transaction held the lock %.1fs (%s): began at %s with %r; '
-                           'rolled back on return to the pool', time.monotonic() - t0, ctx, where, stmt)
+            t0, first_s, stmt, where, ctx = began
+            logger.warning('[db-lock] write transaction held the lock up to %.1fs (%s; first statement %.1fs, '
+                           'which may include waiting for the lock): began at %s with %r; '
+                           'rolled back on return to the pool', time.monotonic() - t0, ctx, first_s, where, stmt)
