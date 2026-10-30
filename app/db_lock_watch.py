@@ -18,6 +18,11 @@ from sqlalchemy import event
 logger = logging.getLogger(__name__)
 
 _THRESHOLD_S = float(os.environ.get('FC_DB_LOCK_WARN_SECONDS', '5'))
+# Other writers fail after 30s (busy_timeout), so WARNING means getting close to
+# that. A first statement's time can be waiting for the lock rather than holding
+# it, but a wait gives up at about 30s, so past that it must be real work.
+_WARN_HOLD_S = 20.0
+_WARN_FIRST_S = 31.0
 _WRITE_PREFIXES = ('INSERT', 'UPDATE', 'DELETE', 'REPLACE')
 _KEY = 'fc_write_began'
 _PENDING_KEY = 'fc_write_pending'
@@ -51,8 +56,7 @@ def _context() -> str:
 
 def install(engine) -> None:
     # Timed from before the first write, so one huge statement counts in full.
-    # That statement's time can include waiting for the lock, so it's logged
-    # separately. If it fails (it never got the lock), nothing was held.
+    # If it fails (it never got the lock), nothing was held.
     @event.listens_for(engine, 'before_cursor_execute')
     def _before_write(conn, cursor, statement, parameters, context, executemany):
         info = conn.connection.info
@@ -68,12 +72,22 @@ def install(engine) -> None:
             info[_KEY] = (t0, now - t0, ' '.join(statement.split())[:100], _where(), _context())
 
     def _report(began, how, commit_s=0.0):
-        held = time.monotonic() - began[0]
-        if held >= _THRESHOLD_S:
-            t0, first_s, stmt, where, ctx = began
-            logger.warning('[db-lock] write transaction held the lock up to %.1fs (%s; first statement %.1fs, '
-                           'which may include waiting for the lock; commit %.1fs): began at %s with %r; %s at %s',
-                           held, ctx, first_s, commit_s, where, stmt, how, _where())
+        t0, first_s, stmt, where, ctx = began
+        held = time.monotonic() - t0
+        if held < _THRESHOLD_S:
+            return
+        details = (f'{ctx}; first statement {first_s:.1f}s, commit {commit_s:.1f}s: began at {where} '
+                   f'with {stmt!r}; {how} at {_where()}')
+        if held - first_s >= _WARN_HOLD_S or first_s >= _WARN_FIRST_S:
+            logger.warning('[db-lock] long write held the lock up to %.1fs; other writes may fail (%s)', held, details)
+            return
+        if first_s >= commit_s and first_s >= held - first_s - commit_s:
+            why = 'mostly the first statement, which may just be waiting on another writer'
+        elif commit_s >= held - first_s - commit_s:
+            why = 'mostly the commit, usually a slow disk'
+        else:
+            why = 'mostly between the first write and the commit'
+        logger.info('[db-lock] slow write: %.1fs, %s (%s)', held, why, details)
 
     def _take(info):
         info.pop(_PENDING_KEY, None)
@@ -112,10 +126,6 @@ def install(engine) -> None:
     # without the engine-level rollback event.
     @event.listens_for(engine, 'reset')
     def _on_reset(dbapi_connection, connection_record, reset_state):
-        connection_record.info.pop(_PENDING_KEY, None)
-        began = connection_record.info.pop(_KEY, None)
-        if began and time.monotonic() - began[0] >= _THRESHOLD_S:
-            t0, first_s, stmt, where, ctx = began
-            logger.warning('[db-lock] write transaction held the lock up to %.1fs (%s; first statement %.1fs, '
-                           'which may include waiting for the lock): began at %s with %r; '
-                           'rolled back on return to the pool', time.monotonic() - t0, ctx, first_s, where, stmt)
+        began = _take(connection_record.info)
+        if began:
+            _report(began, 'rolled back on return to the pool')
