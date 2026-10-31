@@ -10,11 +10,11 @@
       </div>
     </div>
     <div class="source-body open">
-      <div class="toggle-row">
+      <div class="tve-account">
         <div class="toggle-row-text">
           <div class="toggle-row-label">TV Provider Sign-In</div>
           <div class="toggle-row-help">Choose your TV provider, then enter the same username and password you use on that provider's site. These credentials are stored only in the local FastChannels database and are never returned to the browser after saving.</div>
-          <div style="margin-top:0.7rem;display:grid;grid-template-columns:1fr;gap:0.45rem;max-width:520px">
+          <div style="margin-top:0.7rem;display:grid;grid-template-columns:minmax(0,1fr);gap:0.45rem;max-width:520px">
             <label style="display:flex;flex-direction:column;gap:0.25rem;color:var(--text-muted);font-size:0.78rem">
               TV provider
               <input type="text" id="tve-provider-search" placeholder="Search supported TV providers" oninput="filterTveProviders()" autocomplete="off" style="min-width:0;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:0.88rem;padding:0.45rem 0.6rem">
@@ -25,9 +25,13 @@
               </select>
             </label>
           </div>
-          <div style="margin-top:0.65rem;display:grid;grid-template-columns:1fr 1fr;gap:0.6rem">
-            <input type="text" id="tve-username" autocomplete="username" placeholder="TV provider username" value="{{ tve_account.username }}" style="min-width:0;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:0.88rem;padding:0.45rem 0.6rem">
-            <input type="password" id="tve-password" autocomplete="current-password" placeholder="{% if tve_account.password_configured %}Password saved - leave blank to keep{% else %}TV provider password{% endif %}" style="min-width:0;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:0.88rem;padding:0.45rem 0.6rem">
+          <div class="tve-credentials">
+            <label for="tve-username">Username
+              <input type="text" id="tve-username" autocomplete="username" placeholder="TV provider username" value="{{ tve_account.username }}">
+            </label>
+            <label for="tve-password">Password
+              <input type="password" id="tve-password" autocomplete="current-password" placeholder="{% if tve_account.password_configured %}Password saved - leave blank to keep{% else %}TV provider password{% endif %}">
+            </label>
           </div>
           <div id="tve-provider-hint" style="margin-top:0.45rem;color:var(--text-muted);font-size:0.82rem">Used by TVE sources such as A+E Networks TVE.</div>
           <div id="tve-cox-retiring-notice" style="display:none;margin-top:0.45rem;color:var(--warning-soft,#b8860b);background:var(--warning-bg-2,rgba(184,134,11,0.12));border:1px solid var(--warning-border,rgba(184,134,11,0.3));border-radius:4px;padding:0.5rem 0.7rem;font-size:0.82rem;line-height:1.4">
@@ -49,9 +53,23 @@
             {% endif %}
           </div>
           <div id="tve-disabled-warning" style="display:{% if tve_account.is_enabled %}none{% else %}block{% endif %};margin-top:0.75rem;color:var(--warning-soft,#b8860b);background:var(--warning-bg-2,rgba(184,134,11,0.12));border:1px solid var(--warning-border,rgba(184,134,11,0.3));border-radius:4px;padding:0.5rem 0.7rem;font-size:0.82rem;line-height:1.4">
-            ⚠ TVE is disabled — the toggle on the right is off, so every network's scraper and every "Sign in" click will fail until it's turned back on and saved.
+            ⚠ TVE is disabled — the enable switch is off, so every network's scraper and every "Sign in" click will fail until it's turned back on and saved.
           </div>
-          <div style="margin-top:0.75rem">
+          <div class="tve-account-actions">
+            <div class="tve-enabled-control">
+              <label class="toggle-switch">
+                <input type="checkbox" id="tve-enabled" aria-label="Enable TV Everywhere" onchange="_updateTveDisabledWarning()" {% if tve_account.is_enabled %}checked{% endif %}>
+                <span class="toggle-slider"></span>
+              </label>
+              <span>Enable TV Everywhere</span>
+            </div>
+            <span class="save-status" id="tve-status"></span>
+            <button class="btn btn-secondary" id="tve-test-btn" onclick="testTveMvpd()">Save &amp; test</button>
+            <button class="btn btn-primary" onclick="saveTveMvpdSettings()">Save credentials</button>
+          </div>
+          <div class="tve-networks">
+            <h3>Network sign-ins</h3>
+
             <div style="display:flex;justify-content:space-between;align-items:flex-end;gap:0.75rem;margin-bottom:0.3rem">
               <div style="color:var(--text-muted);font-size:0.78rem">TVE network sign-in status — sign in to each network individually below, or all at once.</div>
               <button class="btn btn-audit" style="padding:0.15rem 0.6rem;font-size:0.74rem;white-space:nowrap" type="button" onclick="signInToAllTve()" title="Signs in to every network one at a time, with a short pause between each to avoid triggering your TV provider's own rate limiting. Takes a minute or two.">Sign in to all</button>
@@ -69,17 +87,13 @@
             <div id="tve-xfinity-cache-status" style="display:none;margin-bottom:0.4rem;color:var(--text-muted);font-size:0.78rem"></div>
             <div id="tve-network-status" style="font-size:0.82rem;color:var(--text-soft)">Loading…</div>
           </div>
+          <details class="settings-disclosure settings-danger-zone">
+            <summary>Reset TV Everywhere</summary>
+            <p>Deletes saved provider credentials, cached sign-in tokens, and the browser's saved login session.</p>
+            <button class="btn btn-danger" onclick="resetTveState()">Reset TV Everywhere</button>
+          </details>
         </div>
-        <div class="toggle-row-control" style="gap:0.5rem;flex-wrap:wrap">
-          <label class="toggle-switch" title="Enable TVE credentials">
-            <input type="checkbox" id="tve-enabled" onchange="_updateTveDisabledWarning()" {% if tve_account.is_enabled %}checked{% endif %}>
-            <span class="toggle-slider"></span>
-          </label>
-          <button class="btn btn-secondary" onclick="saveTveMvpdSettings()">Save</button>
-          <button class="btn btn-audit" id="tve-test-btn" onclick="testTveMvpd()">Test</button>
-          <button class="btn btn-danger" onclick="resetTveState()" title="Deletes the saved TV provider username/password, every cached sign-in token, and the browser's saved login session — for testing sign-in from a clean slate">Reset</button>
-          <span class="save-status" id="tve-status"></span>
-        </div>
+
       </div>
     </div>
   </div>

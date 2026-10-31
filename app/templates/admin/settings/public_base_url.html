@@ -8,6 +8,7 @@
           <div class="source-meta">Set the address players and other devices should use to reach this server</div>
         </div>
       </div>
+      {{ setup_status('public_base_url') }}
     </div>
     <div class="source-body open">
       <div class="fields-grid" style="max-width:480px">
@@ -16,7 +17,7 @@
           <input type="text" id="public-base-url"
                  placeholder="{{ detected_base_url or '192.168.1.50:5523' }}" value="{{ public_base_url }}"
                  oninput="checkPublicBaseUrlPortWarning()">
-          <div class="help">Address other devices should use to reach this FastChannels server for generated M3U, XML, logo, poster, and playback URLs. Include <code>http://</code> and the port if needed (most installs use <code>:5523</code>). This only changes generated URLs; it does not change the Docker published port. To move the web UI itself to another port, change the compose port mapping and restart the container.</div>
+          <div class="help">The address other devices use to reach FastChannels. Include <code>http://</code> and a port if needed, for example <code>http://192.168.1.50:5523</code>.</div>
           <div class="help" id="no-port-warning" style="color:var(--warning-soft);{% if not public_base_url_no_port_warning %} display:none;{% endif %}">
             No port specified — this is fine if you're behind a reverse proxy, but most direct installs need <code>:5523</code>.
           </div>
@@ -26,12 +27,15 @@
           {% if public_base_url_needs_config and public_base_url %}
           <div class="help" style="color:var(--warning-soft)">This is still an example placeholder. Replace it with the address other devices use to reach this FastChannels install.</div>
           {% endif %}
-          <div class="hint-box">
-            Browser address: <code>{{ request_base_url }}</code><br>
-            Detected server address: <code>{{ detected_base_url }}</code><br>
-            If this field is set, generated feed URLs will use it exactly, even if you open the admin UI from a different host or port.<br>
-            If FastChannels is running in Docker and you opened the UI with <code>localhost</code>, auto-detect is usually not what other devices need, so set this field manually.
-          </div>
+          <details class="settings-disclosure">
+            <summary>Connection help &amp; detected addresses</summary>
+            <div class="hint-box">
+              Browser address: <code>{{ request_base_url }}</code><br>
+              Detected server address: <code>{{ detected_base_url }}</code><br>
+              Generated feed, image, and playback URLs use this field exactly, even if you open the admin UI from another address. In Docker, <code>localhost</code> usually isn't reachable by other devices.<br>
+              This changes generated URLs only. To move the web UI to another port, change the Docker compose port mapping and restart the container.
+            </div>
+          </details>
         </div>
       </div>
       <div class="field-actions">

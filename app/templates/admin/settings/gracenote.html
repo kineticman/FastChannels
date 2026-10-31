@@ -16,6 +16,7 @@
           <div class="toggle-row-help">When enabled, scrapers populate Gracenote guide IDs for channels that support it. Channels with manually assigned IDs are never affected.</div>
         </div>
         <div class="toggle-row-control">
+          <span class="settings-autosave">Auto-saves</span>
           <label class="toggle-switch">
             <input type="checkbox" id="gracenote-auto-fill-toggle"
                    {% if gracenote_auto_fill %}checked{% endif %}
@@ -42,7 +43,11 @@
       </div>
       <div style="padding: 0.75rem 0 0.25rem; display:flex; gap:0.5rem; flex-wrap:wrap; align-items:center">
         <button class="btn btn-audit" onclick="openCommunityMap()">Browse Community Map</button>
-        <button class="btn btn-danger" onclick="document.getElementById('gracenote-clear-modal').classList.add('open')">Disable &amp; Clear All Gracenote</button>
       </div>
+      <details class="settings-disclosure settings-danger-zone">
+        <summary>Disable &amp; clear Gracenote</summary>
+        <p>Turn off automatic assignment and clear existing Gracenote IDs. Review the confirmation before applying.</p>
+        <button class="btn btn-danger" onclick="document.getElementById('gracenote-clear-modal').classList.add('open')">Disable &amp; Clear All Gracenote</button>
+      </details>
     </div>
   </div>

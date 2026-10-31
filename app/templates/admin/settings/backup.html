@@ -25,8 +25,8 @@
         </div>
 
         <!-- RESTORE -->
-        <div class="backup-col">
-          <div class="backup-col-title">Restore</div>
+        <details class="backup-col settings-disclosure settings-danger-zone">
+          <summary>Restore database</summary>
           <div class="backup-note">
             Replaces the current database, then reloads workers.
             <strong style="color:var(--warning)">This cannot be undone</strong> — download a backup first.
@@ -52,7 +52,7 @@
             </div>
             <span class="save-status" id="restore-db-status" style="display:block;margin-top:0.5rem"></span>
           </div>
-        </div>
+        </details>
 
       </div>
     </div>

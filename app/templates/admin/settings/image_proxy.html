@@ -1,21 +1,10 @@
-  <!-- Image Proxy card -->
-  <div class="source-card">
-    <div class="source-header" style="cursor:default">
-      <div class="source-title">
-        <div class="source-icon">🖼️</div>
-        <div>
-          <div class="source-name">Image Proxy &amp; Caching</div>
-          <div class="source-meta">Control whether logos and program artwork are served through FastChannels</div>
-        </div>
-      </div>
-    </div>
-    <div class="source-body open">
       <div class="toggle-row">
         <div class="toggle-row-text">
-          <div class="toggle-row-label">Enable image proxy &amp; caching</div>
-          <div class="toggle-row-help">When enabled, channel logos and program artwork are cached and served through FastChannels — ensuring consistent delivery regardless of upstream CDN availability. When disabled, all image URLs point directly to the upstream provider. Note: some sources (e.g. Roku) require proxying for program artwork to display correctly; disabling this may cause missing artwork for those channels.</div>
+          <div class="toggle-row-label">Cache channel logos &amp; guide artwork</div>
+          <div class="toggle-row-help">Serve cached images through FastChannels for reliable delivery. When off, image URLs point to the provider. Some sources, including Roku, need proxying for artwork to display correctly.</div>
         </div>
         <div class="toggle-row-control">
+          <span class="settings-autosave">Auto-saves</span>
           <label class="toggle-switch">
             <input type="checkbox" id="image-proxy-enabled" {% if image_proxy_enabled %}checked{% endif %}
                    onchange="saveSettings({image_proxy_enabled: this.checked}, 'image-proxy-status')">
@@ -24,5 +13,3 @@
           <span class="save-status" id="image-proxy-status"></span>
         </div>
       </div>
-    </div>
-  </div>

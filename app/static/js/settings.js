@@ -4,111 +4,80 @@ const settingsNeedsConfigState = settingsBootstrap.settingsNeedsConfigState || {
 function scrollToSettingCard(anchorId) {
   const el = document.getElementById(anchorId);
   if (!el) return;
+  // Changing the hash reveals its section, including links into advanced help.
+  if (window.location.hash !== `#${anchorId}`) window.location.hash = anchorId;
+  else window.dispatchEvent(new Event('hashchange'));
+  el.closest('.settings-section')?.querySelectorAll('details').forEach((details) => {
+    if (details.contains(el)) details.open = true;
+  });
   el.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
-function settingsSectionLinks(container) {
-  return Array.from(container.querySelectorAll('a[href^="#settings-section-"]'));
-}
-
-function syncSettingsSectionNavActive(navContainers) {
-  const sourceNav = navContainers[0];
-  if (!sourceNav) return;
-  const sourceLinks = settingsSectionLinks(sourceNav);
-  const sections = sourceLinks
-    .map((link) => document.getElementById(link.getAttribute('href').slice(1)))
-    .filter(Boolean);
-  if (!sourceLinks.length || !sections.length) return;
-
-  const floatingNav = navContainers.find((nav) => nav.classList.contains('settings-section-nav-floating'));
-  const navBottom = (floatingNav && floatingNav.classList.contains('is-visible'))
-    ? floatingNav.getBoundingClientRect().bottom
-    : 0;
-  const activationLine = navBottom + 96;
-  let activeId = sections[0].id;
-  for (const section of sections) {
-    if (section.getBoundingClientRect().top <= activationLine) activeId = section.id;
-  }
-
-  navContainers.forEach((nav) => {
-    settingsSectionLinks(nav).forEach((link) => {
-      const isActive = link.getAttribute('href') === `#${activeId}`;
-      link.classList.toggle('active', isActive);
-      if (isActive) {
-        link.setAttribute('aria-current', 'true');
-        const left = link.offsetLeft;
-        const right = left + link.offsetWidth;
-        if (left < nav.scrollLeft) nav.scrollLeft = left;
-        if (right > nav.scrollLeft + nav.clientWidth) nav.scrollLeft = right - nav.clientWidth;
-      } else {
-        link.removeAttribute('aria-current');
-      }
-    });
-  });
-}
-
 function initSettingsSectionNav() {
-  const sourceNav = document.querySelector('.settings-section-nav');
-  if (!sourceNav) return;
-
-  const floatingNav = document.createElement('div');
-  floatingNav.className = 'settings-section-nav-floating';
-  floatingNav.setAttribute('role', 'navigation');
-  floatingNav.setAttribute('aria-label', 'Settings sections');
-  floatingNav.innerHTML = sourceNav.innerHTML;
-  document.body.appendChild(floatingNav);
-
+  const nav = document.querySelector('.settings-section-nav');
+  if (!nav) return; // settings.js is also used by the Bridge page.
+  const links = Array.from(nav.querySelectorAll('a[href^="#settings-section-"]'));
+  const sections = Array.from(document.querySelectorAll('.settings-section'));
+  const picker = document.getElementById('settings-section-picker');
   const adminNav = document.querySelector('body > nav');
-  const navContainers = [sourceNav, floatingNav];
-  const setActiveByHash = (hash) => {
-    if (!hash || !hash.startsWith('#settings-section-')) return;
-    navContainers.forEach((nav) => {
-      settingsSectionLinks(nav).forEach((link) => {
-        const isActive = link.getAttribute('href') === hash;
-        link.classList.toggle('active', isActive);
-        if (isActive) link.setAttribute('aria-current', 'true');
-        else link.removeAttribute('aria-current');
-      });
+  const updateHeaderHeight = () => {
+    document.documentElement.style.setProperty('--settings-header-height', `${adminNav?.offsetHeight || 0}px`);
+  };
+  updateHeaderHeight();
+  if (adminNav && window.ResizeObserver) new ResizeObserver(updateHeaderHeight).observe(adminNav);
+  const legacySections = {
+    'settings-section-playback': 'settings-section-feeds',
+    'settings-section-guide': 'settings-section-feeds',
+    'settings-section-credentials': 'settings-section-tve',
+    'settings-section-maintenance': 'settings-section-system',
+    'settings-section-advanced': 'settings-section-system',
+  };
+  const showSection = (moveFocus = false) => {
+    const hash = window.location.hash.slice(1);
+    const target = document.getElementById(legacySections[hash] || hash);
+    const section = target?.closest('.settings-section') || sections[0];
+    sections.forEach((item) => { item.hidden = item !== section; });
+    links.forEach((link) => {
+      const active = link.hash === `#${section.id}`;
+      link.classList.toggle('active', active);
+      if (active) link.setAttribute('aria-current', 'location');
+      else link.removeAttribute('aria-current');
     });
+    if (picker) picker.value = section.id;
+    // Reveal nested disclosures before the browser scrolls to a deep link.
+    for (let parent = target?.parentElement; parent && parent !== section; parent = parent.parentElement) {
+      if (parent.tagName === 'DETAILS') parent.open = true;
+    }
+    if (hash === 'settings-section-advanced') section.querySelector('.settings-advanced').open = true;
+    if (moveFocus) {
+      const heading = section.querySelector('h2');
+      heading.focus({ preventScroll: true });
+      (target || section).scrollIntoView({ block: 'start' });
+    }
   };
-  const adminNavOffset = () => {
-    if (!adminNav || adminNav === sourceNav) return 0;
-    return Math.max(0, Math.round(adminNav.getBoundingClientRect().bottom));
-  };
-  const update = () => {
-    const topOffset = adminNavOffset();
-    document.documentElement.style.setProperty('--settings-section-nav-top', `${topOffset}px`);
-    const sourceRect = sourceNav.getBoundingClientRect();
-    floatingNav.classList.toggle('is-visible', sourceRect.bottom <= topOffset);
-    syncSettingsSectionNavActive(navContainers);
-  };
-
-  let pending = false;
-  const requestUpdate = () => {
-    if (pending) return;
-    pending = true;
-    window.requestAnimationFrame(() => {
-      pending = false;
-      update();
-    });
-  };
-
-  navContainers.forEach((nav) => {
-    settingsSectionLinks(nav).forEach((link) => {
-      link.addEventListener('click', () => setActiveByHash(link.getAttribute('href')));
+  links.forEach((link) => {
+    link.addEventListener('click', () => {
+      if (window.location.hash === link.hash) showSection(true);
     });
   });
+  picker?.addEventListener('change', () => { window.location.hash = picker.value; });
+  document.querySelector('.settings-mobile-nav').hidden = false;
+  document.body.classList.add('settings-navigation-ready');
+  showSection();
+  window.addEventListener('hashchange', () => showSection(true));
+}
 
-  update();
-  window.addEventListener('scroll', requestUpdate, { passive: true });
-  window.addEventListener('resize', requestUpdate);
-  window.addEventListener('hashchange', () => {
-    setActiveByHash(window.location.hash);
-    requestUpdate();
+function refreshSetupStatuses() {
+  document.querySelectorAll('[data-setup-status]').forEach((badge) => {
+    const needsConfig = settingsNeedsConfigState[badge.dataset.setupStatus];
+    badge.textContent = needsConfig ? 'Needs setup' : 'Configured';
+    badge.classList.toggle('needs-attention', !!needsConfig);
+    badge.classList.toggle('is-configured', !needsConfig);
   });
 }
 
 function refreshSettingsNeedsConfigBanner() {
+  refreshSetupStatuses();
   const banner = document.getElementById('settings-needs-config-banner');
   const list = document.getElementById('settings-needs-config-list');
   if (!banner || !list) return;
@@ -137,7 +106,7 @@ function refreshSettingsNeedsConfigBanner() {
   }
 
   if (strong) {
-    strong.textContent = `⚠ ${remaining} setting${remaining === 1 ? '' : 's'} should be configured on new installs`;
+    strong.textContent = `⚠ ${remaining} setting${remaining === 1 ? ' needs' : 's need'} your attention`;
   }
 }
 
