@@ -87,7 +87,7 @@ def install(engine) -> None:
             why = 'mostly the commit, usually a slow disk'
         else:
             why = 'mostly between the first write and the commit'
-        logger.info('[db-lock] slow write: %.1fs, %s (%s)', held, why, details)
+        logger.debug('[db-lock] slow write: %.1fs, %s (%s)', held, why, details)
 
     def _take(info):
         info.pop(_PENDING_KEY, None)
