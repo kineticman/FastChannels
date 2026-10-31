@@ -1693,6 +1693,12 @@ def _sanitize(s: str | None) -> str:
     """Strip control characters from text (safe for both M3U attributes and XML text nodes)."""
     if not s:
         return ''
+    # Most guide text is already clean ASCII.  In that case none of the
+    # mojibake repair, character remapping, whitespace cleanup or control
+    # stripping below can change it; skipping those steps matters when the
+    # XML generator calls this hundreds of thousands of times per artifact.
+    if s.isascii() and s.isprintable() and '  ' not in s and s == s.strip():
+        return s
     s = _try_fix_mojibake(s)
     s = s.translate(_WIN1252_REMAP)
     s = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]+', '', s)  # strip remaining C0 controls

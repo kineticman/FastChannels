@@ -1775,6 +1775,7 @@ def feeds():
                            prismcast_enabled=app_settings.prismcast_capture_configured(),
                            fc_player_enabled=_fc_player_bridge.hdmi_bridge_active(app_settings),
                            fc_player_ah4c_configured=_fc_player_bridge.ah4c_bridge_active(app_settings),
+                           native_output_enabled=bool(app_settings.native_output_enabled),
                            feed_summary=feed_summary,
                            feed_split_counts=feed_split_counts,
                            feed_chnum_placeholder=feed_chnum_placeholder,
@@ -1917,6 +1918,7 @@ def _bridge_coverage(methods: list[dict]) -> dict:
 @admin_bp.route('/settings')
 def settings():
     app_settings = AppSettings.get()
+    from ..xml_cache import native_output_activity
     request_base_url = request.host_url.rstrip('/')
     settings_needs_config = []
     _eff_url, _url_source, _url_needs_config = public_base_url_config(app_settings)
@@ -1968,6 +1970,9 @@ def settings():
                            auto_allow_new_channels=app_settings.auto_allow_new_channels if app_settings.auto_allow_new_channels is not None else True,
                            gracenote_auto_fill=app_settings.gracenote_auto_fill if app_settings.gracenote_auto_fill is not None else True,
                            dvr_epg_auto_refresh=app_settings.dvr_epg_auto_refresh if app_settings.dvr_epg_auto_refresh is not None else True,
+                           native_output_enabled=bool(app_settings.native_output_enabled),
+                           native_output_activity=native_output_activity(
+                               f.slug for f in Feed.query.filter_by(is_enabled=True).all()),
                            image_proxy_enabled=app_settings.image_proxy_enabled if app_settings.image_proxy_enabled is not None else True,
                            event_guide_filler=app_settings.event_guide_filler if app_settings.event_guide_filler is not None else True,
                            m3u_rewrite_timestamps=bool(app_settings.m3u_rewrite_timestamps),

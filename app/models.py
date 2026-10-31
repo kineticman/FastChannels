@@ -411,6 +411,7 @@ class Feed(db.Model):
 
     def to_dict(self, base_url: str = '') -> dict:
         base_url = (base_url or '').rstrip('/')
+        native_enabled = bool(AppSettings.get().native_output_enabled)
         return {
             'id':          self.id,
             'slug':        self.slug,
@@ -427,8 +428,8 @@ class Feed(db.Model):
             'epg_url':        f'{base_url}/feeds/{self.slug}/epg.xml',
             'gracenote_url':  f'{base_url}/feeds/{self.slug}/m3u/gracenote',
             'mixed_url':      f'{base_url}/feeds/{self.slug}/m3u/mixed',
-            'native_m3u_url': f'{base_url}/feeds/{self.slug}/native/m3u',
-            'native_epg_url': f'{base_url}/feeds/{self.slug}/native/epg.xml',
+            'native_m3u_url': f'{base_url}/feeds/{self.slug}/native/m3u' if native_enabled else None,
+            'native_epg_url': f'{base_url}/feeds/{self.slug}/native/epg.xml' if native_enabled else None,
         }
 
 
@@ -481,6 +482,7 @@ class AppSettings(db.Model):
     auto_allow_new_channels = db.Column(db.Boolean, nullable=False, default=True, server_default=db.text('1'))  # newly-scraped channels enter feeds enabled (vs. held for review)
     gracenote_auto_fill  = db.Column(db.Boolean, nullable=False, default=True, server_default=db.text('1'))  # scrapers auto-assign Gracenote IDs
     dvr_epg_auto_refresh = db.Column(db.Boolean, nullable=False, default=True, server_default=db.text('1'))  # hourly PUT to Channels DVR lineups
+    native_output_enabled = db.Column(db.Boolean, nullable=False, default=True, server_default=db.text('1'))  # publish native scraped-only feed M3U and XML outputs
     image_proxy_enabled  = db.Column(db.Boolean, nullable=False, default=True, server_default=db.text('1'))  # proxy/cache logos and posters in output
     event_guide_filler   = db.Column(db.Boolean, nullable=False, default=True, server_default=db.text('1'))  # XMLTV: "Event Not Started"/"Event Ended" blocks around event channels' programmes
     m3u_rewrite_timestamps = db.Column(db.Boolean, nullable=False, default=False, server_default=db.text('0'))  # experimental: add Channels DVR timestamp-rewrite directive to M3U entries

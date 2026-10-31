@@ -165,6 +165,51 @@ async function saveSettings(body, statusId) {
   }
 }
 
+function renderNativeOutputActivity() {
+  const toggle = document.getElementById('native-output-enabled');
+  if (!toggle) return;
+  const last = document.getElementById('native-last-request');
+  const lastAt = Number(last.dataset.timestamp);
+  last.textContent = lastAt
+    ? new Date(lastAt * 1000).toLocaleString()
+    : 'None recorded since this setting was added';
+
+  const countdown = document.getElementById('native-refresh-countdown');
+  if (!toggle.checked) {
+    countdown.textContent = 'Automatic native refresh is disabled by this switch.';
+    return;
+  }
+  const until = Number(countdown.dataset.until);
+  if (!until) {
+    countdown.textContent = 'Native XML auto-refresh: the seven-day window starts when a guide is first built.';
+    return;
+  }
+  const seconds = Math.ceil(until - Date.now() / 1000);
+  if (seconds <= 0) {
+    countdown.textContent = 'Native XML auto-refresh: all guides are idle. Their URLs remain available and requests rebuild them if needed.';
+    return;
+  }
+  const days = Math.floor(seconds / 86400);
+  const hours = Math.floor((seconds % 86400) / 3600);
+  const minutes = Math.ceil((seconds % 3600) / 60);
+  const remaining = days ? `${days}d ${hours}h` : hours ? `${hours}h ${minutes}m` : `${minutes}m`;
+  countdown.textContent = `Native XML auto-refresh: all guides will be idle within ${remaining} unless requested again.`;
+}
+
+async function saveNativeOutput() {
+  const toggle = document.getElementById('native-output-enabled');
+  const enabled = toggle.checked;
+  toggle.disabled = true;
+  const saved = await saveSettings({native_output_enabled: enabled}, 'native-output-status');
+  toggle.disabled = false;
+  if (!saved) toggle.checked = !enabled;
+  renderNativeOutputActivity();
+  if (saved) setTimeout(() => location.reload(), 700);
+}
+
+renderNativeOutputActivity();
+setInterval(renderNativeOutputActivity, 60_000);
+
 function checkPublicBaseUrlPortWarning() {
   const val = document.getElementById('public-base-url').value.trim();
   const warning = document.getElementById('no-port-warning');

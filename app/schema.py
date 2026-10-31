@@ -307,6 +307,11 @@ def ensure_runtime_schema() -> None:
                 conn.execute(text(
                     "ALTER TABLE app_settings ADD COLUMN dvr_epg_auto_refresh BOOLEAN NOT NULL DEFAULT 1"
                 ))
+            if "native_output_enabled" not in cols:
+                # Keep existing native URLs working until the user opts out.
+                conn.execute(text(
+                    "ALTER TABLE app_settings ADD COLUMN native_output_enabled BOOLEAN NOT NULL DEFAULT 1"
+                ))
             if "image_proxy_enabled" not in cols:
                 conn.execute(text(
                     "ALTER TABLE app_settings ADD COLUMN image_proxy_enabled BOOLEAN NOT NULL DEFAULT 1"

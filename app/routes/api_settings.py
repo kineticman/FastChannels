@@ -345,6 +345,8 @@ def app_settings():
             row.gracenote_auto_fill = bool(data['gracenote_auto_fill'])
         if 'dvr_epg_auto_refresh' in data:
             row.dvr_epg_auto_refresh = bool(data['dvr_epg_auto_refresh'])
+        if 'native_output_enabled' in data:
+            row.native_output_enabled = bool(data['native_output_enabled'])
         if 'image_proxy_enabled' in data:
             row.image_proxy_enabled = bool(data['image_proxy_enabled'])
         if 'event_guide_filler' in data:
@@ -415,6 +417,7 @@ def app_settings():
         'auto_allow_new_channels': row.auto_allow_new_channels if row.auto_allow_new_channels is not None else True,
         'gracenote_auto_fill': row.gracenote_auto_fill if row.gracenote_auto_fill is not None else True,
         'dvr_epg_auto_refresh': row.dvr_epg_auto_refresh if row.dvr_epg_auto_refresh is not None else True,
+        'native_output_enabled': bool(row.native_output_enabled),
         'image_proxy_enabled': row.image_proxy_enabled if row.image_proxy_enabled is not None else True,
         'event_guide_filler': row.event_guide_filler if row.event_guide_filler is not None else True,
         'm3u_rewrite_timestamps': bool(row.m3u_rewrite_timestamps),

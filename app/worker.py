@@ -56,6 +56,7 @@ from app.tve.adobe_pass import TVENotAuthorizedError
 from app.xml_cache import (
     ARTIFACT_IDLE_SECONDS, ARTIFACT_PURGE_SECONDS, artifact_in_use, ensure_xml_artifact, get_artifact,
     invalidate_xml_cache, purge_idle_artifacts, sweep_unused_artifacts, write_artifact,
+    delete_xml_artifact,
 )
 from app.routes.images import delete_cached_logo
 
@@ -1850,9 +1851,10 @@ def _refresh_xml_artifacts(only_keys: set[str] | None = None) -> None:
     (they're built on their next request instead). `only_keys` builds just
     those artifacts — the on-request path — with no idle check or sweep.
     """
+    started_at = time.monotonic()
     from app.generators.m3u import generate_gracenote_m3u, generate_m3u, generate_native_m3u, generate_mixed_m3u, generate_combined_ah4c_m3u, generate_prismcast_m3u, generate_fc_player_m3u, feed_number_kwargs, feed_to_query_filters, _MASTER_GRACENOTE_START
     from app import fc_player_bridge as _fc_player_bridge
-    from app.generators.xmltv import write_xmltv
+    from app.generators.xmltv import feed_xml_artifact_key, write_xmltv
 
     for attempt in range(2):
         # The feed list below is read now, so the sweep's grace counts from here.
@@ -1924,27 +1926,33 @@ def _refresh_xml_artifacts(only_keys: set[str] | None = None) -> None:
                 lambda fp: fp.write(generate_fc_player_m3u(
                     {}, base_url=base_url, namespace_start=default_gn_start, gracenote=True, ah4c_base_url=ah4c_url)),
             ))
+        default_uses_master = False
         for feed in Feed.query.filter_by(is_enabled=True).order_by(Feed.slug).all():
             filters = feed_to_query_filters(feed.filters or {})
-            xml_artifacts.append((
-                f'feed-{feed.slug}',
-                lambda fp, filters=filters, feed_name=feed.name: write_xmltv(
-                    fp,
-                    filters,
-                    base_url=base_url,
-                    feed_name=feed_name,
-                ),
-            ))
-            xml_artifacts.append((
-                f'feed-{feed.slug}-native',
-                lambda fp, filters=filters, feed_name=feed.name: write_xmltv(
-                    fp,
-                    filters,
-                    base_url=base_url,
-                    feed_name=feed_name,
-                    native=True,
-                ),
-            ))
+            xml_key = feed_xml_artifact_key(feed)
+            if xml_key == 'master':
+                default_uses_master = True
+            else:
+                xml_artifacts.append((
+                    xml_key,
+                    lambda fp, filters=filters, feed_name=feed.name: write_xmltv(
+                        fp,
+                        filters,
+                        base_url=base_url,
+                        feed_name=feed_name,
+                    ),
+                ))
+            if _settings.native_output_enabled:
+                xml_artifacts.append((
+                    f'feed-{feed.slug}-native',
+                    lambda fp, filters=filters, feed_name=feed.name: write_xmltv(
+                        fp,
+                        filters,
+                        base_url=base_url,
+                        feed_name=feed_name,
+                        native=True,
+                    ),
+                ))
             std_kw = feed_number_kwargs(feed)
             m3u_artifacts.append((
                 f'feed-{feed.slug}-m3u',
@@ -1958,13 +1966,14 @@ def _refresh_xml_artifacts(only_keys: set[str] | None = None) -> None:
             # a channel-level attribute only — program data still rides in the EPG XML —
             # so stripping it is lossless for guides and makes the native M3U import
             # cleanly into Threadfin/Plex and other bridges.
-            m3u_artifacts.append((
-                f'feed-{feed.slug}-native-m3u',
-                lambda fp, filters=filters, std_kw=std_kw, slug=feed.slug: fp.write(
-                    generate_native_m3u(filters, base_url=base_url, include_description=False,
-                                        epg_url=f'{base_url}/feeds/{slug}/native/epg.xml', **std_kw)
-                ),
-            ))
+            if _settings.native_output_enabled:
+                m3u_artifacts.append((
+                    f'feed-{feed.slug}-native-m3u',
+                    lambda fp, filters=filters, std_kw=std_kw, slug=feed.slug: fp.write(
+                        generate_native_m3u(filters, base_url=base_url, include_description=False,
+                                            epg_url=f'{base_url}/feeds/{slug}/native/epg.xml', **std_kw)
+                    ),
+                ))
             # EXPERIMENTAL: mixed Gracenote/XMLTV single-source playlist, pairs with
             # this feed's regular /epg.xml — see generate_mixed_m3u docstring.
             m3u_artifacts.append((
@@ -2087,6 +2096,8 @@ def _refresh_xml_artifacts(only_keys: set[str] | None = None) -> None:
                 rebuilt_xml += 1
             except Exception:
                 logger.exception('[xml-cache] failed to refresh %s', cache_key)
+        if default_uses_master and get_artifact('master', ext='xml') is not None:
+            delete_xml_artifact('feed-default')
         rebuilt_m3u = 0
         for cache_key, writer in m3u_artifacts:
             try:
@@ -2101,17 +2112,12 @@ def _refresh_xml_artifacts(only_keys: set[str] | None = None) -> None:
             continue
 
         if only_keys is not None:
-            logger.info('[artifacts] built %d XML and %d M3U artifact(s) on request: %s',
-                        rebuilt_xml, rebuilt_m3u, ', '.join(sorted(only_keys)))
+            logger.info('[artifacts] built %d XML and %d M3U artifact(s) on request: %s (%.1fs)',
+                        rebuilt_xml, rebuilt_m3u, ', '.join(sorted(only_keys)),
+                        time.monotonic() - started_at)
             if missing_m3u:
                 logger.warning('[artifacts] on-request build left M3U artifact(s) missing: %s', missing_m3u)
             break
-        if idle_keys:
-            logger.info('[artifacts] refreshed %d XML artifact(s) and %d M3U artifact(s); '
-                        'skipped %d not requested in %d days', rebuilt_xml, rebuilt_m3u,
-                        len(idle_keys), ARTIFACT_IDLE_SECONDS // 86400)
-        else:
-            logger.info('[artifacts] refreshed %d XML artifact(s) and %d M3U artifact(s)', rebuilt_xml, rebuilt_m3u)
         if missing_m3u:
             logger.warning('[artifacts] still missing M3U artifact(s) after retry: %s', missing_m3u)
         try:
@@ -2131,6 +2137,14 @@ def _refresh_xml_artifacts(only_keys: set[str] | None = None) -> None:
                             swept, swept_bytes / 1024 / 1024)
         except Exception:
             logger.exception('[artifacts] unused-artifact sweep failed')
+        elapsed = time.monotonic() - started_at
+        if idle_keys:
+            logger.info('[artifacts] refreshed %d XML artifact(s) and %d M3U artifact(s); '
+                        'skipped %d not requested in %d days (%.1fs)', rebuilt_xml, rebuilt_m3u,
+                        len(idle_keys), ARTIFACT_IDLE_SECONDS // 86400, elapsed)
+        else:
+            logger.info('[artifacts] refreshed %d XML artifact(s) and %d M3U artifact(s) (%.1fs)',
+                        rebuilt_xml, rebuilt_m3u, elapsed)
         break
 
 

@@ -1,7 +1,7 @@
 import logging
 import os
 
-from flask import Blueprint, Response, redirect, request, send_file, stream_with_context
+from flask import Blueprint, Response, abort, redirect, request, send_file, stream_with_context
 from ..generators.m3u import (
     generate_m3u,
     generate_gracenote_m3u,
@@ -12,8 +12,8 @@ from ..generators.m3u import (
     generate_prismcast_m3u,
     generate_fc_player_m3u,
 )
-from ..generators.xmltv import generate_xmltv_stream
-from ..models import Feed
+from ..generators.xmltv import feed_xml_artifact_key, generate_xmltv_stream
+from ..models import AppSettings, Feed
 from ..url import public_base_url
 from ..xml_cache import (
     get_artifact, get_xml_artifact, note_artifact_request, xml_artifact_path,
@@ -307,8 +307,10 @@ def feed_m3u_gracenote(slug):
 @output_bp.route('/feeds/<slug>/epg.xml')
 def feed_epg(slug):
     feed     = Feed.query.filter_by(slug=slug, is_enabled=True).first_or_404()
-    path, stale = _xml_artifact(f'feed-{feed.slug}')
-    _log_epg_request(f'feed-{feed.slug}', path, stale)
+    # Preserve the Default feed URL without a second copy of the same guide.
+    cache_key = feed_xml_artifact_key(feed)
+    path, stale = _xml_artifact(cache_key)
+    _log_epg_request(cache_key, path, stale)
     if path is None:
         return Response(
             f'Feed XML artifact for {feed.slug} is warming. Retry shortly.',
@@ -325,6 +327,8 @@ def feed_epg(slug):
 
 @output_bp.route('/feeds/<slug>/native/m3u')
 def feed_native_m3u(slug):
+    if not AppSettings.get().native_output_enabled:
+        abort(404)
     feed = Feed.query.filter_by(slug=slug, is_enabled=True).first_or_404()
     path = _artifact(f'feed-{slug}-native-m3u', ext='m3u')
     if path is None:
@@ -343,6 +347,8 @@ def feed_native_m3u(slug):
 
 @output_bp.route('/feeds/<slug>/native/epg.xml')
 def feed_native_epg(slug):
+    if not AppSettings.get().native_output_enabled:
+        abort(404)
     feed = Feed.query.filter_by(slug=slug, is_enabled=True).first_or_404()
     path, stale = _xml_artifact(f'feed-{feed.slug}-native')
     _log_epg_request(f'feed-{feed.slug}-native', path, stale)

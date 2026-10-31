@@ -684,6 +684,7 @@
       </div>
 
       <div class="feed-urls">
+        {% set feed_epg_path = '/epg.xml' if feed.slug == 'default' else '/feeds/' ~ feed.slug ~ '/epg.xml' %}
         {% set split = feed_split_counts.get(feed.id, {}) %}
         {% set standard_total = split.get('total_count', feed.channel_count()) %}
         {% set std_count = split.get('standard_count', 1) %}
@@ -695,11 +696,11 @@
           <a href="{{ base_url }}/feeds/{{ feed.slug }}/m3u/mixed" target="_blank" onclick="event.stopPropagation()" class="url-chip-open" title="Open">↗</a>
           <button class="copy-btn" onclick="copyChip(event, this.closest('.url-chip'), '{{ base_url }}/feeds/{{ feed.slug }}/m3u/mixed')">Copy</button>
         </div>
-        <div class="url-chip" onclick="copyChip(event, this, '{{ base_url }}/feeds/{{ feed.slug }}/epg.xml')">
+        <div class="url-chip" onclick="copyChip(event, this, '{{ base_url }}{{ feed_epg_path }}')">
           <span class="url-chip-label">EPG</span>
-          <span class="url-chip-text">{{ base_url }}/feeds/{{ feed.slug }}/epg.xml</span>
-          <a href="{{ base_url }}/feeds/{{ feed.slug }}/epg.xml" target="_blank" onclick="event.stopPropagation()" class="url-chip-open" title="Open">↗</a>
-          <button class="copy-btn" onclick="copyChip(event, this.closest('.url-chip'), '{{ base_url }}/feeds/{{ feed.slug }}/epg.xml')">Copy</button>
+          <span class="url-chip-text">{{ base_url }}{{ feed_epg_path }}</span>
+          <a href="{{ base_url }}{{ feed_epg_path }}" target="_blank" onclick="event.stopPropagation()" class="url-chip-open" title="Open">↗</a>
+          <button class="copy-btn" onclick="copyChip(event, this.closest('.url-chip'), '{{ base_url }}{{ feed_epg_path }}')">Copy</button>
         </div>
         {% elif std_count > 0 %}
         <div class="url-chip" onclick="copyChip(event, this, '{{ base_url }}/feeds/{{ feed.slug }}/m3u')">
@@ -708,11 +709,11 @@
           <a href="{{ base_url }}/feeds/{{ feed.slug }}/m3u" target="_blank" onclick="event.stopPropagation()" class="url-chip-open" title="Open">↗</a>
           <button class="copy-btn" onclick="copyChip(event, this.closest('.url-chip'), '{{ base_url }}/feeds/{{ feed.slug }}/m3u')">Copy</button>
         </div>
-        <div class="url-chip" onclick="copyChip(event, this, '{{ base_url }}/feeds/{{ feed.slug }}/epg.xml')">
+        <div class="url-chip" onclick="copyChip(event, this, '{{ base_url }}{{ feed_epg_path }}')">
           <span class="url-chip-label">EPG</span>
-          <span class="url-chip-text">{{ base_url }}/feeds/{{ feed.slug }}/epg.xml</span>
-          <a href="{{ base_url }}/feeds/{{ feed.slug }}/epg.xml" target="_blank" onclick="event.stopPropagation()" class="url-chip-open" title="Open">↗</a>
-          <button class="copy-btn" onclick="copyChip(event, this.closest('.url-chip'), '{{ base_url }}/feeds/{{ feed.slug }}/epg.xml')">Copy</button>
+          <span class="url-chip-text">{{ base_url }}{{ feed_epg_path }}</span>
+          <a href="{{ base_url }}{{ feed_epg_path }}" target="_blank" onclick="event.stopPropagation()" class="url-chip-open" title="Open">↗</a>
+          <button class="copy-btn" onclick="copyChip(event, this.closest('.url-chip'), '{{ base_url }}{{ feed_epg_path }}')">Copy</button>
         </div>
         {% endif %}
         {% if gn_count > 0 and not mixed_guide %}
@@ -725,6 +726,7 @@
         {% endif %}
       </div>
 
+      {% if native_output_enabled %}
       <details class="native-endpoints">
         <summary>Native (scraped-only) endpoints — advanced</summary>
         <div class="feed-urls" style="margin-top:0.5rem">
@@ -748,6 +750,7 @@
         </div>
         <p class="help" style="margin-top:0.5rem">The feed's {{ standard_total }} standard channel{{ 's' if standard_total != 1 else '' }} with scraped EPG data only — Gracenote assignments and bridge-only DRM channels are ignored. Use these together as a single source for clients that prefer one EPG backend.</p>
       </details>
+      {% endif %}
 
       {% if prismcast_enabled or fc_player_enabled or fc_player_ah4c_configured %}
       <div class="bridge-outputs-head">
@@ -782,11 +785,11 @@
           </div>
           {% endif %}
           {% endif %}
-          <div class="url-chip" onclick="copyChip(event, this, '{{ base_url }}/feeds/{{ feed.slug }}/epg.xml')">
+          <div class="url-chip" onclick="copyChip(event, this, '{{ base_url }}{{ feed_epg_path }}')">
             <span class="url-chip-label">EPG</span>
-            <span class="url-chip-text">{{ base_url }}/feeds/{{ feed.slug }}/epg.xml</span>
-            <a href="{{ base_url }}/feeds/{{ feed.slug }}/epg.xml" target="_blank" onclick="event.stopPropagation()" class="url-chip-open" title="Open">↗</a>
-            <button class="copy-btn" onclick="copyChip(event, this.closest('.url-chip'), '{{ base_url }}/feeds/{{ feed.slug }}/epg.xml')">Copy</button>
+            <span class="url-chip-text">{{ base_url }}{{ feed_epg_path }}</span>
+            <a href="{{ base_url }}{{ feed_epg_path }}" target="_blank" onclick="event.stopPropagation()" class="url-chip-open" title="Open">↗</a>
+            <button class="copy-btn" onclick="copyChip(event, this.closest('.url-chip'), '{{ base_url }}{{ feed_epg_path }}')">Copy</button>
           </div>
         </div>
         <div style="margin-top:0.6rem">
@@ -826,11 +829,11 @@
           </div>
           {% endif %}
           {% endif %}
-          <div class="url-chip" onclick="copyChip(event, this, '{{ base_url }}/feeds/{{ feed.slug }}/epg.xml')">
+          <div class="url-chip" onclick="copyChip(event, this, '{{ base_url }}{{ feed_epg_path }}')">
             <span class="url-chip-label">EPG</span>
-            <span class="url-chip-text">{{ base_url }}/feeds/{{ feed.slug }}/epg.xml</span>
-            <a href="{{ base_url }}/feeds/{{ feed.slug }}/epg.xml" target="_blank" onclick="event.stopPropagation()" class="url-chip-open" title="Open">↗</a>
-            <button class="copy-btn" onclick="copyChip(event, this.closest('.url-chip'), '{{ base_url }}/feeds/{{ feed.slug }}/epg.xml')">Copy</button>
+            <span class="url-chip-text">{{ base_url }}{{ feed_epg_path }}</span>
+            <a href="{{ base_url }}{{ feed_epg_path }}" target="_blank" onclick="event.stopPropagation()" class="url-chip-open" title="Open">↗</a>
+            <button class="copy-btn" onclick="copyChip(event, this.closest('.url-chip'), '{{ base_url }}{{ feed_epg_path }}')">Copy</button>
           </div>
         </div>
         <div style="margin-top:0.6rem">
@@ -869,11 +872,11 @@
           </div>
           {% endif %}
           {% endif %}
-          <div class="url-chip" onclick="copyChip(event, this, '{{ base_url }}/feeds/{{ feed.slug }}/epg.xml')">
+          <div class="url-chip" onclick="copyChip(event, this, '{{ base_url }}{{ feed_epg_path }}')">
             <span class="url-chip-label">EPG</span>
-            <span class="url-chip-text">{{ base_url }}/feeds/{{ feed.slug }}/epg.xml</span>
-            <a href="{{ base_url }}/feeds/{{ feed.slug }}/epg.xml" target="_blank" onclick="event.stopPropagation()" class="url-chip-open" title="Open">↗</a>
-            <button class="copy-btn" onclick="copyChip(event, this.closest('.url-chip'), '{{ base_url }}/feeds/{{ feed.slug }}/epg.xml')">Copy</button>
+            <span class="url-chip-text">{{ base_url }}{{ feed_epg_path }}</span>
+            <a href="{{ base_url }}{{ feed_epg_path }}" target="_blank" onclick="event.stopPropagation()" class="url-chip-open" title="Open">↗</a>
+            <button class="copy-btn" onclick="copyChip(event, this.closest('.url-chip'), '{{ base_url }}{{ feed_epg_path }}')">Copy</button>
           </div>
         </div>
         <div style="margin-top:0.6rem">
