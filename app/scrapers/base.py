@@ -131,11 +131,12 @@ _LANGUAGE_PHRASE_MARKERS = (
     ('arab series', 'ar'),
     ('al arabiya', 'ar'),        # brand (desc never says "Arabic")
     ('asharq', 'ar'),            # brand (pan-Arab news)
-    # NOTE: Portuguese is intentionally NOT inferred from country references
-    # ("from Brazil", "Samba"): those are bilingual/Latin-music false positives
-    # (e.g. TRACE Latina lists Samba among Salsa/Reggaeton; 3ABN Latino is
-    # Spanish+Portuguese).  Add 'pt' only on an explicit "Portuguese-language"
-    # style statement if one ever appears.
+    # Portuguese is inferred only from an explicit language statement or phrase,
+    # not country references ("from Brazil", "Samba") that can describe
+    # bilingual/Latin-music programming.
+    ('portuguese-language', 'pt'),
+    ('portuguese language', 'pt'),
+    ('em portugues', 'pt'),
     # Spanish phrases the name-based pass (_SPANISH_LANGUAGE_MARKERS) misses
     # because they live in the description rather than the channel name.
     ('spanish speaking', 'es'),

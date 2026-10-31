@@ -37,7 +37,8 @@ import requests
 
 from ..tve.adobe_pass import TVEAuthError
 from ..sports import normalize_sport, sport_for_league
-from .base import BaseScraper, ChannelData, ConfigField, ProgramData, StreamDeadError, EVENT_CHANNEL_TAG
+from .base import (BaseScraper, ChannelData, ConfigField, ProgramData,
+                   StreamDeadError, EVENT_CHANNEL_TAG, infer_language)
 
 logger = logging.getLogger(__name__)
 
@@ -318,6 +319,7 @@ class ParamountScraper(BaseScraper):
                 stream_url=f'{EVENT_SCHEME}{cid}?slug={league["slug"]}&end={int(end.timestamp())}',
                 logo_url=_THUMBS + thumb if thumb else (_IMAGES + logo if logo else None),
                 category='Sports',
+                language=infer_language(item.get('title'), item.get('description')),
                 stream_type='hls',
                 guide_key=f'{EVENT_CHANNEL_PREFIX}{cid}',
                 tags=[EVENT_CHANNEL_TAG, 'Paramount+ Sports'],
