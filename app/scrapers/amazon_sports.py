@@ -19,9 +19,11 @@ There is no sign-in here: the account is the Amazon Prime Free source's.
 
 from __future__ import annotations
 
+import gzip
 import hashlib
 import json
 import logging
+import os
 import re
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -72,6 +74,11 @@ _TITLE_FIELDS = (
 # Reasons that rights and live state already explain. Anything else (a
 # blackout or regional block, say) is surfaced in the event's description.
 _EXPECTED_REASONS = frozenset({'NO_ENTITLEMENT', 'LIVE_EVENT_IN_FUTURE'})
+# Temporary, for reviewing what Amazon really returns: each scrape's raw
+# responses are saved only where this directory has been created by hand.
+_DUMP_DIR = '/data/debug/amazon_sports'
+_DUMP_KEEP_DAYS = 14
+_DUMP_OMIT_KEYS = frozenset({'playbackEnvelope', 'csrfToken', 'token'})
 # How an entitled event is labelled for the access filter, by entitlementType.
 # Amazon names free-with-ads events' benefit "Prime", which reads as if Prime
 # were needed.
@@ -321,6 +328,49 @@ def event_matches_filter(event: dict, config: dict) -> bool:
     return True
 
 
+def _dump_scrub(value):
+    if isinstance(value, dict):
+        return {key: _dump_scrub(item) for key, item in value.items() if key not in _DUMP_OMIT_KEYS}
+    if isinstance(value, list):
+        return [_dump_scrub(item) for item in value]
+    return value
+
+
+class _ScrapeDump:
+    """One scrape's raw responses, written as one gzipped JSON file. Never
+    allowed to affect the scrape."""
+
+    def __init__(self):
+        self.enabled = os.path.isdir(_DUMP_DIR)
+        self.started = datetime.now(timezone.utc)
+        self.data = {'started_at': self.started.isoformat(), 'outcome': None, 'storefront': None,
+                     'pages': [], 'title_batches': [], 'decisions': None}
+
+    def set(self, key: str, value) -> None:
+        if self.enabled:
+            self.data[key] = _dump_scrub(value)
+
+    def append(self, key: str, value) -> None:
+        if self.enabled:
+            self.data[key].append(_dump_scrub(value))
+
+    def save(self, label: str, outcome: str) -> None:
+        if not self.enabled:
+            return
+        try:
+            self.data['outcome'] = outcome
+            self.data['finished_at'] = datetime.now(timezone.utc).isoformat()
+            name = f"{self.started.strftime('%Y%m%d-%H%M%S')}-{label}.json.gz"
+            with gzip.open(os.path.join(_DUMP_DIR, name), 'wt', encoding='utf-8') as handle:
+                json.dump(self.data, handle)
+            cutoff = time.time() - _DUMP_KEEP_DAYS * 86400
+            for entry in os.scandir(_DUMP_DIR):
+                if entry.name.endswith('.json.gz') and entry.stat().st_mtime < cutoff:
+                    os.unlink(entry.path)
+        except Exception as exc:
+            logger.warning('[amazon-sports] raw scrape dump failed: %s', type(exc).__name__)
+
+
 class AmazonSportsScraper(AmazonPrimeFreeScraper, BaseScraper):
     source_name = 'amazon_sports'
     source_aliases = ()
@@ -354,6 +404,7 @@ class AmazonSportsScraper(AmazonPrimeFreeScraper, BaseScraper):
     def __init__(self, config=None):
         super().__init__(_with_account(config))
         self._events: dict[str, dict] = {}
+        self._dump = _ScrapeDump()
         self._listing_gap = False
 
     # ── discovery ──
@@ -363,6 +414,7 @@ class AmazonSportsScraper(AmazonPrimeFreeScraper, BaseScraper):
         if not response or response.status_code != 200:
             raise RuntimeError('Amazon sports page unavailable')
         body = _hydration(response.text)
+        self._dump.set('storefront', body)
         containers = body.get('containers') or []
         main = [c for c in containers if c.get('title') in self.CAROUSELS]
         if len(main) != len(self.CAROUSELS):
@@ -419,6 +471,9 @@ class AmazonSportsScraper(AmazonPrimeFreeScraper, BaseScraper):
                         data = page.json()
                     except ValueError as exc:
                         raise RuntimeError('Amazon sports pagination was not JSON') from exc
+                    self._dump.append('pages', {'carousel': container.get('title') or target, 'index': index,
+                                                'attempt': attempt, 'at': datetime.now(timezone.utc).isoformat(),
+                                                'response': data})
                     entities = data.get('entities')
                     if not isinstance(entities, list):
                         raise RuntimeError('Amazon sports pagination changed shape')
@@ -580,6 +635,7 @@ class AmazonSportsScraper(AmazonPrimeFreeScraper, BaseScraper):
             except Exception as exc:
                 logger.warning('[amazon-sports] title batch failed: %s', type(exc).__name__)
                 continue
+            self._dump.append('title_batches', {'asins': [by_gti[gti] for gti in chunk], 'response': data})
             for i, gti in enumerate(chunk):
                 title = data.get(f't{i}') or {}
                 if not title:
@@ -641,6 +697,22 @@ class AmazonSportsScraper(AmazonPrimeFreeScraper, BaseScraper):
     # ── channels / EPG ──
 
     def fetch_channels(self) -> list[ChannelData]:
+        self._dump = _ScrapeDump()
+        label, outcome = 'interrupted', 'interrupted'
+        try:
+            channels = self._fetch_channels()
+            label, outcome = 'ok', 'ok'
+            return channels
+        except ScrapeRetrySoonError as exc:
+            label, outcome = 'stalled', str(exc)
+            raise
+        except Exception as exc:
+            label, outcome = 'error', f'{type(exc).__name__}: {exc}'
+            raise
+        finally:
+            self._dump.save(label, outcome)
+
+    def _fetch_channels(self) -> list[ChannelData]:
         if not self._cookie_header:
             raise RuntimeError('Sign in to Amazon on the Amazon Prime Free source first')
         cards = {asin: card for asin, card in self._candidates().items()
@@ -842,6 +914,8 @@ class AmazonSportsScraper(AmazonPrimeFreeScraper, BaseScraper):
         # Filtered-out events leave the output now; their rows keep manual
         # edits until their delete deadline.
         self.excluded_channel_ids = frozenset(candidate_ids - included_ids)
+        self._dump.set('decisions', {'group_ids': group_ids, 'candidates': sorted(candidate_ids),
+                                     'included': sorted(included_ids), 'events': metadata})
         self._events = metadata
         self._channel_pe = envelopes
         self._update_cache('channel_pe', envelopes)
