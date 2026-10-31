@@ -354,6 +354,7 @@ class AmazonSportsScraper(AmazonPrimeFreeScraper, BaseScraper):
     def __init__(self, config=None):
         super().__init__(_with_account(config))
         self._events: dict[str, dict] = {}
+        self._listing_gap = False
 
     # ── discovery ──
 
@@ -398,6 +399,7 @@ class AmazonSportsScraper(AmazonPrimeFreeScraper, BaseScraper):
                 if container in main:
                     raise RuntimeError('Amazon sports pagination seed missing')
                 continue
+            short_page = False
             for _ in range(12):
                 query = {**params, 'paginationTargetId': target, 'serviceToken': token,
                          'startIndex': index,
@@ -426,10 +428,19 @@ class AmazonSportsScraper(AmazonPrimeFreeScraper, BaseScraper):
                 if not data.get('hasMoreItems'):
                     break
                 if not entities:
+                    # A short page that promised more, then nothing: the list is
+                    # over, but Amazon left out events it still counted (compared
+                    # with the next good scrape, some were from mid-list).
+                    if short_page:
+                        logger.info('[amazon-sports] %s ended at index %d with events left out',
+                                    container.get('title') or target, index)
+                        self._listing_gap = True
+                        break
                     # Seen to last a few minutes: the scheduler tries again soon.
                     raise ScrapeRetrySoonError(
                         f"Amazon's sports listing stopped partway ({container.get('title') or target!r} "
                         f"after {index} events), so this scrape was skipped.")
+                short_page = len(entities) < query['pageSize']
                 next_index = data.get('startIndex')
                 if not isinstance(next_index, int) or next_index <= index:
                     raise RuntimeError('Amazon sports pagination did not advance')
@@ -808,7 +819,26 @@ class AmazonSportsScraper(AmazonPrimeFreeScraper, BaseScraper):
             ))
 
         # A completed event inventory can retire old event rows on this scrape.
-        self.hide_missing_event_channels = True
+        # One with events left out can't: their channels stay, and so does what
+        # playback reads about them, until a soon rescrape lists them again.
+        self.hide_missing_event_channels = not self._listing_gap
+        self.retry_soon = self._listing_gap
+        kept_ids = set()
+        if self._listing_gap:
+            group_ids = {**previous_ids, **group_ids}
+            ended = now - timedelta(seconds=EVENT_END_GRACE_SECONDS)
+            previous_pe = self.cache.get('channel_pe') or {}
+            previous_broadcasts = self.cache.get('sports_broadcasts') or {}
+            for group_id, meta in (self.cache.get('sports_events') or {}).items():
+                if group_id in candidate_ids or not meta.get('end') or datetime.fromisoformat(meta['end']) <= ended:
+                    continue
+                metadata[group_id] = meta
+                kept_ids.add(group_id)
+                for kept, previous in ((envelopes, previous_pe), (broadcasts, previous_broadcasts),
+                                       (station_slots, previous_slots)):
+                    if group_id in previous:
+                        kept[group_id] = previous[group_id]
+        self.kept_channel_ids = frozenset(kept_ids)
         # Filtered-out events leave the output now; their rows keep manual
         # edits until their delete deadline.
         self.excluded_channel_ids = frozenset(candidate_ids - included_ids)

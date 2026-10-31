@@ -622,6 +622,8 @@ class BaseScraper(ABC):
     # filtered out. Reconciliation deactivates existing rows without deleting
     # user settings and excludes these IDs from the lineup-collapse guard.
     excluded_channel_ids: set[str] | frozenset[str] = frozenset()
+    kept_channel_ids: frozenset = frozenset()  # set by fetch_channels(): source_channel_ids absent from this scrape's list only because the listing was incomplete; reconciliation leaves their rows untouched and doesn't count a miss
+    retry_soon: bool = False  # set by fetch_channels() when a scrape succeeded on an incomplete listing: scrape again on the early-retry schedule
     pinned_channel_ids: frozenset = frozenset()  # source_channel_ids born (and kept) scrape_pinned=True — exempt from channel_miss_threshold; for channels that are expected to be intermittently absent from a scrape by design (e.g. a rotating best-effort discovery), not just resilient-by-default
     rehome_by_guide_key: bool = False  # when True, re-use existing DB rows whose guide_key matches an incoming channel whose uuid changed
 

@@ -536,6 +536,7 @@ def run_scraper(source_name: str, force_full: bool = False):
                                 pinned_channel_ids=getattr(scraper, 'pinned_channel_ids', frozenset()),
                                 excluded_channel_ids=getattr(scraper, 'excluded_channel_ids', frozenset()),
                                 hide_missing_event_channels=getattr(scraper, 'hide_missing_event_channels', False),
+                                kept_channel_ids=scraper.kept_channel_ids,
                             )
                         # Persist scraper config/cache FIRST. persist_*() call
                         # db.session.expire_all(), which DISCARDS unflushed attribute
@@ -656,7 +657,12 @@ def run_scraper(source_name: str, force_full: bool = False):
                 elapsed = time.monotonic() - t0
                 logger.info('[%s] Scrape complete — %d channels, %d programs (%.1fs)',
                             source_name, len(channels), len(programs), elapsed)
-                _clear_scrape_retry(source_name)
+                if scraper.retry_soon:
+                    minutes = _schedule_scrape_retry(source_name)
+                    if minutes:
+                        logger.info('[%s] Scraping again in %d minutes: the listing was incomplete', source_name, minutes)
+                else:
+                    _clear_scrape_retry(source_name)
                 logo_urls = [ch.logo_url for ch in channels if ch.logo_url]
                 if logo_urls:
                     # Publish the phase change immediately so the UI does not sit
@@ -2860,7 +2866,8 @@ def _upsert_channels(source, channel_data_list, gracenote_auto_fill: bool = True
                      miss_threshold: int = _CHANNEL_MISS_THRESHOLD, rehome_by_guide_key: bool = False,
                      allow_suspicious_collapse: bool = False, pinned_channel_ids: frozenset = frozenset(),
                      excluded_channel_ids: frozenset = frozenset(),
-                     hide_missing_event_channels: bool = False):
+                     hide_missing_event_channels: bool = False,
+                     kept_channel_ids: frozenset = frozenset()):
     existing = {ch.source_channel_id: ch for ch in source.channels.all()}
     # Build a guide_key → channel index so we can re-use an existing DB row
     # when a scraper assigns a new uuid to the same content (e.g. Vidaa rotating
@@ -3076,7 +3083,7 @@ def _upsert_channels(source, channel_data_list, gracenote_auto_fill: bool = True
 
     seen = {cd.source_channel_id for cd in channel_data_list}
     existing_active_ids = {ch_id for ch_id, ch in existing.items() if ch.is_active}
-    missing_active_ids = existing_active_ids - seen
+    missing_active_ids = existing_active_ids - seen - kept_channel_ids
     # Explicit scraper filters are not missing upstream channels. Identify them
     # from the fetched inventory, including rows imported before tags existed.
     filtered_ids = (set(excluded_channel_ids) & set(existing)) - seen
@@ -3166,7 +3173,8 @@ def _upsert_channels(source, channel_data_list, gracenote_auto_fill: bool = True
         )
     else:
         for ch_id, ch in existing.items():
-            if ch_id not in seen and ch_id not in region_removed_ids and ch_id not in filtered_ids and ch_id not in missing_event_ids:
+            if (ch_id not in seen and ch_id not in region_removed_ids and ch_id not in filtered_ids
+                    and ch_id not in missing_event_ids and ch_id not in kept_channel_ids):
                 # Event groups are short-lived. Keep their policy in the source
                 # config even when the entire group is absent from this import.
                 group = ch.playlist_group
