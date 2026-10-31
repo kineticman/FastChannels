@@ -364,7 +364,7 @@ def create_feed():
     slug = data.get('slug') or _slugify(name)
     if Feed.query.filter_by(slug=slug).first():
         return jsonify({'error': f'slug "{slug}" already exists'}), 409
-    guide_mode = data.get('guide_mode') or 'split'
+    guide_mode = data.get('guide_mode') or 'mixed'
     if guide_mode not in GUIDE_MODES:
         return jsonify({'error': 'guide_mode must be "split" or "mixed"'}), 400
 

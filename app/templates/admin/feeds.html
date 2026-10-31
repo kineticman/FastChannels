@@ -312,7 +312,6 @@
     .pill-manual { background: var(--accent-bg); color: var(--accent-soft); }
     .pill-red  { background: color-mix(in srgb, var(--danger-bg) 72%, var(--surface)); color: var(--danger); }
     .pill-teal { background: color-mix(in srgb, var(--teal) 26%, var(--surface)); color: var(--teal-soft); }
-    .pill-beta { background: color-mix(in srgb, var(--warning-bg) 70%, transparent); color: var(--warning-soft); border: 1px solid var(--warning-border); text-transform: uppercase; }
 
     /* ── Two-pane feed modal ── */
     .modal-feed { max-width: 1280px; }
@@ -670,7 +669,7 @@
       <div class="feed-settings">
         <div class="inline-setting">
           <div class="field">
-            <label>Guide Mode <span class="badge-pill pill-beta">Beta</span></label>
+            <label>Guide Mode</label>
             <div class="inline-controls">
               <select id="guide-mode-{{ feed.id }}" data-saved="{{ 'mixed' if mixed_guide else 'split' }}" onchange="saveFeedGuideMode({{ feed.id }}, {{ feed.name|tojson|forceescape }}, this)">
                 <option value="split" {% if not mixed_guide %}selected{% endif %}>Separate standard + Gracenote playlists</option>
@@ -898,7 +897,7 @@
         <div style="margin-top:0.6rem">
           <button class="btn btn-dvr" title="Register this whole feed (standard channels + ah4c bridge channels) as one custom M3U source in Channels DVR"
                   onclick='pushCombinedAh4cToDvr({{ feed.id }}, {{ feed.name|tojson }}, {{ single_total }}, this)'
-                  {% if single_total == 0 %}disabled{% endif %}>📺 Add whole feed as one source <span class="badge-pill pill-beta">Beta</span></button>
+                  {% if single_total == 0 %}disabled{% endif %}>📺 Add whole feed as one source</button>
         </div>
         <p class="help" style="margin-top:0.5rem">One Channels DVR source for the whole feed: its standard channels plus these bridge channels through ah4c, replacing the regular source and the separate ah4c source. ah4c refuses a tune when all its tuners are busy, so the free channels need no stream limit. Registered as MPEG-TS; pair with the EPG above if adding it by hand.</p>
         {% endif %}

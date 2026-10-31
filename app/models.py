@@ -394,7 +394,7 @@ class Feed(db.Model):
     description = db.Column(db.Text, default='')
     filters     = db.Column(db.JSON, default=dict)
     chnum_start = db.Column(db.Integer, nullable=True)   # starting tvg-chno for this feed's M3U output
-    guide_mode  = db.Column(db.String(16), nullable=False, default='split', server_default='split')  # 'split' = separate XMLTV + Gracenote playlists; 'mixed' = one playlist (Channels DVR 2026.08.25+)
+    guide_mode  = db.Column(db.String(16), nullable=False, default='mixed', server_default='mixed')  # 'split' = separate XMLTV + Gracenote playlists; 'mixed' = one playlist (Channels DVR 2026.08.25+)
     is_enabled  = db.Column(db.Boolean, default=True)
     created_at  = db.Column(db.DateTime(timezone=True),
                             default=lambda: datetime.now(timezone.utc))
