@@ -789,9 +789,14 @@ class AmazonSportsScraper(AmazonPrimeFreeScraper, BaseScraper):
             candidate_ids.add(group_id)
             actions = {asin: _chosen_live_action(details[asin][1]) if asin in details else None for asin in group}
             # An actionable broadcast first, then one this account can play.
+            # Break ties in favor of listings without unexpected blocking
+            # reasons (e.g. MISSING_CHILD_PRIMARY_TITLE), before ASIN order.
             # The choice holds for manifest and license requests until the
             # next scrape; a playback session never switches broadcasts.
-            selected_asin = min(group, key=lambda asin: (not actions[asin], not has_rights(asin), asin))
+            selected_asin = min(group, key=lambda asin: (
+                not actions[asin], not has_rights(asin),
+                any(reason not in _EXPECTED_REASONS for reason in offers[asin]['blocked_reasons']),
+                asin))
             for asin in group:
                 group_ids[asin] = group_id
             broadcasts[group_id] = [
