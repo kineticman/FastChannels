@@ -49,7 +49,7 @@ import requests
 
 from ..gracenote_map import resolve_gracenote
 from ..tve.adobe_pass import TVEAuthError, TVENotAuthorizedError
-from ..sports import infer_sport
+from ..sports import infer_sport, normalize_league, normalize_sport, sport_for_league
 from .base import BaseScraper, ChannelData, ConfigField, ProgramData, EVENT_CHANNEL_TAG
 
 logger = logging.getLogger(__name__)
@@ -259,6 +259,16 @@ def _image(about: dict) -> str | None:
 
 # ── scraper ──────────────────────────────────────────────────────────────────
 
+def _event_sport_league(video: dict) -> tuple[str | None, str | None]:
+    """Use the same event classification for channels and guide categories."""
+    about = video.get('about') or {}
+    props = video.get('properties') or {}
+    league = normalize_league(props.get('leagueDisplayName')) or normalize_league(about.get('prefix'))
+    sport = (normalize_sport(props.get('sport')) or sport_for_league(league)
+             or infer_sport([about.get('title') or '', league or '']))
+    return sport, league
+
+
 class CBSSportsScraper(BaseScraper):
     source_name = 'cbs_sports'
     display_name = 'CBS'
@@ -448,10 +458,9 @@ class CBSSportsScraper(BaseScraper):
                 video = event['video']
                 start, end = _event_window(event)
                 about = video.get('about') or {}
-                props = video.get('properties') or {}
                 title = about.get('title') or 'CBS Sports'
                 network = video['network']
-                league = props.get('leagueDisplayName') or about.get('prefix')
+                sport, league = _event_sport_league(video)
                 channels.append(ChannelData(
                     source_channel_id=f'{EVENT_CHANNEL_PREFIX}{event["id"]}',
                     name=f'{EVENT_LABELS[network]} - {title}'[:256],
@@ -461,7 +470,7 @@ class CBSSportsScraper(BaseScraper):
                     stream_type='hls',
                     guide_key=f'{EVENT_CHANNEL_PREFIX}{event["id"]}',
                     tags=[EVENT_CHANNEL_TAG, 'CBS Sports Games'],
-                    sport=props.get('sport') or infer_sport([title, league or '']),
+                    sport=sport,
                     league=league,
                     gracenote_mode='off',
                     retire_at=end + timedelta(seconds=EVENT_END_GRACE_SECONDS),
@@ -537,8 +546,7 @@ class CBSSportsScraper(BaseScraper):
                 continue
             seen.add((cid, start))
             about = video.get('about') or {}
-            props = video.get('properties') or {}
-            sport = props.get('sport')
+            sport, league = _event_sport_league(video)
             programs.append(ProgramData(
                 source_channel_id=cid,
                 title=about.get('title') or 'CBS Sports',
@@ -546,8 +554,8 @@ class CBSSportsScraper(BaseScraper):
                 end_time=end,
                 description=about.get('description') or None,
                 poster_url=_image(about),
-                category=';'.join(x for x in ('Sports Event', sport, props.get('leagueDisplayName')) if x),
-                episode_title=props.get('leagueDisplayName') if props.get('leagueDisplayName') != about.get('title') else None,
+                category=';'.join(x for x in ('Sports Event', sport, league) if x),
+                episode_title=league if league != about.get('title') else None,
                 is_live=True,
                 episode_id=str(event['id']),
             ))

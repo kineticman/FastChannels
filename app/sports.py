@@ -50,6 +50,8 @@ _SPORT_KEYWORDS = (
     (r'tennis|atp|wta', 'Tennis'), (r'golf|pga|lpga', 'Golf'), (r'boxing', 'Boxing'),
     (r'mma|ufc|mixed martial arts|bellator', 'MMA'), (r'wwe|aew|pro wrestling', 'Pro Wrestling'),
     (r'darts', 'Darts'), (r'bowling', 'Bowling'), (r'cycling|mountain bike|mtb', 'Cycling'),
+    (r'swimming', 'Swimming'), (r'track and field|track & field|world athletics', 'Track and Field'),
+    (r'amateur wrestling|collegiate wrestling|ncaa wrestling|freestyle wrestling|greco-roman wrestling', 'Wrestling'),
     (r'australian football|afl', 'Australian Football'),
     (r'soccer|mls|nwsl|usl|futbol|fútbol|premier league|la ?liga|serie a|bundesliga|ligue 1|liga mx|'
      r'uefa|fifa|concacaf|champions league|europa league|english football league|efl|carabao cup|league cup|fa cup|'
@@ -65,6 +67,7 @@ KNOWN_SPORTS = tuple(sorted(
     {name for _, name in _SPORT_KEYWORDS} | {'Swimming', 'Track and Field', 'Wrestling'},
     key=str.casefold,
 ))
+_CANONICAL_SPORTS = {name.casefold(): name for name in set(KNOWN_SPORTS) | set(_ALIASES.values())}
 
 
 def normalize_sport(name: str | None) -> str | None:
@@ -75,6 +78,8 @@ def normalize_sport(name: str | None) -> str | None:
         return None
     if key in _ALIASES:
         return _ALIASES[key]
+    if key in _CANONICAL_SPORTS:
+        return _CANONICAL_SPORTS[key]
     # "SOCCER" → "Soccer"; mixed case ("MMA", "Track and Field") is kept.
     return text.title() if text.isupper() and len(text) > 3 else text
 
