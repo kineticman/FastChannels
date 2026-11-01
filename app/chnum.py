@@ -230,6 +230,13 @@ def settle() -> None:
         logger.error('[chnum] channel numbers are not seeded; not settling')
         return
     db.session.flush()
+    # SQLite's legacy transaction mode does not begin a transaction for a
+    # SELECT. Take its writer lock before reading the allocation inputs, or a
+    # scrape can commit new assignments between our read and _write(). A no-op
+    # UPDATE also works when the caller already has a write transaction, and
+    # leaves commit/rollback (and any pending channel edits) with the caller.
+    table = AppSettings.__table__
+    db.session.execute(update(table).where(table.c.id == 1).values(id=table.c.id))
     settings = AppSettings.get()
     locks = lock_map()
     provider = _reserved_provider_numbers()
