@@ -245,7 +245,9 @@ def _event_description(title: str, sport: str | None, league: str | None, access
     league, sport = (league or '').strip(), (sport or '').strip()
     # "UTR Pro Tennis Tour" already names its sport; "GPAC" wouldn't.
     label = league if sport and sport.casefold() in league.casefold() else ' '.join(x for x in (league, sport) if x)
-    parts = [f'{label}: {title}' if label else title]
+    # Some titles already lead with the league ("ECHL Hockey: Cincinnati Cyclones vs Indy Fuel").
+    named = label and any(x and title.casefold().startswith(x.casefold()) for x in (label, league))
+    parts = [f'{label}: {title}' if label and not named else title]
     parts.append(f'Streaming on Prime Video ({access[0]})' if access else 'Streaming on Prime Video')
     return '. '.join(parts) + '.'
 

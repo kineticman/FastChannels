@@ -1329,7 +1329,9 @@ def _event_description(airing: dict) -> str:
     name = (matchup_body(matchup, sport) if matchup else None) or airing.get('name') or airing.get('shortName') or 'ESPN event'
     services = event_services(airing)
     service = ', '.join(EVENT_SERVICE_LABELS[k].removesuffix(' Events') for k in ('espn_plus', 'acc_extra', 'sec_plus') if k in services)
-    parts = [f'{label}: {name}' if label else name]
+    # Some names already lead with the league ("Grand Slam of Curling: Masters").
+    named = label and any(x and name.casefold().startswith(x.casefold()) for x in (label, league))
+    parts = [f'{label}: {name}' if label and not named else name]
     if airing.get('feedName'):
         parts.append(f'{airing["feedName"].strip()} feed')
     if airing.get('isReAir'):
