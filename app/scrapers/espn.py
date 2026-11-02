@@ -69,6 +69,7 @@ from xml.sax.saxutils import escape
 import requests
 
 from ..gracenote_map import resolve_gracenote
+from ..matchups import matchup_body, matchup_description, matchup_title, team_name
 from ..tve.adobe_pass import TVEAuthError, TVENotAuthorizedError, refresh_adobe_client_token
 from .base import BaseScraper, ChannelData, ConfigField, ProgramData, EVENT_CHANNEL_TAG
 
@@ -257,23 +258,33 @@ def _summary_path(airing: dict) -> str | None:
     return f'{sport}/{league}'
 
 
-def _lookup_event_teams(path: str, event_id: str) -> list[dict]:
-    """Teams of one event from the site API; [] when it has none or fails."""
+def _lookup_event_teams(path: str, event_id: str) -> tuple[list[dict], bool]:
+    """Teams of one event from the site API, each with its side ('home' or
+    'away'), and whether it's at a neutral site; [] when it has none or fails."""
     try:
         r = requests.get(f'{_SITE_API}/{path}/summary', params={'event': event_id},
                          headers={'User-Agent': _UA}, timeout=10)
         if r.status_code != 200:
-            return []
-        competitors = r.json()['header']['competitions'][0]['competitors']
+            return [], False
+        competition = r.json()['header']['competitions'][0]
+        competitors = competition['competitors']
     except Exception:  # noqa: BLE001 — a missing team list just means title fallback
-        return []
+        return [], False
     teams = []
     for competitor in competitors or []:
         team = (competitor or {}).get('team') or {}
         if team.get('id') and team.get('displayName'):
             teams.append({'id': str(team['id']), 'name': team['displayName'],
-                          'location': team.get('location') or ''})
-    return teams if len(teams) == 2 else []
+                          'location': team.get('location') or '', 'side': competitor.get('homeAway') or ''})
+    return (teams, bool(competition.get('neutralSite'))) if len(teams) == 2 else ([], False)
+
+
+def event_matchup(airing: dict) -> dict | None:
+    """{'away', 'home', 'neutral'} from the site API's teams, or None."""
+    sides = {team.get('side'): team_name(team.get('name'), team.get('location')) for team in airing.get('_teams') or []}
+    if sides.get('home') and sides.get('away'):
+        return {'away': sides['away'], 'home': sides['home'], 'neutral': bool(airing.get('_neutral'))}
+    return None
 
 
 def attach_event_teams(airings: list[dict], cache: dict | None, fetch: bool) -> dict:
@@ -288,19 +299,24 @@ def attach_event_teams(airings: list[dict], cache: dict | None, fetch: bool) -> 
             path = _summary_path(airing)
             key = str(airing.get('eventId') or '')
             entry = cache.get(key)
+            # Teams cached before home/away was kept are looked up again.
+            stale = bool(entry and entry.get('teams') and not all(t.get('side') for t in entry['teams']))
             if path and key not in wanted and (
-                    entry is None or (not entry.get('teams') and now - entry['at'] >= _TEAM_LOOKUP_RETRY)):
+                    entry is None or stale or (not entry.get('teams') and now - entry['at'] >= _TEAM_LOOKUP_RETRY)):
                 wanted[key] = path
         if wanted:
             with ThreadPoolExecutor(max_workers=_TEAM_LOOKUP_WORKERS) as pool:
                 results = pool.map(lambda item: _lookup_event_teams(item[1], item[0]), wanted.items())
-                for key, teams in zip(wanted, results):
-                    cache[key] = {'teams': teams, 'at': int(now)}
+                for key, (teams, neutral) in zip(wanted, results):
+                    if not teams and (cache.get(key) or {}).get('teams'):
+                        continue  # keep the older teams (no sides) over a failed refresh
+                    cache[key] = {'teams': teams, 'neutral': neutral, 'at': int(now)}
             logger.info('[espn] looked up teams for %d events (%d found)', len(wanted),
                         sum(1 for key in wanted if cache[key]['teams']))
     for airing in airings:
-        entry = cache.get(str(airing.get('eventId') or ''))
-        airing['_teams'] = (entry or {}).get('teams') or []
+        entry = cache.get(str(airing.get('eventId') or '')) or {}
+        airing['_teams'] = entry.get('teams') or []
+        airing['_neutral'] = bool(entry.get('neutral'))
     return cache
 
 
@@ -898,15 +914,14 @@ class ESPNScraper(BaseScraper):
                 feed = (airing.get('feedName') or '').strip()
                 services = event_services(airing)
                 service = next((key for key in ('acc_extra', 'sec_plus', 'espn_plus') if key in services), 'espn_plus')
-                title = airing.get('name') or airing.get('shortName') or 'ESPN Event'
-                if feed:
-                    title = f'{title} ({feed})'
                 league = ((airing.get('league') or {}).get('name') or '').strip()
                 sport = ((airing.get('sport') or {}).get('name') or '').strip()
-                # A numeric league prefix (e.g. "3. Liga") is less useful as a
-                # channel's first word than its sport; keep descriptive league
-                # names such as NHL, LALIGA 2, and NCAA Football.
-                label = (sport if league[:1].isdigit() and sport else league) or sport or EVENT_SERVICE_LABELS[service]
+                matchup = event_matchup(airing)
+                title = (matchup_body(matchup, sport) if matchup else None) \
+                    or airing.get('name') or airing.get('shortName') or 'ESPN Event'
+                if feed:
+                    title = f'{title} ({feed})'
+                label = _event_label(airing) or EVENT_SERVICE_LABELS[service]
                 channels.append(ChannelData(
                     source_channel_id=EVENT_CHANNEL_PREFIX + airing_id,
                     name=f'{label} - {title}'[:256],
@@ -1009,12 +1024,16 @@ class ESPNScraper(BaseScraper):
             start, end = _parse_time(a.get('startDateTime')), _parse_time(a.get('endDateTime'))
             if not start or not end or end <= start:
                 continue
+            matchup = event_matchup(a)
+            sport = (a.get('sport') or {}).get('name')
+            description = a.get('description') or _event_description(a)
             programs.append(ProgramData(
                 source_channel_id=cid,
-                title=a.get('name') or a.get('shortName') or 'ESPN+ Event',
+                title=(matchup_title(_event_label(a), matchup, sport) if matchup
+                       else a.get('name') or a.get('shortName') or 'ESPN+ Event'),
                 start_time=start,
                 end_time=end,
-                description=a.get('description') or _event_description(a),
+                description=matchup_description(matchup, sport, description) if matchup else description,
                 poster_url=(a.get('image') or {}).get('url'),
                 category=_event_epg_categories(a),
                 episode_title=(a.get('feedName') or (a.get('league') or {}).get('name')),
@@ -1291,13 +1310,23 @@ def _parse_time(value: str | None) -> datetime | None:
         return None
 
 
+def _event_label(airing: dict) -> str:
+    """An event's league, or its sport when the league is a numbered one
+    ("3. Liga"), which reads worse first; descriptive leagues such as NHL,
+    LALIGA 2 and NCAA Football are kept."""
+    league = ((airing.get('league') or {}).get('name') or '').strip()
+    sport = ((airing.get('sport') or {}).get('name') or '').strip()
+    return (sport if league[:1].isdigit() and sport else league) or sport
+
+
 def _event_description(airing: dict) -> str:
     """ESPN rarely describes an event; say what it is and where it streams."""
     league = ((airing.get('league') or {}).get('name') or '').strip()
     sport = ((airing.get('sport') or {}).get('name') or '').strip()
     # "NCAA Football" already names its sport; "CWHOC" doesn't.
     label = league if sport and sport.casefold() in league.casefold() else ' '.join(x for x in (league, sport) if x)
-    name = airing.get('name') or airing.get('shortName') or 'ESPN event'
+    matchup = event_matchup(airing)
+    name = (matchup_body(matchup, sport) if matchup else None) or airing.get('name') or airing.get('shortName') or 'ESPN event'
     services = event_services(airing)
     service = ', '.join(EVENT_SERVICE_LABELS[k].removesuffix(' Events') for k in ('espn_plus', 'acc_extra', 'sec_plus') if k in services)
     parts = [f'{label}: {name}' if label else name]

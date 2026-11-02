@@ -48,6 +48,8 @@ from datetime import datetime, timedelta, timezone
 import requests
 
 from ..gracenote_map import resolve_gracenote
+from ..matchups import (MATCHUP_CACHE_KEY, MatchupResolver, event_label, matchup_body,
+                        matchup_description, matchup_title)
 from ..tve.adobe_pass import TVEAuthError, TVENotAuthorizedError
 from ..sports import infer_sport, normalize_league, normalize_sport, sport_for_league
 from .base import BaseScraper, ChannelData, ConfigField, ProgramData, EVENT_CHANNEL_TAG
@@ -451,9 +453,11 @@ class CBSSportsScraper(BaseScraper):
                 gracenote_id=resolve_gracenote('cbs_sports', upstream_id=meta.get('gracenote'), lookup_key=code),
             ))
         self._game_items = []
+        self._matchups = {}
         if self._events_enabled():
             self._game_items = self._games(authorized, local=bool(station))
             self.hide_missing_event_channels = True
+            resolver = MatchupResolver(self.cache.get(MATCHUP_CACHE_KEY), self.source_name)
             for event in self._game_items:
                 video = event['video']
                 start, end = _event_window(event)
@@ -461,6 +465,12 @@ class CBSSportsScraper(BaseScraper):
                 title = about.get('title') or 'CBS Sports'
                 network = video['network']
                 sport, league = _event_sport_league(video)
+                matchup = resolver.lookup(str(event['id']), about.get('title'), start,
+                                          league=league or (video.get('properties') or {}).get('league'),
+                                          sport=sport)
+                if matchup:
+                    self._matchups[event['id']] = matchup
+                    title = matchup_body(matchup, sport)
                 channels.append(ChannelData(
                     source_channel_id=f'{EVENT_CHANNEL_PREFIX}{event["id"]}',
                     name=f'{EVENT_LABELS[network]} - {title}'[:256],
@@ -476,6 +486,7 @@ class CBSSportsScraper(BaseScraper):
                     retire_at=end + timedelta(seconds=EVENT_END_GRACE_SECONDS),
                     delete_at=end + timedelta(seconds=EVENT_END_GRACE_SECONDS + 24 * 3600),
                 ))
+            self._update_cache(MATCHUP_CACHE_KEY, resolver.export())
         return channels
 
     def _pplus_programs(self, code: str, slug: str, category: str | None = 'Sports') -> list[ProgramData]:
@@ -547,12 +558,17 @@ class CBSSportsScraper(BaseScraper):
             seen.add((cid, start))
             about = video.get('about') or {}
             sport, league = _event_sport_league(video)
+            # Only game channels get full team names; the 24/7 channels'
+            # guides keep CBS's titles.
+            matchup = getattr(self, '_matchups', {}).get(event['id']) if cid.startswith(EVENT_CHANNEL_PREFIX) else None
             programs.append(ProgramData(
                 source_channel_id=cid,
-                title=about.get('title') or 'CBS Sports',
+                title=(matchup_title(event_label(league, sport), matchup, sport) if matchup
+                       else about.get('title') or 'CBS Sports'),
                 start_time=start,
                 end_time=end,
-                description=about.get('description') or None,
+                description=(matchup_description(matchup, sport, about.get('description')) if matchup
+                             else about.get('description') or None),
                 poster_url=_image(about),
                 category=';'.join(x for x in ('Sports Event', sport, league) if x),
                 episode_title=league if league != about.get('title') else None,

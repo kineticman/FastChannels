@@ -32,6 +32,8 @@ from datetime import datetime, timedelta, timezone
 from bs4 import BeautifulSoup
 
 from .amazon_prime_free import AmazonPrimeFreeScraper
+from ..matchups import (MATCHUP_CACHE_KEY, MatchupResolver, event_label, matchup_body,
+                        matchup_description, matchup_title)
 from ..sports import infer_sport, normalize_sport, sport_for_league
 from .base import BaseScraper, ChannelData, ProgramData, ScrapeRetrySoonError, EVENT_CHANNEL_TAG
 
@@ -776,6 +778,7 @@ class AmazonSportsScraper(AmazonPrimeFreeScraper, BaseScraper):
         group_ids, used_group_ids = {}, set()
         channels, envelopes, metadata, broadcasts, preview = [], {}, {}, {}, []
         included_ids, candidate_ids = set(), set()
+        resolver = MatchupResolver(self.cache.get(MATCHUP_CACHE_KEY), self.source_name)
         for group in _group_offers(offers):
             # Events further out are left for a later scrape.
             if all(offers[asin]['start'] and offers[asin]['start'] > horizon for asin in group):
@@ -851,10 +854,20 @@ class AmazonSportsScraper(AmazonPrimeFreeScraper, BaseScraper):
                                        'asin': selected_asin, 'fetched_at': time.time()}
             card = selected['card']
             art = _event_art(selected['images'], card.get('images') or {})
+            # The channel name and the source's league picker keep Amazon's
+            # own league, so names and saved picker filters don't change.
+            league = selected['league'] or _title_league(selected['title'], selected['sport'])
+            # Amazon's title stays as listed (station airings and broadcast
+            # grouping match on it); the matchup renames the guide entry.
+            matchup = resolver.lookup(group_id, selected['title'], selected['start'] or start,
+                                      league=league, sport=selected['sport'])
             description = (card.get('synopsis') or '').strip()
             # Some synopses only repeat the title.
             if not description or description.casefold() == selected['title'].strip().casefold():
-                description = _event_description(selected['title'], selected['sport'], selected['league'], access)
+                description = _event_description(matchup_body(matchup, selected['sport']) if matchup
+                                                 else selected['title'], selected['sport'], selected['league'], access)
+            elif matchup:
+                description = matchup_description(matchup, selected['sport'], description)
             if not has_rights(selected_asin):
                 needs = list(dict.fromkeys(offer['name'] for offer in selected['unlock_offers']))
                 access_note = 'Not playable with this Amazon account.'
@@ -864,9 +877,6 @@ class AmazonSportsScraper(AmazonPrimeFreeScraper, BaseScraper):
             unexpected = [reason for reason in selected['blocked_reasons'] if reason not in _EXPECTED_REASONS]
             if unexpected:
                 description = f"Amazon reports this event can't play: {', '.join(unexpected)}. {description}".strip()
-            # The channel name and the source's league picker keep Amazon's
-            # own league, so names and saved picker filters don't change.
-            league = selected['league'] or _title_league(selected['title'], selected['sport'])
             metadata[group_id] = {
                 'playback_id': action.get('playbackID') if action else None,
                 'title': selected['title'], 'description': description, 'art': art,
@@ -876,12 +886,12 @@ class AmazonSportsScraper(AmazonPrimeFreeScraper, BaseScraper):
                 'entitled': selected['entitled'], 'entitled_via': selected['entitled_via'],
                 'unlock_offers': selected['unlock_offers'], 'can_play': selected['can_play'],
                 'blocked_reasons': selected['blocked_reasons'], 'access': access,
-                'sport': selected['sport'], 'league': league,
+                'sport': selected['sport'], 'league': league, 'matchup': matchup,
             }
             label = selected['league'] or selected['sport'] or self.display_name
             channels.append(ChannelData(
                 source_channel_id=group_id,
-                name=f'{label} - {selected["title"]}'[:256],
+                name=f'{label} - {matchup_body(matchup, selected["sport"]) if matchup else selected["title"]}'[:256],
                 stream_url=f'primefree://{group_id}',
                 logo_url=art,
                 category='Sports',
@@ -896,6 +906,7 @@ class AmazonSportsScraper(AmazonPrimeFreeScraper, BaseScraper):
                 delete_at=end + timedelta(seconds=EVENT_END_GRACE_SECONDS + 24 * 3600),
             ))
 
+        self._update_cache(MATCHUP_CACHE_KEY, resolver.export())
         # A completed event inventory can retire old event rows on this scrape.
         # One with events left out can't: their channels stay, and so does what
         # playback reads about them, until a soon rescrape lists them again.
@@ -945,8 +956,11 @@ class AmazonSportsScraper(AmazonPrimeFreeScraper, BaseScraper):
             # Amazon's predicted window, often including its studio coverage.
             # A display window only: retire_at, not this, ends the channel.
             league = meta.get('league')
+            matchup = meta.get('matchup')
+            title = (matchup_title(event_label(league, meta.get('sport')), matchup, meta.get('sport'))
+                     if matchup else meta['title'])
             programs.append(ProgramData(
-                channel.source_channel_id, meta['title'],
+                channel.source_channel_id, title,
                 datetime.fromisoformat(meta['start']), datetime.fromisoformat(meta['end']),
                 description=meta.get('description') or None, poster_url=meta.get('art'),
                 category=_event_epg_categories(meta, self.display_name),
