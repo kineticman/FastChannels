@@ -16,10 +16,12 @@ from ._common import Network, NetChannel, parse_iso, program
 _EPG = 'https://insight-api-shared.univtec.com/interface/epg'
 _HEADERS = {'x-tenant-id': 'beondtv', 'platform': 'web', 'Origin': 'https://www.beond.tv',
             'Accept': 'application/json'}
-# Carried in Free Networks already from the network's own feed (BEONDTV via
-# KSL, LatiNation = Cineverse's Latino Alternative TV stream).
-_ELSEWHERE = {"80's sitcom flashback", 'comercio tv', 'tastemade', 'young hollywood', 'beondtv', 'latination'}
-_SPANISH = {'Novelas De Siempre', 'TeleOnce America'}
+# Every channel in the feed is listed, including ones Free Networks also gets
+# from another network's feed (BEONDTV via KSL, Tastemade, Young Hollywood and
+# LatiNation via Cineverse, Comercio TV via OG Network, 80's Sitcom Flashback
+# via The CW), so users can pick whichever copy plays best for them.
+_SPANISH = {'Novelas De Siempre', 'TeleOnce America', 'Comercio TV'}
+_TITLES = {'TASTEMADE': 'Tastemade'}
 
 
 class BeOND(Network):
@@ -37,8 +39,9 @@ class BeOND(Network):
         out = []
         for ch in self._feed(s):
             cid, title, url = ch.get('id'), (ch.get('title') or '').strip(), ch.get('videoUrl')
-            if not cid or not title or not url or title.lower() in _ELSEWHERE:
+            if not cid or not title or not url:
                 continue
+            title = _TITLES.get(title, title)
             # BEOND Travel's URL is a DAI request that needs its query.
             stream = url if 'doubleclick.net' in url else url.split('?', 1)[0]
             out.append(NetChannel(cid, title, stream, logo=ch.get('image') or ch.get('poster') or None,
