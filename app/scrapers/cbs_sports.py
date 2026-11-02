@@ -1,7 +1,7 @@
 """CBS (source cbs_sports) — the local CBS station, CBS Sports Network, CBS game windows and the free CBS Sports channels.
 
 All streams are clear HLS (checked 2026-10-17):
-  - CBS Sports HQ, Golazo and the Champions League channel are free Google DAI
+  - CBS Sports HQ, Golazo, the Champions League channel and NFL Channel are free Google DAI
     linear streams (POST pubads.g.doubleclick.net/ssai/event/<assetKey>/streams).
   - CBS Sports Network and CBS (the broadcast network, from the viewer's local
     affiliate) come from Syncbak through a TV-provider sign-in, up to 1080p.
@@ -82,6 +82,10 @@ NETWORKS = {
     'CBSSGOLAZO': {'name': 'CBS Sports Golazo Network', 'gracenote': '133691', 'dai': '7f3Wv6f7QEKfQna22jHqLQ',
                    'pplus': 'golazo', 'logo': 'https://tmsimg.fancybits.co/assets/s133691_ll_h15_aa.png'},
     'CBSCHAMPIONSLEAGUE': {'name': 'CBS Sports Champions League', 'dai': 'ydKcHHYQSt27vbSP38xMVw'},
+    # Listed on cbssports.com/watch/live (network NFLCHANNEL, playback openHLS,
+    # no authentication); Paramount+ has no listings for it.
+    'NFLCHANNEL': {'name': 'NFL Channel', 'gracenote': '121705', 'dai': 'v4CTWEdUSzqQgJtYB9rmrw',
+                   'logo': 'https://tmsimg.fancybits.co/assets/s121705_ll_h15_aa.png'},
 }
 EVENT_LABELS = {'CBSE': 'CBS', 'CBSSN': 'CBS Sports Network'}
 # The viewer's local CBS station: a 24/7 channel under the CBSE code, so CBS
@@ -539,6 +543,18 @@ class CBSSportsScraper(BaseScraper):
                     continue
                 if grid:
                     programs.extend(grid)
+                    gridded.add(code)
+        # Free 24/7 channels without a Paramount+ grid (NFL Channel always; HQ and
+        # Golazo when their listings fail) take tvtv's cached guide for their
+        # Gracenote ID, which the nightly tvtv refresh fetches for every applied ID.
+        gracenote = {ch.source_channel_id: ch.gracenote_id for ch in channels}
+        for code, meta in NETWORKS.items():
+            station_id = gracenote.get(code) or meta.get('gracenote')
+            if code in wanted and code not in gridded and meta.get('dai') and station_id:
+                from .free_networks import FreeNetworksScraper
+                rows = FreeNetworksScraper._tvtv_programs(self, code, station_id)
+                if rows:
+                    programs.extend(rows)
                     gridded.add(code)
         try:
             events = self._events()
