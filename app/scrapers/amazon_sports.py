@@ -461,8 +461,8 @@ class AmazonSportsScraper(AmazonPrimeFreeScraper, BaseScraper):
                 # stall outlasted 3s of retries, so back off for up to 15s.
                 for attempt in range(5):
                     if attempt:
-                        logger.warning('[amazon-sports] empty page at %s index %d; retry %d',
-                                       container.get('title') or target, index, attempt)
+                        logger.info('[amazon-sports] empty page at %s index %d; retry %d',
+                                    container.get('title') or target, index, attempt)
                         time.sleep(2 ** (attempt - 1))
                     page = self.get(self.PAGINATE_URL, params=query, headers=headers)
                     if not page or page.status_code != 200:
@@ -487,8 +487,9 @@ class AmazonSportsScraper(AmazonPrimeFreeScraper, BaseScraper):
                     # over, but Amazon left out events it still counted (compared
                     # with the next good scrape, some were from mid-list).
                     if short_page:
-                        logger.info('[amazon-sports] %s ended at index %d with events left out',
-                                    container.get('title') or target, index)
+                        logger.warning('[amazon-sports] %s ended at index %d with events left out; '
+                                       'preserving missing channels and requesting another scrape',
+                                       container.get('title') or target, index)
                         self._listing_gap = True
                         break
                     # Seen to last a few minutes: the scheduler tries again soon.
