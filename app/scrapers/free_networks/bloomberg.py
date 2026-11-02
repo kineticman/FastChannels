@@ -8,8 +8,9 @@ IDs were matched to /live/<page> from browser HARs (2026-10-17).
 Guide: GET www.bloomberg.com/live/schedule/<region> with header RSC: 1 returns
 a Next.js RSC payload of LiveSchedule objects (~a week, UTC). All of
 bloomberg.com/live* is behind PerimeterX: it passes with a curl_cffi Chrome
-fingerprint, but plain requests get a 403 and a burst of them seems to earn
-the IP a temporary block. So: impersonated requests only, at most once a day
+fingerprint, but plain requests get a 403 and rapid consecutive requests
+trigger an "Are you a robot?" challenge. So: impersonated requests spaced out,
+at most once a day
 (sooner only if there's no stored guide left to keep, e.g. after the channels
 were deleted), and on any failure the existing guide is simply kept (programs
 are replaced per channel, so returning nothing leaves it in place).
@@ -68,7 +69,9 @@ _CHANNELS = [
 ]
 _GUIDED = {cid for cid, _, _, region in _CHANNELS if region} | {'radio'}
 _CACHE_KEY = 'bloomberg_schedule_fetched_at'
+_BLOCKED_CACHE_KEY = 'bloomberg_schedule_blocked_at'
 _REFRESH_SECONDS = 20 * 3600
+_SCHEDULE_PAUSE_SECONDS = 3
 
 
 class Bloomberg(Network):
@@ -83,27 +86,43 @@ class Bloomberg(Network):
 
     def programs(self, s, channels):
         wanted = {ch.id for ch in channels}
+        if time.time() - float(s.cache.get(_BLOCKED_CACHE_KEY) or 0) < _REFRESH_SECONDS:
+            # A bot/rate-limit response is unlikely to improve on the next
+            # scrape. Keep the stored guide without sending another burst.
+            return None
         last = float(s.cache.get(_CACHE_KEY) or 0)
         if time.time() - last < _REFRESH_SECONDS:
-            # Fetched recently: keep what's stored, as long as there is a stored
-            # guide that still runs a day ahead. Its channels may have been
-            # deleted since (source or network switched off and on again).
+            # Only bypass the refresh interval when there is no current guide
+            # at all (e.g. channels were deleted and recreated). Some Bloomberg
+            # schedules cover less than a day, so requiring a full day here
+            # causes a redundant request on every forced scrape.
             stored_end = s.stored_guide_end(self.key, wanted & _GUIDED)
-            if stored_end and stored_end > datetime.now(timezone.utc) + timedelta(days=1):
+            if stored_end and stored_end > datetime.now(timezone.utc):
                 return None
-            logger.info('[free_networks] Bloomberg: no stored guide to keep, fetching despite the daily limit')
+            logger.info('[free_networks] Bloomberg: stored guide expired or absent, fetching despite the daily limit')
         out, ok = [], 0
-        for cid, _, _, region in _CHANNELS:
-            if not region or cid not in wanted:
-                continue
+        # The site may block after several schedule requests. Refresh channels
+        # with the least guide left first so a partial run covers the gaps.
+        regions = [(cid, region) for cid, _, _, region in _CHANNELS if region and cid in wanted]
+        regions.sort(key=lambda item: s.stored_guide_end(self.key, {item[0]})
+                     or datetime.min.replace(tzinfo=timezone.utc))
+        for index, (cid, region) in enumerate(regions):
+            # A burst of RSC requests triggers Bloomberg's "Are you a robot?"
+            # px-captcha page. Three seconds between regions passed all six
+            # schedules from the same session during a live check.
+            if index:
+                time.sleep(_SCHEDULE_PAUSE_SECONDS)
             try:
                 r = s.impersonated().get(_SCHEDULE.format(region), headers={'RSC': '1'}, timeout=20)
             except Exception as exc:
                 logger.warning('[free_networks] Bloomberg schedule %s failed: %s', region, exc)
                 continue
             if r.status_code != 200:
-                logger.warning('[free_networks] Bloomberg schedule %s: HTTP %s (bot check?) — keeping existing guide',
-                               region, r.status_code)
+                reason = ' (robot challenge)' if r.status_code == 403 else ' (rate limit)' if r.status_code == 429 else ''
+                logger.warning('[free_networks] Bloomberg schedule %s: HTTP %s%s — keeping existing guide',
+                               region, r.status_code, reason)
+                if r.status_code in (403, 429):
+                    s._update_cache(_BLOCKED_CACHE_KEY, time.time())
                 break  # don't keep knocking after a block
             ok += 1
             out.extend(self._parse(cid, r.text))
