@@ -112,6 +112,7 @@
         <ul>
           <li><a href="https://github.com/kineticman/FastChannels" target="_blank" rel="noopener noreferrer">FastChannels on GitHub</a></li>
           <li><a href="https://github.com/kineticman/FastChannels/blob/development/docs/fc-player-setup.md" target="_blank" rel="noopener noreferrer">HDMI Capture / ah4c Capture setup guide</a></li>
+          <li><a href="https://github.com/kineticman/FastChannels/blob/development/docs/custom-playlists.md" target="_blank" rel="noopener noreferrer">Custom playlists guide (your own M3U + XMLTV)</a></li>
           <li><a href="https://github.com/hjdhjd/prismcast" target="_blank" rel="noopener noreferrer">PrismCast documentation</a></li>
           <li><a href="https://community.getchannels.com/" target="_blank" rel="noopener noreferrer">Channels Community Forum</a></li>
           <li><a href="https://community.getchannels.com/t/fastchannels-fast-channels-aggregator-manager/45986" target="_blank" rel="noopener noreferrer">FastChannels Help Forum Thread</a></li>
@@ -133,7 +134,7 @@
         <h2>Feeds</h2>
         <ul>
           <li>The built-in <code>Default</code> feed includes all enabled channels.</li>
-          <li>Create custom feeds to filter by source, category, language, or a hand-picked channel list.</li>
+          <li>Create custom feeds to filter by source, category, language, country, or Gracenote, pick events by sport, or pin hand-picked channels.</li>
           <li>Each feed has its own stable <code>/feeds/&lt;slug&gt;/m3u</code> and <code>/epg.xml</code> — cached for fast delivery.</li>
           <li>Set <code>Channel Number Start</code> on a feed to number channels sequentially from a given number. Fresh installs start the built-in <code>Default</code> feed at channel 5000.</li>
           <li><code>/m3u/gracenote</code> feed variants are for Channels DVR guide matching via Gracenote.</li>
@@ -146,7 +147,7 @@
         <ul>
           <li>Finds channels with the same name across multiple sources.</li>
           <li>Healthy channels are preferred over <code>DRM</code>, <code>Dead</code>, or inactive ones.</li>
-          <li>Source priority breaks ties between equally healthy matches.</li>
+          <li>Between healthy matches, a Gracenote ID wins, then fuller guide data, then source priority.</li>
           <li>If every duplicate is unhealthy, the whole group is disabled.</li>
         </ul>
       </section>
@@ -175,7 +176,7 @@
         <h2>Scraping</h2>
         <ul>
           <li><strong>Scrape</strong>: refresh channels and EPG on the normal schedule.</li>
-          <li><strong>Force Full</strong>: clear and re-fetch everything from scratch — use when a source looks stale or after a long outage.</li>
+          <li><strong>Force Complete Refresh</strong> (Sources page): re-fetch channels and guides for every enabled source — use when things look stale or after a long outage.</li>
           <li><strong>Audit</strong>: health-check every stream for a source and automatically mark dead or DRM channels.</li>
           <li>Sources run on their own schedule automatically. Use <strong>Configure</strong> to adjust frequency or set a clock-aligned start time.</li>
         </ul>
@@ -184,8 +185,7 @@
       <section class="card">
         <h2>Source Notes</h2>
         <ul>
-          <li><strong>Custom Channels</strong>: add any HLS/M3U8 stream by URL. FastChannels auto-detects special stream types (webcams, re-streaming proxies, etc.) and handles polling and header quirks automatically.</li>
-          <li><strong>Pluto TV</strong>: session pool size is configurable in source settings if you have many concurrent viewers.</li>
+          <li><strong>Custom Channels</strong>: add a stream URL or a page (YouTube, Twitch, a web player). A page's stream is found fresh each time it plays.</li>
         </ul>
       </section>
 
