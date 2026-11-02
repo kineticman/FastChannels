@@ -13,10 +13,13 @@ Key facts established by probing:
   provider's SAML round trip /action/link-provider-redirect lands on
   link-provider-success or link-provider-no-access.
 - Seen in the HAR: Spectrum → no-access, DIRECTV (ATTOTT) → success.
-- The TV-provider route has no user-facing account: Get Access → "Sign in
-  with your TV provider" pre-fills a hidden random <hex>@random.com email
-  and password, and the only visible step is a reCAPTCHA v2 checkbox before
-  /action/subscribe creates that account. The captcha is enforced server-side
+- The TV-provider route has no user-facing account: Log In → "Sign In with
+  TV Provider" (/signin-link-provider; as of 2026-11-02 Get Access only shows
+  paid plans) pre-fills a hidden random <hex>@random.com email and password,
+  and the only visible step is "Verify that you are human" (a "How did you
+  hear about us?" question and a reCAPTCHA v2 checkbox) before
+  /action/subscribe creates that account. The provider list that follows has
+  85 MVPDs, without Cox, YouTube TV, Hulu, Fubo or Frontier. The captcha is enforced server-side
   (error 506 "Missing recaptcha" without it), so FastChannels can't create
   the account. Instead the user does that step in a browser and pastes the
   next page's URL, link-provider?mode=linkProvider&token=<64 hex>: the token
@@ -124,10 +127,14 @@ class ReelzTVEScraper(BaseScraper):
     config_schema = [
         ConfigField('session_link', 'REELZ+ link URL', field_type='password', secret=True,
                     placeholder='https://reelzplus.com/reelz-en/link-provider?mode=linkProvider&token=…',
-                    help_text='For TV-provider access: at reelzplus.com choose Get Access → "Sign in with your '
-                              'TV provider" and tick the captcha. On the next page (choose your TV provider), '
-                              'copy the address from the address bar and paste it here, then finish signing in '
-                              'with your provider on that page.'),
+                    help_text='For TV-provider access, in a browser: (1) at reelzplus.com click the person icon '
+                              '(Log In), then "Sign In with TV Provider" (not Get Access, which only offers paid '
+                              'plans). (2) On "Verify that you are human", answer "How did you hear about us?", '
+                              'tick the captcha and Submit. (3) You are now on "Sign In With TV Provider": copy '
+                              'the address from the address bar (it contains token=) and paste it here. '
+                              '(4) Back in the browser, choose your provider under "Select TV Provider" and sign '
+                              'in. Only providers in that list work: Cox, YouTube TV, Hulu, Fubo and Frontier '
+                              'are not in it, and Spectrum is listed but does not include REELZ.'),
         ConfigField('email', 'REELZ+ email (subscribers)', placeholder='you@example.com',
                     help_text='Only for a paid REELZ+ subscription. Leave empty when using the link URL above.'),
         ConfigField('password', 'REELZ+ password (subscribers)', field_type='password', secret=True),
@@ -242,8 +249,8 @@ class ReelzTVEScraper(BaseScraper):
                 raise TVEAuthError('REELZ: signed in, but this REELZ+ account has no access to the live channel.')
             raise TVEAuthError(
                 'REELZ: the REELZ+ link has no access — either the TV-provider sign-in on reelzplus.com was not '
-                'finished, your provider does not include REELZ, or the link expired. Run Get Access → '
-                '"Sign in with your TV provider" again and paste the new link URL.')
+                'finished, your provider does not include REELZ, or the link expired. At reelzplus.com go to '
+                'Log In → "Sign In with TV Provider" again and paste the new link URL.')
         r.raise_for_status()
         m = _HLS_RE.search(r.text)
         if not m:
