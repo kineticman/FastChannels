@@ -2374,11 +2374,12 @@ def run_playlist_delete(source_id: int):
         for feed in Feed.query.all():
             filters = dict(feed.filters or {})
             changed = False
-            if name in (filters.get('sources') or []):
-                scrubbed = _scrubbed_feed_list('sources', filters['sources'], {name})
-                if scrubbed != filters['sources']:
-                    filters['sources'] = scrubbed
-                    changed = True
+            for key in ('sources', 'exclude_sources'):
+                if name in (filters.get(key) or []):
+                    scrubbed = _scrubbed_feed_list(key, filters[key], {name})
+                    if scrubbed != filters[key]:
+                        filters[key] = scrubbed
+                        changed = True
             for key in ('channel_ids', 'excluded_channel_ids', 'pinned_channel_ids'):
                 ids = filters.get(key)
                 if isinstance(ids, list) and gone.intersection(ids):

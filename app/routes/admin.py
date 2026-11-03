@@ -17,9 +17,10 @@ from ..generators.m3u import (
     _drm_bridge_query_filters,
     _has_gracenote_claim,
     feed_to_query_filters,
+    filter_match_clauses,
 )
 from ..scrapers import registry as _scraper_registry
-from ..channel_tags import event_filter_clause, event_sport_clause
+from ..channel_tags import event_filter_clause
 from ..sports import KNOWN_SPORTS
 from ..drm_bridge import DRM_BRIDGE_TRUSTED_SOURCES
 from .. import fc_player_bridge as _fc_player_bridge
@@ -325,24 +326,7 @@ def _apply_admin_feed_membership_filters(query, feed: Feed):
             channel_ids = list(set(channel_ids) | set(pinned_ids))
         query = query.filter(Channel.id.in_(channel_ids))
         return query
-    match = []
-    if sources := filters.get('source'):
-        match.append(Source.name.in_(sources))
-    if categories := filters.get('category'):
-        match.append(Channel.category.in_(categories))
-    if languages := filters.get('languages'):
-        match.append(Channel.language.in_(languages))
-    elif language := filters.get('language'):
-        match.append(Channel.language == language)
-    if countries := filters.get('countries'):
-        match.append(Channel.country.in_(countries))
-    if (sport_clause := event_sport_clause(filters.get('sports'))) is not None:
-        match.append(sport_clause)
-    if gracenote := filters.get('gracenote'):
-        if gracenote == 'has':
-            match.append(db.and_(Channel.gracenote_id != None, Channel.gracenote_id != ''))
-        elif gracenote == 'missing':
-            match.append((Channel.gracenote_id == None) | (Channel.gracenote_id == ''))
+    match = filter_match_clauses(filters)
     # Pins join past the match filters, as in the feed's own playlists.
     if match:
         match_expr = db.and_(*match)

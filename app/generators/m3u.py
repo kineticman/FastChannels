@@ -217,6 +217,45 @@ def _apply_event_filter(query, filters: dict):
     return query.filter(event_clause)
 
 
+def filter_match_clauses(filters: dict) -> list:
+    """The SQL clauses for a query-format filter dict's include/exclude rules
+    (sources, categories, languages, regions, sports, Gracenote, search).
+    Callers AND them together and let pinned channels join past them.
+
+    Exclusions keep channels with no value: `category NOT IN (...)` is NULL,
+    not true, for an uncategorized channel, so leaving out News must not also
+    drop every channel without a category."""
+    match = []
+    if sources := filters.get('source'):
+        match.append(Source.name.in_(sources))
+    if excluded_sources := filters.get('exclude_source'):
+        match.append(Source.name.notin_(excluded_sources))
+    if categories := filters.get('category'):
+        match.append(Channel.category.in_(categories))
+    if excluded_categories := filters.get('exclude_category'):
+        match.append(db.or_(Channel.category == None,
+                            Channel.category.notin_(excluded_categories)))
+    if languages := filters.get('languages'):
+        match.append(Channel.language.in_(languages))
+    elif language := filters.get('language'):
+        match.append(Channel.language == language)
+    if countries := filters.get('countries'):
+        match.append(Channel.country.in_(countries))
+    if (sport_clause := event_sport_clause(filters.get('sports'))) is not None:
+        match.append(sport_clause)
+    if gracenote := filters.get('gracenote'):
+        if gracenote == 'has':
+            match.append(db.and_(Channel.gracenote_id != None, Channel.gracenote_id != ''))
+        elif gracenote == 'missing':
+            match.append(db.and_(
+                db.or_(Channel.gracenote_id == None, Channel.gracenote_id == ''),
+                ~Channel.slug.like('%|%'),
+            ))
+    if search := filters.get('search'):
+        match.append(Channel.name.ilike(f'%{search}%'))
+    return match
+
+
 def _build_channel_query(filters: dict, *, activity: str = 'active'):
     """Shared filtered query for channels.
 
@@ -285,29 +324,7 @@ def _build_channel_query(filters: dict, *, activity: str = 'active'):
     if channel_ids := filters.get('channel_ids'):
         query = query.filter(Channel.id.in_(channel_ids))
     else:
-        _match = []
-        if sources := filters.get('source'):
-            _match.append(Source.name.in_(sources))
-        if categories := filters.get('category'):
-            _match.append(Channel.category.in_(categories))
-        if languages := filters.get('languages'):
-            _match.append(Channel.language.in_(languages))
-        elif language := filters.get('language'):
-            _match.append(Channel.language == language)
-        if countries := filters.get('countries'):
-            _match.append(Channel.country.in_(countries))
-        if (sport_clause := event_sport_clause(filters.get('sports'))) is not None:
-            _match.append(sport_clause)
-        if gracenote := filters.get('gracenote'):
-            if gracenote == 'has':
-                _match.append(db.and_(Channel.gracenote_id != None, Channel.gracenote_id != ''))
-            elif gracenote == 'missing':
-                _match.append(db.and_(
-                    db.or_(Channel.gracenote_id == None, Channel.gracenote_id == ''),
-                    ~Channel.slug.like('%|%'),
-                ))
-        if search := filters.get('search'):
-            _match.append(Channel.name.ilike(f'%{search}%'))
+        _match = filter_match_clauses(filters)
         _match_expr = db.and_(*_match) if _match else None
         # Pinned channels join the feed regardless of the source/category filters above
         # (still subject to the active/enabled/bridge predicates), so the counts and the
@@ -349,29 +366,7 @@ def _build_channel_stub_query(filters: dict):
     if channel_ids := filters.get('channel_ids'):
         query = query.filter(Channel.id.in_(channel_ids))
     else:
-        _match = []
-        if sources := filters.get('source'):
-            _match.append(Source.name.in_(sources))
-        if categories := filters.get('category'):
-            _match.append(Channel.category.in_(categories))
-        if languages := filters.get('languages'):
-            _match.append(Channel.language.in_(languages))
-        elif language := filters.get('language'):
-            _match.append(Channel.language == language)
-        if countries := filters.get('countries'):
-            _match.append(Channel.country.in_(countries))
-        if (sport_clause := event_sport_clause(filters.get('sports'))) is not None:
-            _match.append(sport_clause)
-        if gracenote := filters.get('gracenote'):
-            if gracenote == 'has':
-                _match.append(db.and_(Channel.gracenote_id != None, Channel.gracenote_id != ''))
-            elif gracenote == 'missing':
-                _match.append(db.and_(
-                    db.or_(Channel.gracenote_id == None, Channel.gracenote_id == ''),
-                    ~Channel.slug.like('%|%'),
-                ))
-        if search := filters.get('search'):
-            _match.append(Channel.name.ilike(f'%{search}%'))
+        _match = filter_match_clauses(filters)
         _match_expr = db.and_(*_match) if _match else None
         # Pinned channels join the feed regardless of the source/category filters above
         # (still subject to the active/enabled/bridge predicates), so the counts and the
@@ -513,8 +508,12 @@ def feed_to_query_filters(feed_filters: dict) -> dict:
         return f
     if sources := feed_filters.get('sources'):
         f['source'] = sources
+    if excluded_sources := feed_filters.get('exclude_sources'):
+        f['exclude_source'] = excluded_sources
     if categories := feed_filters.get('categories'):
         f['category'] = categories
+    if excluded_categories := feed_filters.get('exclude_categories'):
+        f['exclude_category'] = excluded_categories
     if languages := feed_filters.get('languages'):
         f['languages'] = languages
     if countries := feed_filters.get('countries'):

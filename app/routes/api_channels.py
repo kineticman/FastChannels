@@ -46,10 +46,19 @@ def list_channels():
         q = q.filter(Channel.name.ilike(f'%{search}%'))
     pag = q.order_by(Channel.name).paginate(page=page, per_page=per_page, error_out=False)
     if request.args.get('slim') in ('1', 'true'):
+        # bridge_only: the channel goes to a feed's bridge playlists, not its
+        # regular M3U. Taken from the playlists' own query so the feed editor
+        # splits channels exactly the way the output does.
+        from ..generators.m3u import _build_channel_query
+        page_ids = [ch.id for ch in pag.items]
+        bridge_ids = {cid for (cid,) in _build_channel_query(
+            {'channel_ids': page_ids}, activity='drm_bridge',
+        ).with_entities(Channel.id).all()} if page_ids else set()
         items = [{'id': ch.id, 'name': ch.name, 'source_name': ch.source.name,
                   'category': ch.category, 'language': ch.language,
                   'country': ch.country, 'gracenote_id': ch.gracenote_id,
-                  'sport': ch.sport, 'is_event': is_event_channel(ch)}
+                  'sport': ch.sport, 'is_event': is_event_channel(ch),
+                  'bridge_only': ch.id in bridge_ids}
                  for ch in pag.items]
     else:
         items = [ch.to_dict() for ch in pag.items]

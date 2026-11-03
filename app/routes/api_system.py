@@ -235,8 +235,13 @@ def stats():
     )
     if sources := request.args.getlist('source'):
         q = q.filter(Source.name.in_(sources))
+    if excluded_sources := request.args.getlist('exclude_source'):
+        q = q.filter(Source.name.notin_(excluded_sources))
     if categories := request.args.getlist('category'):
         q = q.filter(Channel.category.in_(categories))
+    if excluded_categories := request.args.getlist('exclude_category'):
+        q = q.filter(db.or_(Channel.category == None,
+                            Channel.category.notin_(excluded_categories)))
     if languages := request.args.getlist('language'):
         q = q.filter(Channel.language.in_(languages))
     if countries := request.args.getlist('country'):

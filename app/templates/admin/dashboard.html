@@ -242,6 +242,7 @@
               {% set f = feed.filters or {} %}
               {% for s in (f.get('sources') or []) %}<span class="pill">{{ s }}</span>{% endfor %}
               {% for c in (f.get('categories') or []) %}<span class="pill" style="background:var(--success-bg);color:var(--success)">{{ c }}</span>{% endfor %}
+              {% for c in (f.get('exclude_sources') or []) + (f.get('exclude_categories') or []) %}<span class="pill" style="background:var(--danger-bg);color:var(--danger)">no {{ c }}</span>{% endfor %}
               {% if not f.get('sources') and not f.get('categories') %}<span style="color:var(--text-muted);font-size:0.8rem">all channels</span>{% endif %}
             </td>
             <td>

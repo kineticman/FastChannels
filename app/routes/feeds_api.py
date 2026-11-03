@@ -678,8 +678,18 @@ def _clean_filters(raw: dict) -> dict:
         return out  # channel_ids overrides other filters; event remains a hard limit
     if sources := raw.get('sources'):
         out['sources'] = [str(s) for s in sources if s]
+    # Leave-out lists: a value also included is an include (the editor never
+    # sends both); an emptied list is dropped like any other.
+    if excluded := list(dict.fromkeys(str(s) for s in raw.get('exclude_sources') or [] if s)):
+        excluded = [s for s in excluded if s not in out.get('sources', [])]
+        if excluded:
+            out['exclude_sources'] = excluded
     if categories := raw.get('categories'):
         out['categories'] = [str(c) for c in categories if c]
+    if excluded := list(dict.fromkeys(str(c) for c in raw.get('exclude_categories') or [] if c)):
+        excluded = [c for c in excluded if c not in out.get('categories', [])]
+        if excluded:
+            out['exclude_categories'] = excluded
     if languages := raw.get('languages'):
         out['languages'] = [str(l) for l in languages if l]
     elif language := raw.get('language'):
