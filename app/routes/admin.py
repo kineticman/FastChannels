@@ -9,7 +9,7 @@ from sqlalchemy import select, case, func, or_
 from sqlalchemy.orm import load_only, defer
 from ..extensions import db
 from .. import admin_auth
-from ..models import Source, Channel, Feed, AppSettings, Program
+from ..models import Source, Channel, Feed, AppSettings, Program, SourceCache
 from ..generators.m3u import (
     _apply_event_filter,
     _build_channel_query,
@@ -551,7 +551,7 @@ def _humanize_until(dt, now):
     return f'in {int(secs // 86400)}d'
 
 
-def _source_status_line(s, *, cfg_status, epg, cfm, retired, mix, now, tz_name, bridge_ready=True):
+def _source_status_line(s, *, cfg_status, epg, cfm, retired, mix, now, tz_name, bridge_ready=True, fill=None):
     """The one line under a source: the most important thing about it right
     now, worst first, and a hover title with the detail. state is the dot's
     colour: ok | warn | error | setup | pending | info."""
@@ -600,6 +600,14 @@ def _source_status_line(s, *, cfg_status, epg, cfm, retired, mix, now, tz_name, 
             return {'state': 'warn', 'text': f'Scrape overdue — was due {_humanize_age(nxt, now)}', 'title': title}
     when = f'next {_humanize_until(nxt, now)}' if nxt else ('clock-aligned' if s.scrape_cron else 'manual only')
     pending = ' · guide arrives with the next scrape' if epg and epg.get('pending') else ''
+    if not pending and fill and fill.get('waiting') and fill.get('total'):
+        # Staged first fill (Roku): a capped number of stations per scrape.
+        waiting, total = fill['waiting'], fill['total']
+        runs = -(-waiting // max(1, fill.get('per_run') or waiting))
+        pending = f' · guide still filling ({total - waiting} of {total} channels)'
+        title = (f'{waiting} channel{"" if waiting == 1 else "s"} still {"has" if waiting == 1 else "have"} no guide yet. '
+                 f'To avoid being rate-limited, the guide is fetched for a limited number of channels per scrape; '
+                 f'the rest arrive over the next {runs} scrape{"" if runs == 1 else "s"}. ' + title)
     return {'state': 'pending' if pending else 'ok', 'text': f'Updated {_humanize_age(s.last_scraped_at, now)} · {when}{pending}',
             'title': title, 'ts': s.last_scraped_at}
 
@@ -903,11 +911,18 @@ def sources():
                     if source_mix[s.id]['kind'] != 'clear'}
     _tz_name = AppSettings.get().effective_timezone_name()
     _epg_meta = _epg_freshness_meta(sources_list, _now)
+    _epg_fill = dict(
+        db.session.query(SourceCache.source_id, SourceCache.value)
+        .filter(SourceCache.cache_key == 'epg_fill',
+                SourceCache.source_id.in_([s.id for s in sources_list]))
+        .all()
+    )
     source_status = {
         s.id: _source_status_line(
             s, cfg_status=source_config_status.get(s.id), epg=_epg_meta.get(s.id),
             cfm=channel_fetch_meta.get(s.id), retired=source_retired.get(s.id),
-            mix=source_mix[s.id], now=_now, tz_name=_tz_name, bridge_ready=bridge_ready.get(s.id, True))
+            mix=source_mix[s.id], now=_now, tz_name=_tz_name, bridge_ready=bridge_ready.get(s.id, True),
+            fill=_epg_fill.get(s.id))
         for s in sources_list if s.is_enabled and s.name != 'custom'
     }
 
