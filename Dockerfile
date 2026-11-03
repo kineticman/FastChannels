@@ -6,10 +6,6 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-# Set automatically by Buildx for each target platform. It must be declared in
-# this build stage before a RUN instruction can read it.
-ARG TARGETARCH
-
 # No compiler: every requirement installs from a prebuilt wheel on amd64 and arm64
 # (checked 2026-11-03). gcc + libpq-dev (nothing uses Postgres) cost ~145 MB. If a
 # new dependency has no wheel the pip install fails loudly here rather than at runtime.
@@ -69,15 +65,10 @@ RUN echo "yt-dlp refresh token: ${YTDLP_REFRESH}" \
 # headed Chromium launch would fail with "Executable doesn't exist" - install full
 # chromium again if one is ever added.
 RUN playwright install-deps chromium && playwright install --only-shell chromium
-# Real Google Chrome (not open-source Chromium) is an amd64-only Playwright
-# download. DirecTV Stream's Akamai protection needs it (see app/scrapers/directv.py,
-# which always launches channel='chrome', headed on Xvfb). Playwright has no
-# Chrome-for-Linux-arm64 build, so DirecTV browser sign-in is unavailable on arm64.
-RUN if [ "$TARGETARCH" = "amd64" ]; then \
-        playwright install-deps chrome && playwright install chrome; \
-    else \
-        echo "Skipping unsupported Playwright Chrome download on $TARGETARCH"; \
-    fi
+# No Google Chrome: DirecTV's email/password sign-in used to fall back to headed
+# Chrome when curl-cffi failed. That fallback was removed (446 MB on amd64; code
+# sign-in covers it). Camoufox can't stand in - DirecTV redirects Firefox to
+# BrowserNotSupported.html.
 # Camoufox (anti-detect Firefox) for the TVE/Sling/Spectrum browser sign-ins -
 # fetches its own prebuilt browser binary; libgtk-3-0/xvfb above cover its runtime deps.
 # The bundle ships spoofing fonts for all three OSes, grouped by which OS reads them
