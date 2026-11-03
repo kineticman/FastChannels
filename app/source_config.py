@@ -97,6 +97,10 @@ def is_source_config_complete(source_name: str, scraper_cls, values: dict | None
     if source_name == 'espn':
         return bool(saved.get('refresh_token') or saved.get('adobe_client_id'))
 
+    # B1G+ — "configured" means the code sign-in saved a session.
+    if source_name == 'b1g_plus':
+        return bool(saved.get('token'))
+
     # Paramount+ — "configured" means the activation-code sign-in saved a session.
     if source_name == 'paramount':
         return bool((saved.get('cookies') or {}).get('CBS_COM'))

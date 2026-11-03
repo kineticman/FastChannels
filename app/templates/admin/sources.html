@@ -3392,7 +3392,7 @@
         }
 
         // ESPN's, Paramount+'s and Amazon Sports' visible settings are rendered separately from their hidden schemas.
-        if (!schema.length && !['espn', 'paramount', 'amazon_sports'].includes(sourceName) && !cfg.tve_signin) {
+        if (!schema.length && !['espn', 'paramount', 'amazon_sports', 'b1g_plus'].includes(sourceName) && !cfg.tve_signin) {
           if (badge) {
             badge.textContent = 'Auto';
             badge.className = 'config-badge auto';
@@ -5164,6 +5164,26 @@
         </div>
         <div class="config-note" style="margin-top:0.8rem">Match channels retire an hour after the stream window ends and are deleted a day later.</div>`;
     }
+    function renderB1gPlusConfig(sourceId, schema, values, cfg) {
+      const info = (cfg && cfg.b1g_plus) || {};
+      let detail = info.signin_error || '';
+      if (info.signed_in) {
+        detail = `Signed in${info.email ? ' as ' + escapeHtml(info.email) : ''}`
+          + (info.subscription_active === false ? ' — this account has no active B1G+ pass' : (info.subscription ? ` — ${escapeHtml(info.subscription)}` : ''));
+      }
+      return `
+        <div class="config-title">B1G+ Settings</div>
+        <div class="config-subtitle" style="font-weight:600">Sign in</div>
+        <div class="config-note">Adds B1G+ live events as temporary channels, one per event in the next two days.
+          Needs a B1G+ subscription. FastChannels counts as one of your account's devices.</div>
+        <div class="espn-auth-options">
+          ${codeLinkOption(sourceId, 'b1g-plus', 'b1g_plus', 'account', 'B1G+', 'B1G+ account',
+                   info.signed_in, detail,
+                   'Get a code, then go to bigtenplus.com/code on your phone or computer, sign in to B1G+ and enter it. Codes last 5 minutes.')}
+        </div>
+        <div class="config-note" style="margin-top:0.8rem">B1G+ doesn't publish end times, so each event gets a typical length for its sport,
+          extended while it's still live. Event channels retire an hour after that and are deleted a day later.</div>`;
+    }
     // ── end activation-code sign-ins ──────────────────────────────────────────
 
     function renderFuboConfig(sourceId, schema, values) {
@@ -6329,6 +6349,8 @@
         return renderCbsSportsConfig(sourceId, schema, values, cfg);
       } else if (sourceName === 'paramount') {
         return renderParamountConfig(sourceId, schema, values, cfg);
+      } else if (sourceName === 'b1g_plus') {
+        return renderB1gPlusConfig(sourceId, schema, values, cfg);
       } else if (sourceName === 'sling') {
         return renderSlingConfig(sourceId, schema, values, cfg);
       } else if (sourceName === 'spectrum') {

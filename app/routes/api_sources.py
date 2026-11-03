@@ -527,6 +527,12 @@ def get_source_config(source_id):
         extra['nfl'] = _nfl_signin_info(saved)
     if source.name == 'cbs_sports':
         extra['cbs_sports'] = _cbs_sports_signin_info(saved)
+    if source.name == 'b1g_plus':
+        extra['b1g_plus'] = {'signed_in': bool(saved.get('token')),
+                             'email': saved.get('email'),
+                             'subscription': saved.get('subscription'),
+                             'subscription_active': saved.get('subscription_active'),
+                             'signin_error': saved.get('signin_error')}
     if source.name == 'paramount':
         extra['paramount'] = {'signed_in': bool((saved.get('cookies') or {}).get('CBS_COM')),
                               'account_status': saved.get('account_status'),
@@ -2071,6 +2077,90 @@ def clear_paramount_auth(source_id, kind):
     db.session.commit()
     if source.is_enabled:
         trigger_scrape('paramount', force_full=True)
+    return jsonify({'status': 'cleared'})
+
+
+# ── B1G+ sign-in (6-digit code at bigtenplus.com/code) ──────────────────────
+# The user enters the code on bigtenplus.com while signed in; a sign-in-queue
+# job polls for the session — see app.scrapers.b1g_plus.
+
+def _b1g_plus_source_or_400(source_id):
+    source = Source.query.get_or_404(source_id)
+    if source.name != 'b1g_plus':
+        return None, (jsonify({'error': 'not a b1g_plus source'}), 400)
+    return source, None
+
+
+@sources_bp.route('/sources/<int:source_id>/b1g-plus-link/start', methods=['POST'])
+def b1g_plus_link_start(source_id):
+    import redis as _redis
+    import requests as _requests
+    import uuid as _uuid
+    from ..scrapers.b1g_plus import LINK_STATUS_KEY, B1GAuthError, link_status, start_link
+    from .tasks import get_signin_queue
+
+    source, err = _b1g_plus_source_or_400(source_id)
+    if err:
+        return err
+    cfg = dict(source.config or {})
+    if not cfg.get('device_id'):
+        cfg['device_id'] = str(_uuid.uuid4())
+        source.config = cfg
+        db.session.commit()
+    try:
+        ctx = start_link(cfg['device_id'])
+    except (B1GAuthError, _requests.RequestException) as e:
+        return jsonify({'error': str(e)}), 502
+    status = link_status(ctx, 'waiting')
+    _redis.from_url(current_app.config['REDIS_URL']).setex(LINK_STATUS_KEY, 720, json.dumps(status))
+    get_signin_queue().enqueue('app.scrapers.b1g_plus.run_link', ctx, job_timeout=420)
+    return jsonify(status)
+
+
+@sources_bp.route('/sources/<int:source_id>/b1g-plus-link/state')
+def b1g_plus_link_state(source_id):
+    import redis as _redis
+    from ..scrapers.b1g_plus import LINK_STATUS_KEY
+
+    _, err = _b1g_plus_source_or_400(source_id)
+    if err:
+        return err
+    raw = _redis.from_url(current_app.config['REDIS_URL']).get(LINK_STATUS_KEY)
+    return jsonify(_with_code_queue_notice(json.loads(raw) if raw else {'state': 'idle'},
+                                           'app.scrapers.b1g_plus.run_link'))
+
+
+@sources_bp.route('/sources/<int:source_id>/b1g-plus-link/stop', methods=['POST'])
+def b1g_plus_link_stop(source_id):
+    import redis as _redis
+    from ..scrapers.b1g_plus import LINK_STATUS_KEY
+
+    _, err = _b1g_plus_source_or_400(source_id)
+    if err:
+        return err
+    _redis.from_url(current_app.config['REDIS_URL']).delete(LINK_STATUS_KEY)
+    return jsonify({'status': 'stopped'})
+
+
+@sources_bp.route('/sources/<int:source_id>/b1g-plus-auth/<kind>', methods=['DELETE'])
+def clear_b1g_plus_auth(source_id, kind):
+    from ..scrapers.b1g_plus import SIGNIN_CONFIG_KEYS, logout
+
+    source, err = _b1g_plus_source_or_400(source_id)
+    if err:
+        return err
+    cfg = dict(source.config or {})
+    if cfg.get('token'):
+        try:
+            logout(cfg['token'])
+        except Exception:  # noqa: BLE001 — signing out locally still counts
+            logger.warning('[b1g_plus] logout failed', exc_info=True)
+    for key in SIGNIN_CONFIG_KEYS + ('signin_error',):
+        cfg.pop(key, None)
+    source.config = cfg
+    db.session.commit()
+    if source.is_enabled:
+        trigger_scrape('b1g_plus', force_full=True)
     return jsonify({'status': 'cleared'})
 
 
