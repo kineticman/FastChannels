@@ -6,12 +6,7 @@ async function saveInterfaceMode(toggle) {
   toggle.disabled = true;
   status.textContent = 'Saving…';
   try {
-    const response = await fetch('/api/settings/lite-mode', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({enabled: !toggle.checked}),
-    });
-    if (!response.ok) throw new Error('Could not save interface preference.');
+    await setLiteModePreference(!toggle.checked);
     window.location.reload();
   } catch (error) {
     toggle.checked = !toggle.checked;

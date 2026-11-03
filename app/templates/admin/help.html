@@ -103,7 +103,7 @@
           <li>Use <code>Channels</code> to enable, disable, inspect, and resolve duplicates.</li>
           <li>Use <code>Feeds</code> to build named M3U + EPG outputs for your players.</li>
           <li>Use <code>Settings</code> to configure your server URL and Channels DVR address.</li>
-          <li>Use <code>Bridge</code> to configure HDMI Capture (single stream), ah4c Capture (multi-tuner), or PrismCast Capture (browser) for DRM channels.</li>
+          {% if ui.show_bridge %}<li>Use <code>Bridge</code> to configure HDMI Capture (single stream), ah4c Capture (multi-tuner), or PrismCast Capture (browser) for DRM channels.</li>{% endif %}
         </ul>
       </section>
 
@@ -111,9 +111,9 @@
         <h2>Links</h2>
         <ul>
           <li><a href="https://github.com/kineticman/FastChannels" target="_blank" rel="noopener noreferrer">FastChannels on GitHub</a></li>
-          <li><a href="https://github.com/kineticman/FastChannels/blob/development/docs/fc-player-setup.md" target="_blank" rel="noopener noreferrer">HDMI Capture / ah4c Capture setup guide</a></li>
+          {% if ui.show_bridge %}<li><a href="https://github.com/kineticman/FastChannels/blob/development/docs/fc-player-setup.md" target="_blank" rel="noopener noreferrer">HDMI Capture / ah4c Capture setup guide</a></li>{% endif %}
           <li><a href="https://github.com/kineticman/FastChannels/blob/development/docs/custom-playlists.md" target="_blank" rel="noopener noreferrer">Custom playlists guide (your own M3U + XMLTV)</a></li>
-          <li><a href="https://github.com/hjdhjd/prismcast" target="_blank" rel="noopener noreferrer">PrismCast documentation</a></li>
+          {% if ui.show_bridge %}<li><a href="https://github.com/hjdhjd/prismcast" target="_blank" rel="noopener noreferrer">PrismCast documentation</a></li>{% endif %}
           <li><a href="https://community.getchannels.com/" target="_blank" rel="noopener noreferrer">Channels Community Forum</a></li>
           <li><a href="https://community.getchannels.com/t/fastchannels-fast-channels-aggregator-manager/45986" target="_blank" rel="noopener noreferrer">FastChannels Help Forum Thread</a></li>
         </ul>
@@ -124,7 +124,7 @@
         <ul>
           <li><code>Active</code>: channel still exists upstream (set by scraper).</li>
           <li><code>Enabled</code>: channel is included in your M3U / EPG output (set by you).</li>
-          <li><code>DRM</code>: stream is protected — not playable in generic IPTV clients.</li>
+          {% if ui.show_drm %}<li><code>DRM</code>: stream is protected — not playable in generic IPTV clients.</li>{% endif %}
           <li><code>Dead</code>: stream audit found this channel is not currently playable.</li>
           <li><code>VOD</code>: stream audit detected on-demand content instead of a live feed — excluded from output.</li>
         </ul>
@@ -146,7 +146,7 @@
         <h2>Duplicates Helper</h2>
         <ul>
           <li>Finds channels with the same name across multiple sources.</li>
-          <li>Healthy channels are preferred over <code>DRM</code>, <code>Dead</code>, or inactive ones.</li>
+          <li>Healthy channels are preferred over {% if ui.show_drm %}<code>DRM</code>, {% endif %}<code>Dead</code>{% if ui.show_drm %},{% endif %} or inactive ones.</li>
           <li>Between healthy matches, a Gracenote ID wins, then fuller guide data, then source priority.</li>
           <li>If every duplicate is unhealthy, the whole group is disabled.</li>
         </ul>
@@ -155,7 +155,7 @@
       <section class="card">
         <h2>Inspect &amp; Stream Audit</h2>
         <ul>
-          <li><code>Inspect</code> tests a single channel's full resolve path — identifies dead manifests, VOD-only streams, DRM, and resolver failures. Also shows stream variant stats (resolution, bitrate, codecs).</li>
+          <li><code>Inspect</code> tests a single channel's full resolve path — identifies dead manifests, VOD-only streams{% if ui.show_drm %}, DRM{% endif %}, and resolver failures. Also shows stream variant stats (resolution, bitrate, codecs).</li>
           <li><code>Stream Audit</code> checks linear channels by default. You can include scheduled events per run; future events may not have playable streams yet. The audit marks confirmed dead or unplayable channels inactive automatically.</li>
         </ul>
       </section>
@@ -177,7 +177,7 @@
         <ul>
           <li><strong>Scrape</strong>: refresh channels and EPG on the normal schedule.</li>
           <li><strong>Force Complete Refresh</strong> (Sources page): re-fetch channels and guides for every enabled source — use when things look stale or after a long outage.</li>
-          <li><strong>Audit</strong>: health-check every stream for a source and automatically mark dead or DRM channels.</li>
+          <li><strong>Audit</strong>: health-check every stream for a source and automatically mark dead{% if ui.show_drm %} or DRM{% endif %} channels.</li>
           <li>Sources run on their own schedule automatically. Use <strong>Configure</strong> to adjust frequency or set a clock-aligned start time.</li>
         </ul>
       </section>
