@@ -69,9 +69,23 @@ RUN if [ "$TARGETARCH" = "amd64" ]; then \
     else \
         echo "Skipping unsupported Playwright Chrome download on $TARGETARCH"; \
     fi
-# Camoufox (anti-detect Firefox) for the interactive Sling sign-in - fetches its
-# own prebuilt browser binary; libgtk-3-0/xvfb above cover its runtime deps.
-RUN python -m camoufox fetch
+# Camoufox (anti-detect Firefox) for the TVE/Sling/Spectrum browser sign-ins -
+# fetches its own prebuilt browser binary; libgtk-3-0/xvfb above cover its runtime deps.
+# The bundle ships spoofing fonts for all three OSes, grouped by which OS reads them
+# (fonts/groups.json: L, M, W, LM, LW, MW, LMW). Every Camoufox launch in this repo
+# uses os='windows', which only reads LMW/LW/MW/W, so the macOS-only (M) and Linux-only
+# (L) groups are dead weight: ~1 GB of 2.1 GB in 156.0.1-beta.36, which doubled the
+# image when it landed. Camoufox builds its fontconfig from groups.json and skips
+# missing group dirs. Older bundles used fonts/<os>/ instead, so trim those too.
+# The trim also fixes a fingerprint leak: camoufox.cfg sets gfx.bundled-fonts.activate,
+# which adds the whole fonts/ tree recursively, so with M present a "Windows" browser drew
+# Arial from macOS's Arial file (canvas width 393 vs 388 with Windows' arial.ttf).
+# If a launch ever spoofs macOS or Linux, remove the matching rm below.
+RUN python -m camoufox fetch \
+    && for d in /root/.cache/camoufox/browsers/*/*/fonts; do \
+        rm -rf "$d/M" "$d/L" "$d/macos" "$d/linux"; \
+    done \
+    && du -sh /root/.cache/camoufox
 
 COPY . .
 

@@ -13,6 +13,10 @@ __pycache__/
 node_modules/
 dist/
 build/
+**/build/
+**/.gradle/
+.venv/
+experiments/
 dev/
 amazoncookies.json
 docker-compose*.yml
