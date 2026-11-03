@@ -1280,16 +1280,27 @@ def _write_db_and_reload(data: bytes):
     and on-disk-backup-restore endpoints.
     """
     import signal as _signal
+    import tempfile
+    from ..schema import prepare_restored_database
 
     SQLITE_MAGIC = b'SQLite format 3\x00'
     if not data.startswith(SQLITE_MAGIC):
         return False, 'File does not appear to be a valid SQLite database.'
 
     db_path  = '/data/fastchannels.db'
-    tmp_path = '/data/fastchannels_restore_tmp.db'
+    tmp = tempfile.NamedTemporaryFile(prefix='fastchannels_restore_', suffix='.db', dir='/data', delete=False)
+    tmp_path = tmp.name
+    tmp.close()
     try:
+        # NamedTemporaryFile creates 0600, and os.replace keeps it: carry the live
+        # file's mode over so host-side readers of /data keep access after a restore.
+        try:
+            _os.chmod(tmp_path, _os.stat(db_path).st_mode & 0o7777)
+        except OSError:
+            _os.chmod(tmp_path, 0o644)
         with open(tmp_path, 'wb') as fp:
             fp.write(data)
+        prepare_restored_database(tmp_path)
         # Atomically replace the live DB first, then remove stale WAL/SHM so new
         # connections get a clean WAL rather than replaying the old one.
         _os.replace(tmp_path, db_path)
@@ -1301,11 +1312,13 @@ def _write_db_and_reload(data: bytes):
                 except OSError:
                     pass
     except Exception as exc:
-        try:
-            _os.unlink(tmp_path)
-        except OSError:
-            pass
-        return False, f'Failed to write database: {exc}'
+        return False, f'Failed to restore database: {exc}'
+    finally:
+        for path in (tmp_path, tmp_path + '-wal', tmp_path + '-shm'):
+            try:
+                _os.unlink(path)
+            except OSError:
+                pass
 
     # Gracefully reload gunicorn workers so they open fresh connections to the new DB
     try:

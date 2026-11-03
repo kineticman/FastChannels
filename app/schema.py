@@ -7,6 +7,37 @@ from .extensions import db
 
 logger = logging.getLogger(__name__)
 
+
+def prepare_restored_database(path: str) -> None:
+    """Validate and migrate an isolated backup before replacing the live file."""
+    import sqlite3
+    from contextlib import closing
+    from flask import Flask, current_app
+
+    with closing(sqlite3.connect(path)) as conn:
+        tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        if not {'sources', 'channels', 'app_settings'}.issubset(tables):
+            raise ValueError('Backup is missing FastChannels tables.')
+        if conn.execute('PRAGMA quick_check').fetchone()[0] != 'ok':
+            raise ValueError('Backup failed the SQLite integrity check.')
+
+    restore_app = Flask('fastchannels_restore')
+    restore_app.config.update(current_app.config)
+    restore_app.config['SQLALCHEMY_DATABASE_URI'] = f'sqlite:///{path}'
+    db.init_app(restore_app)
+    with restore_app.app_context():
+        try:
+            # A backup is always an existing install. Older backups without
+            # lite_mode receive the upgrade default, regardless of FC_SCHEMA_READY.
+            ensure_runtime_schema(fresh_install=False)
+        finally:
+            db.session.remove()
+            db.engine.dispose()
+    # Include any WAL commits in the file that will be moved into place.
+    with closing(sqlite3.connect(path)) as conn:
+        if conn.execute('PRAGMA wal_checkpoint(TRUNCATE)').fetchone()[0] != 0:
+            raise RuntimeError('Could not checkpoint the restored database.')
+
 _DEFAULT_FEEDS = (
     {
         "slug": "default",

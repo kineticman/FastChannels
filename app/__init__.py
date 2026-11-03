@@ -165,12 +165,33 @@ def create_app(config_class=Config):
         from sqlalchemy import event
         import sqlite3 as _sqlite3
 
+        sqlite_path = db.engine.url.database if db.engine.dialect.name == 'sqlite' else None
+
+        def _sqlite_file_identity():
+            if not sqlite_path or sqlite_path == ':memory:':
+                return None
+            try:
+                stat = os.stat(sqlite_path)
+                return stat.st_dev, stat.st_ino
+            except OSError:
+                return None
+
         @event.listens_for(db.engine, "connect")
-        def _set_sqlite_pragmas(dbapi_conn, _):
+        def _set_sqlite_pragmas(dbapi_conn, record):
             if isinstance(dbapi_conn, _sqlite3.Connection):
                 dbapi_conn.execute("PRAGMA journal_mode=WAL")
                 dbapi_conn.execute("PRAGMA busy_timeout=30000")
                 dbapi_conn.execute("PRAGMA foreign_keys=ON")
+                record.info['sqlite_file_identity'] = _sqlite_file_identity()
+
+        @event.listens_for(db.engine, "checkout")
+        def _reopen_replaced_sqlite(dbapi_conn, record, proxy):
+            # Gunicorn preload and RQ can retain pooled connections to the old
+            # inode after a restore. Recycle them before the next transaction.
+            if (isinstance(dbapi_conn, _sqlite3.Connection)
+                    and record.info.get('sqlite_file_identity') != _sqlite_file_identity()):
+                from sqlalchemy.exc import DisconnectionError
+                raise DisconnectionError('SQLite database was replaced by a restore')
 
         from .db_lock_watch import install as _install_db_lock_watch
         _install_db_lock_watch(db.engine)
