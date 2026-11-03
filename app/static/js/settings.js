@@ -2510,7 +2510,7 @@ async function loadSystemStats() {
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     const d = await r.json();
 
-    const db = d.db, ic = d.image_cache, mem = d.memory || {}, cpu = d.cpu || {}, proc = d.processes || {};
+    const db = d.db, ic = d.image_cache, mem = d.memory || {}, cpu = d.cpu || {}, proc = d.processes || {}, disk = d.disk || {};
     const totalCacheBytes = ic.logos_bytes + ic.posters_bytes;
     const containerUsage = mem.container_bytes ? _fmt_bytes(mem.container_bytes) : 'Unavailable';
     const containerLimit = mem.container_limit_bytes ? _fmt_bytes(mem.container_limit_bytes) : null;
@@ -2539,6 +2539,15 @@ async function loadSystemStats() {
           ${_stat('Posters', `${ic.posters_count.toLocaleString()} files / ${_fmt_bytes(ic.posters_bytes)}`)}
           ${_stat('Poster TTL', `${ic.poster_ttl_days} days`)}
           ${_stat('Total cache', _fmt_bytes(totalCacheBytes), totalCacheBytes > 2147483648 ? 'warn' : '')}
+        </div>
+        <div>
+          <div class="stats-section-label">Disk</div>
+          ${_stat('Container', disk.container_bytes != null ? _fmt_bytes(disk.container_bytes) : 'Unavailable')}
+          ${disk.camoufox_bytes != null ? _stat('&nbsp;&nbsp;Camoufox (browser sign-ins)', _fmt_bytes(disk.camoufox_bytes), 'muted') : ''}
+          ${disk.chromium_bytes != null ? _stat('&nbsp;&nbsp;Chromium (headless)', _fmt_bytes(disk.chromium_bytes), 'muted') : ''}
+          ${disk.python_bytes != null ? _stat('&nbsp;&nbsp;Python packages', _fmt_bytes(disk.python_bytes), 'muted') : ''}
+          ${_stat('Data volume (/data)', disk.data_bytes != null ? _fmt_bytes(disk.data_bytes) : 'Unavailable')}
+          ${disk.data_disk_free_bytes != null ? _stat('Free on /data disk', `${_fmt_bytes(disk.data_disk_free_bytes)} of ${_fmt_bytes(disk.data_disk_total_bytes)}`, disk.data_disk_free_bytes < 5368709120 ? 'warn' : 'muted') : ''}
         </div>
         <div>
           <div class="stats-section-label">Memory</div>

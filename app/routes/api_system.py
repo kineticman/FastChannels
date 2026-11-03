@@ -265,6 +265,49 @@ def stats():
     })
 
 
+_disk_stats_cache: dict = {}
+
+
+def _du_bytes(path: str, one_filesystem: bool = False) -> int | None:
+    """Apparent size of a tree via du (~1s for the whole container), or None."""
+    import subprocess
+    if not _os.path.exists(path):
+        return None
+    cmd = ['du', '-sb'] + (['-x'] if one_filesystem else []) + [path]
+    try:
+        out = subprocess.run(cmd, capture_output=True, text=True, timeout=60).stdout
+        return int(out.split()[0])
+    except (OSError, ValueError, IndexError, subprocess.SubprocessError):
+        return None
+
+
+def _disk_stats() -> dict:
+    """Container filesystem vs the /data volume. Cached 10 min: the image doesn't
+    change while running and du walks ~100k files."""
+    now = _time.time()
+    if _disk_stats_cache.get('expires', 0) > now:
+        return _disk_stats_cache['data']
+    import shutil
+    import sysconfig
+    data = {
+        # -x keeps du on the container's own (overlay) filesystem, so /data and
+        # any other mounts are left out: image files plus the writable layer.
+        'container_bytes': _du_bytes('/', one_filesystem=True),
+        'camoufox_bytes':  _du_bytes('/root/.cache/camoufox'),
+        'chromium_bytes':  _du_bytes('/root/.cache/ms-playwright'),
+        'python_bytes':    _du_bytes(sysconfig.get_paths()['purelib']),
+        'data_bytes':      _du_bytes('/data'),
+    }
+    try:
+        usage = shutil.disk_usage('/data')
+        data['data_disk_free_bytes'] = usage.free
+        data['data_disk_total_bytes'] = usage.total
+    except OSError:
+        pass
+    _disk_stats_cache.update(data=data, expires=now + 600)
+    return data
+
+
 @system_bp.route('/system-stats')
 def system_stats():
     # ── Database ──────────────────────────────────────────────────────────
@@ -320,6 +363,7 @@ def system_stats():
             'poster_ttl_days': 4,
         },
         'processes': _process_stats(),
+        'disk': _disk_stats(),
         'cpu': _cpu_stats(),
         'memory': _memory_stats(),
     })
