@@ -1,0 +1,16 @@
+{# Lite-mode heads-up for new installs (lite is their default). Hidden until
+   initLiteNotice() checks the per-browser dismissal, so it never flashes. #}
+{% if ui.lite %}
+<div class="lite-notice" id="lite-notice" role="note" hidden>
+  <div class="lite-notice-text">
+    <strong>You're in lite mode: free sources only.</strong>
+    Subscription, TV Everywhere and DRM sources (DirecTV, ESPN, Sling, the DRM bridge and more) are hidden.
+    Switch with the <strong>Lite mode</strong> menu at the top right, or in Settings &rarr; Interface. Nothing you've set up is changed either way.
+  </div>
+  <div class="lite-notice-actions">
+    <button type="button" class="btn btn-sm" onclick="liteNoticeShowAll(this)">Show everything</button>
+    <button type="button" class="btn btn-cancel btn-sm" onclick="dismissLiteNotice()">Got it</button>
+  </div>
+</div>
+<script>initLiteNotice();</script>
+{% endif %}

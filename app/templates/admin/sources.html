@@ -1045,6 +1045,7 @@
   {% include 'admin/_nav.html' %}
 
   <div class="container">
+    {% include 'admin/_lite_notice.html' %}
 
     {% if needs_config %}
     <div class="needs-config-banner" id="needs-config-banner">
@@ -1729,8 +1730,7 @@
     </div>
   </div>
 
-  <script src="{{ url_for('static', filename='js/admin_preferences.js') }}"></script>
-  <script>
+    <script>
     const MASK = '••••••••';
     let _pendingSourceId   = null;
     let _pendingCheckbox   = null;

@@ -163,6 +163,7 @@
   {% set active_page = 'dashboard' %}
   {% include 'admin/_nav.html' %}
   <div class="container">
+    {% include 'admin/_lite_notice.html' %}
     {% if scheduler_health and not scheduler_health.ok %}
     <div style="background:color-mix(in srgb, var(--danger-bg) 70%, var(--surface));border:1px solid var(--danger-border);border-radius:8px;padding:0.85rem 1.25rem;margin:0 0 1rem;color:var(--danger-soft)">
       <strong>⛔ Scheduler is not running — scrapes and EPG refreshes are stopped.</strong>

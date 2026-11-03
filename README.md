@@ -91,6 +91,8 @@ Go to **Admin → Sources**. Enable or disable sources to taste, and expand any 
 
 Only free sources that need nothing from you start enabled: The Roku Channel, Samsung TV Plus, Plex, Xumo Play, LG Channels, Vizio WatchFree+, TCL TV+, Whale TV+, STIRR, FreeLiveSports, Bally Sports Live, Hallmark and Adult Swim. Everything else ships **disabled** because it needs an account, a TV provider, a local device or a DRM bridge. Enable the ones you want and expand the card to sign in. Many sign-ins are a code or link you approve on your phone, so no password is stored. TV-provider sources share one sign-in from **Settings → TV Everywhere**. Note that **Tubi needs a free account** now. See [Source Notes](#source-notes) for per-source details.
 
+**Lite and Advanced mode.** New installs start in **Lite** mode, which shows only the free sources. Subscription, TV Everywhere and DRM sources, the **Bridge** page and **Settings → TV Everywhere** are hidden until you switch to **Advanced** with the **Lite mode / Advanced mode** menu at the top right of every admin page (or **Settings → Interface**). The mode only changes what the admin UI shows: no source, channel, feed or playlist changes, and anything you already use stays visible in Lite. Existing installs start in Advanced mode when they update.
+
 **4. Run Stream Audits.**
 Once channels are populated, run a Stream Audit on each source (see [Stream Audit](#stream-audit) below). This identifies dead and DRM-protected channels and disables them automatically — highly recommended before building your feeds.
 
@@ -110,7 +112,7 @@ Go to **Admin → Feeds** and build filtered channel lists for your players (see
 | `/admin/feeds` | Create and manage named output feeds |
 | `/admin/guide` | Preview the EPG grid as your players will see it |
 | `/admin/settings` | Server URLs, Gracenote options, TV Everywhere sign-in, and system stats |
-| `/admin/bridge` | DRM bridge setup — HDMI Capture, ah4c Capture, PrismCast, post-install healthcheck, tuner authorization checks |
+| `/admin/bridge` | DRM bridge setup (Advanced mode) — HDMI Capture, ah4c Capture, PrismCast, post-install healthcheck, tuner authorization checks |
 | `/admin/logs` | Live log tail |
 | `/admin/reports/channel-changes` | Inferred New / Now Inactive / At Risk channels (BETA) |
 | `/admin/help` | In-app help and source gotchas |
@@ -390,7 +392,7 @@ Disabling a source deletes all its channels from the DB. Re-enabling and running
 
 ### TV provider (TV Everywhere)
 
-These sources sign in through your cable or streaming provider (MVPD) rather than a per-source login. Go to **Settings → TV Everywhere**, pick your provider, and sign in, either in a real browser session that opens in an admin-UI modal or by opening a link on your phone. **Sign in to all** repeats that for every TV-provider network in one pass, with a short pause between each to avoid tripping your provider's rate limiting.
+These sources sign in through your cable or streaming provider (MVPD) rather than a per-source login, and are listed only in Advanced mode (new installs start in Lite; switch with the **Lite mode / Advanced mode** menu at the top right). Go to **Settings → TV Everywhere**, pick your provider, and sign in, either in a real browser session that opens in an admin-UI modal or by opening a link on your phone. **Sign in to all** repeats that for every TV-provider network in one pass, with a short pause between each to avoid tripping your provider's rate limiting.
 
 If one source should sign in with a different TV provider than the rest, choose **A different sign-in, just for this source** on that source's card. It then signs in each of its networks by a link you open on your phone, independently of the shared login.
 

@@ -6,6 +6,10 @@ Channels DVR requests a bridge-only channel, FastChannels resolves the live
 stream, launches the player on a Fire TV or Android TV device over ADB, and
 returns the device's captured HDMI output as a normal channel.
 
+> **Lite mode:** new installs start in Lite mode, which hides the **Bridge** page.
+> Switch to **Advanced** with the **Lite mode / Advanced mode** menu at the top right of the admin UI
+> (or **Settings → Interface**) before following this guide.
+
 > **Device support note:** The development and day-to-day test device is a Fire
 > TV Stick. Android TV devices, including onn. streaming boxes/sticks, use the
 > same Player APK and ADB workflow, but their Settings labels and wireless ADB

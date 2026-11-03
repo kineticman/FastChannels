@@ -15,6 +15,16 @@
     {% if ui.show_bridge %}<a href="/admin/bridge"{% if active_page == 'bridge' %} class="active"{% endif %}>Bridge</a>{% endif %}
     <a href="/admin/logs"{% if active_page == 'logs' %} class="active"{% endif %}>Logs</a>
     <a href="/admin/help"{% if active_page == 'help' %} class="active"{% endif %}>Help</a>
+    <script src="{{ url_for('static', filename='js/admin_preferences.js') }}"></script>
+    <div class="nav-prefs">
+    <div class="theme-picker mode-picker{% if ui.lite %} is-lite{% endif %}" aria-label="Interface mode"
+         title="{% if ui.lite %}Lite: free sources only; subscriptions, TV Everywhere and DRM are hidden unless you already use them{% else %}Advanced: every source and feature is shown{% endif %}">
+      <select class="theme-picker-select" aria-label="Choose interface mode" onchange="onModePickerChange(this)">
+        <option value="lite"{% if ui.lite %} selected{% endif %}>Lite mode</option>
+        <option value="advanced"{% if not ui.lite %} selected{% endif %}>Advanced mode</option>
+      </select>
+    </div>
     {% include 'admin/_theme_toggle.html' %}
+    </div>
     {% if update_status.update_available %}<span class="version" style="cursor:pointer" onclick="openUpdateModal()" title="Update available: v{{ update_status.latest_version }}">v{{ app_version }}<span class="update-pip"></span></span>{% else %}<a class="version" href="{{ update_status.latest_url or 'https://github.com/kineticman/FastChannels' }}" target="_blank" rel="noopener noreferrer" title="View FastChannels on GitHub">v{{ app_version }}</a>{% endif %}
   </nav>
