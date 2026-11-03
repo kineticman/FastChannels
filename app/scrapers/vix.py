@@ -66,6 +66,7 @@ class ViXScraper(BaseScraper):
     """
 
     source_name = 'vix'
+    advanced = True
     display_name = 'ViX'
     source_category = 'fast'
     scrape_interval = 360

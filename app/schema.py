@@ -141,7 +141,7 @@ def _mark_migration_done(conn, flag: str) -> None:
         )
 
 
-def ensure_runtime_schema() -> None:
+def ensure_runtime_schema(*, fresh_install: bool | None = None) -> None:
     # NOTE: the "Migration NNN" labels used in comments/flags below (migration_011_done,
     # migration_012_done, migration_025_done, ...) are this function's own numbering and
     # are unrelated to migrations/NNN_*.py — the numbers don't correspond to each other
@@ -155,6 +155,8 @@ def ensure_runtime_schema() -> None:
             row[0]
             for row in conn.execute(text("SELECT name FROM sqlite_master WHERE type='table'"))
         }
+        if fresh_install is None:
+            fresh_install = "app_settings" not in tables
         if "app_settings" not in tables or "feeds" not in tables:
             db.create_all()
             tables = {
@@ -412,7 +414,11 @@ def ensure_runtime_schema() -> None:
                 conn.execute(text("ALTER TABLE app_settings ADD COLUMN admin_username TEXT"))
             if "admin_password_hash" not in cols:
                 conn.execute(text("ALTER TABLE app_settings ADD COLUMN admin_password_hash TEXT"))
+            if "lite_mode" not in cols:
+                conn.execute(text("ALTER TABLE app_settings ADD COLUMN lite_mode BOOLEAN NOT NULL DEFAULT 0"))
             _ensure_app_settings_row(conn)
+            if fresh_install:
+                conn.execute(text("UPDATE app_settings SET lite_mode = 1 WHERE id = 1"))
 
         if "sources" in tables:
             src_cols = {

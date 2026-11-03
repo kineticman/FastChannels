@@ -1,0 +1,21 @@
+<div class="source-card" id="interface-card">
+  <div class="source-header" style="cursor:default">
+    <div><h3 class="source-name">Interface</h3><p class="source-meta">Choose how much you see in the admin interface.</p></div>
+  </div>
+  <div class="source-body open">
+    <div class="toggle-row">
+      <div class="toggle-row-text">
+        <div class="toggle-row-label">Show advanced sources &amp; features</div>
+        <div class="toggle-row-help">Lite mode keeps setup simple. Advanced mode includes subscriptions, TV Everywhere, and DRM playback. Features you already use stay visible. Your channels, schedules, and playlists stay the same.</div>
+      </div>
+      <div class="toggle-row-control">
+        <span class="settings-autosave">Auto-saves</span>
+        <label class="toggle-switch">
+          <input type="checkbox" id="advanced-interface" aria-label="Show advanced sources and features" {% if not ui.lite %}checked{% endif %} onchange="saveInterfaceMode(this)">
+          <span class="toggle-slider"></span>
+        </label>
+        <span class="save-status" id="interface-status" role="status"></span>
+      </div>
+    </div>
+  </div>
+</div>

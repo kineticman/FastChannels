@@ -479,6 +479,7 @@ class AppSettings(db.Model):
     channels_dvr_url     = db.Column(db.Text, nullable=True)     # e.g. http://192.168.1.x:8089
     public_base_url      = db.Column(db.Text, nullable=True)     # e.g. http://192.168.1.x:5523
     timezone_name        = db.Column(db.String(64), nullable=True)  # IANA timezone, e.g. America/New_York
+    lite_mode            = db.Column(db.Boolean, nullable=False, default=False, server_default=db.text('0'))  # UI preference only; fresh installs opt in during schema setup
     auto_allow_new_channels = db.Column(db.Boolean, nullable=False, default=True, server_default=db.text('1'))  # newly-scraped channels enter feeds enabled (vs. held for review)
     gracenote_auto_fill  = db.Column(db.Boolean, nullable=False, default=True, server_default=db.text('1'))  # scrapers auto-assign Gracenote IDs
     dvr_epg_auto_refresh = db.Column(db.Boolean, nullable=False, default=True, server_default=db.text('1'))  # hourly PUT to Channels DVR lineups

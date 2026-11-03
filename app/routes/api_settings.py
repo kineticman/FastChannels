@@ -294,6 +294,18 @@ def _stream_debug_path(stream_url: str) -> str:
     return f'{parsed.path or "/"}{query}'
 
 
+@settings_bp.route('/settings/lite-mode', methods=['POST'])
+def set_lite_mode():
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict) or type(data.get('enabled')) is not bool:
+        return jsonify({'error': 'enabled must be a boolean.'}), 400
+    row = AppSettings.get()
+    row.lite_mode = data['enabled']
+    db.session.commit()
+    # Deliberately no output invalidation, reconciliation, or rescheduling.
+    return jsonify({'lite_mode': row.lite_mode})
+
+
 @settings_bp.route('/settings', methods=['GET', 'POST'])
 def app_settings():
     row = AppSettings.get()

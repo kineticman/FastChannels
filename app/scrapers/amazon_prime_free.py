@@ -37,6 +37,7 @@ class AmazonPrimeFreeScraper(BaseScraper):
     """
 
     source_name = "amazon_prime_free"
+    advanced = True
     source_aliases = ("amazon-prime-free",)
     display_name = "Amazon Prime Free Channels"
     scrape_interval = 100  # minutes — keep well under the 2-hour DASH URL TTL

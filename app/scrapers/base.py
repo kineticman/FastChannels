@@ -323,7 +323,7 @@ class ConfigField:
                  required: bool = False, secret: bool = False,
                  placeholder: str = '', help_text: str = '', default=None,
                  options: list | None = None, multiple: bool = False,
-                 hidden: bool = False, add_label: str = ''):
+                 hidden: bool = False, add_label: str = '', advanced: bool = False):
         self.key         = key          # key in source.config JSON
         self.label       = label        # human label in UI
         self.field_type  = field_type   # 'text' | 'password' | 'select' | 'toggle' | 'number'
@@ -341,6 +341,7 @@ class ConfigField:
         self.multiple    = multiple
         self.hidden      = hidden       # internal/auto-managed only — never sent to the UI at all
         self.add_label   = add_label    # 'list' fields: text of the add-entry button
+        self.advanced    = advanced     # UI classification only; configured fields stay visible
 
     def to_dict(self):
         d = {
@@ -352,6 +353,7 @@ class ConfigField:
             'placeholder': self.placeholder,
             'help_text':   self.help_text,
             'default':     self.default,
+            'advanced':    self.advanced,
         }
         if self.options:
             d['options'] = self.options
@@ -612,6 +614,14 @@ class BaseScraper(ABC):
     config_required: bool = False      # True if source won't return useful channels without user configuration
     is_premium: bool = False           # True for paid/subscription services — shown as a badge in the admin UI
     source_category: str = 'fast'     # 'fast' (free) | 'account' (free with an account) | 'premium' (subscription) | 'tve' | 'local' (antenna tuner)
+    advanced: bool | None = None     # None derives the UI classification from source_category
+
+    @classmethod
+    def is_advanced(cls) -> bool:
+        if cls.advanced is not None:
+            return cls.advanced
+        return cls.source_category in {'premium', 'tve', 'local'}
+
     under_development: bool = False  # shown in the admin UI; source remains opt-in
     is_beta: bool = False            # "Beta" badge: built, but not yet confirmed by real users
     # Sources page only: list this source under another source's row (by source_name),

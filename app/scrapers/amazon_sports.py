@@ -327,6 +327,7 @@ def event_matches_filter(event: dict, config: dict) -> bool:
 
 class AmazonSportsScraper(AmazonPrimeFreeScraper, BaseScraper):
     source_name = 'amazon_sports'
+    advanced = True
     source_aliases = ()
     display_name = 'Amazon Sports'
     is_beta = True

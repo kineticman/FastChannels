@@ -1,6 +1,25 @@
 const settingsBootstrap = window.FC_SETTINGS_BOOTSTRAP || {};
 const settingsNeedsConfigState = settingsBootstrap.settingsNeedsConfigState || {};
 
+async function saveInterfaceMode(toggle) {
+  const status = document.getElementById('interface-status');
+  toggle.disabled = true;
+  status.textContent = 'Saving…';
+  try {
+    const response = await fetch('/api/settings/lite-mode', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({enabled: !toggle.checked}),
+    });
+    if (!response.ok) throw new Error('Could not save interface preference.');
+    window.location.reload();
+  } catch (error) {
+    toggle.checked = !toggle.checked;
+    status.textContent = 'Save failed. Please try again.';
+    toggle.disabled = false;
+  }
+}
+
 function scrollToSettingCard(anchorId) {
   const el = document.getElementById(anchorId);
   if (!el) return;

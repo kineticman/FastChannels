@@ -128,6 +128,7 @@ def create_app(config_class=Config):
 
     @app.context_processor
     def inject_version():
+        from .lite import ui_context
         settings = AppSettings.get()
         try:
             pending_review_count = (
@@ -139,6 +140,7 @@ def create_app(config_class=Config):
             # Never let a count query break page rendering (e.g. mid-migration).
             pending_review_count = 0
         return {
+            'ui': ui_context(),
             'app_version': VERSION,
             'app_timezone_name': settings.effective_timezone_name(),
             'pending_review_count': pending_review_count,
@@ -176,6 +178,8 @@ def create_app(config_class=Config):
 
         # Fresh installs need the base tables before any startup path queries
         # AppSettings (for timezone cache, template globals, etc.).
+        from sqlalchemy import inspect
+        fresh_install = not inspect(db.engine).has_table('app_settings')
         db.create_all()
         # Skip schema migration if the entrypoint already ran it (FC_SCHEMA_READY=1).
         # This prevents write-write lock contention when the worker and gunicorn
@@ -190,7 +194,7 @@ def create_app(config_class=Config):
             # Don't reach for AppSettings.get() before it: that SELECTs every
             # ORM-mapped column and raises "no such column" on upgrades where the
             # newest ones haven't been added yet.
-            ensure_runtime_schema()
+            ensure_runtime_schema(fresh_install=fresh_install)
         write_timezone_cache(AppSettings.get().timezone_name)
 
     from . import admin_auth
