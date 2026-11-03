@@ -2,8 +2,10 @@
 
 Each has its own WordPress site on the same theme. The watch-live page embeds
 clear HLS at fast-channels.sinclairstoryline.com/<CODE>/index.m3u8; the code is
-re-read each scrape, and a network whose page shows the "TBD" placeholder
-(ROAR as of 2026-10-17) is skipped until it has a real stream.
+re-read each scrape. ROAR's page embeds the code "TBD", which looked like a
+placeholder and 404'd until late October; it has since become ROAR's real
+stream (1080p, clear, 2026-11-02), so a "TBD" code is used when it answers
+with a playlist and skipped otherwise.
 
 Guide: /wp-json/comet/v1/fetch-all-schedule-days?days=YYYY-MM-DD,... returns
 {"html": {day: rendered rows}}. Times read "8 PM Eastern Pacific"; the stream
@@ -46,7 +48,7 @@ _SITES = {n[0]: n[2] for n in _NETS}
 
 class Sinclair(Network):
     key = 'sinclair'
-    name = 'Sinclair (Comet, Charge!, TheNest)'
+    name = 'Sinclair (Comet, Charge!, TheNest, ROAR)'
 
     def channels(self, s):
         out = []
@@ -87,7 +89,8 @@ class Sinclair(Network):
             return fallback
         # Charge's page also has a commented-out uplynk URL; the first
         # sinclairstoryline match is the live one on every page so far.
-        codes = [c for c in _CODE_RE.findall(r.text) if c not in _PLACEHOLDERS]
+        codes = [c for c in _CODE_RE.findall(r.text)
+                 if c not in _PLACEHOLDERS or Sinclair._plays(s, c)]
         if codes:
             if fallback and codes[0] != fallback:
                 logger.warning('[free_networks] %s stream code changed upstream: %s -> %s',
@@ -97,6 +100,11 @@ class Sinclair(Network):
             logger.info('[free_networks] %s has no live stream yet (placeholder), skipping', name)
             return None
         return fallback
+
+    @staticmethod
+    def _plays(s, code) -> bool:
+        r = s.get(_STREAM.format(code=code))
+        return bool(r) and r.text.lstrip().startswith('#EXTM3U')
 
     @staticmethod
     def _parse_days(data):
