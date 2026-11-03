@@ -2516,10 +2516,10 @@ async function loadSystemStats() {
     const containerLimit = mem.container_limit_bytes ? _fmt_bytes(mem.container_limit_bytes) : null;
     const anonBytes = mem.container_anon_bytes ? _fmt_bytes(mem.container_anon_bytes) : 'Unavailable';
     const fileCacheBytes = mem.container_file_cache_bytes ? _fmt_bytes(mem.container_file_cache_bytes) : 'Unavailable';
-    const processRss = mem.process_rss_bytes ? _fmt_bytes(mem.process_rss_bytes) : 'Unavailable';
-    const processSwap = mem.process_swap_bytes ? _fmt_bytes(mem.process_swap_bytes) : '0 B';
     const hostAvailable = mem.host_mem_available_bytes ? _fmt_bytes(mem.host_mem_available_bytes) : 'Unavailable';
     const loadAvg = Array.isArray(cpu.loadavg) ? cpu.loadavg.map(v => v.toFixed(2)).join(' / ') : 'Unavailable';
+    const memWarn = (mem.container_percent || 0) >= 80 ? 'warn' : '';
+    const flagged = (label, n) => _stat(label, n > 0 ? n.toLocaleString() : '0', n > 0 ? 'warn' : 'muted');
 
     body.innerHTML = `
       <div class="stats-sections">
@@ -2527,17 +2527,17 @@ async function loadSystemStats() {
           <div class="stats-section-label">Database</div>
           ${_stat('File size', _fmt_bytes(db.size_bytes))}
           ${_stat('Channels (active)', `${db.channels_active.toLocaleString()} / ${db.channels_total.toLocaleString()}`)}
-          ${_stat('DRM flagged', db.channels_drm > 0 ? db.channels_drm.toLocaleString() : '0', db.channels_drm > 0 ? 'warn' : 'muted')}
-          ${_stat('Dead flagged', db.channels_dead > 0 ? db.channels_dead.toLocaleString() : '0', db.channels_dead > 0 ? 'warn' : 'muted')}
+          ${d.show_drm ? _stat('DRM (bridge-only)', (db.channels_bridge_only || 0).toLocaleString(), 'muted') : ''}
+          ${d.show_drm && db.channels_drm > 0 ? flagged('DRM switched off', db.channels_drm) : ''}
+          ${flagged('Dead flagged', db.channels_dead)}
+          ${flagged('VOD flagged', db.channels_vod || 0)}
           ${_stat('EPG programs', db.programs_total.toLocaleString())}
           ${_stat('Sources enabled', `${db.sources_enabled} / ${db.sources_total}`)}
         </div>
         <div>
           <div class="stats-section-label">Image Cache</div>
           ${_stat('Logos', `${ic.logos_count.toLocaleString()} files / ${_fmt_bytes(ic.logos_bytes)}`)}
-          ${_stat('Logo expiry', ic.logo_expiry || 'url-change')}
           ${_stat('Posters', `${ic.posters_count.toLocaleString()} files / ${_fmt_bytes(ic.posters_bytes)}`)}
-          ${_stat('Poster TTL', `${ic.poster_ttl_days} days`)}
           ${_stat('Total cache', _fmt_bytes(totalCacheBytes), totalCacheBytes > 2147483648 ? 'warn' : '')}
         </div>
         <div>
@@ -2551,19 +2551,16 @@ async function loadSystemStats() {
         </div>
         <div>
           <div class="stats-section-label">Memory</div>
-          ${_stat('Container total (incl. cache)', containerLimit ? `${containerUsage} / ${containerLimit}` : containerUsage, (mem.container_percent || 0) >= 80 ? 'warn' : '')}
+          ${_stat('Container total (incl. cache)', containerLimit ? `${containerUsage} / ${containerLimit}` : containerUsage, memWarn)}
+          ${_stat('Container limit', containerLimit ? `${mem.container_percent}% used` : 'No limit', containerLimit ? (memWarn || 'muted') : 'muted')}
           ${_stat('Process memory', anonBytes)}
           ${_stat('File cache (reclaimable)', fileCacheBytes, 'muted')}
-          ${_stat('Container %', mem.container_percent != null ? `${mem.container_percent}%` : 'Unavailable', (mem.container_percent || 0) >= 80 ? 'warn' : 'muted')}
-          ${_stat('Web process RSS', processRss)}
-          ${_stat('Web process swap', processSwap, (mem.process_swap_bytes || 0) > 0 ? 'warn' : 'muted')}
           ${_stat('Host available', hostAvailable)}
         </div>
         <div>
           <div class="stats-section-label">CPU</div>
           ${_stat('Load avg', loadAvg)}
           ${_stat('CPU cores', cpu.cpu_count != null ? cpu.cpu_count.toLocaleString() : 'Unavailable')}
-          ${_stat('Web CPU time', _fmt_seconds(cpu.process_cpu_seconds))}
         </div>
         <div>
           <div class="stats-section-label">Processes</div>
