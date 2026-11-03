@@ -524,7 +524,7 @@ class _Disney:
         return list(self.requestors)
 
     def start(self, label):
-        from ..scrapers.disney_tve import ADOBE_BASE, REQUESTORS, software_statements
+        from ..scrapers.disney_tve import ADOBE_BASE, REQUESTORS, _jwt_claims, software_statements
         from ..scrapers.nbc_tve import AdobePassV2Client
         requestor = self.requestors[label]
         site = REQUESTORS[requestor]
@@ -536,33 +536,63 @@ class _Disney:
                                    origin=site['redirect'].rstrip('/'))
 
         def open_session():
-            return client.session.post(
-                f'{ADOBE_BASE}/api/v2/{requestor}/sessions',
-                data={'mvpd': self.mso_id, 'redirectUrl': site['redirect'], 'domainName': site['domain']},
-                headers={**client._bearer_headers(), 'Content-Type': 'application/x-www-form-urlencoded'},
-                timeout=30)
+            # Adobe answers 429 to a burst of /sessions calls (two within a
+            # few seconds of a 401 is enough); it clears within a minute.
+            for delay in (5, 15, 30, None):
+                r = client.session.post(
+                    f'{ADOBE_BASE}/api/v2/{requestor}/sessions',
+                    data={'mvpd': self.mso_id, 'redirectUrl': site['redirect'], 'domainName': site['domain']},
+                    headers={**client._bearer_headers(), 'Content-Type': 'application/x-www-form-urlencoded'},
+                    timeout=30)
+                if r.status_code != 429 or delay is None:
+                    return r
+                logger.info('[link-login] Disney %s: Adobe returned 429, retrying in %ss', requestor, delay)
+                time.sleep(delay)
+
+        def rate_limited():
+            return TVEAuthError('Disney: Adobe is rate-limiting sign-ins from this network (HTTP 429). '
+                                'Wait a few minutes and try again.')
 
         r = None
+        statement_sub = saved.get('statement_sub')
         if saved.get('client_id') and saved.get('client_secret'):
             client.client_id, client.client_secret = saved['client_id'], saved['client_secret']
-            client.refresh_access_token()
-            r = open_session()
-        if r is None or r.status_code == 401:
-            # A site carries one statement per brand; only one is this requestor's.
-            for statement in software_statements(requestor):
+            try:
+                client.refresh_access_token()
+                r = open_session()
+            except TVEAuthError as exc:
+                if '429' in str(exc):
+                    raise rate_limited() from exc
+                r = None
+        if r is not None and r.status_code == 429:
+            raise rate_limited()
+        if r is None or r.status_code in (400, 401):
+            # A site carries one statement per brand; only one is this
+            # requestor's. Every try registers a new Adobe client and Adobe
+            # rate-limits that, so the one that worked last time goes first,
+            # then the newest (the live ones are the recently issued ones).
+            statements = sorted(software_statements(requestor),
+                                key=lambda s: (_jwt_claims(s).get('sub') != statement_sub,
+                                               -(_jwt_claims(s).get('iat') or 0)))
+            for statement in statements:
                 client.software_statement, client._client_creds = statement, None
                 try:
                     client._register_client()
-                except TVEAuthError:
+                except TVEAuthError as exc:
+                    if '429' in str(exc):
+                        raise rate_limited() from exc
                     continue
                 r = open_session()
+                if r.status_code == 429:
+                    raise rate_limited()
                 if r.status_code != 401:
+                    statement_sub = _jwt_claims(statement).get('sub')
                     break
             else:
                 raise TVEAuthError(f'Disney: none of the settings on {site["domain"]} were accepted — '
                                    'Disney may have changed its site.')
         data = r.json() if r.ok else {}
-        ctx = {'client': client, 'requestor': requestor, 'fingerprint': fingerprint,
+        ctx = {'client': client, 'requestor': requestor, 'fingerprint': fingerprint, 'statement_sub': statement_sub,
                'profile_url': f'{ADOBE_BASE}/api/v2/{requestor}/profiles/{self.mso_id}'}
         if data.get('reasonType') == 'authenticated':
             return None, ctx
@@ -597,7 +627,7 @@ class _Disney:
         auth[requestor] = {
             'mso_id': self.mso_id, 'client_id': client.client_id, 'client_secret': client.client_secret,
             'access_token': client.access_token, 'device_fingerprint': ctx['fingerprint'],
-            'captured_at': int(time.time()),
+            'statement_sub': ctx.get('statement_sub'), 'captured_at': int(time.time()),
         }
         cfg['disney_mvpd_auth'] = auth
         self.account.config = cfg
