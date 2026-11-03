@@ -128,14 +128,13 @@ def create_app(config_class=Config):
 
     @app.context_processor
     def inject_version():
-        from .lite import ui_context
+        from .lite import channels_for_ui, ui_context
         settings = AppSettings.get()
         try:
-            pending_review_count = (
+            pending_review_count = channels_for_ui(
                 Channel.query
                 .filter(Channel.review_state == 'pending')
-                .count()
-            )
+            ).count()
         except Exception:
             # Never let a count query break page rendering (e.g. mid-migration).
             pending_review_count = 0

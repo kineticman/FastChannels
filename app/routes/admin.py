@@ -20,7 +20,7 @@ from ..generators.m3u import (
     filter_match_clauses,
 )
 from ..scrapers import registry as _scraper_registry
-from ..lite import source_visible
+from ..lite import channels_for_ui, source_visible, ui_context
 from ..channel_tags import event_filter_clause
 from ..sports import KNOWN_SPORTS
 from ..drm_bridge import DRM_BRIDGE_TRUSTED_SOURCES
@@ -482,6 +482,8 @@ def _source_channel_mix(sources, scrapers):
         Channel.source_id, Channel.is_enabled, Channel.requires_drm_bridge, Channel.disable_reason,
     ):
         m = mix.setdefault(source_id, {'play': 0, 'drm': 0, 'off': 0, 'off_reasons': {}, 'bridge': 0})
+        if bridge or (reason or '').startswith('DRM'):
+            m['restricted'] = m.get('restricted', 0) + n
         if bridge:
             m['bridge'] += n
         if not enabled:
@@ -631,6 +633,7 @@ def dashboard():
     feeds          = Feed.query.filter_by(is_enabled=True).order_by(Feed.name).all()
     app_settings   = AppSettings.get()
     all_scrapers   = _scraper_registry.get_all_including(s.name for s in sources)
+    sources = [s for s in sources if source_visible(s, all_scrapers.get(s.name))]
     under_development = {
         name: getattr(cls, 'under_development', False)
         for name, cls in all_scrapers.items()
@@ -953,6 +956,8 @@ def channels():
     review_filter    = request.args.get('review', '')
     presence_filter  = request.args.get('presence', '')
     drm_filter       = request.args.get('drm', '')
+    if not ui_context()['show_drm'] and drm_filter in ('1', 'bridge'):
+        drm_filter = ''
     gracenote_filter = request.args.get('gracenote', '')
     gracenote_mode_filter = request.args.get('gracenote_mode', '')
     language_filter  = request.args.get('language', '')
@@ -971,7 +976,7 @@ def channels():
     exact_duplicate_names, possible_duplicate_names, gn_duplicate_ids = _duplicate_name_sets()
     all_duplicate_names = exact_duplicate_names | possible_duplicate_names
 
-    q = Channel.query.join(Source)
+    q = channels_for_ui(Channel.query.join(Source))
 
     selected_feed = None
     if feed_filter == '__none__':
@@ -1376,6 +1381,7 @@ def guide():
         db.session.query(Channel.category, db.func.count(Channel.id))
         .filter(Channel.is_active == True, Channel.category != None)
     )
+    cat_count_q = channels_for_ui(cat_count_q)
     if state == 'enabled':
         cat_count_q = cat_count_q.filter(Channel.is_enabled == True)
     elif state == 'disabled':
@@ -1406,6 +1412,7 @@ def guide():
         Channel.id, Channel.name, Channel.logo_url, Channel.number, Channel.source_id,
         Channel.is_enabled,
     )).filter(Channel.is_active == True)
+    q = channels_for_ui(q)
     if state == 'enabled':
         q = q.filter(Channel.is_enabled == True)
     elif state == 'disabled':
@@ -1702,14 +1709,16 @@ def feeds():
     }
     _cnt_rows = db.session.query(
         Source.name, Channel.is_active, Channel.is_enabled, Channel.stream_url != None,
+        Channel.requires_drm_bridge,
     ).select_from(Channel).join(Source, Channel.source_id == Source.id)\
      .filter(Source.is_enabled == True).all()
-    for name, active, enabled, has_url in _cnt_rows:
+    show_drm = ui_context()['show_drm']
+    for name, active, enabled, has_url, bridge in _cnt_rows:
         entry = source_counts.get(name)
         if entry is None:
             continue
         entry['total'] += 1
-        if active and has_url and not entry['epg_only']:
+        if active and has_url and not entry['epg_only'] and (show_drm or not bridge):
             if enabled:
                 entry['eligible'] += 1
             else:

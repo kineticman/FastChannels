@@ -30,6 +30,10 @@ def list_channels():
     page     = request.args.get('page', 1, type=int)
     per_page = request.args.get('per_page', 50, type=int)
     q        = Channel.query.join(Source)
+    # Explicit opt-in keeps external listing clients independent of UI mode.
+    if request.args.get('ui') == '1':
+        from ..lite import channels_for_ui
+        q = channels_for_ui(q)
     if request.args.get('feed_eligible') in ('1', 'true', 'yes'):
         q = q.filter(
             Channel.is_active == True,

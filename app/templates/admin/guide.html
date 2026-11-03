@@ -602,7 +602,7 @@
       <p style="font-size:0.75rem;color:var(--text-muted);margin-bottom:0.5rem">
         {% if state == 'disabled' %}Showing <strong>disabled</strong> channels only — these are excluded from M3U output.
         {% elif state == 'both' %}Showing enabled <em>and</em> disabled channels; disabled ones are dimmed and excluded from M3U output.
-        {% else %}Showing enabled channels eligible for M3U output, including bridge playlists.{% endif %}
+        {% else %}Showing enabled channels eligible for M3U output, {% if ui.show_drm %}including bridge playlists{% else %}in standard playlists{% endif %}.{% endif %}
         Toggle a channel's state on the <a href="/admin/channels" style="color:var(--accent)">Channels</a> page.</p>
 
       <div class="guide-outer" id="guide-outer">
@@ -1190,7 +1190,7 @@
         const isMuxed = streamType === 'mpegts';
         // Bridge-only DRM: external players can't decrypt it (see channels.html).
         const bridgeOnly = !!ch.requires_drm_bridge;
-        const bridgeNote = bridgeOnly
+        const bridgeNote = {{ ui.show_drm | tojson }} && bridgeOnly
           ? `<div class="gm-note">This channel is DRM-protected, so it plays here in the browser or through the DRM bridge (FastChannels Player, ah4c or PrismCast), not in VLC or other players.</div>`
           : '';
         const muxedNote = isMuxed

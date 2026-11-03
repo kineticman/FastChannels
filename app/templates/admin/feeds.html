@@ -541,9 +541,9 @@
       <span class="sub">{{ feed_summary.enabled_feeds }} enabled · {{ feed_summary.custom_feeds }} custom</span>
     </div>
     <div class="summary-stat">
-      <span class="num">{{ '{:,}'.format(feed_summary.all_channels) }}</span>
+      <span class="num">{{ '{:,}'.format(feed_summary.all_channels if ui.show_drm else feed_summary.standard) }}</span>
       <span class="lbl">Channels</span>
-      <span class="sub">{{ '{:,}'.format(feed_summary.standard) }} standard{% if feed_summary.bridged %} · {{ '{:,}'.format(feed_summary.bridged) }} bridge-only{% endif %}</span>
+      <span class="sub">{{ '{:,}'.format(feed_summary.standard) }} standard{% if ui.show_drm and feed_summary.bridged %} · {{ '{:,}'.format(feed_summary.bridged) }} bridge-only{% endif %}</span>
     </div>
     <div class="summary-stat">
       <span class="num">{{ '{:,}'.format(feed_summary.gracenote) }}</span>
@@ -647,13 +647,13 @@
         {% set _standard_total = split.get('total_count', feed.channel_count()) %}
         {% set _bridged = split.get('bridged_count', 0) %}
         {% set _available_total = _standard_total + _bridged %}
-        <div class="feed-stat" title="Total active channels this feed can output across standard and PrismCast playlists.">
-          <strong>{{ _available_total }}</strong> available
+        <div class="feed-stat" title="{% if ui.show_drm %}Total active channels this feed can output across standard and PrismCast playlists.{% else %}Channels available in standard playlists.{% endif %}">
+          <strong>{{ _available_total if ui.show_drm else _standard_total }}</strong> available
         </div>
-        <div class="feed-stat" title="Channels in the regular M3U/EPG output. Bridge-only DRM channels are excluded here.">
+        <div class="feed-stat" title="Channels in the regular M3U/EPG output.{% if ui.show_drm %} Bridge-only DRM channels are excluded here.{% endif %}">
           <strong>{{ _standard_total }}</strong> standard
         </div>
-        {% if _bridged %}
+        {% if ui.show_drm and _bridged %}
         <div class="feed-stat" title="DRM-protected channels available only through the PrismCast output below.">
           <strong>{{ _bridged }}</strong> bridge-only
         </div>
@@ -771,7 +771,7 @@
       </div>
       <div style="margin-top:0.6rem">
         <button class="btn btn-dvr"
-                title="{% if standard_total == 0 %}No standard channels in this feed; use the bridge outputs below for bridge-only channels{% else %}Register this feed's M3U in Channels DVR{% endif %}"
+                title="{% if standard_total == 0 %}No standard channels in this feed{% if ui.show_drm %}; use the bridge outputs below for bridge-only channels{% endif %}{% else %}Register this feed's M3U in Channels DVR{% endif %}"
                 onclick='pushToDvr({{ feed.id }}, {{ feed.name|tojson }}, {{ standard_total }}, {{ standard_total if mixed_guide else split.get("standard_count", standard_total) }}, this)'
                 {% if standard_total == 0 %}disabled{% endif %}>📺 Add to Channels DVR</button>
       </div>
@@ -779,7 +779,7 @@
       </section>
       </div>
 
-      {% if native_output_enabled %}
+      {% if ui.show_native and native_output_enabled %}
       <details class="native-endpoints">
         <summary>Native (scraped-only) endpoints — advanced</summary>
         <div class="feed-urls" style="margin-top:0.5rem">
@@ -1086,7 +1086,7 @@
           <option value="1">Events only</option>
           <option value="0">No events (24/7 channels only)</option>
         </select>
-        <div class="help">This also limits channels you select by hand or pin. ESPN and Amazon events use bridge playback, so look in this feed's bridge M3U when its standard M3U is empty.</div>
+        <div class="help">This also limits channels you select by hand or pin. {% if ui.show_drm %}ESPN and Amazon events use bridge playback, so look in this feed's bridge M3U when its standard M3U is empty.{% endif %}</div>
       </div>
       <div class="field" id="sports-field">
         <label>Sports <span class="label-note">none checked = events of any sport</span></label>
@@ -1139,14 +1139,14 @@
           </span>
         </div>
         <input class="ch-search" id="ch-search" type="text" placeholder="Filter channels…" oninput="renderChannelListDebounced()">
-        <div class="ch-view" role="group" aria-label="Show channels"
+        {% if ui.show_drm %}<div class="ch-view" role="group" aria-label="Show channels"
              title="Bridge-only channels (DRM) go to this feed's bridge playlists, never its regular M3U. This only changes what the list shows, not what the feed includes.">
           Show:
           <button type="button" data-view="all" class="active" onclick="setChView('all')">All</button>
           <button type="button" data-view="bridge" onclick="setChView('bridge')">Bridge-only</button>
           <button type="button" data-view="standard" onclick="setChView('standard')">Standard</button>
         </div>
-        <div class="ch-list" id="channel-list"></div>
+        {% endif %}<div class="ch-list" id="channel-list"></div>
         <div class="ord-hint">Leave everything unchecked to let the filters on the left define this feed, or check channels to hand-pick it.</div>
       </div>
 
@@ -1177,6 +1177,7 @@
 
 <script>
 const FEED_CHNUM_PLACEHOLDER = {{ feed_chnum_placeholder | tojson }};
+const SHOW_DRM = {{ ui.show_drm | tojson }};
 const SRC_COUNTS = {{ source_counts | tojson }};
 
 // ── Channel list cache ─────────────────────────────────────────────────────
@@ -1206,7 +1207,7 @@ async function ensureChannelsLoaded() {
   try {
     let page = 1, all = [];
     while (true) {
-      const r = await fetch(`/api/channels?feed_eligible=1&slim=1&per_page=2000&page=${page}`, {cache: 'no-store'});
+      const r = await fetch(`/api/channels?ui=1&feed_eligible=1&slim=1&per_page=2000&page=${page}`, {cache: 'no-store'});
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       const d = await r.json();
       all = all.concat(d.channels);
@@ -1338,7 +1339,7 @@ function renderChannelList() {
         : '';
       const label = document.createElement('label');
       label.className = 'ch-item' + (checked && !isExcluded ? ' selected' : '') + (isExcluded ? ' excluded' : '');
-      label.innerHTML = `<input type="checkbox" value="${ch.id}" ${checked ? 'checked' : ''}><span class="ch-name">${ch.name}</span>${feedPill}${ch.bridge_only ? '<span class="ch-bridge" title="Bridge-only (DRM): in this feed\'s bridge playlists, not its regular M3U">bridge</span>' : ''}`;
+      label.innerHTML = `<input type="checkbox" value="${ch.id}" ${checked ? 'checked' : ''}><span class="ch-name">${ch.name}</span>${feedPill}${SHOW_DRM && ch.bridge_only ? '<span class="ch-bridge" title="Bridge-only (DRM): in this feed\'s bridge playlists, not its regular M3U">bridge</span>' : ''}`;
       label.querySelector('input').addEventListener('change', e => {
         if (excludeMode) {
           if (e.target.checked) _excludedChannelIds.delete(ch.id);
@@ -1651,6 +1652,8 @@ async function updateCountPreview() {
       const ch = _allChannels.find(c => c.id === id);
       return ch && (!filters.event || (filters.event === '1') === !!ch.is_event);
     }).length;
+  } else if (!SHOW_DRM) {
+    total = getVisibleChannels({matchOnly: true}).filter(ch => !_excludedChannelIds.has(ch.id)).length;
   } else {
     const params = new URLSearchParams();
     (filters.sources    || []).forEach(s => params.append('source', s));
@@ -1683,7 +1686,7 @@ async function updateCountPreview() {
   // above has no split). Skipped under a channel cap: which channels it keeps
   // depends on numbering the list doesn't know.
   let splitNote = '';
-  if (!max && _allChannels.length) {
+  if (SHOW_DRM && !max && _allChannels.length) {
     const members = filters.channel_ids
       ? _allChannels.filter(ch => _selectedChannelIds.has(ch.id)
           && (!filters.event || (filters.event === '1') === !!ch.is_event))

@@ -35,6 +35,14 @@ def source_visible(source, cls) -> bool:
     return not lite_active() or cls is None or not cls.is_advanced() or bool(source.is_enabled)
 
 
+def channels_for_ui(query):
+    """Apply only to admin lists, never output queries or channel mutations."""
+    from .models import Channel
+    if not ui_context()['show_drm']:
+        query = query.filter(Channel.requires_drm_bridge.is_not(True))
+    return query
+
+
 @_per_request
 def bridge_in_use() -> bool:
     settings = _settings()
