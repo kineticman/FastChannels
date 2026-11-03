@@ -474,9 +474,12 @@ def delete_source_channels(source_id):
 
 @sources_bp.route('/sources/<int:source_id>/config', methods=['GET'])
 def get_source_config(source_id):
+    from ..lite import lite_active
     source      = Source.query.get_or_404(source_id)
     scraper_cls = registry.get(source.name)
-    schema      = [f.to_dict() for f in (scraper_cls.config_schema if scraper_cls else []) if not f.hidden]
+    saved       = source.config or {}
+    schema      = [f.to_dict() for f in (scraper_cls.config_schema if scraper_cls else [])
+                   if not f.hidden and (not lite_active() or not f.advanced or saved.get(f.key))]
     retired     = None
     if scraper_cls is None and source.scraper_missing_since is not None:
         from ..worker import _SCRAPER_MISSING_GRACE_DAYS
@@ -486,7 +489,6 @@ def get_source_config(source_id):
         purge_at = missing_since + timedelta(days=_SCRAPER_MISSING_GRACE_DAYS)
         days_left = max(0, (purge_at - datetime.now(timezone.utc)).days)
         retired = {'purge_at': purge_at.isoformat(), 'days_left': days_left}
-    saved       = source.config or {}
     secret_keys = {f['key'] for f in schema if f['secret']}
     values = {}
     for f in schema:

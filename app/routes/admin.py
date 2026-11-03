@@ -20,6 +20,7 @@ from ..generators.m3u import (
     filter_match_clauses,
 )
 from ..scrapers import registry as _scraper_registry
+from ..lite import source_visible
 from ..channel_tags import event_filter_clause
 from ..sports import KNOWN_SPORTS
 from ..drm_bridge import DRM_BRIDGE_TRUSTED_SOURCES
@@ -793,6 +794,9 @@ def sources():
         return 'configured' if has_meaningful_source_config(cls, source.config or {}) else 'optional'
 
     sources_list = Source.query.order_by(Source.display_name).all()
+    visible_sources = [s for s in sources_list if source_visible(s, all_scrapers.get(s.name))]
+    hidden_source_count = len(sources_list) - len(visible_sources)
+    sources_list = visible_sources
     source_config_status = {
         s.id: _config_status(s, all_scrapers[s.name])
         for s in sources_list
@@ -908,6 +912,8 @@ def sources():
     _app_settings = AppSettings.get()
     return render_template('admin/sources.html',
                            sources=sources_list,
+                           hidden_source_count=hidden_source_count,
+                           advanced_sources={name: cls.is_advanced() for name, cls in all_scrapers.items()},
                            auto_allow_new_channels=_app_settings.auto_allow_new_channels if _app_settings.auto_allow_new_channels is not None else True,
                            chnum_warnings=[],
                            audit_enabled=audit_enabled,

@@ -32,7 +32,7 @@
       <nav class="settings-section-nav" aria-label="Settings sections">
         <a href="#settings-section-setup"><span>Setup</span><small>Server, DVR &amp; time zone</small></a>
         <a href="#settings-section-feeds"><span>Feeds &amp; Guide</span><small>Channels, artwork &amp; output</small></a>
-        <a href="#settings-section-tve"><span>TV Everywhere</span><small>Provider &amp; network sign-ins</small></a>
+        {% if ui.show_tve %}<a href="#settings-section-tve"><span>TV Everywhere</span><small>Provider &amp; network sign-ins</small></a>{% endif %}
         <a href="#settings-section-access"><span>Admin Access</span><small>Login &amp; password</small></a>
         <a href="#settings-section-system"><span>System</span><small>Backups &amp; diagnostics</small></a>
       </nav>
@@ -41,7 +41,7 @@
         <select id="settings-section-picker">
           <option value="settings-section-setup">Setup</option>
           <option value="settings-section-feeds">Feeds &amp; Guide</option>
-          <option value="settings-section-tve">TV Everywhere</option>
+          {% if ui.show_tve %}<option value="settings-section-tve">TV Everywhere</option>{% endif %}
           <option value="settings-section-access">Admin Access</option>
           <option value="settings-section-system">System</option>
         </select>
@@ -94,9 +94,10 @@
           </div>
         </div>
         {% include 'admin/settings/gracenote.html' %}
-        {% include 'admin/settings/native_output.html' %}
+        {% if ui.show_native %}{% include 'admin/settings/native_output.html' %}{% endif %}
       </section>
 
+      {% if ui.show_tve %}
       <section class="settings-section" id="settings-section-tve" aria-labelledby="settings-title-tve">
         <div class="settings-section-header">
           <div>
@@ -106,6 +107,7 @@
         </div>
         {% include 'admin/settings/tve.html' %}
       </section>
+      {% endif %}
 
       <section class="settings-section" id="settings-section-access" aria-labelledby="settings-title-access">
         <div class="settings-section-header">

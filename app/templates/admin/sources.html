@@ -1103,12 +1103,14 @@
         {% endif %}
         <button type="button" class="quicknav-chip active" data-playback-filter=""
                 onclick="setPlaybackFilter('')">All</button>
+        {% if ui.show_drm %}
         <button type="button" class="quicknav-chip" data-playback-filter="clear"
                 title="Sources whose channels play in any player: no DRM"
                 onclick="setPlaybackFilter('clear')">Any player</button>
         <button type="button" class="quicknav-chip" data-playback-filter="drm"
                 title="Sources with DRM channels, which play only through FastChannels Player"
                 onclick="setPlaybackFilter('drm')">Needs FastChannels Player</button>
+        {% endif %}
       </div>
     </div>
 
@@ -1164,6 +1166,7 @@
               data-cat="{{ this_cat }}"{% if parent_name %} data-parent="{{ parent_name }}"{% endif %} data-search="{{ (source.display_name ~ ' ' ~ source.name) | lower }}"
               data-playback="{{ mix.get('kind', 'clear') }}"
               data-fc-player="{{ 'true' if mix.get('fc_player') else 'false' }}"
+              data-advanced="{{ 'true' if advanced_sources.get(source.name) else 'false' }}"
               {% if mix.get('kind') in ('drm', 'some') and not bridge_ready.get(source.id) %}data-bridge-missing="true"{% endif %}
               {% if status and status.state in ('error', 'warn', 'setup') %}data-issue="true"{% endif %}
               {% if is_custom %}data-custom="true"{% endif %}
@@ -1171,8 +1174,9 @@
             <td class="col-source">
               <div class="source-name-wrap">
                 <span class="source-name">{{ source.display_name }}</span>
+                {% if ui.lite and advanced_sources.get(source.name) %}<span class="config-badge" title="Available in advanced mode; enabled sources stay visible in lite mode">Advanced</span>{% endif %}
                 {% if not is_custom %}
-                  {% if mix.get('kind') in ('drm', 'some') %}
+                  {% if ui.show_drm and mix.get('kind') in ('drm', 'some') %}
                     {% set _via = 'FastChannels Player' if mix.fc_player else 'PrismCast (not yet tested with FastChannels Player)' %}
                     {% set _ready = ' A DRM bridge is set up.' if bridge_ready.get(source.id) else ' No DRM bridge is set up yet.' %}
                     {% if mix.kind == 'drm' %}
@@ -1457,6 +1461,12 @@
     <div class="dashboard-panel no-results-row" id="no-sources-match-row" style="display:none">
       No sources match "<span id="no-sources-match-query"></span>".
     </div>
+    {% if hidden_source_count %}
+    <p class="config-note" id="advanced-sources-note">{{ hidden_source_count }} more sources (subscriptions, TV Everywhere, DRM) in advanced mode:
+      <button type="button" class="btn btn-cancel btn-sm" onclick="showAdvancedSources(this)">Show</button>
+      <span id="advanced-sources-status" role="status"></span>
+    </p>
+    {% endif %}
 
   </div>
 
@@ -1530,6 +1540,7 @@
       <p id="modal-body">All channels from <strong id="modal-source-name"></strong> will be
          <strong>deleted from the database</strong> and removed from your M3U and EPG.
          Re-enabling will re-scrape and restore them.</p>
+      <p id="lite-disable-warning" hidden>This source is hidden in lite mode once disabled.</p>
       <div class="modal-actions">
         <button class="btn btn-cancel" onclick="cancelDisable()">Cancel</button>
         <button class="btn btn-confirm" onclick="confirmDisable()">Disable &amp; Delete</button>
@@ -2077,6 +2088,23 @@
 
     // ── New-channel review nudge at enable time ───────────────────────────
     const AUTO_ALLOW_NEW_CHANNELS = {{ 'true' if auto_allow_new_channels else 'false' }};
+    const LITE_MODE = {{ ui.lite | tojson }};
+    const SHOW_DRM = {{ ui.show_drm | tojson }};
+
+    async function showAdvancedSources(button) {
+      button.disabled = true;
+      try {
+        const response = await fetch('/api/settings/lite-mode', {
+          method: 'POST', headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({enabled: false}),
+        });
+        if (!response.ok) throw new Error('Save failed');
+        window.location.reload();
+      } catch (error) {
+        document.getElementById('advanced-sources-status').textContent = 'Could not save. Please try again.';
+        button.disabled = false;
+      }
+    }
 
     async function maybeOfferReviewHold(sourceId) {
       // Only relevant when the global default would let channels flow straight in
@@ -2105,6 +2133,7 @@
         _pendingSourceId = sourceId;
         _pendingCheckbox = checkbox;
         document.getElementById('modal-source-name').textContent = sourceName;
+        document.getElementById('lite-disable-warning').hidden = !(LITE_MODE && row?.dataset.advanced === 'true');
         document.getElementById('confirm-modal').classList.add('open');
       } else {
         // Custom source or re-enabling: no destructive action needed
@@ -6786,6 +6815,7 @@
     // Turning on a DRM source with no DRM bridge ready: say so on the row
     // before the user finds out from a channel that won't play.
     function _showDrmHeadsUp(sourceId, enabled) {
+      if (!SHOW_DRM) return;
       const row = document.getElementById(`dash-row-${sourceId}`);
       const box = document.getElementById(`drm-heads-up-${sourceId}`);
       if (!row || !box) return;

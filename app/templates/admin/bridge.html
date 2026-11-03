@@ -43,6 +43,11 @@
   {% set setup_done = step_method and bridge_enabled and step_source and step_audit %}
 
   <div class="page">
+    {% if ui.lite and not ui.show_bridge %}
+    <div class="source-card"><div class="source-body open">
+      Advanced feature: <a href="/admin/settings#interface-card">turn on advanced mode</a> to see it in the menu.
+    </div></div>
+    {% endif %}
     <h1>Bridge</h1>
     <p class="subtitle">Keep DRM channels available by routing them through a compatible playback and capture path.</p>
 
