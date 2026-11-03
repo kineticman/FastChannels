@@ -5182,7 +5182,54 @@
                    'Get a code, then go to bigtenplus.com/code on your phone or computer, sign in to B1G+ and enter it. Codes last 5 minutes.')}
         </div>
         <div class="config-note" style="margin-top:0.8rem">B1G+ doesn't publish end times, so each event gets a typical length for its sport,
-          extended while it's still live. Event channels retire an hour after that and are deleted a day later.</div>`;
+          extended while it's still live. Event channels retire an hour after that and are deleted a day later.</div>
+        ${_b1gPlusFilter(sourceId, info)}
+        ${_saveRow(sourceId)}`;
+    }
+
+    // B1G+ event filter: picked sports and/or picked schools; both must match.
+    function _b1gPlusFilter(sourceId, info) {
+      const policy = info.event_filter || {sport_mode: 'all', sports: [], school_mode: 'all', schools: []};
+      const group = (kind, title, allLabel, names, mode, picked) => {
+        const pickedSet = new Set(picked.map(n => n.toLocaleLowerCase()));
+        return `
+          <div class="espn-filter" style="margin-top:0.7rem">
+            <div class="espn-mode" role="radiogroup" aria-label="${title}">
+              <span class="espn-mode-label">${title}</span>
+              <label><input type="radio" name="b1g-${kind}-mode-${sourceId}" value="all" ${mode !== 'selected' ? 'checked' : ''}
+                     onchange="b1gPlusSetMode(${sourceId}, '${kind}', this.value)">${allLabel}</label>
+              <label><input type="radio" name="b1g-${kind}-mode-${sourceId}" value="selected" ${mode === 'selected' ? 'checked' : ''}
+                     onchange="b1gPlusSetMode(${sourceId}, '${kind}', this.value)">Only the ones I pick</label>
+            </div>
+            <div class="checklist-grid" id="b1g-${kind}-list-${sourceId}" ${mode === 'selected' ? '' : 'hidden'}
+                 style="display:${mode === 'selected' ? 'grid' : 'none'};grid-template-columns:repeat(auto-fill,minmax(11rem,1fr));gap:0.2rem 0.8rem;margin-top:0.4rem">
+              ${names.map(n => `<label style="font-weight:normal"><input type="checkbox" class="b1g-${kind}-${sourceId}"
+                     value="${escapeHtml(n)}" ${pickedSet.has(n.toLocaleLowerCase()) ? 'checked' : ''}> ${escapeHtml(n)}</label>`).join('')}
+            </div>
+          </div>`;
+      };
+      return `
+        <div class="config-subtitle" style="margin-top:0.8rem">Event filter</div>
+        <div class="config-note">Pick sports, schools, or both; an event is added when it matches both. Schools are the Big Ten
+          schools the event belongs to, so "Ohio State" includes every Ohio State event, home or away.</div>
+        ${group('sports', 'Sports', 'All, including new ones', info.sports || [], policy.sport_mode, policy.sports || [])}
+        ${group('schools', 'Schools', 'All', info.schools || [], policy.school_mode, policy.schools || [])}`;
+    }
+
+    function b1gPlusSetMode(sourceId, kind, mode) {
+      const list = document.getElementById(`b1g-${kind}-list-${sourceId}`);
+      if (list) { list.hidden = mode !== 'selected'; list.style.display = mode === 'selected' ? 'grid' : 'none'; }
+    }
+
+    function _b1gPlusCollectFilter(sourceId) {
+      const pick = kind => {
+        const mode = (document.querySelector(`input[name="b1g-${kind}-mode-${sourceId}"]:checked`) || {}).value || 'all';
+        const names = [...document.querySelectorAll(`.b1g-${kind}-${sourceId}:checked`)].map(el => el.value);
+        return [mode, names];
+      };
+      const [sportMode, sports] = pick('sports');
+      const [schoolMode, schools] = pick('schools');
+      return {sport_mode: sportMode, sports, school_mode: schoolMode, schools};
     }
     // ── end activation-code sign-ins ──────────────────────────────────────────
 
@@ -6530,6 +6577,9 @@
       });
       if (['espn', 'amazon_sports'].includes(getSourceName(sourceId)) && _espnEventPolicy[sourceId]) {
         payload.event_filter = _espnEventPolicy[sourceId];
+      }
+      if (getSourceName(sourceId) === 'b1g_plus' && document.querySelector(`input[name="b1g-sports-mode-${sourceId}"]`)) {
+        payload.event_filter = _b1gPlusCollectFilter(sourceId);
       }
 
       status.textContent = 'Saving…';

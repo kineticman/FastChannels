@@ -20,6 +20,10 @@ Playback (verified 2026-11-02 on a live game): POST contents/<id>/check-access
 content token) → an Akamai master.m3u8 whose hdnea token expires about a
 minute after it's issued, so resolve() always issues a fresh one. Streams are
 clear MPEG-TS HLS, 720p. Content flagged drmProtectionEnabled is skipped.
+
+The card's event filter (config event_filter) narrows the events to picked
+sports ("Women's Basketball") and/or Big Ten schools (the event's "schools"
+metadata); filtered events are reported as excluded so they hide at once.
 """
 from __future__ import annotations
 
@@ -291,6 +295,78 @@ def parse_event_url(raw_url: str) -> tuple[int, int | None]:
     return int(m.group(1)), int(m.group(2)) if m.group(2) else None
 
 
+# ── event filter ─────────────────────────────────────────────────────────────
+
+BIG_TEN_SCHOOLS = ('Illinois', 'Indiana', 'Iowa', 'Maryland', 'Michigan', 'Michigan State', 'Minnesota',
+                   'Nebraska', 'Northwestern', 'Ohio State', 'Oregon', 'Penn State', 'Purdue', 'Rutgers',
+                   'UCLA', 'USC', 'Washington', 'Wisconsin')
+# Listed in the picker even out of season; sports seen on the schedule are added.
+BASE_SPORTS = ('Football', "Men's Basketball", "Women's Basketball", "Women's Volleyball",
+               "Men's Soccer", "Women's Soccer", 'Field Hockey', "Men's Wrestling",
+               "Men's Hockey", "Women's Hockey", 'Baseball', 'Softball')
+_ONE_GENDER_SPORTS = frozenset({'Football', 'Baseball', 'Softball', 'Field Hockey'})
+SEEN_SPORTS_CACHE_KEY = 'b1g_seen_sports'
+
+
+def sport_label(event: dict) -> str:
+    """The picker's name for an event's sport: "Women's Basketball", "Football"."""
+    sport, gender = sport_and_gender(event)
+    sport = sport or 'Other'
+    if gender in ('M', 'W') and sport not in _ONE_GENDER_SPORTS:
+        return f"{'Men' if gender == 'M' else 'Women'}'s {sport}"
+    return sport
+
+
+def event_schools(event: dict) -> list[str]:
+    """The Big Ten schools an event belongs to (its "schools" metadata, else its competitors)."""
+    names = [x.get('name') for x in event.get('metadata') or []
+             if ((x.get('field') or {}).get('name') or '').lower() == 'schools' and x.get('name')]
+    if not names:
+        known = {s.casefold(): s for s in BIG_TEN_SCHOOLS}
+        for side in ('homeCompetitor', 'awayCompetitor'):
+            name = ((event.get(side) or {}).get('name') or '').casefold()
+            if name in known:
+                names.append(known[name])
+    return list(dict.fromkeys(n.strip() for n in names if n.strip()))
+
+
+def _clean_names(value, what: str) -> list[str]:
+    if not isinstance(value, list) or len(value) > 200 or any(
+            not isinstance(v, str) or not v.strip() or len(v) > 100 for v in value):
+        raise ValueError(f'Invalid {what}')
+    return list(dict.fromkeys(v.strip() for v in value))
+
+
+def clean_event_filter(value) -> dict:
+    """Validate the saved filter; 'all' includes sports and schools added later."""
+    if value is None:
+        return {'sport_mode': 'all', 'sports': [], 'school_mode': 'all', 'schools': []}
+    if not isinstance(value, dict):
+        raise ValueError('Invalid event filter')
+    sport_mode, school_mode = value.get('sport_mode', 'all'), value.get('school_mode', 'all')
+    if sport_mode not in ('all', 'selected'):
+        raise ValueError('Sports must be All or Only the ones I pick')
+    if school_mode not in ('all', 'selected'):
+        raise ValueError('Schools must be All or Only the ones I pick')
+    return {'sport_mode': sport_mode, 'sports': _clean_names(value.get('sports', []), 'sport'),
+            'school_mode': school_mode, 'schools': _clean_names(value.get('schools', []), 'school')}
+
+
+def event_matches_filter(event: dict, config: dict) -> bool:
+    try:
+        policy = clean_event_filter((config or {}).get('event_filter'))
+    except ValueError:
+        return True
+    if policy['sport_mode'] == 'selected' and sport_label(event).casefold() not in {
+            s.casefold() for s in policy['sports']}:
+        return False
+    if policy['school_mode'] == 'selected':
+        picked = {s.casefold() for s in policy['schools']}
+        if not any(s.casefold() in picked for s in event_schools(event)):
+            return False
+    return True
+
+
 # ── scraper ──────────────────────────────────────────────────────────────────
 
 class B1GPlusScraper(BaseScraper):
@@ -371,6 +447,8 @@ class B1GPlusScraper(BaseScraper):
         horizon = now + timedelta(hours=_EVENT_LOOKAHEAD_HOURS)
         today = now.astimezone(_ET).date()
         found: dict[int, tuple[dict, dict, datetime, datetime]] = {}
+        self.excluded_channel_ids = set()
+        seen_sports = dict(self.cache.get(SEEN_SPORTS_CACHE_KEY) or {})
         for offset in (-1, 0, 1, 2):
             day = (today + timedelta(days=offset)).isoformat()
             try:
@@ -402,7 +480,14 @@ class B1GPlusScraper(BaseScraper):
                         end = now + _LIVE_EXTENSION
                     if end <= now or start >= horizon:
                         continue
+                    seen_sports[sport_label(event)] = int(time.time())
+                    if not event_matches_filter(event, self.config):
+                        self.excluded_channel_ids.add(f'{EVENT_CHANNEL_PREFIX}{cid}')
+                        continue
                     found.setdefault(int(cid), (event, content, start, end))
+        # Forget sports not seen for a year.
+        cutoff = time.time() - 365 * 24 * 3600
+        self._update_cache(SEEN_SPORTS_CACHE_KEY, {k: v for k, v in seen_sports.items() if v >= cutoff})
         return sorted(found.values(), key=lambda e: (e[2], e[1]['id']))
 
     # ── channels / EPG ──
@@ -430,7 +515,8 @@ class B1GPlusScraper(BaseScraper):
             logo = (home.get('image') or {}).get('url') or _image((content.get('editorial') or {}).get('images'), '400x225')
             channels.append(ChannelData(
                 source_channel_id=f'{EVENT_CHANNEL_PREFIX}{cid}',
-                name=f'B1G+ - {label}: {body}'[:256] if label else f'B1G+ - {body}'[:256],
+                # "<League> - <matchup>", like ESPN's and Paramount+'s event channels.
+                name=f'{label} - {body}'[:256] if label else f'B1G+ - {body}'[:256],
                 stream_url=f'{EVENT_SCHEME}{cid}?end={int(end.timestamp())}',
                 logo_url=logo,
                 category='Sports',

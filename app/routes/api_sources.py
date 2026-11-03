@@ -528,7 +528,8 @@ def get_source_config(source_id):
     if source.name == 'cbs_sports':
         extra['cbs_sports'] = _cbs_sports_signin_info(saved)
     if source.name == 'b1g_plus':
-        extra['b1g_plus'] = {'signed_in': bool(saved.get('token')),
+        extra['b1g_plus'] = {**_b1g_plus_filter_info(source, saved),
+                             'signed_in': bool(saved.get('token')),
                              'email': saved.get('email'),
                              'subscription': saved.get('subscription'),
                              'subscription_active': saved.get('subscription_active'),
@@ -729,6 +730,12 @@ def save_source_config(source_id):
             current['event_filter'] = clean_event_filter(data['event_filter'])
         except ValueError as exc:
             return jsonify({'error': str(exc)}), 422
+    if source.name == 'b1g_plus' and 'event_filter' in data:
+        from ..scrapers.b1g_plus import clean_event_filter
+        try:
+            current['event_filter'] = clean_event_filter(data['event_filter'])
+        except ValueError as exc:
+            return jsonify({'error': str(exc)}), 422
     if source.name == 'amazon_sports' and 'event_filter' in data:
         from ..scrapers.amazon_sports import clean_event_filter
         try:
@@ -817,6 +824,8 @@ def save_source_config(source_id):
     espn_any_events = any(_toggle_enabled(current, key) for key in espn_event_keys)
     amazon_sports_filter_changed = source.name == 'amazon_sports' and (
         _amazon_sports_event_filter(old) != _amazon_sports_event_filter(current))
+    b1g_plus_filter_changed = source.name == 'b1g_plus' and (
+        _b1g_plus_event_filter(old) != _b1g_plus_event_filter(current))
     if source.name == 'espn' and espn_any_events and not hasattr(Channel, 'retire_at'):
         return jsonify({'error': 'ESPN events require a FastChannels image rebuild and restart.'}), 503
     if creds_changed or sling_subscription_changed:
@@ -956,6 +965,9 @@ def save_source_config(source_id):
         full_scrape_queued = True
     elif amazon_sports_filter_changed and source.is_enabled:
         trigger_scrape('amazon_sports', force_full=True)
+        full_scrape_queued = True
+    elif b1g_plus_filter_changed and source.is_enabled:
+        trigger_scrape('b1g_plus', force_full=True)
         full_scrape_queued = True
     elif networks_reenabled and source.is_enabled:
         trigger_scrape(source.name, force_full=True)
@@ -2083,6 +2095,25 @@ def clear_paramount_auth(source_id, kind):
 # ── B1G+ sign-in (6-digit code at bigtenplus.com/code) ──────────────────────
 # The user enters the code on bigtenplus.com while signed in; a sign-in-queue
 # job polls for the session — see app.scrapers.b1g_plus.
+
+def _b1g_plus_event_filter(cfg: dict) -> dict | None:
+    from ..scrapers.b1g_plus import clean_event_filter
+    try:
+        return clean_event_filter(cfg.get('event_filter'))
+    except ValueError:
+        return None
+
+
+def _b1g_plus_filter_info(source, saved: dict) -> dict:
+    """The saved filter and the sports/schools the card's checklists offer."""
+    from ..scrapers.b1g_plus import BASE_SPORTS, BIG_TEN_SCHOOLS, SEEN_SPORTS_CACHE_KEY, clean_event_filter
+    policy = _b1g_plus_event_filter(saved) or clean_event_filter(None)
+    seen = load_source_cache(source.id).get(SEEN_SPORTS_CACHE_KEY) or {}
+    sports = list(dict.fromkeys([*BASE_SPORTS, *sorted(seen), *policy['sports']]))
+    schools = list(dict.fromkeys([*BIG_TEN_SCHOOLS, *policy['schools']]))
+    return {'event_filter': policy, 'sports': sorted(sports, key=lambda s: s.split("'s ")[-1] + s),
+            'schools': schools}
+
 
 def _b1g_plus_source_or_400(source_id):
     source = Source.query.get_or_404(source_id)
