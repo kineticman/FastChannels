@@ -35,8 +35,12 @@ from datetime import datetime, timedelta, timezone
 
 import requests
 
+from ..matchups import (MATCHUP_CACHE_KEY, MatchupResolver, event_label, matchup_body,
+                        matchup_description, matchup_title)
 from ..tve.adobe_pass import TVEAuthError
-from .base import BaseScraper, ChannelData, ConfigField, ProgramData, StreamDeadError, EVENT_CHANNEL_TAG
+from ..sports import normalize_sport, sport_for_league
+from .base import (BaseScraper, ChannelData, ConfigField, ProgramData,
+                   StreamDeadError, EVENT_CHANNEL_TAG, infer_language)
 
 logger = logging.getLogger(__name__)
 
@@ -190,6 +194,17 @@ def _epoch_ms(value) -> datetime | None:
         return None
 
 
+def _item_sport(item: dict) -> str | None:
+    """The sport in a listing's category path, e.g. "Soccer" from
+    "Live Streaming/Sports/Soccer/EFL Cup"; None when there's no Sports level."""
+    path = [part.strip() for part in ((item.get('contentCANVideo') or {}).get('primaryCategoryName') or '').split('/')]
+    folded = [part.casefold() for part in path]
+    if 'sports' not in folded:
+        return None
+    rest = path[folded.index('sports') + 1:]
+    return rest[0] if rest and rest[0] else None
+
+
 def _jwt_exp(header_value: str) -> float:
     try:
         payload = header_value.split()[-1].split('.')[1]
@@ -294,25 +309,38 @@ class ParamountScraper(BaseScraper):
         if not self._signed_in():
             return []
         self._event_items = self._events()
+        self._matchups = {}
+        resolver = MatchupResolver(self.cache.get(MATCHUP_CACHE_KEY), self.source_name)
         channels = []
         for league, item in self._event_items:
             cid = item['videoContentId']
             end = _epoch_ms(item.get('streamEndTimestamp') or item.get('endTimestamp'))
             thumb = (item.get('filePathThumb') or '').removeprefix('files/')
             logo = league.get('filePathLogoSelected') or league.get('filePathLogo')
+            sport = normalize_sport(_item_sport(item)) or sport_for_league(league.get('channelName'))
+            matchup = resolver.lookup(
+                cid, item.get('title'), _epoch_ms(item.get('startTimestamp') or item.get('streamStartTimestamp')),
+                league=league.get('channelName'), sport=sport)
+            if matchup:
+                self._matchups[cid] = matchup
+            title = matchup_body(matchup, sport) if matchup else item.get('title') or 'Live'
             channels.append(ChannelData(
                 source_channel_id=f'{EVENT_CHANNEL_PREFIX}{cid}',
-                name=f'{league.get("channelName") or "Paramount+"} - {item.get("title") or "Live"}'[:256],
+                name=f'{league.get("channelName") or "Paramount+"} - {title}'[:256],
                 stream_url=f'{EVENT_SCHEME}{cid}?slug={league["slug"]}&end={int(end.timestamp())}',
                 logo_url=_THUMBS + thumb if thumb else (_IMAGES + logo if logo else None),
                 category='Sports',
+                language=infer_language(item.get('title'), item.get('description')),
                 stream_type='hls',
                 guide_key=f'{EVENT_CHANNEL_PREFIX}{cid}',
                 tags=[EVENT_CHANNEL_TAG, 'Paramount+ Sports'],
+                sport=_item_sport(item),
+                league=league.get('channelName'),
                 gracenote_mode='off',
                 retire_at=end + timedelta(seconds=EVENT_END_GRACE_SECONDS),
                 delete_at=end + timedelta(seconds=EVENT_END_GRACE_SECONDS + 24 * 3600),
             ))
+        self._update_cache(MATCHUP_CACHE_KEY, resolver.export())
         return channels
 
     def fetch_epg(self, channels: list[ChannelData], **kwargs) -> list[ProgramData]:
@@ -326,14 +354,18 @@ class ParamountScraper(BaseScraper):
                 continue
             thumb = (item.get('filePathThumb') or '').removeprefix('files/')
             league_name = league.get('channelName')
+            sport = normalize_sport(_item_sport(item)) or sport_for_league(league_name)
+            matchup = getattr(self, '_matchups', {}).get(item['videoContentId'])
             programs.append(ProgramData(
                 source_channel_id=cid,
-                title=item.get('title') or league_name or 'Paramount+',
+                title=(matchup_title(event_label(league_name, sport), matchup, sport) if matchup
+                       else item.get('title') or league_name or 'Paramount+'),
                 start_time=start,
                 end_time=end,
-                description=item.get('description') or None,
+                description=(matchup_description(matchup, sport, item.get('description')) if matchup
+                             else item.get('description') or None),
                 poster_url=_THUMBS + thumb if thumb else None,
-                category=';'.join(x for x in ('Sports Event', league_name) if x),
+                category=';'.join(x for x in ('Sports Event', sport, league_name) if x),
                 episode_title=league_name if league_name != item.get('title') else None,
                 is_live=True,
                 episode_id=str(item.get('id') or item['videoContentId']),

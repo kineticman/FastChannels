@@ -10,10 +10,10 @@ Sources are grouped the same way as on the **Sources** page. A handful of free s
 
 | Group | Sources |
 |-------|---------|
-| **Free** | The Roku Channel, Samsung TV Plus, Plex, Xumo Play, LG Channels, Vizio WatchFree+, TCL TV+, Whale TV+, STIRR, FreeLiveSports, Bally Sports Live, Hallmark, Adult Swim, Pluto TV, Sling Freestream, Local Now, Vidaa Free TV, PBS, C-SPAN, ViX, Zeam, and **Free Networks** (30+ networks that stream on their own sites: DW, NHK, Al Jazeera, Bloomberg, CBS News, NewsNation, The CW's FAST lineup, HSN, QVC and more) |
+| **Free** | The Roku Channel, Samsung TV Plus, Plex, Xumo Play, LG Channels, Vizio WatchFree+, TCL TV+, Whale TV+, STIRR, FreeLiveSports, Bally Sports Live, Hallmark, Adult Swim, Pluto TV, Sling Freestream, Local Now, Vidaa Free TV, PBS, C-SPAN, ViX, Zeam, and **Free Networks** (nearly 40 networks that stream on their own sites: DW, NHK, Al Jazeera, Bloomberg, CBS News, NewsNation, The CW's FAST lineup, OG Network, Cineverse, HSN, QVC and more). On the Sources page, Bally Sports Live, Hallmark and Adult Swim are listed under Free Networks |
 | **Free with an account** | Tubi, Amazon Prime Free Channels, FreeCast |
 | **Subscription** | DirecTV Stream, Spectrum, Fubo, Philo, Frndly TV, ESPN, NFL, CBS, FOX One, Paramount+ |
-| **TV provider** (TV Everywhere) | Sign in with your cable or streaming provider: A+E Networks, AMC Networks, SundanceTV, CNN, C-SPAN, DAZN (YES, MSG), Discovery, Disney (ABC, FX, Nat Geo, Disney Channel), FOX, NBCUniversal, Versant (USA, E!, Syfy, CNBC, MS NOW, Golf), Warner Bros. Discovery (TBS, TNT, truTV, TCM), Univision, Tennis Channel, NESN |
+| **TV provider** (TV Everywhere) | Sign in with your cable or streaming provider: A+E Networks, AMC Networks, SundanceTV, CNN, C-SPAN, DAZN (YES, MSG), Discovery, Disney (ABC, FX, Nat Geo, Disney Channel), FOX, NBCUniversal, Versant (USA, E!, Syfy, CNBC, MS NOW, Golf), Warner Bros. Discovery (TBS, TNT, truTV, TCM), Univision, Tennis Channel, NESN, REELZ |
 | **Local** | Your HDHomeRun tuner |
 | **Custom** | Any HLS stream by URL, or your own M3U playlists with their XMLTV guides |
 
@@ -91,6 +91,8 @@ Go to **Admin → Sources**. Enable or disable sources to taste, and expand any 
 
 Only free sources that need nothing from you start enabled: The Roku Channel, Samsung TV Plus, Plex, Xumo Play, LG Channels, Vizio WatchFree+, TCL TV+, Whale TV+, STIRR, FreeLiveSports, Bally Sports Live, Hallmark and Adult Swim. Everything else ships **disabled** because it needs an account, a TV provider, a local device or a DRM bridge. Enable the ones you want and expand the card to sign in. Many sign-ins are a code or link you approve on your phone, so no password is stored. TV-provider sources share one sign-in from **Settings → TV Everywhere**. Note that **Tubi needs a free account** now. See [Source Notes](#source-notes) for per-source details.
 
+**Lite and Advanced mode.** New installs start in **Lite** mode, which shows only the free sources. Subscription, TV Everywhere and DRM sources, the **Bridge** page and **Settings → TV Everywhere** are hidden until you switch to **Advanced** with the **Lite mode / Advanced mode** menu at the top right of every admin page (or **Settings → Interface**). The mode only changes what the admin UI shows: no source, channel, feed or playlist changes, and anything you already use stays visible in Lite. Existing installs start in Advanced mode when they update.
+
 **4. Run Stream Audits.**
 Once channels are populated, run a Stream Audit on each source (see [Stream Audit](#stream-audit) below). This identifies dead and DRM-protected channels and disables them automatically — highly recommended before building your feeds.
 
@@ -110,7 +112,7 @@ Go to **Admin → Feeds** and build filtered channel lists for your players (see
 | `/admin/feeds` | Create and manage named output feeds |
 | `/admin/guide` | Preview the EPG grid as your players will see it |
 | `/admin/settings` | Server URLs, Gracenote options, TV Everywhere sign-in, and system stats |
-| `/admin/bridge` | DRM bridge setup — HDMI Capture, ah4c Capture, PrismCast, post-install healthcheck, tuner authorization checks |
+| `/admin/bridge` | DRM bridge setup (Advanced mode) — HDMI Capture, ah4c Capture, PrismCast, post-install healthcheck, tuner authorization checks |
 | `/admin/logs` | Live log tail |
 | `/admin/reports/channel-changes` | Inferred New / Now Inactive / At Risk channels (BETA) |
 | `/admin/help` | In-app help and source gotchas |
@@ -121,7 +123,7 @@ The Channels page is where you fine-tune your lineup after scraping.
 
 **Filtering** — ways to slice the list:
 - Free-text search by channel name
-- Filter by source, category, or language
+- Filter by source, category, or language (with Free Networks selected, a Network dropdown narrows it to one network; "all matching" bulk actions stay inside it)
 - Show only Enabled, Disabled, or All
 - Filter by stream health (DRM only, Dead only, or clean only)
 - Filter by Gracenote coverage (has it / missing it)
@@ -154,6 +156,8 @@ A built-in **Default** feed is created automatically and includes all enabled ch
 /feeds/sports/native/m3u       # every channel on the scraped guide, no Gracenote
 /feeds/sports/native/epg.xml
 ```
+
+Native M3U playlists name their guide in the `#EXTM3U` header (`url-tvg` / `x-tvg-url`), so TiviMate and similar players load the EPG without a separate URL.
 
 Feed outputs are cached and served from disk — fast for players polling on a schedule.
 
@@ -194,8 +198,8 @@ who want to make Plex work anyway, **[docs/plex.md](docs/plex.md)** covers both 
 ### FastChannels Player
 
 DRM channels that need real Widevine playback (Sling, PBS, Amazon Prime Free, Vidaa,
-Philo, Roku, Fubo, DirecTV Stream, Spectrum, ESPN, ViX, and the NBCUniversal, Warner Bros. Discovery,
-Versant, Disney, CNN, SundanceTV, Tennis Channel, DAZN and NESN TV Everywhere sources) can be routed through a real Fire TV /
+Philo, Roku, Fubo, DirecTV Stream, Spectrum, ESPN, ViX, and the NBCUniversal,
+Versant, Disney, CNN, Tennis Channel, DAZN and NESN TV Everywhere sources) can be routed through a real Fire TV /
 Android TV device running FastChannels' own player app, captured back off its HDMI
 output and re-published as a normal channel — no browser/PrismCast bridge needed for
 these sources. An alternate HDMI-capture front end, [ah4c](https://github.com/sullrich/ah4c),
@@ -203,6 +207,11 @@ is also supported for installs that already have that hardware in place. Not eve
 DRM source can ride this bridge. Hardware-and-software
 setup, not a toggle: **[docs/fc-player-setup.md](docs/fc-player-setup.md)** is the
 full walkthrough.
+
+The Bridge page's **audio** setting controls Dolby audio: *Auto* passes it through when the
+HDMI device accepts it, *Decode to PCM* decodes it on the stick, and *Stereo* uses the channel's
+stereo AAC track where there is one (DIRECTV, ESPN, CNN). Try PCM or Stereo if a capture card
+clicks or drops out on Dolby channels.
 
 A single capture device plays one channel at a time. To stop a second viewer or a
 recording from retuning it — and to fall back to PrismCast when it's busy — set a stream
@@ -222,6 +231,10 @@ environment:
 ```
 
 Values saved in **Settings** override environment variables. If a DB value is cleared, FastChannels falls back to the environment variable.
+
+### Admin login
+
+An optional password for the admin UI and its API, under **Settings → Advanced**. It's off until a password is saved. Playlists, guides, `/play`, `/watch`, images and the player heartbeat stay open so DVRs, IPTV players and the bridges keep working. If you forget the password, set `FC_AUTH_DISABLED=1` in the container's environment, restart, and set a new one.
 
 ## Architecture
 
@@ -295,7 +308,7 @@ Event channels are marked with a calendar icon on the Channels and Guide pages. 
 
 ### HDHomeRun
 
-If you run an HDHomeRun network tuner, enable the **HDHomeRun** source and point it at the device's LAN address (its `discover.json` BaseURL). FastChannels pulls the lineup and the device's Gracenote-sourced XMLTV guide, and proxies the tuner streams alongside your FAST channels. Note that tuner streams are MPEG-2/AC-3 — fine for Channels DVR, but browser and mobile playback need transcoding; HDHomeRun EXTEND models can transcode in hardware via the **Transcode profile** option.
+If you run an HDHomeRun network tuner, enable the **HDHomeRun** source and point it at the device's LAN address (its `discover.json` BaseURL). For more than one tuner, add each under **Device addresses**: the first keeps its channel IDs and each other device's channels get their own IDs, guide and tag, so an IP change only needs the address updated. FastChannels pulls the lineup and the device's Gracenote-sourced XMLTV guide, and proxies the tuner streams alongside your FAST channels. Note that tuner streams are MPEG-2/AC-3 — fine for Channels DVR, but browser and mobile playback need transcoding; HDHomeRun EXTEND models can transcode in hardware via the **Transcode profile** option.
 
 ### Gracenote
 
@@ -343,7 +356,7 @@ Disabling a source deletes all its channels from the DB. Re-enabling and running
 | C-SPAN | None | **Default off.** Free congressional/public-affairs event streams (floor sessions, hearings, Washington Journal). The 24/7 C-SPAN 1/2/3 networks are a separate [TV provider](#tv-provider-tv-everywhere) source |
 | ViX | None | **Default off.** About 80 free Spanish-language channels (N+ Univision news, telenovelas, movies, comedy, sports). Nearly all are Widevine DRM, so they play through the DRM bridge |
 | Zeam | None | **Default off.** Syncbak's free local-news and FAST service (formerly VUit): about 400 channels across every market. Clear HLS |
-| Free Networks | None | **Default off.** 30+ networks that stream free on their own websites: news (DW, Al Jazeera, TRT, NHK, Arirang, Bloomberg, CBS News, Scripps, Newsmax, NewsNation, Sky News, KSL and more), faith (EWTN, TBN, CBN), shopping (HSN, QVC), Sinclair's diginets, The CW's FAST lineup, A+E's FAST channels, Tastemade, Outside TV. Each network is fetched separately, so one outage doesn't affect the others |
+| Free Networks | None | **Default off.** Nearly 40 networks that stream free on their own websites: news (DW, Al Jazeera, TRT, NHK, Arirang, Bloomberg, CBS News, Scripps, Newsmax, NewsNation, Sky News, KSL and more), faith (EWTN, TBN, CBN), shopping (HSN, QVC), Sinclair's diginets, The CW's FAST lineup, A+E's FAST channels, OG Network, Cineverse (with RetroCrush and JoySauce), BeOND TV, Mansa TV, Tastemade, Outside TV, and CBS's free Judge Judy, Hot Bench and Car Chase channels. Channels already carried by another network are skipped, and each network can be switched off on the source card. Each network is fetched separately, so one outage doesn't affect the others |
 
 ### Free with an account
 
@@ -379,7 +392,7 @@ Disabling a source deletes all its channels from the DB. Re-enabling and running
 
 ### TV provider (TV Everywhere)
 
-These sources sign in through your cable or streaming provider (MVPD) rather than a per-source login. Go to **Settings → TV Everywhere**, pick your provider, and sign in, either in a real browser session that opens in an admin-UI modal or by opening a link on your phone. **Sign in to all** repeats that for every TV-provider network in one pass, with a short pause between each to avoid tripping your provider's rate limiting.
+These sources sign in through your cable or streaming provider (MVPD) rather than a per-source login, and are listed only in Advanced mode (new installs start in Lite; switch with the **Lite mode / Advanced mode** menu at the top right). Go to **Settings → TV Everywhere**, pick your provider, and sign in, either in a real browser session that opens in an admin-UI modal or by opening a link on your phone. **Sign in to all** repeats that for every TV-provider network in one pass, with a short pause between each to avoid tripping your provider's rate limiting.
 
 If one source should sign in with a different TV provider than the rest, choose **A different sign-in, just for this source** on that source's card. It then signs in each of its networks by a link you open on your phone, independently of the shared login.
 
@@ -387,7 +400,7 @@ If one source should sign in with a different TV provider than the rest, choose 
 |--------|----------|-------|
 | A+E Networks TVE | A&E, Lifetime, History, FYI and sister networks | **Default off.** PrismCast bridge only |
 | AMC Networks TVE | AMC, BBC America, IFC, WE tv | **Default off.** PrismCast bridge only |
-| SundanceTV | SundanceTV (24/7) | **Default off.** Needs a Sundance account as well as your provider. DRM bridge |
+| SundanceTV | SundanceTV (24/7) | **Default off.** Needs a Sundance account as well as your provider. Clear HLS, no DRM bridge |
 | CNN TVE | CNN, CNN International, HLN | **Default off.** One sign-in covers all three. DRM bridge |
 | C-SPAN TVE | C-SPAN, C-SPAN2, C-SPAN3 (24/7) | **Default off.** Clear HLS, no DRM bridge |
 | DAZN | DAZN 1, Rally TV, Red Bull TV, Unbeaten, Fubo Sports; YES and MSG | **Default off.** The free channels need a free DAZN account (signed in with a phone link); YES and MSG need a provider that carries them. DRM bridge |
@@ -396,10 +409,11 @@ If one source should sign in with a different TV provider than the rest, choose 
 | FOX TVE | FOX broadcast plus FS1/FS2 | **Default off.** PrismCast bridge only |
 | NBCUniversal TVE | Local NBC/Telemundo affiliate (auto-detected by IP, overridable), Bravo, NBC News NOW, NBC Sports Now, Telemundo and Universo channels | **Default off.** DRM bridge |
 | Versant TVE | USA, E!, Syfy, Oxygen (East and West), CNBC, MS NOW, Golf Channel | **Default off.** One sign-in covers all 11. DRM bridge |
-| Warner Bros. Discovery TVE | TBS, TNT, truTV, TCM | **Default off.** DRM bridge |
+| Warner Bros. Discovery TVE | TBS, TNT, truTV, TCM East/West | **Default off.** Clear HLS, no DRM bridge |
 | Univision TVE | Univision, UniMás, Galavisión, TUDN; free N+ Univision 24/7, Zona TUDN, Canal ViX | **Default off.** Clear HLS, no DRM bridge |
 | Tennis Channel TVE | Tennis Channel; free Tennis Channel 2 and Pickleball TV | **Default off.** Tennis Channel plays through the DRM bridge; the free channels are clear |
 | NESN TVE (Beta) | NESN, NESN Plus | **Default off.** New England providers only. Needs a NESN account (signed in with an emailed code) as well as your provider. DRM bridge |
+| REELZ | REELZ | **Default off.** Its own sign-in, not the shared one: on the source card, run Get Access → Sign in with your TV provider in a browser and paste the link it lands on. REELZ+ subscribers can use email and password instead. Clear HLS |
 
 "DRM bridge" means PrismCast or [FastChannels Player](#fastchannels-player); "PrismCast bridge only" sources can't use FastChannels Player yet. The sign-in has been verified with **Cox**, **Spectrum**, **Sling TV** and **Xfinity/Comcast**. Adobe Pass lists many more providers, but not every provider carries every network, and some may fail to sign in.
 

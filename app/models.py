@@ -257,6 +257,8 @@ class Channel(db.Model):
     went_inactive_at  = db.Column(db.DateTime(timezone=True), nullable=True)
     retire_at         = db.Column(db.DateTime(timezone=True), nullable=True)
     delete_at         = db.Column(db.DateTime(timezone=True), nullable=True)
+    sport             = db.Column(db.String(64), nullable=True)    # event's sport in app.sports' vocabulary; set by scraper
+    league            = db.Column(db.String(128), nullable=True)   # event's league as the source names it
     returned_at       = db.Column(db.DateTime(timezone=True), nullable=True)
     identity_changed_at = db.Column(db.DateTime(timezone=True), nullable=True)  # set by scraper when an enabled slot's content changed upstream (guide_key/name swap) — needs Gracenote review
     previous_name       = db.Column(db.String(256), nullable=True)  # the occupant's name before the last content swap (paired with identity_changed_at)
@@ -329,6 +331,8 @@ class Channel(db.Model):
             'last_seen_at':     self.last_seen_at.isoformat() if self.last_seen_at else None,
             'retire_at':       self.retire_at.isoformat() if self.retire_at else None,
             'delete_at':       self.delete_at.isoformat() if self.delete_at else None,
+            'sport':           self.sport,
+            'league':          self.league,
             'identity_changed_at': self.identity_changed_at.isoformat() if self.identity_changed_at else None,
             'previous_name':    self.previous_name,
             'previous_gracenote_id': self.previous_gracenote_id,
@@ -379,6 +383,7 @@ class Feed(db.Model):
       sources      list[str]  — Source.name values to include
       categories   list[str]  — channel category strings
       languages    list[str]  — ISO 639-1 codes
+      sports       list[str]  — app.sports names; channels without a sport don't match
       max_channels int        — cap on channels returned
     """
     __tablename__ = 'feeds'
@@ -389,7 +394,7 @@ class Feed(db.Model):
     description = db.Column(db.Text, default='')
     filters     = db.Column(db.JSON, default=dict)
     chnum_start = db.Column(db.Integer, nullable=True)   # starting tvg-chno for this feed's M3U output
-    guide_mode  = db.Column(db.String(16), nullable=False, default='split', server_default='split')  # 'split' = separate XMLTV + Gracenote playlists; 'mixed' = one playlist (Channels DVR 2026.08.25+)
+    guide_mode  = db.Column(db.String(16), nullable=False, default='mixed', server_default='mixed')  # 'split' = separate XMLTV + Gracenote playlists; 'mixed' = one playlist (Channels DVR 2026.08.25+)
     is_enabled  = db.Column(db.Boolean, default=True)
     created_at  = db.Column(db.DateTime(timezone=True),
                             default=lambda: datetime.now(timezone.utc))
@@ -406,6 +411,7 @@ class Feed(db.Model):
 
     def to_dict(self, base_url: str = '') -> dict:
         base_url = (base_url or '').rstrip('/')
+        native_enabled = bool(AppSettings.get().native_output_enabled)
         return {
             'id':          self.id,
             'slug':        self.slug,
@@ -422,8 +428,8 @@ class Feed(db.Model):
             'epg_url':        f'{base_url}/feeds/{self.slug}/epg.xml',
             'gracenote_url':  f'{base_url}/feeds/{self.slug}/m3u/gracenote',
             'mixed_url':      f'{base_url}/feeds/{self.slug}/m3u/mixed',
-            'native_m3u_url': f'{base_url}/feeds/{self.slug}/native/m3u',
-            'native_epg_url': f'{base_url}/feeds/{self.slug}/native/epg.xml',
+            'native_m3u_url': f'{base_url}/feeds/{self.slug}/native/m3u' if native_enabled else None,
+            'native_epg_url': f'{base_url}/feeds/{self.slug}/native/epg.xml' if native_enabled else None,
         }
 
 
@@ -438,18 +444,46 @@ class FeedChannelNumber(db.Model):
     __table_args__ = (db.Index('ix_feed_channel_numbers_feed_id', 'feed_id'),)
 
 
+class ChannelNumber(db.Model):
+    """A channel's number in one numbering scope -- the only record of it.
+
+    scope_id is a feed id, or one of the master scopes (0, -1, -2, see
+    app.chnum), so it has no foreign key. released_at is set
+    while the channel is out of the scope and its number is held for it.
+    Written only by app.chnum. (FeedChannelNumber is the previous store, left
+    untouched so a downgrade still finds its numbers.)
+    """
+    __tablename__ = 'channel_numbers'
+
+    scope_id    = db.Column(db.Integer, primary_key=True, autoincrement=False)
+    channel_id  = db.Column(db.Integer, db.ForeignKey('channels.id', ondelete='CASCADE'),
+                            primary_key=True, autoincrement=False)
+    number      = db.Column(db.Integer, nullable=False)
+    released_at = db.Column(db.DateTime, nullable=True)
+
+    __table_args__ = (
+        db.UniqueConstraint('scope_id', 'number', name='uq_channel_numbers_scope_number'),
+        db.Index('ix_channel_numbers_channel_id', 'channel_id'),
+    )
+
+
 class AppSettings(db.Model):
     """Single-row global settings table (always id=1)."""
     __tablename__ = 'app_settings'
 
     id                   = db.Column(db.Integer, primary_key=True)
     global_chnum_start   = db.Column(db.Integer, nullable=True)  # master tvg-chno start for ungrouped sources
+    master_chnum_start   = db.Column(db.Integer, nullable=True)  # where new master numbers start (follows the Default feed's start); None = keep scraper numbers, new ones from 5000
+    master_gracenote_chnum_start = db.Column(db.Integer, nullable=True)  # where new /m3u/gracenote numbers start; None = above the master numbers
+    chnum_seeded_at      = db.Column(db.DateTime, nullable=True)  # channel_numbers seeded from the previous numbering (app.chnum.seed_channel_numbers)
     channels_dvr_url     = db.Column(db.Text, nullable=True)     # e.g. http://192.168.1.x:8089
     public_base_url      = db.Column(db.Text, nullable=True)     # e.g. http://192.168.1.x:5523
     timezone_name        = db.Column(db.String(64), nullable=True)  # IANA timezone, e.g. America/New_York
+    lite_mode            = db.Column(db.Boolean, nullable=False, default=False, server_default=db.text('0'))  # UI preference only; fresh installs opt in during schema setup
     auto_allow_new_channels = db.Column(db.Boolean, nullable=False, default=True, server_default=db.text('1'))  # newly-scraped channels enter feeds enabled (vs. held for review)
     gracenote_auto_fill  = db.Column(db.Boolean, nullable=False, default=True, server_default=db.text('1'))  # scrapers auto-assign Gracenote IDs
     dvr_epg_auto_refresh = db.Column(db.Boolean, nullable=False, default=True, server_default=db.text('1'))  # hourly PUT to Channels DVR lineups
+    native_output_enabled = db.Column(db.Boolean, nullable=False, default=True, server_default=db.text('1'))  # publish native scraped-only feed M3U and XML outputs
     image_proxy_enabled  = db.Column(db.Boolean, nullable=False, default=True, server_default=db.text('1'))  # proxy/cache logos and posters in output
     event_guide_filler   = db.Column(db.Boolean, nullable=False, default=True, server_default=db.text('1'))  # XMLTV: "Event Not Started"/"Event Ended" blocks around event channels' programmes
     m3u_rewrite_timestamps = db.Column(db.Boolean, nullable=False, default=False, server_default=db.text('0'))  # experimental: add Channels DVR timestamp-rewrite directive to M3U entries

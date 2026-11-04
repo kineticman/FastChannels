@@ -27,6 +27,7 @@ import re
 import secrets
 import time
 import uuid
+import xml.etree.ElementTree as ET
 from functools import lru_cache
 from dataclasses import dataclass, field
 from urllib.parse import urlsplit, urlunsplit, urljoin, parse_qs, unquote, quote
@@ -58,6 +59,10 @@ _VIDEO_URL_RE = re.compile(
     re.IGNORECASE,
 )
 _IFRAME_RE = re.compile(r'''<iframe[^>]+?src\s*=\s*['"]?([^'">\s]+)''', re.IGNORECASE)
+_HUDL_EMBED_RE = re.compile(
+    r'''https?://vcloud\.hudl\.com/broadcast/embed/(\d+)(?:[/?#]|$)''',
+    re.IGNORECASE,
+)
 # Third-party domains that only serve ads, analytics, or tracking — never video.
 # Skipping them avoids wasting the detection budget on GTM noscript iframes etc.
 # HLS candidates intercepted by Playwright that are never the target stream —
@@ -786,22 +791,26 @@ class StreamDetector:
             if _c not in _priority_hls:
                 _priority_hls.append(_c)
                 self._candidate_resolvers.setdefault(_c, 'earthcam')
+        hudl_embedded = bool(_HUDL_EMBED_RE.search(url) or _HUDL_EMBED_RE.search(html.unescape(text)))
+        for _c in self._extract_hudl_provider_candidates(session, url, text):
+            if _c not in _priority_hls:
+                _priority_hls.append(_c)
+                self._candidate_resolvers.setdefault(_c, 'hudl')
+                self._candidate_page_urls.setdefault(_c, url)
 
-        # Track whether a recognised live-cam embed is the primary player on this page.
-        # Used below to suppress lura.live/JPEG false positives from article carousels.
-        _known_cam_embed_found = (
+        # A recognised live embed takes priority over unrelated page media.
+        _known_live_embed_found = (
             bool(_VIDEOLINQ_IFRAME_RE.search(text)) or bool(_VIDEOLINQ_PAGE_RE.match(url))
             or bool(_IPCAMLIVE_IFRAME_RE.search(html.unescape(text)))
             or bool(_EARTHCAM_EMBED_RE.search(html.unescape(text)))
             or bool(_EARTHCAM_PLAYER_PAGE_RE.match(url))
+            or hudl_embedded
         )
 
-        # Fast path: this page has a recognised cam embed (VideoLinq / ipcamlive / EarthCam).
-        # Skip generic extraction, custom-API extractors, and iframe recursion — they
-        # add ~20 s of overhead and can only produce false positives here.  If the
-        # priority extractor found a stream it's in _priority_hls; if the cam is
-        # offline, _priority_hls is empty and detect() returns "no stream found".
-        if _known_cam_embed_found:
+        # Use the provider's stream, or report it offline. Generic extraction can
+        # mistake a background video or ad for the live player (WZDM embeds both
+        # a Hudl broadcast and a looping YouTube video).
+        if _known_live_embed_found:
             return _priority_hls
 
         hls_candidates, video_candidates = self._extract_generic_candidates(text)
@@ -840,7 +849,7 @@ class StreamDetector:
         #   • CMS banner images (WordPress /wp-content/uploads/*.jpg) that look like
         #     JPEG snapshot feeds to the generic regex
         # Both cam providers always serve HLS, so neither category is a valid fallback.
-        if _known_cam_embed_found:
+        if _known_live_embed_found:
             hls_candidates = [c for c in hls_candidates
                               if 'lura.live' not in urlsplit(c).netloc.lower()]
             video_candidates = []
@@ -2776,6 +2785,44 @@ class StreamDetector:
                         candidates.append(c)
             except Exception as exc:
                 logger.debug('[detector] brownrice script fetch failed %s: %s', script_url[:80], exc)
+
+        return candidates
+
+    def _extract_hudl_provider_candidates(
+        self,
+        session: requests.Session,
+        url: str,
+        text: str,
+    ) -> list[str]:
+        """Read the live Content entry from Hudl's broadcast VMAP, excluding ads."""
+        ids: list[str] = []
+        for source in (url, html.unescape(text)):
+            for match in _HUDL_EMBED_RE.finditer(source):
+                if match.group(1) not in ids:
+                    ids.append(match.group(1))
+
+        candidates: list[str] = []
+        for broadcast_id in ids:
+            if self._detect_budget_exhausted():
+                break
+            try:
+                embed_url = f'https://vcloud.hudl.com/broadcast/embed/{broadcast_id}'
+                response = session.get(
+                    f'https://vcloud.hudl.com/api/broadcast/vmap/{broadcast_id}',
+                    headers={'Referer': embed_url},
+                    timeout=self.TIMEOUT,
+                )
+                if not response.ok:
+                    continue
+                root = ET.fromstring(response.text)
+                for content in root.iter('Content'):
+                    if content.get('type') != 'live' or content.get('streaming') != 'true':
+                        continue
+                    stream_url = (content.text or '').strip()
+                    if self._is_hls_url(stream_url) and stream_url not in candidates:
+                        candidates.append(stream_url)
+            except Exception as exc:
+                logger.debug('[detector] hudl VMAP lookup failed %s: %s', broadcast_id, exc)
 
         return candidates
 

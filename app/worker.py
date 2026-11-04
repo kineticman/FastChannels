@@ -31,6 +31,7 @@ from app.config_store import (
     persist_source_cache_updates,
     load_source_cache,
 )
+from app.db_batches import WritePacer, delete_in_batches, yield_writer_lock
 from app.extensions import db
 from app.hls import inspect_hls_drm, parse_stream_info as _parse_stream_info, parse_dash_stream_info as _parse_dash_stream_info, WIDEVINE_UUID, PLAYREADY_UUID
 from app.models import Source, Channel, Program, Feed, AppSettings, SourceCache
@@ -41,6 +42,7 @@ from app.scrapers.playlist import is_playlist_source, event_group_miss_limit, li
 from app.scrapers.base import (
     EVENT_CHANNEL_TAG,
     StreamDeadError,
+    ScrapeRetrySoonError,
     ScrapeSkipError,
     is_ssl_handshake_failure,
     is_transient_network_error,
@@ -54,6 +56,7 @@ from app.tve.adobe_pass import TVENotAuthorizedError
 from app.xml_cache import (
     ARTIFACT_IDLE_SECONDS, ARTIFACT_PURGE_SECONDS, artifact_in_use, ensure_xml_artifact, get_artifact,
     invalidate_xml_cache, purge_idle_artifacts, sweep_unused_artifacts, write_artifact,
+    delete_xml_artifact,
 )
 from app.routes.images import delete_cached_logo
 
@@ -533,6 +536,7 @@ def run_scraper(source_name: str, force_full: bool = False):
                                 pinned_channel_ids=getattr(scraper, 'pinned_channel_ids', frozenset()),
                                 excluded_channel_ids=getattr(scraper, 'excluded_channel_ids', frozenset()),
                                 hide_missing_event_channels=getattr(scraper, 'hide_missing_event_channels', False),
+                                kept_channel_ids=scraper.kept_channel_ids,
                             )
                         # Persist scraper config/cache FIRST. persist_*() call
                         # db.session.expire_all(), which DISCARDS unflushed attribute
@@ -653,6 +657,12 @@ def run_scraper(source_name: str, force_full: bool = False):
                 elapsed = time.monotonic() - t0
                 logger.info('[%s] Scrape complete — %d channels, %d programs (%.1fs)',
                             source_name, len(channels), len(programs), elapsed)
+                if scraper.retry_soon:
+                    minutes = _schedule_scrape_retry(source_name)
+                    if minutes:
+                        logger.info('[%s] Scraping again in %d minutes: the listing was incomplete', source_name, minutes)
+                else:
+                    _clear_scrape_retry(source_name)
                 logo_urls = [ch.logo_url for ch in channels if ch.logo_url]
                 if logo_urls:
                     # Publish the phase change immediately so the UI does not sit
@@ -662,10 +672,15 @@ def run_scraper(source_name: str, force_full: bool = False):
             _progress('done')
         except ScrapeSkipError as e:
             elapsed = time.monotonic() - t0
-            logger.warning('[%s] Scrape skipped after %.1fs: %s', source_name, elapsed, e)
+            message = str(e)
+            if isinstance(e, ScrapeRetrySoonError):
+                minutes = _schedule_scrape_retry(source_name)
+                message += (f' Keeping the current channels; trying again in {minutes} minutes.' if minutes
+                            else ' Keeping the current channels until the next scheduled scrape.')
+            logger.warning('[%s] Scrape skipped after %.1fs: %s', source_name, elapsed, message)
             db.session.rollback()
             _apply_scraper_config_updates(source, scraper)
-            source.last_error = str(e)
+            source.last_error = message
             db.session.commit()
             _progress('done')
         except ScrapePhaseTimeoutError as e:
@@ -871,6 +886,7 @@ def run_stream_audit(source_name: str, scope: str = 'linear'):
         # auditing so a prior generic audit or manual state drift cannot leave
         # channels out of the bridge feed.
         _sync_intrinsic_drm_bridge(source)
+        db.session.commit()
 
         channels_query = source.channels
         if hasattr(Channel, 'retire_at'):
@@ -891,6 +907,18 @@ def run_stream_audit(source_name: str, scope: str = 'linear'):
                 Channel.disable_reason.like('DRM:%'),
             )
         )
+        # Channels the source's own filter leaves out are listed in the report
+        # with its reason, so the modal doesn't look like it lost them.
+        _narrowed = scraper.audit_candidates(audit_candidates)
+        skipped_by_source = []
+        if _narrowed is not audit_candidates:
+            _kept_ids = {cid for (cid,) in _narrowed.with_entities(Channel.id)}
+            skipped_by_source = [
+                {'id': cid, 'name': name, 'status': 'skipped', 'reason': scraper_cls.audit_skip_reason}
+                for cid, name in audit_candidates.with_entities(Channel.id, Channel.name).order_by(Channel.name)
+                if cid not in _kept_ids
+            ]
+        audit_candidates = _narrowed
         skipped_events = 0
         if scope == 'linear':
             skipped_events = audit_candidates.filter(event_channel_clause()).count()
@@ -930,7 +958,7 @@ def run_stream_audit(source_name: str, scope: str = 'linear'):
         consecutive_transient_errors = 0  # resolve-timeout detector
         aborted_reason = None  # set just before any early-abort break below
         scanned = 0
-        report_channels = []
+        report_channels = list(skipped_by_source)
         _audit_ignore_4xx = getattr(scraper_cls, 'audit_ignore_4xx', False)
         _audit_ignore_vod = getattr(scraper_cls, 'audit_ignore_vod', False)
 
@@ -1495,6 +1523,12 @@ def run_stream_audit(source_name: str, scope: str = 'linear'):
                 consecutive_errors += 1
 
             finally:
+                # Commit each channel's result before checking the next one. The
+                # implicit transaction holds SQLite's database-wide writer lock
+                # from the first write to commit, and committing every 25 channels
+                # held it across 25 channels' network checks (10-25s on Pluto), long
+                # enough on a slower source to fail other writers (issue #86).
+                db.session.commit()
                 if i % 25 == 0:
                     source.last_audited_at = datetime.now(timezone.utc)
                     db.session.commit()
@@ -1538,6 +1572,7 @@ def run_stream_audit(source_name: str, scope: str = 'linear'):
                 'total': scanned if aborted_reason else total,
                 'channel_count': total, 'aborted_reason': aborted_reason,
                 'scope': scope, 'skipped_events': skipped_events,
+                'skipped_by_source': len(skipped_by_source),
                 'not_in_output': not_in_output,
                 'checked': checked, 'flagged': flagged, 'bridged': bridged,
                 'dead': dead, 'vod': vod, 'not_authorized': not_authorized, 'errors': errors, 'skipped_403': skipped_403,
@@ -1619,6 +1654,9 @@ def run_stream_audit_recheck(source_name: str, channel_ids: list):
         recheck_results = {}  # channel_id → {'status', 'reason'} or None if ok
 
         for i, ch in enumerate(channels, 1):
+            # The previous channel's result, committed before this one's network
+            # check so the writer lock isn't held across them (see run_stream_audit).
+            db.session.commit()
             try:
                 _resolve = getattr(scraper, 'audit_resolve', scraper.resolve)
                 try:
@@ -1733,8 +1771,10 @@ def run_stream_audit_recheck(source_name: str, channel_ids: list):
 
 
 def _make_progress_writer(source_name: str):
-    """Return a callable(phase, done=0, total=0) that writes scrape progress to Redis.
-    Phase 'done' deletes the key.  Silently no-ops if Redis is unavailable."""
+    """Return a callable(phase, done=0, total=0, detail=None) that writes scrape
+    progress to Redis. detail is a short label for what is running now (Free
+    Networks passes the network's name). Phase 'done' deletes the key.  Silently
+    no-ops if Redis is unavailable."""
     import json as _json
     key = f'scrape:progress:{source_name}'
     try:
@@ -1743,12 +1783,15 @@ def _make_progress_writer(source_name: str):
     except Exception:
         return lambda *a, **kw: None
 
-    def _write(phase: str, done: int = 0, total: int = 0):
+    def _write(phase: str, done: int = 0, total: int = 0, detail: str | None = None):
         try:
             if phase == 'done':
                 r.delete(key)
             else:
-                r.setex(key, 600, _json.dumps({'phase': phase, 'done': done, 'total': total}))
+                data = {'phase': phase, 'done': done, 'total': total}
+                if detail:
+                    data['detail'] = detail
+                r.setex(key, 600, _json.dumps(data))
         except Exception:
             pass
     return _write
@@ -1814,9 +1857,10 @@ def _refresh_xml_artifacts(only_keys: set[str] | None = None) -> None:
     (they're built on their next request instead). `only_keys` builds just
     those artifacts — the on-request path — with no idle check or sweep.
     """
-    from app.generators.m3u import generate_gracenote_m3u, generate_m3u, generate_native_m3u, generate_mixed_m3u, generate_combined_ah4c_m3u, generate_prismcast_m3u, generate_fc_player_m3u, feed_gracenote_start, feed_namespace_start, feed_to_query_filters, _MASTER_GRACENOTE_START
+    started_at = time.monotonic()
+    from app.generators.m3u import generate_gracenote_m3u, generate_m3u, generate_native_m3u, generate_mixed_m3u, generate_combined_ah4c_m3u, generate_prismcast_m3u, generate_fc_player_m3u, feed_number_kwargs, feed_to_query_filters, _MASTER_GRACENOTE_START
     from app import fc_player_bridge as _fc_player_bridge
-    from app.generators.xmltv import write_xmltv
+    from app.generators.xmltv import feed_xml_artifact_key, write_xmltv
 
     for attempt in range(2):
         # The feed list below is read now, so the sweep's grace counts from here.
@@ -1863,8 +1907,8 @@ def _refresh_xml_artifacts(only_keys: set[str] | None = None) -> None:
                 'master-fc-player-ah4c-m3u',
                 lambda fp: fp.write(generate_fc_player_m3u({}, base_url=base_url, ah4c_base_url=ah4c_url)),
             ))
-        default_feed = Feed.query.filter_by(slug='default').first()
-        default_gn_start = feed_gracenote_start(default_feed) if default_feed else _MASTER_GRACENOTE_START
+        # namespace_start without a feed numbers from the master Gracenote rows.
+        default_gn_start = _MASTER_GRACENOTE_START
         m3u_artifacts.append((
             'master-gracenote-m3u',
             lambda fp: fp.write(generate_gracenote_m3u({}, base_url=base_url, namespace_start=default_gn_start)),
@@ -1888,31 +1932,34 @@ def _refresh_xml_artifacts(only_keys: set[str] | None = None) -> None:
                 lambda fp: fp.write(generate_fc_player_m3u(
                     {}, base_url=base_url, namespace_start=default_gn_start, gracenote=True, ah4c_base_url=ah4c_url)),
             ))
+        default_uses_master = False
         for feed in Feed.query.filter_by(is_enabled=True).order_by(Feed.slug).all():
             filters = feed_to_query_filters(feed.filters or {})
-            xml_artifacts.append((
-                f'feed-{feed.slug}',
-                lambda fp, filters=filters, feed_name=feed.name: write_xmltv(
-                    fp,
-                    filters,
-                    base_url=base_url,
-                    feed_name=feed_name,
-                ),
-            ))
-            xml_artifacts.append((
-                f'feed-{feed.slug}-native',
-                lambda fp, filters=filters, feed_name=feed.name: write_xmltv(
-                    fp,
-                    filters,
-                    base_url=base_url,
-                    feed_name=feed_name,
-                    native=True,
-                ),
-            ))
-            if feed.chnum_start is not None:
-                std_kw = {'feed_chnum_start': feed.chnum_start, 'feed_id': feed.id}
+            xml_key = feed_xml_artifact_key(feed)
+            if xml_key == 'master':
+                default_uses_master = True
             else:
-                std_kw = {'namespace_start': feed_namespace_start(feed, gracenote=False)}
+                xml_artifacts.append((
+                    xml_key,
+                    lambda fp, filters=filters, feed_name=feed.name: write_xmltv(
+                        fp,
+                        filters,
+                        base_url=base_url,
+                        feed_name=feed_name,
+                    ),
+                ))
+            if _settings.native_output_enabled:
+                xml_artifacts.append((
+                    f'feed-{feed.slug}-native',
+                    lambda fp, filters=filters, feed_name=feed.name: write_xmltv(
+                        fp,
+                        filters,
+                        base_url=base_url,
+                        feed_name=feed_name,
+                        native=True,
+                    ),
+                ))
+            std_kw = feed_number_kwargs(feed)
             m3u_artifacts.append((
                 f'feed-{feed.slug}-m3u',
                 lambda fp, filters=filters, std_kw=std_kw: fp.write(
@@ -1925,13 +1972,14 @@ def _refresh_xml_artifacts(only_keys: set[str] | None = None) -> None:
             # a channel-level attribute only — program data still rides in the EPG XML —
             # so stripping it is lossless for guides and makes the native M3U import
             # cleanly into Threadfin/Plex and other bridges.
-            m3u_artifacts.append((
-                f'feed-{feed.slug}-native-m3u',
-                lambda fp, filters=filters, std_kw=std_kw, slug=feed.slug: fp.write(
-                    generate_native_m3u(filters, base_url=base_url, include_description=False,
-                                        epg_url=f'{base_url}/feeds/{slug}/native/epg.xml', **std_kw)
-                ),
-            ))
+            if _settings.native_output_enabled:
+                m3u_artifacts.append((
+                    f'feed-{feed.slug}-native-m3u',
+                    lambda fp, filters=filters, std_kw=std_kw, slug=feed.slug: fp.write(
+                        generate_native_m3u(filters, base_url=base_url, include_description=False,
+                                            epg_url=f'{base_url}/feeds/{slug}/native/epg.xml', **std_kw)
+                    ),
+                ))
             # EXPERIMENTAL: mixed Gracenote/XMLTV single-source playlist, pairs with
             # this feed's regular /epg.xml — see generate_mixed_m3u docstring.
             m3u_artifacts.append((
@@ -1998,10 +2046,7 @@ def _refresh_xml_artifacts(only_keys: set[str] | None = None) -> None:
                                                    ah4c_base_url=ah4c_url, **std_kw)
                         ),
                     ))
-            if feed.chnum_start is not None:
-                gn_kw = {'feed_chnum_start': feed.chnum_start, 'feed_id': feed.id}
-            else:
-                gn_kw = {'namespace_start': feed_gracenote_start(feed)}
+            gn_kw = feed_number_kwargs(feed)
             m3u_artifacts.append((
                 f'feed-{feed.slug}-gracenote-m3u',
                 lambda fp, filters=filters, gn_kw=gn_kw: fp.write(
@@ -2057,6 +2102,8 @@ def _refresh_xml_artifacts(only_keys: set[str] | None = None) -> None:
                 rebuilt_xml += 1
             except Exception:
                 logger.exception('[xml-cache] failed to refresh %s', cache_key)
+        if default_uses_master and get_artifact('master', ext='xml') is not None:
+            delete_xml_artifact('feed-default')
         rebuilt_m3u = 0
         for cache_key, writer in m3u_artifacts:
             try:
@@ -2071,17 +2118,12 @@ def _refresh_xml_artifacts(only_keys: set[str] | None = None) -> None:
             continue
 
         if only_keys is not None:
-            logger.info('[artifacts] built %d XML and %d M3U artifact(s) on request: %s',
-                        rebuilt_xml, rebuilt_m3u, ', '.join(sorted(only_keys)))
+            logger.info('[artifacts] built %d XML and %d M3U artifact(s) on request: %s (%.1fs)',
+                        rebuilt_xml, rebuilt_m3u, ', '.join(sorted(only_keys)),
+                        time.monotonic() - started_at)
             if missing_m3u:
                 logger.warning('[artifacts] on-request build left M3U artifact(s) missing: %s', missing_m3u)
             break
-        if idle_keys:
-            logger.info('[artifacts] refreshed %d XML artifact(s) and %d M3U artifact(s); '
-                        'skipped %d not requested in %d days', rebuilt_xml, rebuilt_m3u,
-                        len(idle_keys), ARTIFACT_IDLE_SECONDS // 86400)
-        else:
-            logger.info('[artifacts] refreshed %d XML artifact(s) and %d M3U artifact(s)', rebuilt_xml, rebuilt_m3u)
         if missing_m3u:
             logger.warning('[artifacts] still missing M3U artifact(s) after retry: %s', missing_m3u)
         try:
@@ -2101,6 +2143,14 @@ def _refresh_xml_artifacts(only_keys: set[str] | None = None) -> None:
                             swept, swept_bytes / 1024 / 1024)
         except Exception:
             logger.exception('[artifacts] unused-artifact sweep failed')
+        elapsed = time.monotonic() - started_at
+        if idle_keys:
+            logger.info('[artifacts] refreshed %d XML artifact(s) and %d M3U artifact(s); '
+                        'skipped %d not requested in %d days (%.1fs)', rebuilt_xml, rebuilt_m3u,
+                        len(idle_keys), ARTIFACT_IDLE_SECONDS // 86400, elapsed)
+        else:
+            logger.info('[artifacts] refreshed %d XML artifact(s) and %d M3U artifact(s) (%.1fs)',
+                        rebuilt_xml, rebuilt_m3u, elapsed)
         break
 
 
@@ -2121,7 +2171,26 @@ def _refresh_xml_artifacts_job(only_keys: set[str] | None = None) -> None:
         # the pool without closing the parent's connections (SQLAlchemy's
         # documented post-fork recipe).
         db.engine.dispose(close=False)
+        _settle_channel_numbers()
         _refresh_xml_artifacts(only_keys)
+
+
+def _settle_channel_numbers() -> None:
+    """Store the numbers this rebuild is about to hand out.
+
+    Enabling a channel (singly, in bulk, from the duplicates page or the DVR
+    API) only queues a rebuild. Until its number is saved, each playlist would
+    number it on its own from just the channels in that playlist, so it could
+    get a number a channel elsewhere (say a bridge-only source) already has,
+    and a different one per playlist. Saving here numbers it once against
+    everything in output. Failing to save must not stop the rebuild.
+    """
+    try:
+        _refresh_auto_channel_numbers()
+        db.session.commit()
+    except Exception as exc:  # noqa: BLE001
+        db.session.rollback()
+        logger.warning('[chnum] could not save channel numbers before the rebuild: %s', exc)
 
 
 def _refresh_xml_artifacts_subprocess(timeout_seconds: int = 1800, only_keys: set[str] | None = None) -> None:
@@ -2236,13 +2305,13 @@ def run_gracenote_clear_all():
 def _purge_source_channels_and_programs(source) -> tuple[int, int]:
     """Delete all channels and programs belonging to `source`. Batches the
     channel-id IN-clause to stay under SQLite's default variable limit."""
+    from app.chnum import delete_channel_rows
     ch_ids = [row[0] for row in source.channels.with_entities(Channel.id).all()]
     deleted_programs = 0
     _ID_BATCH = 900
     for i in range(0, len(ch_ids), _ID_BATCH):
-        deleted_programs += Program.query.filter(
-            Program.channel_id.in_(ch_ids[i:i + _ID_BATCH])
-        ).delete(synchronize_session=False)
+        deleted_programs += delete_in_batches(Program, Program.channel_id.in_(ch_ids[i:i + _ID_BATCH]))
+    delete_channel_rows(ch_ids)
     deleted_channels = source.channels.delete(synchronize_session=False)
     return deleted_channels or 0, deleted_programs
 
@@ -2305,11 +2374,12 @@ def run_playlist_delete(source_id: int):
         for feed in Feed.query.all():
             filters = dict(feed.filters or {})
             changed = False
-            if name in (filters.get('sources') or []):
-                scrubbed = _scrubbed_feed_list('sources', filters['sources'], {name})
-                if scrubbed != filters['sources']:
-                    filters['sources'] = scrubbed
-                    changed = True
+            for key in ('sources', 'exclude_sources'):
+                if name in (filters.get(key) or []):
+                    scrubbed = _scrubbed_feed_list(key, filters[key], {name})
+                    if scrubbed != filters[key]:
+                        filters[key] = scrubbed
+                        changed = True
             for key in ('channel_ids', 'excluded_channel_ids', 'pinned_channel_ids'):
                 ids = filters.get(key)
                 if isinstance(ids, list) and gone.intersection(ids):
@@ -2336,6 +2406,16 @@ def run_playlist_delete(source_id: int):
         # gone. The old artifacts stay served until the rebuild lands.
         invalidate_xml_cache()
         _enqueue_xml_refresh_job()
+
+
+def run_deferred_persist(kind: str, source_id: int, updates: dict):
+    """A play-path config/cache write that found the database busy (see
+    app.config_store._defer_persist), made here with the normal wait."""
+    with flask_app.app_context():
+        persist = persist_source_config_updates if kind == 'config' else persist_source_cache_updates
+        if persist(source_id, updates):
+            logger.info('[config-store] saved deferred source %s %s update (%s)',
+                        source_id, kind, ', '.join(updates))
 
 
 def run_source_disable(source_id: int):
@@ -2660,100 +2740,10 @@ def _resolved_logo_url(existing_logo: str | None, incoming_logo: str | None, cac
 
 
 def _refresh_auto_channel_numbers() -> None:
-    """Assign stable automatic numbers to non-pinned active channels.
-
-    Channel.number is system-managed unless the user pins it. Scraper-supplied
-    numbers are ignored; this allocator preserves existing non-pinned numbers
-    where possible and only fills gaps for channels that are new or invalid.
-
-    Standard and Gracenote channels share a single contiguous block for the
-    master (source-based) numbering: standard channels first, then Gracenote
-    channels starting immediately after the highest standard number.
-
-    For feeds with an explicit chnum_start, all channels (standard and Gracenote)
-    share one unified number pool persisted in FeedChannelNumber.  A channel keeps
-    its assigned number when its Gracenote status changes — it just moves between
-    the standard and Gracenote M3U files without being renumbered.
-    """
-    from app.generators.m3u import (
-        _build_source_chnum_map, _build_sticky_gn_chnum_map,
-        _build_feed_chnum_map, _selected_channel_stubs, feed_to_query_filters,
-    )
-    from app.models import Feed, FeedChannelNumber
-
-    with db.session.no_autoflush:
-        all_channels = (
-            Channel.query
-            .join(Source)
-            .filter(
-                Channel.is_active == True,
-                Channel.is_enabled == True,
-                Source.is_enabled == True,
-                Source.epg_only == False,
-                Channel.stream_url != None,
-            )
-            .all()
-        )
-    if not all_channels:
-        return
-
-    std_channels = [ch for ch in all_channels if not (ch.gracenote_id or '').strip()]
-    gn_channels  = [ch for ch in all_channels if (ch.gracenote_id or '').strip()]
-
-    std_map, _ = _build_source_chnum_map(std_channels) if std_channels else ({}, [])
-
-    gn_map = {}
-    if gn_channels:
-        gn_start = (max(std_map.values()) + 1) if std_map else (AppSettings.get().effective_global_chnum_start() or 1)
-        gn_map = _build_sticky_gn_chnum_map(gn_channels, gn_start, set(std_map.values()))
-
-    chnum_map = {**std_map, **gn_map}
-    for ch in all_channels:
-        if ch.number_pinned:
-            continue
-        next_number = chnum_map.get(ch.id)
-        if ch.number != next_number:
-            ch.number = next_number
-
-    # Persist feed-specific channel numbers for feeds with explicit chnum_start.
-    all_channel_ids = {ch.id for ch in all_channels}
-    feeds_with_chnum = Feed.query.filter(
-        Feed.chnum_start != None,
-        Feed.is_enabled == True,
-    ).all()
-    for feed in feeds_with_chnum:
-        filters = feed_to_query_filters(feed.filters or {})
-        with db.session.no_autoflush:
-            std_stubs = _selected_channel_stubs(filters, gracenote=False)
-            gn_stubs  = _selected_channel_stubs(filters, gracenote=True)
-        # Sort the combined list by master number so GN and non-GN interleave
-        # by position rather than arriving as two separate blocks.
-        all_stubs = sorted(
-            std_stubs + gn_stubs,
-            key=lambda ch: (ch.number is None, ch.number or 0, (ch.name or '').lower()),
-        )
-        feed_channel_ids = {s.id for s in all_stubs}
-
-        # Load existing stored numbers for stickiness.
-        stored = {
-            fcn.channel_id: fcn.number
-            for fcn in FeedChannelNumber.query.filter_by(feed_id=feed.id).all()
-        }
-        new_map   = _build_feed_chnum_map(all_stubs, feed.chnum_start, stored_numbers=stored)
-
-        # Upsert new assignments.
-        existing_fcn = {fcn.channel_id: fcn for fcn in FeedChannelNumber.query.filter_by(feed_id=feed.id).all()}
-        for channel_id, number in new_map.items():
-            if channel_id in existing_fcn:
-                if existing_fcn[channel_id].number != number:
-                    existing_fcn[channel_id].number = number
-            else:
-                db.session.add(FeedChannelNumber(feed_id=feed.id, channel_id=channel_id, number=number))
-
-        # Remove stale rows for channels no longer in this feed.
-        for channel_id, fcn in existing_fcn.items():
-            if channel_id not in feed_channel_ids:
-                db.session.delete(fcn)
+    """Settle channel numbers (app.chnum.settle): the one place numbers are
+    assigned. Flushes; the caller commits."""
+    from app.chnum import settle
+    settle()
 
 
 _IDENTITY_STOPWORDS = {
@@ -2877,7 +2867,8 @@ def _upsert_channels(source, channel_data_list, gracenote_auto_fill: bool = True
                      miss_threshold: int = _CHANNEL_MISS_THRESHOLD, rehome_by_guide_key: bool = False,
                      allow_suspicious_collapse: bool = False, pinned_channel_ids: frozenset = frozenset(),
                      excluded_channel_ids: frozenset = frozenset(),
-                     hide_missing_event_channels: bool = False):
+                     hide_missing_event_channels: bool = False,
+                     kept_channel_ids: frozenset = frozenset()):
     existing = {ch.source_channel_id: ch for ch in source.channels.all()}
     # Build a guide_key → channel index so we can re-use an existing DB row
     # when a scraper assigns a new uuid to the same content (e.g. Vidaa rotating
@@ -2978,6 +2969,8 @@ def _upsert_channels(source, channel_data_list, gracenote_auto_fill: bool = True
             ch.stream_url    = cd.stream_url
             ch.retire_at     = getattr(cd, 'retire_at', None)
             ch.delete_at     = getattr(cd, 'delete_at', None)
+            ch.sport         = getattr(cd, 'sport', None)
+            ch.league        = getattr(cd, 'league', None)
             ch.stream_type   = cd.stream_type
             ch.provider_number = cd.provider_number
             old_logo_url = ch.logo_url
@@ -3062,6 +3055,8 @@ def _upsert_channels(source, channel_data_list, gracenote_auto_fill: bool = True
                 country           = cd.country,
                 tags              = ','.join(cd.tags) if getattr(cd, 'tags', None) else None,
                 playlist_group    = getattr(cd, 'playlist_group', None),
+                sport             = getattr(cd, 'sport', None),
+                league            = getattr(cd, 'league', None),
                 description       = _sanitize_description(cd.description) if getattr(cd, 'description', None) else None,
                 number            = None,
                 provider_number   = cd.provider_number,
@@ -3089,7 +3084,7 @@ def _upsert_channels(source, channel_data_list, gracenote_auto_fill: bool = True
 
     seen = {cd.source_channel_id for cd in channel_data_list}
     existing_active_ids = {ch_id for ch_id, ch in existing.items() if ch.is_active}
-    missing_active_ids = existing_active_ids - seen
+    missing_active_ids = existing_active_ids - seen - kept_channel_ids
     # Explicit scraper filters are not missing upstream channels. Identify them
     # from the fetched inventory, including rows imported before tags existed.
     filtered_ids = (set(excluded_channel_ids) & set(existing)) - seen
@@ -3179,7 +3174,8 @@ def _upsert_channels(source, channel_data_list, gracenote_auto_fill: bool = True
         )
     else:
         for ch_id, ch in existing.items():
-            if ch_id not in seen and ch_id not in region_removed_ids and ch_id not in filtered_ids and ch_id not in missing_event_ids:
+            if (ch_id not in seen and ch_id not in region_removed_ids and ch_id not in filtered_ids
+                    and ch_id not in missing_event_ids and ch_id not in kept_channel_ids):
                 # Event groups are short-lived. Keep their policy in the source
                 # config even when the entire group is absent from this import.
                 group = ch.playlist_group
@@ -3284,6 +3280,7 @@ def _prune_old_programs(batch_size: int = 1000):
 
         if deleted < batch_size:
             break
+        yield_writer_lock()
 
     if total_deleted:
         logger.info('[worker] pruned %d expired EPG entries', total_deleted)
@@ -3369,6 +3366,7 @@ def _prune_bogus_programs(batch_size: int = 1000):
         ) or 0
         db.session.commit()
         total_deleted += deleted
+        yield_writer_lock()
 
     if total_deleted:
         logger.info('[worker] pruned %d bogus-timestamp EPG entries', total_deleted)
@@ -3514,14 +3512,17 @@ def _upsert_programs(source, program_data_list, progress_cb=None):
         window_to_ids.setdefault((win_start, win_end), []).append(channel_id)
 
     _ID_BATCH = 900  # stay under SQLite's default variable limit
+    pacer = WritePacer()
     for (win_start, win_end), ch_ids in window_to_ids.items():
         for i in range(0, len(ch_ids), _ID_BATCH):
-            Program.query.filter(
+            delete_in_batches(
+                Program,
                 Program.channel_id.in_(ch_ids[i:i + _ID_BATCH]),
                 Program.end_time   >  win_start,
                 Program.start_time <  win_end,
-            ).delete(synchronize_session=False)
-    db.session.commit()
+                pacer=pacer,
+            )
+    pacer.finish()
 
     rows = []
     for channel_id, pd_list in incoming_by_channel_id.items():
@@ -3544,14 +3545,58 @@ def _upsert_programs(source, program_data_list, progress_cb=None):
                 'series_id':         getattr(pd, 'series_id',    None),
                 'episode_id':        getattr(pd, 'episode_id',   None),
             })
-    # Commit in chunks so the write lock isn't held for the full batch.
-    _CHUNK = 2000
+    # Write in chunks so the write lock isn't held for the full batch.
+    _CHUNK = 500
     total_rows = len(rows)
+    pacer = WritePacer()
     for i in range(0, total_rows, _CHUNK):
         db.session.execute(Program.__table__.insert(), rows[i:i + _CHUNK])
-        db.session.commit()
+        pacer.wrote()
         if progress_cb:
             progress_cb('db', min(i + _CHUNK, total_rows), total_rows)
+    pacer.finish()
+
+
+# A scrape that ends in ScrapeRetrySoonError asks for an early retry: the
+# scraper worker stores when, and the scheduler (a separate process) enqueues
+# it then. A few tries, further apart each time, then the normal interval.
+_SCRAPE_RETRY_KEY = 'fastchannels:scrape_retry:{}'
+_SCRAPE_RETRY_MINUTES = (5, 10, 15)
+
+
+def _schedule_scrape_retry(source_name: str) -> int | None:
+    """Store the next early retry; its delay in minutes, or None when the
+    tries are used up."""
+    try:
+        r = redis.from_url(flask_app.config['REDIS_URL'])
+        key = _SCRAPE_RETRY_KEY.format(source_name)
+        attempt = int(r.hget(key, 'attempt') or 0)
+        if attempt >= len(_SCRAPE_RETRY_MINUTES):
+            return None
+        minutes = _SCRAPE_RETRY_MINUTES[attempt]
+        r.hset(key, mapping={'attempt': attempt + 1, 'at': time.time() + minutes * 60})
+        r.expire(key, 86400)
+        return minutes
+    except Exception as e:
+        logger.warning('[%s] Could not schedule an early retry: %s', source_name, e)
+        return None
+
+
+def _clear_scrape_retry(source_name: str) -> None:
+    try:
+        redis.from_url(flask_app.config['REDIS_URL']).delete(_SCRAPE_RETRY_KEY.format(source_name))
+    except Exception:
+        pass
+
+
+def _take_scrape_retry(r, source_name: str) -> bool:
+    """True once when a source's early retry is due. The attempt count stays
+    until a scrape succeeds."""
+    key = _SCRAPE_RETRY_KEY.format(source_name)
+    at = r.hget(key, 'at')
+    if at is None or float(at) > time.time():
+        return False
+    return bool(r.hdel(key, 'at'))
 
 
 # In-memory record of when each source was last enqueued, so we don't
@@ -3690,11 +3735,14 @@ def _schedule_due_scrapes():
             candidates = [t for t in (last_scraped, last_queued) if t is not None]
             last = max(candidates) if candidates else None
 
-            if _is_source_due(source, now, last):
+            retry = _take_scrape_retry(r, source.name)
+            if retry or _is_source_due(source, now, last):
                 try:
                     q.enqueue('app.worker.run_scraper', source.name, job_timeout=3600, job_id=f'scrape-{source.name}')
                     _last_enqueued[source.name] = now
-                    if source.scrape_cron:
+                    if retry:
+                        logger.info('[scheduler] Enqueued %s (early retry)', source.name)
+                    elif source.scrape_cron:
                         logger.info('[scheduler] Enqueued %s (cron=%s)', source.name, source.scrape_cron)
                     else:
                         logger.info('[scheduler] Enqueued %s (interval=%dm, age=%s)',
@@ -3715,7 +3763,7 @@ def seed_sources():
         if untested:
             logger.warning('DRM sources not on DRM_BRIDGE_TRUSTED_SOURCES (PrismCast only until tested with '
                            'FastChannels Player): %s', ', '.join(untested))
-        default_disabled_sources = {'amazon_prime_free', 'aenetworks_tve', 'fox_tve', 'discovery_tve', 'amcn_tve', 'fox_one', 'nbc_tve', 'warner_tve', 'cspan', 'sling', 'localnow', 'pluto', 'frndlytv', 'fubo', 'hdhomerun', 'freecast', 'vidaa', 'philo', 'directv', 'pbs', 'tubi', 'spectrum', 'espn', 'nfl', 'cbs_sports', 'free_networks', 'versant_tve', 'zeam', 'vix', 'univision_tve', 'disney_tve', 'tennis_tve', 'dazn_tve', 'cspan_tve', 'sundance_tve', 'cnn_tve', 'nesn_tve', 'paramount'}
+        default_disabled_sources = {'amazon_prime_free', 'amazon_sports', 'aenetworks_tve', 'fox_tve', 'discovery_tve', 'amcn_tve', 'fox_one', 'nbc_tve', 'warner_tve', 'cspan', 'sling', 'localnow', 'pluto', 'frndlytv', 'fubo', 'hdhomerun', 'freecast', 'vidaa', 'philo', 'directv', 'pbs', 'tubi', 'spectrum', 'espn', 'nfl', 'cbs_sports', 'free_networks', 'versant_tve', 'zeam', 'vix', 'univision_tve', 'disney_tve', 'tennis_tve', 'dazn_tve', 'cspan_tve', 'sundance_tve', 'cnn_tve', 'nesn_tve', 'monumental_tve', 'altitude_tve', 'myoutdoortv_tve', 'sportsnet_pittsburgh_tve', 'paramount', 'reelz_tve', 'b1g_plus'}
         # Custom Channels source: always seeded, always enabled, never auto-scraped
         if not Source.query.filter_by(name='custom').first():
             db.session.add(Source(

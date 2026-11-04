@@ -10,7 +10,7 @@ from ..generators.m3u import (
     feed_to_query_filters,
     _selected_channel_stubs,
     _resolve_chnum_map,
-    feed_namespace_start,
+    feed_number_kwargs,
 )
 
 duplicates_bp = Blueprint('api_duplicates', __name__)
@@ -125,10 +125,10 @@ def channel_feed_membership(channel_id):
     result = []
     for feed in feeds:
         filters = feed.filters or {}
-        if (filters.get('event') == '1' and not is_event) or (filters.get('event') == '0' and is_event):
+        pinned   = channel_id in (filters.get('pinned_channel_ids')   or [])
+        if not pinned and ((filters.get('event') == '1' and not is_event) or (filters.get('event') == '0' and is_event)):
             result.append({'feed_id': feed.id, 'status': 'absent', 'feed_channel_number': None})
             continue
-        pinned   = channel_id in (filters.get('pinned_channel_ids')   or [])
         excluded = channel_id in (filters.get('excluded_channel_ids') or [])
         if pinned:
             status = 'pinned'
@@ -144,13 +144,7 @@ def channel_feed_membership(channel_id):
         if status != 'absent':
             q_filters = feed_to_query_filters(filters)
             std_channels = _selected_channel_stubs(q_filters, gracenote=False)
-            namespace_start = None if feed.chnum_start is not None else feed_namespace_start(feed, gracenote=False)
-            chnum_map, _ = _resolve_chnum_map(
-                std_channels,
-                feed_chnum_start=feed.chnum_start,
-                namespace_start=namespace_start,
-                feed_id=feed.id if feed.chnum_start is not None else None,
-            )
+            chnum_map, _ = _resolve_chnum_map(std_channels, **feed_number_kwargs(feed))
             feed_channel_number = chnum_map.get(channel_id)
         result.append({
             'feed_id': feed.id,

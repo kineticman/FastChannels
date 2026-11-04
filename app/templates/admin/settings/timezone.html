@@ -8,6 +8,7 @@
           <div class="source-meta">Control how timestamps display across the admin UI and FastChannels logs</div>
         </div>
       </div>
+      {{ setup_status('timezone_name') }}
     </div>
     <div class="source-body open">
       {% if tz_health and tz_health.level == 'warning' %}
@@ -25,7 +26,11 @@
                    value="{{ timezone_name }}">
             <div class="tz-dropdown" id="tz-dropdown" hidden></div>
           </div>
-          <div class="help">Type an IANA timezone like <code>America/New_York</code> or <code>Europe/London</code> — use a canonical <code>Area/Location</code> name, not a legacy alias like <code>US/Eastern</code> (see the <a href="https://en.wikipedia.org/wiki/List_of_tz_database_time_zones" target="_blank" rel="noopener noreferrer">full list ↗</a>). This controls admin timestamps and FastChannels app log timestamps, and overrides the container <code>TZ</code> for the app.</div>
+          <div class="help">Search for a city or region. Controls timestamps in the admin UI and FastChannels logs.</div>
+          <details class="settings-disclosure">
+            <summary>Time zone format &amp; system defaults</summary>
+            <div class="help">Use an IANA name such as <code>America/New_York</code> or <code>Europe/London</code>, rather than an alias like <code>US/Eastern</code> (<a href="https://en.wikipedia.org/wiki/List_of_tz_database_time_zones" target="_blank" rel="noopener noreferrer">full list ↗</a>). Saving here overrides the container's <code>TZ</code> for the app.</div>
+          </details>
           {% if not timezone_name_from_db %}
           <div class="help">Currently using the system timezone because no explicit timezone has been saved yet.</div>
           {% endif %}

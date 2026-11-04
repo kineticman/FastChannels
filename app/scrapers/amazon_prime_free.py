@@ -18,6 +18,10 @@ from ..gracenote_map import resolve_gracenote
 
 logger = logging.getLogger(__name__)
 
+# Sources played through the Amazon DASH manifest proxy and Widevine license
+# proxy (/play/<source>/<id>/dash.mpd, /play/<source>/license).
+AMAZON_DRM_SOURCES = frozenset({'amazon_prime_free', 'amazon_sports'})
+
 
 class AmazonPrimeFreeScraper(BaseScraper):
     """
@@ -33,6 +37,7 @@ class AmazonPrimeFreeScraper(BaseScraper):
     """
 
     source_name = "amazon_prime_free"
+    advanced = True
     source_aliases = ("amazon-prime-free",)
     display_name = "Amazon Prime Free Channels"
     scrape_interval = 100  # minutes — keep well under the 2-hour DASH URL TTL
@@ -150,9 +155,6 @@ class AmazonPrimeFreeScraper(BaseScraper):
     _STREAM_URL_TTL = 5400   # 1.5 hours — well under Amazon's 2-hour TTL
     _MAX_VIDEO_RESOLUTION = '480p'
     _NATIVE_MAX_VIDEO_RESOLUTION = '1080p'
-    # A channel without a current free playback envelope cannot obtain a
-    # license, so do not leave it visible through the default three misses.
-    channel_miss_threshold = 1
     _PRS_WORKERS = 20        # parallel HTTP workers for bulk resolution
     _PRS_TIMEOUT = 10        # per-request timeout (seconds)
 
@@ -460,6 +462,11 @@ class AmazonPrimeFreeScraper(BaseScraper):
     def fetch_channels(self) -> list[ChannelData]:
         self._station_cache = {}
         self._harvested_channel_pe_ids = set()
+        # A channel without a current free playback envelope cannot obtain a
+        # license, so report it as excluded (deactivated on this scrape) rather
+        # than missing. Channels absent from the listing keep the default
+        # three-miss grace: a short pagination run once dropped 210 at once.
+        self.excluded_channel_ids = set()
 
         page = self.get(self.LIVE_TV_URL)
         if not page:
@@ -486,6 +493,7 @@ class AmazonPrimeFreeScraper(BaseScraper):
             if station_id not in self._harvested_channel_pe_ids:
                 label = (station.get("name") or station_id).strip()
                 skipped_no_free_pe.append(_html.unescape(label))
+                self.excluded_channel_ids.add(station_id)
                 continue
             channel = self._channel_from_station(station_id, station)
             if channel:

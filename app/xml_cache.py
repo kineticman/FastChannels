@@ -39,6 +39,10 @@ def _used_path(cache_key: str) -> Path:
     return _cache_path(cache_key, ext='used')
 
 
+def _requested_path(cache_key: str) -> Path:
+    return _cache_path(cache_key, ext='requested')
+
+
 def _xml_tmp_glob(cache_key: str) -> list[Path]:
     """Return all orphaned temp files for this cache key."""
     path = _cache_path(cache_key, ext='xml')
@@ -163,6 +167,7 @@ def delete_xml_artifact(cache_key: str) -> int:
         _xml_stale_path(cache_key),
         _xml_lock_path(cache_key),
         _used_path(cache_key),
+        _requested_path(cache_key),
     ):
         if path.exists():
             path.unlink(missing_ok=True)
@@ -195,6 +200,10 @@ def sweep_unused_artifacts(live_keys: set[str], *, min_age_seconds: int = 600,
     removed = freed = 0
     for path in _CACHE_ROOT.iterdir():
         name = path.name
+        # A native request marker records real client use, independently of the
+        # auto-seeded .used marker. Keep the history while the feed exists.
+        if name.endswith('.requested'):
+            continue
         if not name.startswith(('master', 'feed-')) or name in live_names:
             continue
         try:
@@ -225,6 +234,14 @@ def note_artifact_request(cache_key: str) -> bool:
     _ensure_cache_dir()
     marker = _used_path(cache_key)
     now = time.time()
+    if cache_key.endswith(('-native', '-native-m3u')):
+        requested = _requested_path(cache_key)
+        try:
+            last_request = requested.stat().st_mtime
+        except OSError:
+            last_request = 0
+        if now - last_request > 60:
+            _touch(requested)
     try:
         age = now - marker.stat().st_mtime
     except FileNotFoundError:
@@ -241,6 +258,29 @@ def note_artifact_request(cache_key: str) -> bool:
         except OSError:
             pass
     return age > ARTIFACT_IDLE_SECONDS
+
+
+def native_output_activity(active_slugs=None) -> dict:
+    """Real last native request and the current seven-day XML refresh window."""
+    if not _CACHE_ROOT.is_dir():
+        return {'last_requested_at': None, 'auto_refresh_until': None}
+    def mtimes(paths):
+        for path in paths:
+            try:
+                yield path.stat().st_mtime
+            except OSError:
+                continue
+
+    requested = list(mtimes(_CACHE_ROOT.glob('feed-*-native*.requested')))
+    if active_slugs is None:
+        used_paths = _CACHE_ROOT.glob('feed-*-native.used')
+    else:
+        used_paths = (_used_path(f'feed-{slug}-native') for slug in active_slugs)
+    used = list(mtimes(used_paths))
+    return {
+        'last_requested_at': max(requested) if requested else None,
+        'auto_refresh_until': max(used) + ARTIFACT_IDLE_SECONDS if used else None,
+    }
 
 
 def artifact_in_use(cache_key: str, *, now: float | None = None) -> bool:

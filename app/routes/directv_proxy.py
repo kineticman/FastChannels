@@ -330,14 +330,14 @@ def directv_browser_manifest(channel_id: str):
         # — the CDM gets a license for the wrong content ID and never decrypts.
         if scraper._pending_config_updates:
             try:
-                persist_source_config_updates(channel.source_id, scraper._pending_config_updates)
+                persist_source_config_updates(channel.source_id, scraper._pending_config_updates, wait=False)
             except Exception as ce:
                 from ..extensions import db
                 db.session.rollback()
                 logger.warning('[directv-browser] failed to persist config updates: %s', ce)
         if getattr(scraper, '_pending_cache_updates', None):
             try:
-                persist_source_cache_updates(channel.source_id, scraper._pending_cache_updates)
+                persist_source_cache_updates(channel.source_id, scraper._pending_cache_updates, wait=False)
             except Exception as ce:
                 from ..extensions import db
                 db.session.rollback()

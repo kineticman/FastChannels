@@ -504,15 +504,25 @@ class PlexScraper(BaseScraper):
         except Exception as exc:
             logger.warning("[plex] watch.plex.tv cookie seed failed: %s", exc)
         t0 = time.monotonic()
-        r = self.session.get(
-            f"https://watch.plex.tv/live-tv?_rsc={_rand_rsc()}",
-            headers={
-                "Accept":    "*/*",
-                "RSC":       "1",
-                "Next-Url":  "/en",
-            },
-            timeout=30,
-        )
+        # Only luma gap-fill uses this, so a timeout here must not sink the
+        # programs the targeted guide fetch already collected.
+        try:
+            r = self.session.get(
+                f"https://watch.plex.tv/live-tv?_rsc={_rand_rsc()}",
+                headers={
+                    "Accept":    "*/*",
+                    "RSC":       "1",
+                    "Next-Url":  "/en",
+                },
+                timeout=30,
+            )
+        except requests.RequestException as exc:
+            logger.warning(
+                "[plex] live-tv RSC fetch failed after %.1fs (%s) — skipping luma gap-fill",
+                time.monotonic() - t0,
+                exc,
+            )
+            return ""
         if r.status_code != 200:
             logger.error("[plex] live-tv RSC returned %d", r.status_code)
             return ""

@@ -7,6 +7,37 @@ from .extensions import db
 
 logger = logging.getLogger(__name__)
 
+
+def prepare_restored_database(path: str) -> None:
+    """Validate and migrate an isolated backup before replacing the live file."""
+    import sqlite3
+    from contextlib import closing
+    from flask import Flask, current_app
+
+    with closing(sqlite3.connect(path)) as conn:
+        tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        if not {'sources', 'channels', 'app_settings'}.issubset(tables):
+            raise ValueError('Backup is missing FastChannels tables.')
+        if conn.execute('PRAGMA quick_check').fetchone()[0] != 'ok':
+            raise ValueError('Backup failed the SQLite integrity check.')
+
+    restore_app = Flask('fastchannels_restore')
+    restore_app.config.update(current_app.config)
+    restore_app.config['SQLALCHEMY_DATABASE_URI'] = f'sqlite:///{path}'
+    db.init_app(restore_app)
+    with restore_app.app_context():
+        try:
+            # A backup is always an existing install. Older backups without
+            # lite_mode receive the upgrade default, regardless of FC_SCHEMA_READY.
+            ensure_runtime_schema(fresh_install=False)
+        finally:
+            db.session.remove()
+            db.engine.dispose()
+    # Include any WAL commits in the file that will be moved into place.
+    with closing(sqlite3.connect(path)) as conn:
+        if conn.execute('PRAGMA wal_checkpoint(TRUNCATE)').fetchone()[0] != 0:
+            raise RuntimeError('Could not checkpoint the restored database.')
+
 _DEFAULT_FEEDS = (
     {
         "slug": "default",
@@ -75,6 +106,13 @@ def _merge_source_name(conn, old_name: str, new_name: str) -> None:
                         "old_channel_id": old_channel_id,
                     },
                 )
+                if conn.execute(text(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='channel_numbers'"
+                )).fetchone():
+                    conn.execute(
+                        text("DELETE FROM channel_numbers WHERE channel_id = :channel_id"),
+                        {"channel_id": old_channel_id},
+                    )
                 conn.execute(
                     text("DELETE FROM channels WHERE id = :channel_id"),
                     {"channel_id": old_channel_id},
@@ -134,7 +172,7 @@ def _mark_migration_done(conn, flag: str) -> None:
         )
 
 
-def ensure_runtime_schema() -> None:
+def ensure_runtime_schema(*, fresh_install: bool | None = None) -> None:
     # NOTE: the "Migration NNN" labels used in comments/flags below (migration_011_done,
     # migration_012_done, migration_025_done, ...) are this function's own numbering and
     # are unrelated to migrations/NNN_*.py — the numbers don't correspond to each other
@@ -148,6 +186,8 @@ def ensure_runtime_schema() -> None:
             row[0]
             for row in conn.execute(text("SELECT name FROM sqlite_master WHERE type='table'"))
         }
+        if fresh_install is None:
+            fresh_install = "app_settings" not in tables
         if "app_settings" not in tables or "feeds" not in tables:
             db.create_all()
             tables = {
@@ -165,6 +205,33 @@ def ensure_runtime_schema() -> None:
             conn.execute(text(
                 "ALTER TABLE feeds ADD COLUMN guide_mode VARCHAR(16) NOT NULL DEFAULT 'split'"
             ))
+
+        # channel_numbers: the one store of channel numbers (app/chnum.py). No
+        # foreign key on scope_id: 0, -1 and -2 are the master scopes, the rest
+        # feed ids. Created here and not only by db.create_all() so the unique
+        # index exists on every install. The app_settings columns hold the
+        # master starts and whether the one-time seed below has run.
+        conn.execute(text(
+            "CREATE TABLE IF NOT EXISTS channel_numbers ("
+            " scope_id INTEGER NOT NULL,"
+            " channel_id INTEGER NOT NULL REFERENCES channels(id) ON DELETE CASCADE,"
+            " number INTEGER NOT NULL,"
+            " released_at DATETIME,"
+            " PRIMARY KEY (scope_id, channel_id),"
+            " CONSTRAINT uq_channel_numbers_scope_number UNIQUE (scope_id, number)"
+            ")"
+        ))
+        conn.execute(text(
+            "CREATE INDEX IF NOT EXISTS ix_channel_numbers_channel_id ON channel_numbers (channel_id)"
+        ))
+        tables.add("channel_numbers")
+        if "app_settings" in tables:
+            as_cols = {row[1] for row in conn.execute(text("PRAGMA table_info(app_settings)"))}
+            for col, ddl in (("master_chnum_start", "INTEGER"),
+                             ("master_gracenote_chnum_start", "INTEGER"),
+                             ("chnum_seeded_at", "DATETIME")):
+                if col not in as_cols:
+                    conn.execute(text(f"ALTER TABLE app_settings ADD COLUMN {col} {ddl}"))
 
         # source_cache: key/value home for large regenerable scraper caches that
         # used to bloat Source.config (see models.SourceCache). Fresh installs get
@@ -273,6 +340,11 @@ def ensure_runtime_schema() -> None:
                 conn.execute(text(
                     "ALTER TABLE app_settings ADD COLUMN dvr_epg_auto_refresh BOOLEAN NOT NULL DEFAULT 1"
                 ))
+            if "native_output_enabled" not in cols:
+                # Keep existing native URLs working until the user opts out.
+                conn.execute(text(
+                    "ALTER TABLE app_settings ADD COLUMN native_output_enabled BOOLEAN NOT NULL DEFAULT 1"
+                ))
             if "image_proxy_enabled" not in cols:
                 conn.execute(text(
                     "ALTER TABLE app_settings ADD COLUMN image_proxy_enabled BOOLEAN NOT NULL DEFAULT 1"
@@ -373,7 +445,11 @@ def ensure_runtime_schema() -> None:
                 conn.execute(text("ALTER TABLE app_settings ADD COLUMN admin_username TEXT"))
             if "admin_password_hash" not in cols:
                 conn.execute(text("ALTER TABLE app_settings ADD COLUMN admin_password_hash TEXT"))
+            if "lite_mode" not in cols:
+                conn.execute(text("ALTER TABLE app_settings ADD COLUMN lite_mode BOOLEAN NOT NULL DEFAULT 0"))
             _ensure_app_settings_row(conn)
+            if fresh_install:
+                conn.execute(text("UPDATE app_settings SET lite_mode = 1 WHERE id = 1"))
 
         if "sources" in tables:
             src_cols = {
@@ -540,6 +616,11 @@ def ensure_runtime_schema() -> None:
                 conn.execute(text("ALTER TABLE channels ADD COLUMN retire_at DATETIME"))
             if "delete_at" not in ch_cols:
                 conn.execute(text("ALTER TABLE channels ADD COLUMN delete_at DATETIME"))
+            # Event sport/league; existing event channels fill in on their next scrape.
+            if "sport" not in ch_cols:
+                conn.execute(text("ALTER TABLE channels ADD COLUMN sport VARCHAR(64)"))
+            if "league" not in ch_cols:
+                conn.execute(text("ALTER TABLE channels ADD COLUMN league VARCHAR(128)"))
             if "returned_at" not in ch_cols:
                 conn.execute(text(
                     "ALTER TABLE channels ADD COLUMN returned_at DATETIME"
@@ -870,6 +951,9 @@ def ensure_runtime_schema() -> None:
                                 "DELETE FROM feed_channel_numbers WHERE channel_id = :l"
                             ), {"l": _loser})
                             conn.execute(text(
+                                "DELETE FROM channel_numbers WHERE channel_id = :l"
+                            ), {"l": _loser})
+                            conn.execute(text(
                                 "DELETE FROM channels WHERE id = :l"
                             ), {"l": _loser})
                             _deduped += 1
@@ -934,7 +1018,7 @@ def ensure_runtime_schema() -> None:
                 "AND (c.name = 'Spectrum' OR c.name GLOB 'Spectrum[0-9]*')"
             )).fetchall()]
             if promo_ids:
-                for table in ("programs", "feed_channel_numbers"):
+                for table in ("programs", "feed_channel_numbers", "channel_numbers"):
                     if table in tables:
                         conn.execute(text(
                             f"DELETE FROM {table} WHERE channel_id IN ({','.join(map(str, promo_ids))})"
@@ -1039,3 +1123,8 @@ def ensure_runtime_schema() -> None:
                 " AND source_id IN (SELECT id FROM sources WHERE scrape_interval = 0)"
             )
         )
+
+    # Channel numbers move to channel_numbers once, seeded from what the
+    # previous numbering serves. ORM use is safe here: every column above exists.
+    from .chnum import seed_channel_numbers
+    seed_channel_numbers()

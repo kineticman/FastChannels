@@ -12,6 +12,7 @@ from ..extensions import db
 from ..models import Channel, Program, AppSettings, Feed
 from ..scrapers import registry
 from ..scrapers.playlist import is_playlist_source
+from ..scrapers.amazon_prime_free import AMAZON_DRM_SOURCES
 from ..scrapers.base import EVENT_CHANNEL_TAG, StreamDeadError
 from ..channel_tags import is_event_channel
 from ..hls import (
@@ -33,8 +34,7 @@ from ..generators.m3u import (
     _parse_gracenote_id,
     _selected_channel_stubs,
     _resolve_chnum_map,
-    feed_gracenote_start,
-    feed_namespace_start,
+    feed_number_kwargs,
 )
 
 playback_bp = Blueprint('api_playback', __name__)
@@ -49,11 +49,11 @@ def _channel_feed_summaries(ch: Channel) -> list[dict]:
 
     for feed in feeds:
         filters = feed.filters or {}
-        if filters.get('event') == '1' and not is_event_channel(ch):
-            continue
-        if filters.get('event') == '0' and is_event_channel(ch):
-            continue
         pinned = channel_id in (filters.get('pinned_channel_ids') or [])
+        if not pinned and filters.get('event') == '1' and not is_event_channel(ch):
+            continue
+        if not pinned and filters.get('event') == '0' and is_event_channel(ch):
+            continue
         excluded = channel_id in (filters.get('excluded_channel_ids') or [])
         if excluded and not pinned:
             continue
@@ -73,24 +73,7 @@ def _channel_feed_summaries(ch: Channel) -> list[dict]:
             status = 'filtered'
 
         selected = _selected_channel_stubs(q_filters, gracenote=gracenote_output)
-        if feed.chnum_start is not None:
-            chnum_map, _ = _resolve_chnum_map(
-                selected,
-                feed_chnum_start=feed.chnum_start,
-                feed_id=feed.id,
-            )
-        elif feed.slug == 'default' and gracenote_output:
-            chnum_map, _ = _resolve_chnum_map(
-                selected,
-                namespace_start=feed_gracenote_start(feed),
-            )
-        elif feed.slug == 'default':
-            chnum_map, _ = _resolve_chnum_map(selected)
-        else:
-            chnum_map, _ = _resolve_chnum_map(
-                selected,
-                namespace_start=feed_namespace_start(feed, gracenote=gracenote_output),
-            )
+        chnum_map, _ = _resolve_chnum_map(selected, **feed_number_kwargs(feed))
 
         result.append({
             'feed_id': feed.id,
@@ -201,12 +184,12 @@ def _inspect_drm_bridge(ch, source, scraper_cls):
     finally:
         if scraper._pending_config_updates:
             try:
-                persist_source_config_updates(source.id, scraper._pending_config_updates)
+                persist_source_config_updates(source.id, scraper._pending_config_updates, wait=False)
             except Exception:
                 db.session.rollback()
         if getattr(scraper, '_pending_cache_updates', None):
             try:
-                persist_source_cache_updates(source.id, scraper._pending_cache_updates)
+                persist_source_cache_updates(source.id, scraper._pending_cache_updates, wait=False)
             except Exception:
                 db.session.rollback()
 
@@ -299,7 +282,7 @@ def inspect_channel(channel_id):
     _scraper_cls = registry.get(source.name)
     if getattr(ch, 'requires_drm_bridge', False) and _scraper_cls:
         _bridge_stream_type = (getattr(ch, 'stream_type', '') or '').strip().lower()
-        if _bridge_stream_type == 'dash' or source.name in {'amazon_prime_free', 'philo', 'roku'}:
+        if _bridge_stream_type == 'dash' or source.name in {*AMAZON_DRM_SOURCES, 'philo', 'roku'}:
             return _inspect_drm_bridge(ch, source, _scraper_cls)
 
     # Resolve the stream URL directly — avoids a self-referential HTTP request to the
@@ -319,6 +302,7 @@ def inspect_channel(channel_id):
                     persist_source_config_updates(
                         source.id,
                         scraper._pending_config_updates,
+                        wait=False,
                     )
                 except Exception:
                     db.session.rollback()
@@ -327,6 +311,7 @@ def inspect_channel(channel_id):
                     persist_source_cache_updates(
                         source.id,
                         scraper._pending_cache_updates,
+                        wait=False,
                     )
                 except Exception:
                     db.session.rollback()
@@ -696,10 +681,11 @@ def _get_playback_info(ch, fast_mode=True, browser=False):
     # our server-side manifest proxy which strips that restriction.
     if (
         not preview_url
-        or (ch.source and ch.source.name == 'amazon_prime_free')
+        or (ch.source and ch.source.name in AMAZON_DRM_SOURCES)
     ) and ch.source_channel_id:
         from urllib.parse import quote as _quote
-        preview_url = f'/play/amazon_prime_free/{_quote(ch.source_channel_id, safe="")}/dash.mpd'
+        _amazon_source = ch.source.name if ch.source and ch.source.name in AMAZON_DRM_SOURCES else 'amazon_prime_free'
+        preview_url = f'/play/{_amazon_source}/{_quote(ch.source_channel_id, safe="")}/dash.mpd'
 
     # Roku DRM → the DASH+Widevine variant. Set last so no earlier proxy special-case
     # (which all target other sources) clobbers it. Roku's MPD CDN is CORS-open and
@@ -728,9 +714,14 @@ def _get_playback_info(ch, fast_mode=True, browser=False):
     if ch.source and ch.source.name == 'versant_tve' and ch.source_channel_id:
         from urllib.parse import quote as _quote
         preview_url = f'/play/versant_tve/{_quote(ch.source_channel_id, safe="")}/dash.mpd'
-    if ch.source and ch.source.name == 'nesn_tve' and ch.source_channel_id:
+    from ..scrapers.viewlift_tve import VIEWLIFT_SOURCES
+    if ch.source and ch.source.name in VIEWLIFT_SOURCES and ch.source_channel_id:
         from urllib.parse import quote as _quote
-        preview_url = f'/play/nesn_tve/{_quote(ch.source_channel_id, safe="")}/dash.mpd'
+        preview_url = f'/play/{ch.source.name}/{_quote(ch.source_channel_id, safe="")}/dash.mpd'
+    if (ch.source and ch.source.name == 'sportsnet_pittsburgh_tve' and ch.source_channel_id
+            and (ch.stream_type or '').lower() == 'dash'):
+        from urllib.parse import quote as _quote
+        preview_url = f'/play/sportsnet_pittsburgh_tve/{_quote(ch.source_channel_id, safe="")}/dash.mpd'
     if ch.source and ch.source.name == 'vix' and ch.source_channel_id:
         from urllib.parse import quote as _quote
         # A browser can't fetch ViX's segments (CORS is vix.com-only), so the

@@ -8,7 +8,7 @@ _APP_START = _time.time()
 from flask import Blueprint, jsonify, request
 from ..extensions import db
 from ..models import Source, Channel, Program
-from ..channel_tags import event_filter_clause
+from ..channel_tags import event_filter_clause, event_sport_clause
 try:
     from croniter import croniter as _croniter
 except ImportError:
@@ -173,7 +173,10 @@ def _process_stats() -> dict:
         if not fields or fields.get('rss_bytes') is None:
             continue
 
-        if 'gunicorn' in cmdline and 'app:create_app()' in cmdline and fields.get('ppid') == master_pid:
+        # Web workers are the gunicorn master's children (this request runs in one,
+        # so getppid() is the master). Don't match the app spec: it changed from
+        # app:create_app() to wsgi:app once and silently zeroed this count.
+        if 'gunicorn' in cmdline and fields.get('ppid') == master_pid:
             web_worker_rss.append(fields['rss_bytes'])
         elif 'python -m app.worker' in cmdline:
             bg_worker_rss.append(fields['rss_bytes'])
@@ -235,12 +238,19 @@ def stats():
     )
     if sources := request.args.getlist('source'):
         q = q.filter(Source.name.in_(sources))
+    if excluded_sources := request.args.getlist('exclude_source'):
+        q = q.filter(Source.name.notin_(excluded_sources))
     if categories := request.args.getlist('category'):
         q = q.filter(Channel.category.in_(categories))
+    if excluded_categories := request.args.getlist('exclude_category'):
+        q = q.filter(db.or_(Channel.category == None,
+                            Channel.category.notin_(excluded_categories)))
     if languages := request.args.getlist('language'):
         q = q.filter(Channel.language.in_(languages))
     if countries := request.args.getlist('country'):
         q = q.filter(Channel.country.in_(countries))
+    if (sport_clause := event_sport_clause(request.args.getlist('sport'))) is not None:
+        q = q.filter(sport_clause)
     if gracenote := request.args.get('gracenote'):
         if gracenote == 'has':
             q = q.filter(Channel.gracenote_id != None, Channel.gracenote_id != '')
@@ -258,6 +268,65 @@ def stats():
     })
 
 
+_disk_stats_cache: dict = {}
+
+
+def _du_bytes(path: str, one_filesystem: bool = False) -> int | None:
+    """Apparent size of a tree via du (~1s for the whole container), or None."""
+    import subprocess
+    if not _os.path.exists(path):
+        return None
+    cmd = ['du', '-sb'] + (['-x'] if one_filesystem else []) + [path]
+    try:
+        out = subprocess.run(cmd, capture_output=True, text=True, timeout=60).stdout
+        return int(out.split()[0])
+    except (OSError, ValueError, IndexError, subprocess.SubprocessError):
+        return None
+
+
+def _container_uptime_seconds() -> int:
+    """Seconds since PID 1 (the container's gunicorn master) started. _APP_START is
+    per web worker, and workers are recycled every 250 requests."""
+    try:
+        clk_tck = _os.sysconf(_os.sysconf_names['SC_CLK_TCK'])
+        with open('/proc/uptime', 'r', encoding='utf-8') as fp:
+            host_uptime = float(fp.read().split()[0])
+        with open('/proc/1/stat', 'r', encoding='utf-8') as fp:
+            # comm (field 2) may contain spaces; fields after ')' start at state (3).
+            after_comm = fp.read().rsplit(')', 1)[1].split()
+        started = int(after_comm[19]) / clk_tck   # field 22: starttime
+        return max(0, int(host_uptime - started))
+    except (OSError, ValueError, IndexError, KeyError):
+        return int(_time.time() - _APP_START)
+
+
+def _disk_stats() -> dict:
+    """Container filesystem vs the /data volume. Cached 10 min: the image doesn't
+    change while running and du walks ~100k files."""
+    now = _time.time()
+    if _disk_stats_cache.get('expires', 0) > now:
+        return _disk_stats_cache['data']
+    import shutil
+    import sysconfig
+    data = {
+        # -x keeps du on the container's own (overlay) filesystem, so /data and
+        # any other mounts are left out: image files plus the writable layer.
+        'container_bytes': _du_bytes('/', one_filesystem=True),
+        'camoufox_bytes':  _du_bytes('/root/.cache/camoufox'),
+        'chromium_bytes':  _du_bytes('/root/.cache/ms-playwright'),
+        'python_bytes':    _du_bytes(sysconfig.get_paths()['purelib']),
+        'data_bytes':      _du_bytes('/data'),
+    }
+    try:
+        usage = shutil.disk_usage('/data')
+        data['data_disk_free_bytes'] = usage.free
+        data['data_disk_total_bytes'] = usage.total
+    except OSError:
+        pass
+    _disk_stats_cache.update(data=data, expires=now + 600)
+    return data
+
+
 @system_bp.route('/system-stats')
 def system_stats():
     # ── Database ──────────────────────────────────────────────────────────
@@ -271,6 +340,7 @@ def system_stats():
     channels_total   = Channel.query.count()
     channels_active  = Channel.query.filter_by(is_active=True, is_enabled=True).count()
     channels_drm     = Channel.query.filter(Channel.disable_reason.like('DRM%')).count()
+    channels_bridge  = Channel.query.filter(Channel.requires_drm_bridge.is_(True)).count()
     channels_dead    = Channel.query.filter_by(disable_reason='Dead').count()
     channels_vod     = Channel.query.filter_by(disable_reason='VOD').count()
     sources_enabled  = Source.query.filter_by(is_enabled=True).count()
@@ -289,15 +359,18 @@ def system_stats():
     poster_count, poster_bytes = _dir_stats('/data/logo_cache/posters')
 
     # ── Uptime ────────────────────────────────────────────────────────────
-    uptime_seconds = int(_time.time() - _APP_START)
+    uptime_seconds = _container_uptime_seconds()
 
+    from ..lite import ui_context
     return jsonify({
         'uptime_seconds': uptime_seconds,
+        'show_drm': ui_context()['show_drm'],
         'db': {
             'size_bytes':       db_size,
             'channels_total':   channels_total,
             'channels_active':  channels_active,
             'channels_drm':     channels_drm,
+            'channels_bridge_only': channels_bridge,
             'channels_dead':    channels_dead,
             'channels_vod':     channels_vod,
             'sources_enabled':  sources_enabled,
@@ -313,6 +386,7 @@ def system_stats():
             'poster_ttl_days': 4,
         },
         'processes': _process_stats(),
+        'disk': _disk_stats(),
         'cpu': _cpu_stats(),
         'memory': _memory_stats(),
     })

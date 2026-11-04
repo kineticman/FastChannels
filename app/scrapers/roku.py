@@ -1354,6 +1354,17 @@ class RokuScraper(BaseScraper):
                 "keeping previous EPG data"
             )
 
+        # First-fill backlog for the Sources page ("Guide still filling"):
+        # stations with no guide yet that this run's cap left for later runs.
+        # Zero once the backlog fits in one run, so a station Roku never has a
+        # schedule for doesn't keep the note up forever.
+        waiting = sum(1 for sid in urgent if sid not in targets)
+        self._update_cache("epg_fill", {
+            "waiting": waiting,
+            "total": len(eligible),
+            "per_run": _EPG_MAX_REQUESTS_PER_RUN,
+        })
+
         missing_channels = [
             ch for ch in channels
             if ch.source_channel_id not in disabled_skip

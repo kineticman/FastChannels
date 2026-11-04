@@ -294,6 +294,18 @@ def _stream_debug_path(stream_url: str) -> str:
     return f'{parsed.path or "/"}{query}'
 
 
+@settings_bp.route('/settings/lite-mode', methods=['POST'])
+def set_lite_mode():
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict) or type(data.get('enabled')) is not bool:
+        return jsonify({'error': 'enabled must be a boolean.'}), 400
+    row = AppSettings.get()
+    row.lite_mode = data['enabled']
+    db.session.commit()
+    # Deliberately no output invalidation, reconciliation, or rescheduling.
+    return jsonify({'lite_mode': row.lite_mode})
+
+
 @settings_bp.route('/settings', methods=['GET', 'POST'])
 def app_settings():
     row = AppSettings.get()
@@ -345,6 +357,8 @@ def app_settings():
             row.gracenote_auto_fill = bool(data['gracenote_auto_fill'])
         if 'dvr_epg_auto_refresh' in data:
             row.dvr_epg_auto_refresh = bool(data['dvr_epg_auto_refresh'])
+        if 'native_output_enabled' in data:
+            row.native_output_enabled = bool(data['native_output_enabled'])
         if 'image_proxy_enabled' in data:
             row.image_proxy_enabled = bool(data['image_proxy_enabled'])
         if 'event_guide_filler' in data:
@@ -415,6 +429,7 @@ def app_settings():
         'auto_allow_new_channels': row.auto_allow_new_channels if row.auto_allow_new_channels is not None else True,
         'gracenote_auto_fill': row.gracenote_auto_fill if row.gracenote_auto_fill is not None else True,
         'dvr_epg_auto_refresh': row.dvr_epg_auto_refresh if row.dvr_epg_auto_refresh is not None else True,
+        'native_output_enabled': bool(row.native_output_enabled),
         'image_proxy_enabled': row.image_proxy_enabled if row.image_proxy_enabled is not None else True,
         'event_guide_filler': row.event_guide_filler if row.event_guide_filler is not None else True,
         'm3u_rewrite_timestamps': bool(row.m3u_rewrite_timestamps),
@@ -535,11 +550,12 @@ def bridge_live_test():
         info = _get_playback_info(channel, fast_mode=False)
         manifest_url = info.get('preview_url') or info.get('play_url') or ''
         license_url = info.get('license_url') or None
-        if channel.source.name == 'amazon_prime_free':
+        from ..scrapers.amazon_prime_free import AMAZON_DRM_SOURCES
+        if channel.source.name in AMAZON_DRM_SOURCES:
             from urllib.parse import quote as _quote
             encoded_id = _quote(channel.source_channel_id, safe='')
-            manifest_url = f'/play/amazon_prime_free/{encoded_id}/dash.mpd?hd=1'
-            license_url = (f'{request.host_url.rstrip("/")}/play/amazon_prime_free/license'
+            manifest_url = f'/play/{channel.source.name}/{encoded_id}/dash.mpd?hd=1'
+            license_url = (f'{request.host_url.rstrip("/")}/play/{channel.source.name}/license'
                            f'?channel_id={encoded_id}&hd=1')
         if manifest_url.startswith('/'):
             manifest_url = urljoin(request.host_url, manifest_url.lstrip('/'))
@@ -1264,16 +1280,27 @@ def _write_db_and_reload(data: bytes):
     and on-disk-backup-restore endpoints.
     """
     import signal as _signal
+    import tempfile
+    from ..schema import prepare_restored_database
 
     SQLITE_MAGIC = b'SQLite format 3\x00'
     if not data.startswith(SQLITE_MAGIC):
         return False, 'File does not appear to be a valid SQLite database.'
 
     db_path  = '/data/fastchannels.db'
-    tmp_path = '/data/fastchannels_restore_tmp.db'
+    tmp = tempfile.NamedTemporaryFile(prefix='fastchannels_restore_', suffix='.db', dir='/data', delete=False)
+    tmp_path = tmp.name
+    tmp.close()
     try:
+        # NamedTemporaryFile creates 0600, and os.replace keeps it: carry the live
+        # file's mode over so host-side readers of /data keep access after a restore.
+        try:
+            _os.chmod(tmp_path, _os.stat(db_path).st_mode & 0o7777)
+        except OSError:
+            _os.chmod(tmp_path, 0o644)
         with open(tmp_path, 'wb') as fp:
             fp.write(data)
+        prepare_restored_database(tmp_path)
         # Atomically replace the live DB first, then remove stale WAL/SHM so new
         # connections get a clean WAL rather than replaying the old one.
         _os.replace(tmp_path, db_path)
@@ -1285,11 +1312,13 @@ def _write_db_and_reload(data: bytes):
                 except OSError:
                     pass
     except Exception as exc:
-        try:
-            _os.unlink(tmp_path)
-        except OSError:
-            pass
-        return False, f'Failed to write database: {exc}'
+        return False, f'Failed to restore database: {exc}'
+    finally:
+        for path in (tmp_path, tmp_path + '-wal', tmp_path + '-shm'):
+            try:
+                _os.unlink(path)
+            except OSError:
+                pass
 
     # Gracefully reload gunicorn workers so they open fresh connections to the new DB
     try:

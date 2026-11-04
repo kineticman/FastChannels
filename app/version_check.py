@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import re
+import tempfile
 import threading
 import time
 from pathlib import Path
@@ -48,9 +49,18 @@ def _read_cache() -> dict | None:
 def _write_cache(payload: dict) -> None:
     try:
         _ensure_parent()
-        tmp = Path(str(_CACHE_PATH) + '.tmp')
-        tmp.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding='utf-8')
-        tmp.replace(_CACHE_PATH)
+        content = json.dumps(payload, indent=2, sort_keys=True)
+        # Gunicorn processes refresh independently. Each writer needs its own
+        # file, on the same filesystem so replacing the cache stays atomic.
+        fd, tmp_str = tempfile.mkstemp(
+            dir=_CACHE_PATH.parent, prefix=_CACHE_PATH.name + '.', suffix='.tmp')
+        tmp = Path(tmp_str)
+        try:
+            with os.fdopen(fd, 'w', encoding='utf-8') as fp:
+                fp.write(content)
+            tmp.replace(_CACHE_PATH)
+        finally:
+            tmp.unlink(missing_ok=True)
     except Exception:
         log.exception('[version-check] failed writing cache')
 

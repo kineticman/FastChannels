@@ -88,7 +88,7 @@ def _persist(channel: Channel, scraper) -> None:
                           ('_pending_cache_updates', persist_source_cache_updates)):
         if getattr(scraper, attr, None):
             try:
-                persist(channel.source_id, getattr(scraper, attr))
+                persist(channel.source_id, getattr(scraper, attr), wait=False)
             except Exception as exc:  # noqa: BLE001
                 from ..extensions import db
                 db.session.rollback()

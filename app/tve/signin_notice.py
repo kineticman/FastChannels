@@ -65,11 +65,14 @@ def pending_signins() -> list[dict]:
     # No shared account is still worth a look when a source signs in on its own.
     if not account and not any_separate_signin():
         return []
+    # A source turned off in Sources plays nothing, so its lapsed sign-in
+    # isn't worth a banner; turning it back on brings the notice back.
+    enabled = {name for (name,) in Source.query.with_entities(Source.name).filter_by(is_enabled=True)}
     out = [
         {'label': n['label'], 'message': n.get('last_error_message'), 'at': n.get('last_error_at'),
          # A separate login is signed in from its source's card.
          'href': '/admin/sources' if n.get('separate_provider') else '/admin/settings#settings-card-tve'}
-        for n in tve_network_status(account) if n.get('needs_signin')
+        for n in tve_network_status(account) if n.get('needs_signin') and n.get('source') in enabled
     ]
     errors = ((account.config or {}) if account else {}).get('tve_last_error') or {}
     # Premium sources with their own sign-in: superseded by their own latest one.

@@ -326,7 +326,7 @@
       }
       if (d.with_gracenote) facts.push(`${d.with_gracenote} carry a Gracenote station ID and can use Gracenote guide data.`);
       if (d.with_headers) facts.push(`<span class="pl-warn">${d.with_headers} declare request headers (User-Agent/Referer). Those are not sent yet, so these streams may not play.</span>`);
-      if (d.with_drm) facts.push(`<span class="pl-warn">${d.with_drm} declare a DRM license. DRM streams from playlists are not supported.</span>`);
+      if ({{ ui.show_drm | tojson }} && d.with_drm) facts.push(`<span class="pl-warn">${d.with_drm} declare a DRM license. DRM streams from playlists are not supported.</span>`);
       _plEl('pl-facts').innerHTML = facts.join('<br>');
 
       // Groups gone from the playlist stay listed while they still have a rule,

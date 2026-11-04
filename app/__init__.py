@@ -128,17 +128,18 @@ def create_app(config_class=Config):
 
     @app.context_processor
     def inject_version():
+        from .lite import channels_for_ui, ui_context
         settings = AppSettings.get()
         try:
-            pending_review_count = (
+            pending_review_count = channels_for_ui(
                 Channel.query
                 .filter(Channel.review_state == 'pending')
-                .count()
-            )
+            ).count()
         except Exception:
             # Never let a count query break page rendering (e.g. mid-migration).
             pending_review_count = 0
         return {
+            'ui': ui_context(),
             'app_version': VERSION,
             'app_timezone_name': settings.effective_timezone_name(),
             'pending_review_count': pending_review_count,
@@ -164,15 +165,41 @@ def create_app(config_class=Config):
         from sqlalchemy import event
         import sqlite3 as _sqlite3
 
+        sqlite_path = db.engine.url.database if db.engine.dialect.name == 'sqlite' else None
+
+        def _sqlite_file_identity():
+            if not sqlite_path or sqlite_path == ':memory:':
+                return None
+            try:
+                stat = os.stat(sqlite_path)
+                return stat.st_dev, stat.st_ino
+            except OSError:
+                return None
+
         @event.listens_for(db.engine, "connect")
-        def _set_sqlite_pragmas(dbapi_conn, _):
+        def _set_sqlite_pragmas(dbapi_conn, record):
             if isinstance(dbapi_conn, _sqlite3.Connection):
                 dbapi_conn.execute("PRAGMA journal_mode=WAL")
                 dbapi_conn.execute("PRAGMA busy_timeout=30000")
                 dbapi_conn.execute("PRAGMA foreign_keys=ON")
+                record.info['sqlite_file_identity'] = _sqlite_file_identity()
+
+        @event.listens_for(db.engine, "checkout")
+        def _reopen_replaced_sqlite(dbapi_conn, record, proxy):
+            # Gunicorn preload and RQ can retain pooled connections to the old
+            # inode after a restore. Recycle them before the next transaction.
+            if (isinstance(dbapi_conn, _sqlite3.Connection)
+                    and record.info.get('sqlite_file_identity') != _sqlite_file_identity()):
+                from sqlalchemy.exc import DisconnectionError
+                raise DisconnectionError('SQLite database was replaced by a restore')
+
+        from .db_lock_watch import install as _install_db_lock_watch
+        _install_db_lock_watch(db.engine)
 
         # Fresh installs need the base tables before any startup path queries
         # AppSettings (for timezone cache, template globals, etc.).
+        from sqlalchemy import inspect
+        fresh_install = not inspect(db.engine).has_table('app_settings')
         db.create_all()
         # Skip schema migration if the entrypoint already ran it (FC_SCHEMA_READY=1).
         # This prevents write-write lock contention when the worker and gunicorn
@@ -187,7 +214,7 @@ def create_app(config_class=Config):
             # Don't reach for AppSettings.get() before it: that SELECTs every
             # ORM-mapped column and raises "no such column" on upgrades where the
             # newest ones haven't been added yet.
-            ensure_runtime_schema()
+            ensure_runtime_schema(fresh_install=fresh_install)
         write_timezone_cache(AppSettings.get().timezone_name)
 
     from . import admin_auth

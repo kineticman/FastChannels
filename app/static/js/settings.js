@@ -1,114 +1,97 @@
 const settingsBootstrap = window.FC_SETTINGS_BOOTSTRAP || {};
 const settingsNeedsConfigState = settingsBootstrap.settingsNeedsConfigState || {};
 
+async function saveInterfaceMode(toggle) {
+  const status = document.getElementById('interface-status');
+  toggle.disabled = true;
+  status.textContent = 'Saving…';
+  try {
+    await setLiteModePreference(!toggle.checked);
+    window.location.reload();
+  } catch (error) {
+    toggle.checked = !toggle.checked;
+    status.textContent = 'Save failed. Please try again.';
+    toggle.disabled = false;
+  }
+}
+
 function scrollToSettingCard(anchorId) {
   const el = document.getElementById(anchorId);
   if (!el) return;
+  // Changing the hash reveals its section, including links into advanced help.
+  if (window.location.hash !== `#${anchorId}`) window.location.hash = anchorId;
+  else window.dispatchEvent(new Event('hashchange'));
+  el.closest('.settings-section')?.querySelectorAll('details').forEach((details) => {
+    if (details.contains(el)) details.open = true;
+  });
   el.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
-function settingsSectionLinks(container) {
-  return Array.from(container.querySelectorAll('a[href^="#settings-section-"]'));
-}
-
-function syncSettingsSectionNavActive(navContainers) {
-  const sourceNav = navContainers[0];
-  if (!sourceNav) return;
-  const sourceLinks = settingsSectionLinks(sourceNav);
-  const sections = sourceLinks
-    .map((link) => document.getElementById(link.getAttribute('href').slice(1)))
-    .filter(Boolean);
-  if (!sourceLinks.length || !sections.length) return;
-
-  const floatingNav = navContainers.find((nav) => nav.classList.contains('settings-section-nav-floating'));
-  const navBottom = (floatingNav && floatingNav.classList.contains('is-visible'))
-    ? floatingNav.getBoundingClientRect().bottom
-    : 0;
-  const activationLine = navBottom + 96;
-  let activeId = sections[0].id;
-  for (const section of sections) {
-    if (section.getBoundingClientRect().top <= activationLine) activeId = section.id;
-  }
-
-  navContainers.forEach((nav) => {
-    settingsSectionLinks(nav).forEach((link) => {
-      const isActive = link.getAttribute('href') === `#${activeId}`;
-      link.classList.toggle('active', isActive);
-      if (isActive) {
-        link.setAttribute('aria-current', 'true');
-        const left = link.offsetLeft;
-        const right = left + link.offsetWidth;
-        if (left < nav.scrollLeft) nav.scrollLeft = left;
-        if (right > nav.scrollLeft + nav.clientWidth) nav.scrollLeft = right - nav.clientWidth;
-      } else {
-        link.removeAttribute('aria-current');
-      }
-    });
-  });
-}
-
 function initSettingsSectionNav() {
-  const sourceNav = document.querySelector('.settings-section-nav');
-  if (!sourceNav) return;
-
-  const floatingNav = document.createElement('div');
-  floatingNav.className = 'settings-section-nav-floating';
-  floatingNav.setAttribute('role', 'navigation');
-  floatingNav.setAttribute('aria-label', 'Settings sections');
-  floatingNav.innerHTML = sourceNav.innerHTML;
-  document.body.appendChild(floatingNav);
-
+  const nav = document.querySelector('.settings-section-nav');
+  if (!nav) return; // settings.js is also used by the Bridge page.
+  const links = Array.from(nav.querySelectorAll('a[href^="#settings-section-"]'));
+  const sections = Array.from(document.querySelectorAll('.settings-section'));
+  const picker = document.getElementById('settings-section-picker');
   const adminNav = document.querySelector('body > nav');
-  const navContainers = [sourceNav, floatingNav];
-  const setActiveByHash = (hash) => {
-    if (!hash || !hash.startsWith('#settings-section-')) return;
-    navContainers.forEach((nav) => {
-      settingsSectionLinks(nav).forEach((link) => {
-        const isActive = link.getAttribute('href') === hash;
-        link.classList.toggle('active', isActive);
-        if (isActive) link.setAttribute('aria-current', 'true');
-        else link.removeAttribute('aria-current');
-      });
+  const updateHeaderHeight = () => {
+    document.documentElement.style.setProperty('--settings-header-height', `${adminNav?.offsetHeight || 0}px`);
+  };
+  updateHeaderHeight();
+  if (adminNav && window.ResizeObserver) new ResizeObserver(updateHeaderHeight).observe(adminNav);
+  const legacySections = {
+    'settings-section-playback': 'settings-section-feeds',
+    'settings-section-guide': 'settings-section-feeds',
+    'settings-section-credentials': 'settings-section-tve',
+    'settings-section-maintenance': 'settings-section-system',
+    'settings-section-advanced': 'settings-section-system',
+  };
+  const showSection = (moveFocus = false) => {
+    const hash = window.location.hash.slice(1);
+    const target = document.getElementById(legacySections[hash] || hash);
+    const section = target?.closest('.settings-section') || sections[0];
+    sections.forEach((item) => { item.hidden = item !== section; });
+    links.forEach((link) => {
+      const active = link.hash === `#${section.id}`;
+      link.classList.toggle('active', active);
+      if (active) link.setAttribute('aria-current', 'location');
+      else link.removeAttribute('aria-current');
     });
+    if (picker) picker.value = section.id;
+    // Reveal nested disclosures before the browser scrolls to a deep link.
+    for (let parent = target?.parentElement; parent && parent !== section; parent = parent.parentElement) {
+      if (parent.tagName === 'DETAILS') parent.open = true;
+    }
+    if (hash === 'settings-section-advanced') section.querySelector('.settings-advanced').open = true;
+    if (moveFocus) {
+      const heading = section.querySelector('h2');
+      heading.focus({ preventScroll: true });
+      (target || section).scrollIntoView({ block: 'start' });
+    }
   };
-  const adminNavOffset = () => {
-    if (!adminNav || adminNav === sourceNav) return 0;
-    return Math.max(0, Math.round(adminNav.getBoundingClientRect().bottom));
-  };
-  const update = () => {
-    const topOffset = adminNavOffset();
-    document.documentElement.style.setProperty('--settings-section-nav-top', `${topOffset}px`);
-    const sourceRect = sourceNav.getBoundingClientRect();
-    floatingNav.classList.toggle('is-visible', sourceRect.bottom <= topOffset);
-    syncSettingsSectionNavActive(navContainers);
-  };
-
-  let pending = false;
-  const requestUpdate = () => {
-    if (pending) return;
-    pending = true;
-    window.requestAnimationFrame(() => {
-      pending = false;
-      update();
-    });
-  };
-
-  navContainers.forEach((nav) => {
-    settingsSectionLinks(nav).forEach((link) => {
-      link.addEventListener('click', () => setActiveByHash(link.getAttribute('href')));
+  links.forEach((link) => {
+    link.addEventListener('click', () => {
+      if (window.location.hash === link.hash) showSection(true);
     });
   });
+  picker?.addEventListener('change', () => { window.location.hash = picker.value; });
+  document.querySelector('.settings-mobile-nav').hidden = false;
+  document.body.classList.add('settings-navigation-ready');
+  showSection();
+  window.addEventListener('hashchange', () => showSection(true));
+}
 
-  update();
-  window.addEventListener('scroll', requestUpdate, { passive: true });
-  window.addEventListener('resize', requestUpdate);
-  window.addEventListener('hashchange', () => {
-    setActiveByHash(window.location.hash);
-    requestUpdate();
+function refreshSetupStatuses() {
+  document.querySelectorAll('[data-setup-status]').forEach((badge) => {
+    const needsConfig = settingsNeedsConfigState[badge.dataset.setupStatus];
+    badge.textContent = needsConfig ? 'Needs setup' : 'Configured';
+    badge.classList.toggle('needs-attention', !!needsConfig);
+    badge.classList.toggle('is-configured', !needsConfig);
   });
 }
 
 function refreshSettingsNeedsConfigBanner() {
+  refreshSetupStatuses();
   const banner = document.getElementById('settings-needs-config-banner');
   const list = document.getElementById('settings-needs-config-list');
   if (!banner || !list) return;
@@ -137,7 +120,7 @@ function refreshSettingsNeedsConfigBanner() {
   }
 
   if (strong) {
-    strong.textContent = `⚠ ${remaining} setting${remaining === 1 ? '' : 's'} should be configured on new installs`;
+    strong.textContent = `⚠ ${remaining} setting${remaining === 1 ? ' needs' : 's need'} your attention`;
   }
 }
 
@@ -164,6 +147,51 @@ async function saveSettings(body, statusId) {
     return false;
   }
 }
+
+function renderNativeOutputActivity() {
+  const toggle = document.getElementById('native-output-enabled');
+  if (!toggle) return;
+  const last = document.getElementById('native-last-request');
+  const lastAt = Number(last.dataset.timestamp);
+  last.textContent = lastAt
+    ? new Date(lastAt * 1000).toLocaleString()
+    : 'None recorded since this setting was added';
+
+  const countdown = document.getElementById('native-refresh-countdown');
+  if (!toggle.checked) {
+    countdown.textContent = 'Automatic native refresh is disabled by this switch.';
+    return;
+  }
+  const until = Number(countdown.dataset.until);
+  if (!until) {
+    countdown.textContent = 'Native XML auto-refresh: the seven-day window starts when a guide is first built.';
+    return;
+  }
+  const seconds = Math.ceil(until - Date.now() / 1000);
+  if (seconds <= 0) {
+    countdown.textContent = 'Native XML auto-refresh: all guides are idle. Their URLs remain available and requests rebuild them if needed.';
+    return;
+  }
+  const days = Math.floor(seconds / 86400);
+  const hours = Math.floor((seconds % 86400) / 3600);
+  const minutes = Math.ceil((seconds % 3600) / 60);
+  const remaining = days ? `${days}d ${hours}h` : hours ? `${hours}h ${minutes}m` : `${minutes}m`;
+  countdown.textContent = `Native XML auto-refresh: all guides will be idle within ${remaining} unless requested again.`;
+}
+
+async function saveNativeOutput() {
+  const toggle = document.getElementById('native-output-enabled');
+  const enabled = toggle.checked;
+  toggle.disabled = true;
+  const saved = await saveSettings({native_output_enabled: enabled}, 'native-output-status');
+  toggle.disabled = false;
+  if (!saved) toggle.checked = !enabled;
+  renderNativeOutputActivity();
+  if (saved) setTimeout(() => location.reload(), 700);
+}
+
+renderNativeOutputActivity();
+setInterval(renderNativeOutputActivity, 60_000);
 
 function checkPublicBaseUrlPortWarning() {
   const val = document.getElementById('public-base-url').value.trim();
@@ -750,8 +778,6 @@ function updateTveProviderFields() {
   const isCox = provider.id === 'Cox';
   if (testBtn) testBtn.style.display = isCox ? '' : 'none';
   if (lastStatus) lastStatus.style.display = isCox ? '' : 'none';
-  const coxRetiringNotice = document.getElementById('tve-cox-retiring-notice');
-  if (coxRetiringNotice) coxRetiringNotice.style.display = isCox ? '' : 'none';
   const googleRow = document.getElementById('tve-google-signin-row');
   if (googleRow) googleRow.dataset.youtubeTv = provider.id === 'YouTubeTV' ? '1' : '';
   _updateTveGoogleRowForMethod();
@@ -892,6 +918,10 @@ const MVPD_LOGIN_FAMILIES = {
   sundance:  { base: '/api/settings/tve/link-login', needsRequestor: false },
   cnn:       { base: '/api/settings/tve/link-login', needsRequestor: false },
   nesn:      { base: '/api/settings/tve/link-login', needsRequestor: false },
+  monumental: { base: '/api/settings/tve/link-login', needsRequestor: false },
+  altitude:  { base: '/api/settings/tve/link-login', needsRequestor: false },
+  motv:      { base: '/api/settings/tve/link-login', needsRequestor: false },
+  snp:       { base: '/api/settings/tve/link-login', needsRequestor: false },
   google:    { base: '/api/settings/tve/google/browser-login', needsRequestor: false },
 };
 // Phone-link sign-in (app/tve/link_login.py): the families whose provider
@@ -899,9 +929,9 @@ const MVPD_LOGIN_FAMILIES = {
 // Discovery uses a typed code on its own page (the status carries it); the
 // Google step isn't a network sign-in, so it stays browser-only.
 MVPD_LOGIN_FAMILIES.link = { base: '/api/settings/tve/link-login', needsRequestor: false };
-const TVE_LINK_FAMILIES = new Set(['legacy', 'nbc', 'tcm', 'fox', 'amcn', 'discovery', 'versant', 'univision', 'disney', 'tennis', 'dazn', 'cspan', 'sundance', 'cnn', 'nesn']);
+const TVE_LINK_FAMILIES = new Set(['legacy', 'nbc', 'tcm', 'fox', 'amcn', 'discovery', 'versant', 'univision', 'disney', 'tennis', 'dazn', 'cspan', 'sundance', 'cnn', 'nesn', 'monumental', 'altitude', 'motv', 'snp']);
 // Families with no browser sign-in at all: always the phone link.
-const TVE_LINK_ONLY_FAMILIES = new Set(['tcm', 'versant', 'univision', 'disney', 'tennis', 'dazn', 'cspan', 'sundance', 'cnn', 'nesn']);
+const TVE_LINK_ONLY_FAMILIES = new Set(['tcm', 'versant', 'univision', 'disney', 'tennis', 'dazn', 'cspan', 'sundance', 'cnn', 'nesn', 'monumental', 'altitude', 'motv', 'snp']);
 let _mvpdLoginActive = false;
 let _mvpdLoginDone = false;
 let _mvpdLoginPollTimer = null;
@@ -2478,16 +2508,16 @@ async function loadSystemStats() {
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     const d = await r.json();
 
-    const db = d.db, ic = d.image_cache, mem = d.memory || {}, cpu = d.cpu || {}, proc = d.processes || {};
+    const db = d.db, ic = d.image_cache, mem = d.memory || {}, cpu = d.cpu || {}, proc = d.processes || {}, disk = d.disk || {};
     const totalCacheBytes = ic.logos_bytes + ic.posters_bytes;
     const containerUsage = mem.container_bytes ? _fmt_bytes(mem.container_bytes) : 'Unavailable';
     const containerLimit = mem.container_limit_bytes ? _fmt_bytes(mem.container_limit_bytes) : null;
     const anonBytes = mem.container_anon_bytes ? _fmt_bytes(mem.container_anon_bytes) : 'Unavailable';
     const fileCacheBytes = mem.container_file_cache_bytes ? _fmt_bytes(mem.container_file_cache_bytes) : 'Unavailable';
-    const processRss = mem.process_rss_bytes ? _fmt_bytes(mem.process_rss_bytes) : 'Unavailable';
-    const processSwap = mem.process_swap_bytes ? _fmt_bytes(mem.process_swap_bytes) : '0 B';
     const hostAvailable = mem.host_mem_available_bytes ? _fmt_bytes(mem.host_mem_available_bytes) : 'Unavailable';
     const loadAvg = Array.isArray(cpu.loadavg) ? cpu.loadavg.map(v => v.toFixed(2)).join(' / ') : 'Unavailable';
+    const memWarn = (mem.container_percent || 0) >= 80 ? 'warn' : '';
+    const flagged = (label, n) => _stat(label, n > 0 ? n.toLocaleString() : '0', n > 0 ? 'warn' : 'muted');
 
     body.innerHTML = `
       <div class="stats-sections">
@@ -2495,34 +2525,40 @@ async function loadSystemStats() {
           <div class="stats-section-label">Database</div>
           ${_stat('File size', _fmt_bytes(db.size_bytes))}
           ${_stat('Channels (active)', `${db.channels_active.toLocaleString()} / ${db.channels_total.toLocaleString()}`)}
-          ${_stat('DRM flagged', db.channels_drm > 0 ? db.channels_drm.toLocaleString() : '0', db.channels_drm > 0 ? 'warn' : 'muted')}
-          ${_stat('Dead flagged', db.channels_dead > 0 ? db.channels_dead.toLocaleString() : '0', db.channels_dead > 0 ? 'warn' : 'muted')}
+          ${d.show_drm ? _stat('DRM (bridge-only)', (db.channels_bridge_only || 0).toLocaleString(), 'muted') : ''}
+          ${d.show_drm && db.channels_drm > 0 ? flagged('DRM switched off', db.channels_drm) : ''}
+          ${flagged('Dead flagged', db.channels_dead)}
+          ${flagged('VOD flagged', db.channels_vod || 0)}
           ${_stat('EPG programs', db.programs_total.toLocaleString())}
           ${_stat('Sources enabled', `${db.sources_enabled} / ${db.sources_total}`)}
         </div>
         <div>
           <div class="stats-section-label">Image Cache</div>
           ${_stat('Logos', `${ic.logos_count.toLocaleString()} files / ${_fmt_bytes(ic.logos_bytes)}`)}
-          ${_stat('Logo expiry', ic.logo_expiry || 'url-change')}
           ${_stat('Posters', `${ic.posters_count.toLocaleString()} files / ${_fmt_bytes(ic.posters_bytes)}`)}
-          ${_stat('Poster TTL', `${ic.poster_ttl_days} days`)}
           ${_stat('Total cache', _fmt_bytes(totalCacheBytes), totalCacheBytes > 2147483648 ? 'warn' : '')}
         </div>
         <div>
+          <div class="stats-section-label">Disk</div>
+          ${_stat('Container', disk.container_bytes != null ? _fmt_bytes(disk.container_bytes) : 'Unavailable')}
+          ${disk.camoufox_bytes != null ? _stat('&nbsp;&nbsp;Camoufox (browser sign-ins)', _fmt_bytes(disk.camoufox_bytes), 'muted') : ''}
+          ${disk.chromium_bytes != null ? _stat('&nbsp;&nbsp;Chromium (headless)', _fmt_bytes(disk.chromium_bytes), 'muted') : ''}
+          ${disk.python_bytes != null ? _stat('&nbsp;&nbsp;Python packages', _fmt_bytes(disk.python_bytes), 'muted') : ''}
+          ${_stat('Data volume (/data)', disk.data_bytes != null ? _fmt_bytes(disk.data_bytes) : 'Unavailable')}
+          ${disk.data_disk_free_bytes != null ? _stat('Free on /data disk', `${_fmt_bytes(disk.data_disk_free_bytes)} of ${_fmt_bytes(disk.data_disk_total_bytes)}`, disk.data_disk_free_bytes < 5368709120 ? 'warn' : 'muted') : ''}
+        </div>
+        <div>
           <div class="stats-section-label">Memory</div>
-          ${_stat('Container total (incl. cache)', containerLimit ? `${containerUsage} / ${containerLimit}` : containerUsage, (mem.container_percent || 0) >= 80 ? 'warn' : '')}
+          ${_stat('Container total (incl. cache)', containerLimit ? `${containerUsage} / ${containerLimit}` : containerUsage, memWarn)}
+          ${_stat('Container limit', containerLimit ? `${mem.container_percent}% used` : 'No limit', containerLimit ? (memWarn || 'muted') : 'muted')}
           ${_stat('Process memory', anonBytes)}
           ${_stat('File cache (reclaimable)', fileCacheBytes, 'muted')}
-          ${_stat('Container %', mem.container_percent != null ? `${mem.container_percent}%` : 'Unavailable', (mem.container_percent || 0) >= 80 ? 'warn' : 'muted')}
-          ${_stat('Web process RSS', processRss)}
-          ${_stat('Web process swap', processSwap, (mem.process_swap_bytes || 0) > 0 ? 'warn' : 'muted')}
           ${_stat('Host available', hostAvailable)}
         </div>
         <div>
           <div class="stats-section-label">CPU</div>
           ${_stat('Load avg', loadAvg)}
           ${_stat('CPU cores', cpu.cpu_count != null ? cpu.cpu_count.toLocaleString() : 'Unavailable')}
-          ${_stat('Web CPU time', _fmt_seconds(cpu.process_cpu_seconds))}
         </div>
         <div>
           <div class="stats-section-label">Processes</div>

@@ -13,102 +13,128 @@
   {% include 'admin/_theme_head.html' %}
   <link rel="stylesheet" href="{{ url_for('static', filename='css/community_map.css') }}">
 </head>
-<body>
+<body class="settings-page">
 
   {% set active_page = 'settings' %}
   {% include 'admin/_nav.html' %}
 
 <div class="page">
   <h1>Settings</h1>
-  <p class="subtitle">Use the sections below to configure server addresses, playlist behavior, guide data, credentials, and maintenance tasks.</p>
+  <p class="subtitle">Set up your server, manage your feeds, and keep things running.</p>
 
-  {% if settings_needs_config %}
-  <div class="needs-config-banner" id="settings-needs-config-banner">
-    <strong>⚠ {{ settings_needs_config | length }} setting{{ 's' if settings_needs_config | length != 1 else '' }} should be configured on new installs</strong>
-    <ul id="settings-needs-config-list">
-      {% for item in settings_needs_config %}
-      <li id="settings-needs-config-item-{{ item.key }}">
-        <a href="#{{ item.anchor }}" onclick="scrollToSettingCard('{{ item.anchor }}'); return false;">{{ item.label }}</a>
-        <span class="config-note"> — click to configure</span>
-      </li>
-      {% endfor %}
-    </ul>
+  {% macro setup_status(key) %}
+  {% set needs_config = settings_needs_config | selectattr('key', 'equalto', key) | list %}
+  <span class="setup-status {{ 'needs-attention' if needs_config else 'is-configured' }}" data-setup-status="{{ key }}">{{ 'Needs setup' if needs_config else 'Configured' }}</span>
+  {% endmacro %}
+
+  <div class="settings-layout">
+    <aside class="settings-sidebar">
+      <nav class="settings-section-nav" aria-label="Settings sections">
+        <a href="#settings-section-setup"><span>Setup</span><small>Server, DVR &amp; time zone</small></a>
+        <a href="#settings-section-feeds"><span>Feeds &amp; Guide</span><small>Channels, artwork &amp; output</small></a>
+        {% if ui.show_tve %}<a href="#settings-section-tve"><span>TV Everywhere</span><small>Provider &amp; network sign-ins</small></a>{% endif %}
+        <a href="#settings-section-access"><span>Admin Access</span><small>Login &amp; password</small></a>
+        <a href="#settings-section-system"><span>System</span><small>Backups &amp; diagnostics</small></a>
+      </nav>
+      <div class="settings-mobile-nav" hidden>
+        <label for="settings-section-picker">Settings section</label>
+        <select id="settings-section-picker">
+          <option value="settings-section-setup">Setup</option>
+          <option value="settings-section-feeds">Feeds &amp; Guide</option>
+          {% if ui.show_tve %}<option value="settings-section-tve">TV Everywhere</option>{% endif %}
+          <option value="settings-section-access">Admin Access</option>
+          <option value="settings-section-system">System</option>
+        </select>
+      </div>
+    </aside>
+
+    <div class="settings-content">
+      <section class="settings-section" id="settings-section-setup" aria-labelledby="settings-title-setup">
+        <div class="settings-section-header">
+          <div>
+            <span class="settings-eyebrow">Start here</span>
+            <h2 id="settings-title-setup" tabindex="-1">Setup</h2>
+            <p>These three settings get your server ready. Save each card when you're done.</p>
+          </div>
+        </div>
+        {% if settings_needs_config %}
+        <div class="needs-config-banner" id="settings-needs-config-banner">
+          <strong>⚠ {{ settings_needs_config | length }} setting{{ 's' if settings_needs_config | length != 1 else '' }} need{{ '' if settings_needs_config | length != 1 else 's' }} your attention</strong>
+          <ul id="settings-needs-config-list">
+            {% for item in settings_needs_config %}
+            <li id="settings-needs-config-item-{{ item.key }}">
+              <a href="#{{ item.anchor }}" onclick="scrollToSettingCard('{{ item.anchor }}'); return false;">{{ item.label }}</a>
+              <span class="config-note"> — click to configure</span>
+            </li>
+            {% endfor %}
+          </ul>
+        </div>
+        {% endif %}
+        {% include 'admin/settings/public_base_url.html' %}
+        {% include 'admin/settings/channels_dvr.html' %}
+        {% include 'admin/settings/timezone.html' %}
+        {% include 'admin/settings/interface.html' %}
+      </section>
+
+      <section class="settings-section" id="settings-section-feeds" aria-labelledby="settings-title-feeds">
+        <div class="settings-section-header">
+          <div>
+            <h2 id="settings-title-feeds" tabindex="-1">Feeds &amp; Guide</h2>
+            <p>Choose what goes into your feeds and how guide data and artwork are delivered. Switches save automatically.</p>
+          </div>
+        </div>
+        <div class="source-card settings-preferences">
+          <div class="source-header" style="cursor:default">
+            <div><h3 class="source-name">Channel &amp; artwork defaults</h3><p class="source-meta">Applies across your feeds. Individual sources can override new-channel approval.</p></div>
+          </div>
+          <div class="source-body open">
+            {% include 'admin/settings/new_channels.html' %}
+            {% include 'admin/settings/event_guide.html' %}
+            {% include 'admin/settings/image_proxy.html' %}
+          </div>
+        </div>
+        {% include 'admin/settings/gracenote.html' %}
+        {% if ui.show_native %}{% include 'admin/settings/native_output.html' %}{% endif %}
+      </section>
+
+      {% if ui.show_tve %}
+      <section class="settings-section" id="settings-section-tve" aria-labelledby="settings-title-tve">
+        <div class="settings-section-header">
+          <div>
+            <h2 id="settings-title-tve" tabindex="-1">TV Everywhere</h2>
+            <p>Save your TV provider credentials, then sign in to the networks you use.</p>
+          </div>
+        </div>
+        {% include 'admin/settings/tve.html' %}
+      </section>
+      {% endif %}
+
+      <section class="settings-section" id="settings-section-access" aria-labelledby="settings-title-access">
+        <div class="settings-section-header">
+          <div>
+            <h2 id="settings-title-access" tabindex="-1">Admin Access</h2>
+            <p>Manage the login used to open the admin UI.</p>
+          </div>
+        </div>
+        {% include 'admin/settings/admin_login.html' %}
+      </section>
+
+      <section class="settings-section" id="settings-section-system" aria-labelledby="settings-title-system">
+        <div class="settings-section-header">
+          <div>
+            <h2 id="settings-title-system" tabindex="-1">System</h2>
+            <p>Back up your database, check server health, and troubleshoot issues.</p>
+          </div>
+        </div>
+        {% include 'admin/settings/backup.html' %}
+        {% include 'admin/settings/system_stats.html' %}
+        <details class="settings-disclosure settings-advanced">
+          <summary>Advanced controls <span>Experimental playback options &amp; debug logging</span></summary>
+          {% include 'admin/settings/advanced.html' %}
+        </details>
+      </section>
+    </div>
   </div>
-  {% endif %}
-
-  <nav class="settings-section-nav" aria-label="Settings sections">
-    <a href="#settings-section-setup">Setup</a>
-    <a href="#settings-section-playback">Playback</a>
-    <a href="#settings-section-guide">Guide Data</a>
-    <a href="#settings-section-credentials">Credentials</a>
-    <a href="#settings-section-maintenance">Maintenance</a>
-    <a href="#settings-section-advanced">Advanced</a>
-  </nav>
-
-  <section class="settings-section" id="settings-section-setup">
-    <div class="settings-section-header">
-      <div>
-        <h2>Setup</h2>
-        <p>Core addresses and display behavior used by feeds, playback URLs, and the admin UI.</p>
-      </div>
-    </div>
-    {% include 'admin/settings/public_base_url.html' %}
-    {% include 'admin/settings/channels_dvr.html' %}
-    {% include 'admin/settings/timezone.html' %}
-  </section>
-
-  <section class="settings-section" id="settings-section-playback">
-    <div class="settings-section-header">
-      <div>
-        <h2>Playback</h2>
-        <p>Controls how channel logos and guide artwork are delivered.</p>
-      </div>
-    </div>
-    {% include 'admin/settings/image_proxy.html' %}
-  </section>
-
-  <section class="settings-section" id="settings-section-guide">
-    <div class="settings-section-header">
-      <div>
-        <h2>Guide Data</h2>
-        <p>Defaults for newly discovered channels, event channel guide filler, and Gracenote guide mapping.</p>
-      </div>
-    </div>
-    {% include 'admin/settings/new_channels.html' %}
-    {% include 'admin/settings/event_guide.html' %}
-    {% include 'admin/settings/gracenote.html' %}
-  </section>
-
-  <section class="settings-section" id="settings-section-credentials">
-    <div class="settings-section-header">
-      <div>
-        <h2>Credentials</h2>
-        <p>Shared provider sign-in details used by TV Everywhere backed sources.</p>
-      </div>
-    </div>
-    {% include 'admin/settings/tve.html' %}
-  </section>
-
-  <section class="settings-section" id="settings-section-maintenance">
-    <div class="settings-section-header">
-      <div>
-        <h2>Maintenance</h2>
-        <p>Database backup, restore, and runtime health information.</p>
-      </div>
-    </div>
-    {% include 'admin/settings/backup.html' %}
-    {% include 'admin/settings/system_stats.html' %}
-  </section>
-
-  <section class="settings-section" id="settings-section-advanced">
-    <div class="settings-section-header">
-      <div>
-        <h2>Advanced</h2>
-        <p>Optional playlist behavior, diagnostic logging and admin login.</p>
-      </div>
-    </div>
-    {% include 'admin/settings/advanced.html' %}
-  </section>
 
   {% include 'admin/settings/modals.html' %}
 

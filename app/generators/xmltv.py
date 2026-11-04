@@ -23,9 +23,17 @@ from ..scrapers.playlist import is_playlist_source
 from ..timezone_utils import current_zoneinfo
 from ..url import proxy_logo_url
 from .m3u import (_selected_channels, _tvg_id, _channel_display_name, _source_multi_country_map,
-                  _sanitize, _build_channel_query, _prismcast_capturable, _drm_bridge_query_filters)
+                  _sanitize, _build_channel_query, _prismcast_capturable, _drm_bridge_query_filters,
+                  feed_to_query_filters)
 
 log = logging.getLogger(__name__)
+
+
+def feed_xml_artifact_key(feed) -> str:
+    """The unfiltered built-in Default feed serves the master XML file."""
+    if feed.slug == 'default' and not feed_to_query_filters(feed.filters or {}):
+        return 'master'
+    return f'feed-{feed.slug}'
 
 # Maps common scraped category variants to the canonical values Channels DVR
 # recognises for guide filtering (Movie, Children, News, Sports, Drama).

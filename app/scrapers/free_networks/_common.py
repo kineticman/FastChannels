@@ -15,6 +15,12 @@ ET = ZoneInfo('America/New_York')
 UTC = timezone.utc
 
 
+class EmptyPlaylistError(RuntimeError):
+    """resolve() found the stream answering but its variant lists no segments.
+    Playback just fails (503); the stream audit retries once and then treats
+    it as dead."""
+
+
 @dataclass
 class NetChannel:
     """One channel of a network. `id` is the network's own key for it and is what
@@ -28,6 +34,7 @@ class NetChannel:
     language: str = 'en'
     country: str = 'US'
     gracenote_id: str | None = None
+    description: str | None = None
 
 
 class Network:

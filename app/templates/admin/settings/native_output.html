@@ -1,0 +1,34 @@
+  <div class="source-card" id="settings-card-native-output">
+    <div class="source-header" style="cursor:default">
+      <div class="source-title">
+        <div class="source-icon">📡</div>
+        <div>
+          <div class="source-name">Native Feed Output</div>
+          <div class="source-meta">Optional scraped-only M3U playlists and XML guides for every feed</div>
+        </div>
+      </div>
+    </div>
+    <div class="source-body open">
+      <div class="toggle-row">
+        <div class="toggle-row-text">
+          <div class="toggle-row-label">Enable native feeds</div>
+          <div class="toggle-row-help">This switch applies to every feed. When off, FastChannels stops generating native M3U and XML files, hides their links on Feeds, and returns 404 from native URLs. Existing DVR sources using those URLs will stop working until you turn it back on. Standard, mixed, Gracenote and bridge outputs keep working.</div>
+          <div class="toggle-row-help" style="margin-top:0.5rem">Last native URL request (M3U or EPG): <strong id="native-last-request" data-timestamp="{{ native_output_activity.last_requested_at or '' }}"></strong></div>
+          <div class="toggle-row-help" id="native-refresh-countdown" data-until="{{ native_output_activity.auto_refresh_until or '' }}" style="margin-top:0.25rem"></div>
+          <details class="settings-disclosure">
+            <summary>How native guide refresh works</summary>
+            <div class="help">While enabled, each native file refreshes routinely for seven days after its first build or last request. After that, the switch stays on and the URL remains available; routine refreshes pause for that file. Its next request may wait for a rebuild and starts a new seven-day window.</div>
+          </details>
+        </div>
+        <div class="toggle-row-control">
+          <span class="settings-autosave">Auto-saves</span>
+          <label class="toggle-switch">
+            <input type="checkbox" id="native-output-enabled" {% if native_output_enabled %}checked{% endif %}
+                   onchange="saveNativeOutput()">
+            <span class="toggle-slider"></span>
+          </label>
+          <span class="save-status" id="native-output-status"></span>
+        </div>
+      </div>
+    </div>
+  </div>

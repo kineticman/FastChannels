@@ -194,14 +194,14 @@ def fox_tve_proxy(channel_id: str, proxy_source_name: str):
     finally:
         if getattr(scraper, '_pending_config_updates', None):
             try:
-                persist_source_config_updates(channel.source_id, scraper._pending_config_updates)
+                persist_source_config_updates(channel.source_id, scraper._pending_config_updates, wait=False)
             except Exception as ce:
                 from ..extensions import db
                 db.session.rollback()
                 logger.warning('[%s] failed to persist config updates: %s', proxy_source_name, ce)
         if getattr(scraper, '_pending_cache_updates', None):
             try:
-                persist_source_cache_updates(channel.source_id, scraper._pending_cache_updates)
+                persist_source_cache_updates(channel.source_id, scraper._pending_cache_updates, wait=False)
             except Exception as ce:
                 from ..extensions import db
                 db.session.rollback()

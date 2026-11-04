@@ -212,6 +212,8 @@ def _ensure_feed_dvr_artifacts(feed: Feed, base_url: str, *, has_gracenote: bool
     force_refresh rebuilds this feed synchronously to reflect recent channel
     enable/disable edits before Channels DVR fetches the URL.
     """
+    from ..generators.xmltv import feed_xml_artifact_key
+    xml_key = feed_xml_artifact_key(feed)
     if prismcast:
         std_key = f'feed-{feed.slug}-prismcast-m3u'
         gn_key  = f'feed-{feed.slug}-prismcast-gracenote-m3u'
@@ -226,7 +228,7 @@ def _ensure_feed_dvr_artifacts(feed: Feed, base_url: str, *, has_gracenote: bool
     # refresh passes skip idle artifacts, and _ready below waits on them. Once
     # noted they're no longer idle, so an idle one's out-of-date file would be
     # served as-is — rebuild this feed now instead.
-    idle = [note_artifact_request(key) for key in (f'feed-{feed.slug}', std_key, gn_key)]
+    idle = [note_artifact_request(key) for key in (xml_key, std_key, gn_key)]
     if any(idle):
         force_refresh = True
 
@@ -236,24 +238,19 @@ def _ensure_feed_dvr_artifacts(feed: Feed, base_url: str, *, has_gracenote: bool
             generate_m3u,
             generate_prismcast_m3u,
             generate_fc_player_m3u,
-            feed_gracenote_start,
-            feed_namespace_start,
+            feed_number_kwargs,
             feed_to_query_filters,
         )
         from ..generators.xmltv import write_xmltv
         from ..xml_cache import write_artifact, write_xml_artifact
 
         filters = feed_to_query_filters(feed.filters or {})
-        if feed.chnum_start is not None:
-            std_kw = {'feed_chnum_start': feed.chnum_start, 'feed_id': feed.id}
-            gn_kw = {'feed_chnum_start': feed.chnum_start, 'feed_id': feed.id}
-        else:
-            std_kw = {'namespace_start': feed_namespace_start(feed, gracenote=False)}
-            gn_kw = {'namespace_start': feed_gracenote_start(feed)}
+        std_kw = gn_kw = feed_number_kwargs(feed)
 
         write_xml_artifact(
-            f'feed-{feed.slug}',
-            lambda fp: write_xmltv(fp, filters, base_url=base_url, feed_name=feed.name),
+            xml_key,
+            lambda fp: write_xmltv(fp, {} if xml_key == 'master' else filters,
+                                   base_url=base_url, feed_name=None if xml_key == 'master' else feed.name),
         )
 
         if mixed:
@@ -358,7 +355,7 @@ def _ensure_feed_dvr_artifacts(feed: Feed, base_url: str, *, has_gracenote: bool
         return
 
     def _ready() -> bool:
-        xml_path, _ = get_xml_artifact(f'feed-{feed.slug}')
+        xml_path, _ = get_xml_artifact(xml_key)
         if get_artifact(std_key, ext='m3u') is None:
             return False
         if xml_path is None:
@@ -515,12 +512,14 @@ def push_feed_native_to_dvr(feed_id):
     alternative to that source, not an addition.
     """
     from ..generators.m3u import (
-        _build_channel_query, feed_to_query_filters, feed_namespace_start, generate_native_m3u,
+        _build_channel_query, feed_to_query_filters, feed_number_kwargs, generate_native_m3u,
     )
     from ..generators.xmltv import write_xmltv
     from ..xml_cache import write_artifact, write_xml_artifact
 
     feed = Feed.query.get_or_404(feed_id)
+    if not AppSettings.get().native_output_enabled:
+        return jsonify({'error': 'Native feed output is disabled in Settings.'}), 409
     dvr_url = (AppSettings.get().effective_channels_dvr_url() or '').strip()
     if not dvr_url:
         return jsonify({'error': 'Channels DVR URL is not configured in Settings.'}), 400
@@ -544,10 +543,7 @@ def push_feed_native_to_dvr(feed_id):
 
     # A DVR import is a user-triggered snapshot: rebuild this feed's native
     # artifacts now so the DVR doesn't fetch a stale (or still-warming) file.
-    if feed.chnum_start is not None:
-        std_kw = {'feed_chnum_start': feed.chnum_start, 'feed_id': feed.id}
-    else:
-        std_kw = {'namespace_start': feed_namespace_start(feed, gracenote=False)}
+    std_kw = feed_number_kwargs(feed)
     write_xml_artifact(
         f'feed-{feed.slug}-native',
         lambda fp: write_xmltv(fp, filters, base_url=base, feed_name=feed.name, native=True),
@@ -858,10 +854,10 @@ def push_feed_combined_ah4c_to_dvr(feed_id):
     """
     from .. import fc_player_bridge
     from ..generators.m3u import (
-        combined_ah4c_channel_count, feed_namespace_start, feed_to_query_filters,
+        combined_ah4c_channel_count, feed_number_kwargs, feed_to_query_filters,
         generate_combined_ah4c_m3u,
     )
-    from ..generators.xmltv import write_xmltv
+    from ..generators.xmltv import feed_xml_artifact_key, write_xmltv
     from ..xml_cache import write_artifact, write_xml_artifact
 
     feed = Feed.query.get_or_404(feed_id)
@@ -893,13 +889,12 @@ def push_feed_combined_ah4c_to_dvr(feed_id):
             'recommended_max': _CHANNELS_DVR_RECOMMENDED_MAX,
         }), 409
 
-    if feed.chnum_start is not None:
-        std_kw = {'feed_chnum_start': feed.chnum_start, 'feed_id': feed.id}
-    else:
-        std_kw = {'namespace_start': feed_namespace_start(feed, gracenote=False)}
+    std_kw = feed_number_kwargs(feed)
+    xml_key = feed_xml_artifact_key(feed)
     write_xml_artifact(
-        f'feed-{feed.slug}',
-        lambda fp: write_xmltv(fp, filters, base_url=base, feed_name=feed.name),
+        xml_key,
+        lambda fp: write_xmltv(fp, {} if xml_key == 'master' else filters,
+                               base_url=base, feed_name=None if xml_key == 'master' else feed.name),
     )
     write_artifact(
         f'feed-{feed.slug}-combined-ah4c-m3u',

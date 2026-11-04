@@ -79,8 +79,14 @@ BOOT_PARAMS_BASE = {
     'appName': 'web',
     # Pluto gates demuxed audio on this version (9.13.0 and older get audio muxed into
     # the video variants). Muxed sessions lose the audio of video-only ad bumpers,
-    # which drifts Channels DVR's live remux ~15s per ad break.
-    'appVersion': '9.20.0-89258290264838515e264f5b051b7c1602a58482',
+    # which drifts Channels DVR's live remux ~15s per ad break. The gate is semver, so
+    # the build hash Pluto's web client appends is left off to keep the URL short.
+    'appVersion': '9.20.0',
+    # Keeps ~1.4KB of ad-identity tokens (fmsParams._fw_3P_UID) out of the session JWT.
+    # Without it the stitcher URL runs ~4.0-4.3KB in US regions, past ffmpeg's 4096-char
+    # URL limit, which truncates the JWT and gets a 401 (#84). The stitcher's own child
+    # URLs carry the same JWT, so trimming our query alone wouldn't be enough.
+    'isClientDNT': 'true',
     'deviceVersion': '122.0.0',
     'deviceModel': 'web',
     'deviceMake': 'chrome',

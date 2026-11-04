@@ -1,7 +1,7 @@
 """CBS (source cbs_sports) — the local CBS station, CBS Sports Network, CBS game windows and the free CBS Sports channels.
 
 All streams are clear HLS (checked 2026-10-17):
-  - CBS Sports HQ, Golazo and the Champions League channel are free Google DAI
+  - CBS Sports HQ, Golazo, the Champions League channel and NFL Channel are free Google DAI
     linear streams (POST pubads.g.doubleclick.net/ssai/event/<assetKey>/streams).
   - CBS Sports Network and CBS (the broadcast network, from the viewer's local
     affiliate) come from Syncbak through a TV-provider sign-in, up to 1080p.
@@ -48,7 +48,10 @@ from datetime import datetime, timedelta, timezone
 import requests
 
 from ..gracenote_map import resolve_gracenote
+from ..matchups import (MATCHUP_CACHE_KEY, MatchupResolver, event_label, matchup_body,
+                        matchup_description, matchup_title)
 from ..tve.adobe_pass import TVEAuthError, TVENotAuthorizedError
+from ..sports import infer_sport, normalize_league, normalize_sport, sport_for_league
 from .base import BaseScraper, ChannelData, ConfigField, ProgramData, EVENT_CHANNEL_TAG
 
 logger = logging.getLogger(__name__)
@@ -79,6 +82,10 @@ NETWORKS = {
     'CBSSGOLAZO': {'name': 'CBS Sports Golazo Network', 'gracenote': '133691', 'dai': '7f3Wv6f7QEKfQna22jHqLQ',
                    'pplus': 'golazo', 'logo': 'https://tmsimg.fancybits.co/assets/s133691_ll_h15_aa.png'},
     'CBSCHAMPIONSLEAGUE': {'name': 'CBS Sports Champions League', 'dai': 'ydKcHHYQSt27vbSP38xMVw'},
+    # Listed on cbssports.com/watch/live (network NFLCHANNEL, playback openHLS,
+    # no authentication); Paramount+ has no listings for it.
+    'NFLCHANNEL': {'name': 'NFL Channel', 'gracenote': '121705', 'dai': 'v4CTWEdUSzqQgJtYB9rmrw',
+                   'logo': 'https://tmsimg.fancybits.co/assets/s121705_ll_h15_aa.png'},
 }
 EVENT_LABELS = {'CBSE': 'CBS', 'CBSSN': 'CBS Sports Network'}
 # The viewer's local CBS station: a 24/7 channel under the CBSE code, so CBS
@@ -257,6 +264,16 @@ def _image(about: dict) -> str | None:
 
 
 # ── scraper ──────────────────────────────────────────────────────────────────
+
+def _event_sport_league(video: dict) -> tuple[str | None, str | None]:
+    """Use the same event classification for channels and guide categories."""
+    about = video.get('about') or {}
+    props = video.get('properties') or {}
+    league = normalize_league(props.get('leagueDisplayName')) or normalize_league(about.get('prefix'))
+    sport = (normalize_sport(props.get('sport')) or sport_for_league(league)
+             or infer_sport([about.get('title') or '', league or '']))
+    return sport, league
+
 
 class CBSSportsScraper(BaseScraper):
     source_name = 'cbs_sports'
@@ -440,27 +457,40 @@ class CBSSportsScraper(BaseScraper):
                 gracenote_id=resolve_gracenote('cbs_sports', upstream_id=meta.get('gracenote'), lookup_key=code),
             ))
         self._game_items = []
+        self._matchups = {}
         if self._events_enabled():
             self._game_items = self._games(authorized, local=bool(station))
             self.hide_missing_event_channels = True
+            resolver = MatchupResolver(self.cache.get(MATCHUP_CACHE_KEY), self.source_name)
             for event in self._game_items:
                 video = event['video']
                 start, end = _event_window(event)
-                title = (video.get('about') or {}).get('title') or 'CBS Sports'
+                about = video.get('about') or {}
+                title = about.get('title') or 'CBS Sports'
                 network = video['network']
+                sport, league = _event_sport_league(video)
+                matchup = resolver.lookup(str(event['id']), about.get('title'), start,
+                                          league=league or (video.get('properties') or {}).get('league'),
+                                          sport=sport)
+                if matchup:
+                    self._matchups[event['id']] = matchup
+                    title = matchup_body(matchup, sport)
                 channels.append(ChannelData(
                     source_channel_id=f'{EVENT_CHANNEL_PREFIX}{event["id"]}',
                     name=f'{EVENT_LABELS[network]} - {title}'[:256],
                     stream_url=f'{EVENT_SCHEME}{event["id"]}?net={network}&end={int(end.timestamp())}',
-                    logo_url=_image(video.get('about') or {}),
+                    logo_url=_image(about),
                     category='Sports',
                     stream_type='hls',
                     guide_key=f'{EVENT_CHANNEL_PREFIX}{event["id"]}',
                     tags=[EVENT_CHANNEL_TAG, 'CBS Sports Games'],
+                    sport=sport,
+                    league=league,
                     gracenote_mode='off',
                     retire_at=end + timedelta(seconds=EVENT_END_GRACE_SECONDS),
                     delete_at=end + timedelta(seconds=EVENT_END_GRACE_SECONDS + 24 * 3600),
                 ))
+            self._update_cache(MATCHUP_CACHE_KEY, resolver.export())
         return channels
 
     def _pplus_programs(self, code: str, slug: str, category: str | None = 'Sports') -> list[ProgramData]:
@@ -514,6 +544,18 @@ class CBSSportsScraper(BaseScraper):
                 if grid:
                     programs.extend(grid)
                     gridded.add(code)
+        # Free 24/7 channels without a Paramount+ grid (NFL Channel always; HQ and
+        # Golazo when their listings fail) take tvtv's cached guide for their
+        # Gracenote ID, which the nightly tvtv refresh fetches for every applied ID.
+        gracenote = {ch.source_channel_id: ch.gracenote_id for ch in channels}
+        for code, meta in NETWORKS.items():
+            station_id = gracenote.get(code) or meta.get('gracenote')
+            if code in wanted and code not in gridded and meta.get('dai') and station_id:
+                from .free_networks import FreeNetworksScraper
+                rows = FreeNetworksScraper._tvtv_programs(self, code, station_id)
+                if rows:
+                    programs.extend(rows)
+                    gridded.add(code)
         try:
             events = self._events()
         except Exception as exc:  # noqa: BLE001
@@ -531,17 +573,21 @@ class CBSSportsScraper(BaseScraper):
                 continue
             seen.add((cid, start))
             about = video.get('about') or {}
-            props = video.get('properties') or {}
-            sport = props.get('sport')
+            sport, league = _event_sport_league(video)
+            # Only game channels get full team names; the 24/7 channels'
+            # guides keep CBS's titles.
+            matchup = getattr(self, '_matchups', {}).get(event['id']) if cid.startswith(EVENT_CHANNEL_PREFIX) else None
             programs.append(ProgramData(
                 source_channel_id=cid,
-                title=about.get('title') or 'CBS Sports',
+                title=(matchup_title(event_label(league, sport), matchup, sport) if matchup
+                       else about.get('title') or 'CBS Sports'),
                 start_time=start,
                 end_time=end,
-                description=about.get('description') or None,
+                description=(matchup_description(matchup, sport, about.get('description')) if matchup
+                             else about.get('description') or None),
                 poster_url=_image(about),
-                category=';'.join(x for x in ('Sports Event', sport, props.get('leagueDisplayName')) if x),
-                episode_title=props.get('leagueDisplayName') if props.get('leagueDisplayName') != about.get('title') else None,
+                category=';'.join(x for x in ('Sports Event', sport, league) if x),
+                episode_title=league if league != about.get('title') else None,
                 is_live=True,
                 episode_id=str(event['id']),
             ))

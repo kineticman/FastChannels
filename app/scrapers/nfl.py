@@ -47,6 +47,7 @@ import requests
 
 from ..gracenote_map import resolve_gracenote
 from ..tve.adobe_pass import TVENotAuthorizedError
+from ..matchups import split_teams
 from .base import BaseScraper, ChannelData, ConfigField, ProgramData, EVENT_CHANNEL_TAG
 
 logger = logging.getLogger(__name__)
@@ -509,6 +510,8 @@ class NFLScraper(BaseScraper):
                     stream_type='hls',
                     guide_key=GAME_CHANNEL_PREFIX + item['externalId'],
                     tags=[EVENT_CHANNEL_TAG, 'NFL Games'],
+                    sport='Football',
+                    league='NFL',
                     gracenote_mode='off',
                     retire_at=end + timedelta(seconds=GAME_END_GRACE_SECONDS),
                     delete_at=end + timedelta(seconds=GAME_END_GRACE_SECONDS + 24 * 3600),
@@ -542,7 +545,12 @@ class NFLScraper(BaseScraper):
             cid = GAME_CHANNEL_PREFIX + item['externalId']
             start, end = _item_window(item)
             if cid in wanted and start and end:
-                programs.append(self._program(cid, item, start, end))
+                program = self._program(cid, item, start, end)
+                # NFL already titles games with full names, "Away at Home";
+                # game channels lead with the league like every event source.
+                if split_teams(program.title):
+                    program.title = f'NFL: {program.title}'
+                programs.append(program)
         return programs
 
     @staticmethod

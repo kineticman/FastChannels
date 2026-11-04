@@ -6,7 +6,7 @@ feed, same feeds, same guide mapping. A channel's place is spread across
 several stores, all keyed by channel id:
 
   * Channel.pinned_chno / number + number_pinned  -- user locks (channel-wide)
-  * FeedChannelNumber                             -- sticky numbers in feeds with a chnum_start
+  * channel_numbers                               -- numbers in the master playlists and each feed
   * Feed.filters id lists                         -- channel_ids / pinned / excluded
   * gracenote_id (manual), category/language overrides
 
@@ -20,7 +20,7 @@ again with the channels swapped moves everything back.
 import re
 
 from .extensions import db
-from .models import Channel, Feed, FeedChannelNumber
+from .models import Channel, Feed
 
 _ID_LIST_KEYS = ('channel_ids', 'pinned_channel_ids', 'excluded_channel_ids')
 _DECIMAL_RE = re.compile(r'\d{1,5}\.(?!0+$)\d{1,3}')  # same as api_channels._DECIMAL_CHNO_RE
@@ -33,6 +33,15 @@ class TransferError(ValueError):
 def _feed_member_numbers(feeds) -> dict[int, dict[int, int]]:
     from .routes.feeds_api import _displayed_feed_chnum_map
     return {feed.id: _displayed_feed_chnum_map(feed) for feed in feeds}
+
+
+def _is_member(feed, channel_id: int) -> bool:
+    """Whether a feed's filters select the channel (its rows may say otherwise
+    until the next settle)."""
+    from .generators.m3u import _selected_channel_stubs, feed_to_query_filters
+    filters = feed_to_query_filters(feed.filters or {})
+    return any(ch.id == channel_id for gracenote in (False, True)
+               for ch in _selected_channel_stubs(filters, gracenote=gracenote))
 
 
 def shown_number(channel: Channel, app_number):
@@ -86,7 +95,6 @@ def transfer_channel(old: Channel, new: Channel) -> dict:
 
     all_feeds = Feed.query.order_by(Feed.name).all()
     live_feeds = [f for f in all_feeds if f.is_enabled]
-    feeds_by_id = {f.id: f for f in live_feeds}
     before_maps = _feed_member_numbers(live_feeds)
     before = {
         fid: shown_number(old, nums[old.id])
@@ -111,18 +119,13 @@ def transfer_channel(old: Channel, new: Channel) -> dict:
         if touched:
             feed.filters = filters
 
-    # Numbers. A lock moves as-is. Without one, sticky per-feed numbers move
-    # row-for-row; positional numbering (feeds without a chnum_start) is only
-    # reproducible on another source with a lock, so lock it when the old
-    # channel had that one number everywhere, otherwise carry Channel.number
-    # as a best effort and let the report show what moved.
-    new_rows = {r.feed_id: r for r in FeedChannelNumber.query.filter_by(channel_id=new.id).all()}
-    for row in FeedChannelNumber.query.filter_by(channel_id=old.id).all():
-        if row.feed_id in new_rows:
-            new_rows[row.feed_id].number = row.number
-        else:
-            db.session.add(FeedChannelNumber(feed_id=row.feed_id, channel_id=new.id, number=row.number))
-        db.session.delete(row)
+    # Numbers. A lock moves as-is. Without one, the old channel's numbers in
+    # every scope (master and feeds) move row-for-row. A provider number
+    # belongs to the old source, so only a lock carries it: lock it when the
+    # old channel showed that one number everywhere, and let the report show
+    # what moved otherwise.
+    from .chnum import move_rows
+    move_rows(old.id, new.id)
 
     if (old.pinned_chno or '').strip():
         new.pinned_chno, old.pinned_chno = old.pinned_chno, None
@@ -133,20 +136,15 @@ def transfer_channel(old: Channel, new: Channel) -> dict:
         old.number_pinned = False
         carried.append(f'your number lock on {new.number}')
     else:
-        # Feeds without a chnum_start number by position, and a provider
-        # number belongs to the old source; only a lock carries either. Skip
-        # the lock when the moved rows already cover every feed.
-        positional = [fid for fid in before if feeds_by_id[fid].chnum_start is None]
+        # A provider number belongs to the old source; only a lock carries it.
         distinct = {str(n) for n in before.values()}
         only = next(iter(distinct)) if len(distinct) == 1 else None
-        if (positional or overlaid) and only and only.isdigit():
+        if overlaid and only and only.isdigit():
             new.number, new.number_pinned, new.pinned_chno = int(only), True, None
             notes.append(f'Locks it to channel {only} so the number stays put.')
-        elif (positional or overlaid) and only and _DECIMAL_RE.fullmatch(only):
+        elif overlaid and only and _DECIMAL_RE.fullmatch(only):
             new.pinned_chno, new.number_pinned = only, False
             notes.append(f'Locks it to channel {only} so the number stays put.')
-        elif old.number is not None:
-            new.number = old.number
 
     # Guide mapping: a user-set ID describes the content, not the source, so it
     # carries -- unless the new channel already maps somewhere else.
@@ -186,10 +184,9 @@ def transfer_channel(old: Channel, new: Channel) -> dict:
 
     # A feed that held the old channel through a filter the new one doesn't
     # match (e.g. "Roku only") keeps it by pinning the new channel in.
-    member_now = _feed_member_numbers([f for f in live_feeds if f.id in before])
     pinned_into: list[str] = []
     for feed in live_feeds:
-        if feed.id not in before or new.id in member_now[feed.id] or feed.slug == 'default':
+        if feed.id not in before or feed.slug == 'default' or _is_member(feed, new.id):
             continue
         filters = dict(feed.filters or {})
         if filters.get('channel_ids'):

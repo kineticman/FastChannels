@@ -2,7 +2,8 @@
 nbc_tve.py — NBCUniversal cable/digital networks via TV Everywhere: NBC News
 NOW, NBC Sports Now, Bravo (East/West), Bravo Vault, Real Housewives Vault,
 Telemundo Al Día, Telemundo Deportes Ahora, Noticias Telemundo Ahora, NBC
-Universo (East/West).
+Universo (East/West), and the NBC Sports RSNs (Bay Area, Boston, California,
+Philadelphia).
 
 DRM: Widevine CENC DASH via Adobe Pass Cox + NBCUniversal's own KeyOS-backed
 drm-proxy. Same generic license-proxy bridge pattern as app/scrapers/
@@ -69,9 +70,13 @@ verified byte-for-byte against a real captured license request):
 - That guide grid mixes national feeds with regional/single-market ones: the
   "nbc" row is the caller's LOCAL NBC affiliate (WCMH/PK22 in the captured
   HAR), `necn` is New England Cable News, and four `rsn-*` rows are regional
-  sports networks. This scraper keeps the local affiliate and NECN but skips
-  the RSN rows (near-certain blackout restrictions outside their home
-  market) — see _INCLUDED_BRANDS.
+  sports networks (NBC Sports Bay Area, Boston, California, Philadelphia).
+  All of them are kept. lemonade hands out an RSN manifest from anywhere
+  (checked 2026-11-03 from Ohio for Boston and Philadelphia); whether a
+  viewer may watch is the TV provider's preauthorize answer for the RSN's
+  resourceId (CSNNewEngland etc.), which resolve() already asks before every
+  play, so an out-of-market or not-subscribed account gets NotAuthorized
+  like any other channel its package lacks.
 - The `name` GraphQL variable is NOT the fixed literal "live" it first
   appeared to be — the HAR that pattern was copied from happened to be a
   ?brand=nbc-sports-now page load, where NBC's own client also sends
@@ -123,6 +128,7 @@ from ..tve.adobe_pass import (
     MvpdCooldownMixin,
     TVEAuthError,
     TVENotAuthorizedError,
+    commit_token_cache,
     load_cached_adobe_client_creds,
     save_adobe_client_creds,
 )
@@ -157,10 +163,9 @@ ADOBE_BASE = 'https://sp.auth.adobe.com'
 REQUESTOR_ID = 'nbcentertainment'
 DEFAULT_REDIRECT_URL = 'https://www.nbc.com/mvpd-complete'
 
-# National networks + the caller's local NBC affiliate + NECN — see module
-# docstring. The 4 RSN rows (Bay Area, Boston, California, Philadelphia) are
-# still deliberately excluded: single-market regional sports, almost always
-# blackout-restricted to that market's own MVPD footprint.
+# National networks + the caller's local NBC affiliate + NECN + the four
+# NBC Sports RSNs — see module docstring. The RSNs are gated per viewer by the
+# TV provider's preauthorize answer, not left out.
 _INCLUDED_BRANDS: dict[str, tuple[str, str]] = {  # machineName -> (display name, category)
     'nbc': ('NBC', 'Entertainment'),
     'nbc-news': ('NBC News NOW', 'News'),
@@ -173,6 +178,10 @@ _INCLUDED_BRANDS: dict[str, tuple[str, str]] = {  # machineName -> (display name
     'noticias-telemundo-ahora': ('Noticias Telemundo Ahora', 'News'),
     'nbc-universo': ('NBC Universo', 'Entertainment'),
     'necn': ('NECN', 'News'),
+    'rsn-bay-area': ('NBC Sports Bay Area', 'Sports'),
+    'rsn-boston': ('NBC Sports Boston', 'Sports'),
+    'rsn-california': ('NBC Sports California', 'Sports'),
+    'rsn-philadelphia': ('NBC Sports Philadelphia', 'Sports'),
 }
 
 # Reverse of _INCLUDED_BRANDS' display names, for recovering the machine brand
@@ -857,7 +866,7 @@ class NbcTveScraper(MvpdCooldownMixin, BaseScraper):
                         'client_secret': client.client_secret,
                     }
                     account.config = new_cfg
-                    db.session.commit()
+                    commit_token_cache('NBC Adobe profile')
         if not r.ok:
             logger.warning('[nbc_tve] saved %s sign-in rejected by Adobe: HTTP %s (%.1fh old)', mso_id, r.status_code, age_h)
             return None
@@ -899,9 +908,13 @@ class NbcTveScraper(MvpdCooldownMixin, BaseScraper):
         # for this MVPD (app.worker.run_nbc_browser_login), for MSOs whose login
         # page blocks scripted clients. Reuse that access_token+device
         # fingerprint instead of re-registering a client and requiring the
-        # human again, until Adobe actually stops recognizing it.
+        # human again, until Adobe actually stops recognizing it. Cox too: it
+        # used to be left out because Cox logins could be scripted, but Cox now
+        # signs in through Spectrum (browser only, see app/tve/mvpd), so
+        # skipping this re-registered a client Adobe didn't know and asked
+        # for a new sign-in about a day later (issue #72, 2026-11-03).
         cached_auth = cfg.get('nbc_mvpd_auth') or {}
-        if mso_id != 'Cox' and cached_auth.get('mso_id') == mso_id and cached_auth.get('access_token'):
+        if cached_auth.get('mso_id') == mso_id and cached_auth.get('access_token'):
             cached_client = AdobePassV2Client(
                 REQUESTOR_ID, page_config['software_statement'], DEFAULT_REDIRECT_URL,
                 cached_auth.get('device_fingerprint') or self._ensure_device_fingerprint(),
@@ -952,11 +965,9 @@ class NbcTveScraper(MvpdCooldownMixin, BaseScraper):
             # assisted flow's _save_nbc_mvpd_auth — the admin settings page's
             # "last signed in" column reads this, not last_auth_at (which is
             # shared across every TVE network and would show the wrong
-            # timestamp for NBC specifically). For mso_id != 'Cox' this also
-            # doubles as the actual reusable cached credential (see the
-            # cached_auth check above); for Cox it's status-display-only,
-            # since Cox always re-authorizes fresh here rather than reading it
-            # back. Confirmed missing live 2026-08-11: a successful scripted
+            # timestamp for NBC specifically). It also doubles as the
+            # reusable saved sign-in (see the cached_auth check above).
+            # Confirmed missing live 2026-08-11: a successful scripted
             # Cox sign-in from the "Sign in" button still showed "Never".
             new_cfg = dict(account.config or {})
             new_cfg['nbc_mvpd_auth'] = {
@@ -968,18 +979,18 @@ class NbcTveScraper(MvpdCooldownMixin, BaseScraper):
                 'captured_at': int(time.time()),
             }
             account.config = new_cfg
-            db.session.commit()
+            commit_token_cache('NBC MVPD authorization')
         except TVENotAuthorizedError as exc:
             account.last_auth_status = 'error'
             account.last_auth_message = f'NBC TVE: {mso_id} is not authorized: {exc}'[:500]
             account.last_auth_at = datetime.now(timezone.utc)
-            db.session.commit()
+            commit_token_cache('NBC auth status')
             raise TVENotAuthorizedError(f'NBC TVE: {mso_id} is not authorized: {exc}') from exc
         except TVEAuthError as exc:
             account.last_auth_status = 'error'
             account.last_auth_message = f'NBC TVE: Adobe Pass auth failed: {exc}'[:500]
             account.last_auth_at = datetime.now(timezone.utc)
-            db.session.commit()
+            commit_token_cache('NBC auth status')
             # See fox_tve.py's _fox_sports_access_token() for why this also
             # needs the per-network status, not just the easily-overwritten
             # account-wide last_auth_message.

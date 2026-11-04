@@ -300,11 +300,10 @@ def _upsert_rows(rows: list[dict]) -> int:
 
 def _delete_expired(now_utc: datetime) -> int:
     """Remove entries whose end_time is more than 1 hour in the past."""
-    from .extensions import db
+    from .db_batches import delete_in_batches
     from .models import TvtvProgramCache
     cutoff = now_utc - timedelta(hours=1)
-    deleted = TvtvProgramCache.query.filter(TvtvProgramCache.end_time < cutoff).delete()
-    return deleted
+    return delete_in_batches(TvtvProgramCache, TvtvProgramCache.end_time < cutoff)
 
 
 # ---------------------------------------------------------------------------

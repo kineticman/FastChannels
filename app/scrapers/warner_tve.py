@@ -72,7 +72,7 @@ from ..gracenote_map import resolve_gracenote
 from ..models import TVEAccount
 from ..tve.accounts import tve_account_for
 from ..tve.adobe_pass import (MvpdCooldownMixin, TVEAuthError, TVENotAuthorizedError,
-                              authorize_mvpd, save_adobe_client_creds)
+                              authorize_mvpd, commit_token_cache, save_adobe_client_creds)
 
 SCHEME = 'warner-tve://'
 UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36'
@@ -579,7 +579,6 @@ class WarnerTVEScraper(MvpdCooldownMixin, BaseScraper):
         The TCM player base64-decodes `serializedToken` before giving it to
         token.ngtv.io. Confirmed against the successful East/West HAR capture.
         """
-        from ..extensions import db
         from .nbc_tve import AdobePassV2Client
 
         cfg = account.config or {}
@@ -625,7 +624,7 @@ class WarnerTVEScraper(MvpdCooldownMixin, BaseScraper):
         new_cfg = dict(account.config or {})
         new_cfg['tcm_mvpd_auth'] = {'mso_id': mso_id, 'captured_at': int(time.time())}
         account.config = new_cfg
-        db.session.commit()
+        commit_token_cache('TCM authorization')
         return adobe_token, client.session
 
     @staticmethod

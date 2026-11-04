@@ -8,18 +8,26 @@ every channel with its HLS URL (Wurl / Amagi, clear, up to 1080p; the
 ad-macro query string isn't needed) and ~24 h of schedule in
 epgObject.events. Rows flagged noDisplay are the gaps before the schedule
 starts.
+
+That call leaves out some channels the site's live page shows (BRAT TV, Lovin
+Dubai, Coffee with America as of 2026-11-02), so the live page
+(/interface/pages/66a031f27e7d0a0024ac304c, same channel objects with their
+epgObject) is read too and its extra channels added.
 """
 from __future__ import annotations
 
 from ._common import Network, NetChannel, parse_iso, program
 
 _EPG = 'https://insight-api-shared.univtec.com/interface/epg'
+_LIVE_PAGE = 'https://insight-api-shared.univtec.com/interface/pages/66a031f27e7d0a0024ac304c'
 _HEADERS = {'x-tenant-id': 'beondtv', 'platform': 'web', 'Origin': 'https://www.beond.tv',
             'Accept': 'application/json'}
-# Carried in Free Networks already from the network's own feed (BEONDTV via
-# KSL, LatiNation = Cineverse's Latino Alternative TV stream).
-_ELSEWHERE = {"80's sitcom flashback", 'comercio tv', 'tastemade', 'young hollywood', 'beondtv', 'latination'}
-_SPANISH = {'Novelas De Siempre', 'TeleOnce America'}
+# Every channel in the feed is listed, including ones Free Networks also gets
+# from another network's feed (BEONDTV via KSL, Tastemade, Young Hollywood and
+# LatiNation via Cineverse, Comercio TV via OG Network, 80's Sitcom Flashback
+# via The CW), so users can pick whichever copy plays best for them.
+_SPANISH = {'Novelas De Siempre', 'TeleOnce America', 'Comercio TV'}
+_TITLES = {'TASTEMADE': 'Tastemade'}
 
 
 class BeOND(Network):
@@ -30,15 +38,28 @@ class BeOND(Network):
         def fetch():
             r = s.get(_EPG, headers=_HEADERS)
             data = r.json() if r else []
-            return data if isinstance(data, list) else []
+            out = data if isinstance(data, list) else []
+            seen = {ch.get('id') for ch in out}
+            try:
+                r = s.get(_LIVE_PAGE, headers=_HEADERS)
+                sections = ((r.json() or {}).get('sections') or []) if r else []
+            except ValueError:
+                sections = []
+            for sec in sections:
+                for it in sec.get('items') or []:
+                    if it.get('type') == 'channel' and it.get('videoUrl') and it.get('id') not in seen:
+                        seen.add(it.get('id'))
+                        out.append(it)
+            return out
         return s.memo('beond_feed', fetch)
 
     def channels(self, s):
         out = []
         for ch in self._feed(s):
             cid, title, url = ch.get('id'), (ch.get('title') or '').strip(), ch.get('videoUrl')
-            if not cid or not title or not url or title.lower() in _ELSEWHERE:
+            if not cid or not title or not url:
                 continue
+            title = _TITLES.get(title, title)
             # BEOND Travel's URL is a DAI request that needs its query.
             stream = url if 'doubleclick.net' in url else url.split('?', 1)[0]
             out.append(NetChannel(cid, title, stream, logo=ch.get('image') or ch.get('poster') or None,

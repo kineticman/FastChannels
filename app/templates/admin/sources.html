@@ -915,6 +915,7 @@
     .audit-row-reason.not-authorized { color: var(--danger); }
     .audit-row-reason.drm          { color: var(--warning); }
     .audit-row-reason.rate-limited { color: var(--warning); }
+    .audit-row-reason.skipped      { color: var(--text-muted); font-weight: 500; }
     .btn-audit-reenable {
       background: var(--accent-bg); color: var(--accent-soft); border: none; border-radius: 4px;
       padding: 0.18rem 0.5rem; font-size: 0.72rem; cursor: pointer; white-space: nowrap;
@@ -947,6 +948,62 @@
     .modal p  { color: var(--text-soft); font-size: 0.9rem; line-height: 1.5; margin-bottom: 1.5rem; }
     .modal p strong { color: var(--danger); }
     .modal-actions { display: flex; justify-content: flex-end; gap: 0.75rem; }
+
+    /* Channel catalog modal */
+    .catalog-box { width: 780px; max-width: 95vw; height: 86vh; padding: 1.35rem 1.5rem 1.1rem; }
+    .catalog-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; flex-shrink: 0; }
+    .catalog-title { color: var(--text-strong); font-size: 1.05rem; font-weight: 700; margin: 0; }
+    .catalog-sub { color: var(--text-muted); font-size: 0.78rem; margin-top: 0.2rem; }
+    .catalog-search {
+      width: 100%; margin-top: 0.9rem; flex-shrink: 0; background: var(--bg); border: 1px solid var(--border);
+      border-radius: 7px; padding: 0.5rem 0.75rem; color: var(--text); font-size: 0.85rem; outline: none;
+    }
+    .catalog-search:focus { border-color: var(--focus-accent); }
+    .catalog-tabs { display: flex; flex-wrap: wrap; gap: 0.35rem; margin-top: 0.7rem; flex-shrink: 0; }
+    .catalog-tab {
+      background: none; border: 1px solid var(--border); border-radius: 999px; color: var(--text-soft);
+      font-size: 0.76rem; font-weight: 600; padding: 0.28rem 0.7rem; cursor: pointer;
+    }
+    .catalog-tab:hover { color: var(--text); }
+    .catalog-tab.active { background: var(--accent-bg); border-color: var(--accent-strong); color: var(--accent-soft); }
+    .catalog-tab-count { opacity: 0.65; font-weight: 500; margin-left: 0.2rem; }
+    .catalog-note { color: var(--text-muted); font-size: 0.76rem; line-height: 1.4; margin-top: 0.6rem; flex-shrink: 0; }
+    .catalog-body { flex: 1; min-height: 0; overflow-y: auto; margin-top: 0.8rem; padding-right: 0.25rem; }
+    .catalog-group { margin-bottom: 1.1rem; }
+    .catalog-group-head {
+      display: flex; align-items: baseline; justify-content: space-between; gap: 0.75rem;
+      position: sticky; top: 0; background: var(--surface); padding: 0.2rem 0 0.4rem; z-index: 1;
+    }
+    .catalog-group-title { font-size: 0.72rem; font-weight: 700; color: var(--text-soft); text-transform: uppercase; letter-spacing: 0.06em; }
+    .catalog-group-title span { color: var(--text-muted); font-weight: 500; letter-spacing: 0; text-transform: none; margin-left: 0.35rem; }
+    .catalog-select-all { background: none; border: none; color: var(--accent-soft); font-size: 0.74rem; font-weight: 600; cursor: pointer; padding: 0; }
+    .catalog-select-all:disabled { color: var(--text-muted); cursor: default; }
+    .catalog-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 0.35rem; }
+    .catalog-item {
+      display: flex; align-items: center; gap: 0.7rem; padding: 0.5rem 0.6rem; border-radius: 8px;
+      border: 1px solid var(--border); cursor: pointer; min-width: 0; transition: background .12s, border-color .12s;
+    }
+    .catalog-item:hover { background: color-mix(in srgb, var(--border) 45%, transparent); }
+    .catalog-item.selected { border-color: var(--accent-strong); background: var(--accent-bg); }
+    .catalog-item.added { opacity: 0.5; cursor: default; }
+    .catalog-item.added:hover { background: none; }
+    .catalog-item input { accent-color: var(--accent-strong); flex-shrink: 0; cursor: inherit; }
+    .catalog-logo {
+      width: 38px; height: 38px; border-radius: 6px; flex-shrink: 0; background: var(--bg);
+      display: flex; align-items: center; justify-content: center; overflow: hidden;
+      color: var(--text-muted); font-size: 0.8rem; font-weight: 700;
+    }
+    .catalog-logo img { width: 100%; height: 100%; object-fit: contain; }
+    .catalog-text { flex: 1; min-width: 0; }
+    .catalog-name { font-size: 0.85rem; font-weight: 600; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .catalog-meta { font-size: 0.73rem; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .catalog-badge { font-size: 0.7rem; font-weight: 600; color: var(--text-muted); white-space: nowrap; }
+    .catalog-empty { color: var(--text-muted); font-size: 0.84rem; text-align: center; padding: 2.5rem 0; }
+    .catalog-foot {
+      display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; flex-shrink: 0;
+      padding-top: 0.75rem; margin-top: 0.5rem; border-top: 1px solid var(--border);
+    }
+    .catalog-status { font-size: 0.78rem; font-weight: 500; color: var(--text-soft); min-width: 0; }
 
     /* EPG-only toggle */
     .epg-only-wrap { margin-top: 0.5rem; }
@@ -988,6 +1045,7 @@
   {% include 'admin/_nav.html' %}
 
   <div class="container">
+    {% include 'admin/_lite_notice.html' %}
 
     {% if needs_config %}
     <div class="needs-config-banner" id="needs-config-banner">
@@ -1046,12 +1104,14 @@
         {% endif %}
         <button type="button" class="quicknav-chip active" data-playback-filter=""
                 onclick="setPlaybackFilter('')">All</button>
+        {% if ui.show_drm %}
         <button type="button" class="quicknav-chip" data-playback-filter="clear"
                 title="Sources whose channels play in any player: no DRM"
                 onclick="setPlaybackFilter('clear')">Any player</button>
         <button type="button" class="quicknav-chip" data-playback-filter="drm"
                 title="Sources with DRM channels, which play only through FastChannels Player"
                 onclick="setPlaybackFilter('drm')">Needs FastChannels Player</button>
+        {% endif %}
       </div>
     </div>
 
@@ -1107,6 +1167,7 @@
               data-cat="{{ this_cat }}"{% if parent_name %} data-parent="{{ parent_name }}"{% endif %} data-search="{{ (source.display_name ~ ' ' ~ source.name) | lower }}"
               data-playback="{{ mix.get('kind', 'clear') }}"
               data-fc-player="{{ 'true' if mix.get('fc_player') else 'false' }}"
+              data-advanced="{{ 'true' if advanced_sources.get(source.name) else 'false' }}"
               {% if mix.get('kind') in ('drm', 'some') and not bridge_ready.get(source.id) %}data-bridge-missing="true"{% endif %}
               {% if status and status.state in ('error', 'warn', 'setup') %}data-issue="true"{% endif %}
               {% if is_custom %}data-custom="true"{% endif %}
@@ -1114,8 +1175,9 @@
             <td class="col-source">
               <div class="source-name-wrap">
                 <span class="source-name">{{ source.display_name }}</span>
+                {% if ui.lite and advanced_sources.get(source.name) %}<span class="config-badge" title="Available in advanced mode; enabled sources stay visible in lite mode">Advanced</span>{% endif %}
                 {% if not is_custom %}
-                  {% if mix.get('kind') in ('drm', 'some') %}
+                  {% if ui.show_drm and mix.get('kind') in ('drm', 'some') %}
                     {% set _via = 'FastChannels Player' if mix.fc_player else 'PrismCast (not yet tested with FastChannels Player)' %}
                     {% set _ready = ' A DRM bridge is set up.' if bridge_ready.get(source.id) else ' No DRM bridge is set up yet.' %}
                     {% if mix.kind == 'drm' %}
@@ -1162,7 +1224,7 @@
                 <span class="custom-note" title="Paste a link and FastChannels works out the stream; channels play straight from it, with nothing to scrape. For a whole M3U playlist, use + Add Playlist above.">Channels you add one at a time from a link — YouTube, Twitch, a web player, or a direct HLS, DASH or MPEG-TS stream</span>
                 {% endif %}
                 {% set total = mix.get('total', 0) %}
-                <a class="ch-mix" href="/admin/channels?source={{ source.name }}" title="{{ mix_title(mix) if mix else '' }}">
+                <a class="ch-mix" href="/admin/channels?source={{ source.name }}" title="{{ mix_title(mix) if ui.show_drm and mix else 'Channels discovered by this source' }}">
                   <span class="ch-mix-count">{% if total %}<span id="ch-count-{{ source.id }}">{{ mix.play + mix.drm }}</span> of {{ total }} on{% else %}<span id="ch-count-{{ source.id }}" hidden>0</span>No channels yet{% endif %}</span>
                   {% if total %}
                   <span class="ch-mix-bar" aria-hidden="true">
@@ -1173,6 +1235,9 @@
                   {% endif %}
                 </a>
               </div>
+              {% if ui.lite and not ui.show_drm and mix.get('restricted', 0) %}
+              <div class="config-note">{{ mix.restricted }} protected channel{{ 's' if mix.restricted != 1 else '' }} excluded from standard playlists.</div>
+              {% endif %}
               {% set children = source_children.get(source.name) %}
               {% if children %}
               <button type="button" class="child-toggle" id="child-toggle-{{ source.name }}" aria-expanded="false"
@@ -1186,8 +1251,8 @@
               <div class="drm-heads-up" id="drm-heads-up-{{ source.id }}" hidden></div>
               {% if not is_custom %}
               <div class="scrape-status" id="scrape-status-{{ source.id }}"></div>
-              <div class="audit-status" id="audit-status-{{ source.id }}"></div>
               {% endif %}
+              <div class="audit-status" id="audit-status-{{ source.id }}"></div>
               <div class="mobile-toggle-wrap">
                 <label class="toggle" id="mobile-toggle-{{ source.id }}">
                   <input type="checkbox" {% if source.is_enabled %}checked{% endif %}
@@ -1216,11 +1281,12 @@
             </td>
 
             <td class="col-actions">
-              {% if not is_custom %}
               <div class="dash-actions">
+                {% if not is_custom %}
                 <button class="btn btn-run btn-sm" data-label="Scrape" onclick="run({{ source.id }}, this)"
                         {% if not source.is_enabled %}disabled{% endif %}
                         title="Fetch the latest channel list and guide data now.">Scrape</button>
+                {% endif %}
                 {% if audit_enabled.get(source.name) %}
                 <button class="btn btn-audit btn-sm" data-label="Audit"
                         onclick='openAuditModal({{ source.id }}, {{ source.display_name | tojson }})'
@@ -1228,7 +1294,6 @@
                         title="Check linear stream health and DRM. You can include scheduled events in the audit modal.">Audit</button>
                 {% endif %}
               </div>
-              {% endif %}
               {# Mobile-only configure button — hidden on desktop via CSS #}
               {% if is_custom %}
               <button class="btn btn-configure btn-sm configure-btn-display mobile-configure"
@@ -1283,7 +1348,7 @@
                    data-source-name="{{ source.name }}"
                    data-config-required="{{ 'true' if config_required.get(source.name) else 'false' }}">
 
-                {% if source.name in ('amazon_prime_free', 'sling') %}
+                {% if source.name in ('amazon_prime_free', 'amazon_sports', 'sling') %}
                 <div class="drm-note">⚠ All streams from this source are DRM-protected and will not play on most clients.</div>
                 {% endif %}
 
@@ -1400,6 +1465,12 @@
     <div class="dashboard-panel no-results-row" id="no-sources-match-row" style="display:none">
       No sources match "<span id="no-sources-match-query"></span>".
     </div>
+    {% if hidden_source_count %}
+    <p class="config-note" id="advanced-sources-note">{{ hidden_source_count }} more sources (subscriptions, TV Everywhere, DRM) in advanced mode:
+      <button type="button" class="btn btn-cancel btn-sm" onclick="showAdvancedSources(this)">Show</button>
+      <span id="advanced-sources-status" role="status"></span>
+    </p>
+    {% endif %}
 
   </div>
 
@@ -1473,6 +1544,7 @@
       <p id="modal-body">All channels from <strong id="modal-source-name"></strong> will be
          <strong>deleted from the database</strong> and removed from your M3U and EPG.
          Re-enabling will re-scrape and restore them.</p>
+      <p id="lite-disable-warning" hidden>This source is hidden in lite mode once disabled.</p>
       <div class="modal-actions">
         <button class="btn btn-cancel" onclick="cancelDisable()">Cancel</button>
         <button class="btn btn-confirm" onclick="confirmDisable()">Disable &amp; Delete</button>
@@ -1502,18 +1574,25 @@
   </div>
 
   <!-- Channel Catalog Modal -->
-  <div class="modal-overlay" id="channel-catalog-modal">
-    <div class="modal-box" style="width:620px;max-width:95vw;max-height:90vh;display:flex;flex-direction:column;padding:1.5rem 1.75rem;">
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1.25rem;">
-        <h2 style="font-size:1.05rem;font-weight:700;margin:0;">Channel Catalog</h2>
+  <div class="modal-overlay" id="channel-catalog-modal" onclick="if (event.target === this) closeChannelCatalog()">
+    <div class="modal-box catalog-box">
+      <div class="catalog-head">
+        <div>
+          <h2 class="catalog-title">Channel Catalog</h2>
+          <div class="catalog-sub" id="catalog-sub">Free streams you can add as custom channels.</div>
+        </div>
         <button class="btn btn-cancel btn-sm" onclick="closeChannelCatalog()">✕</button>
       </div>
-      <div id="catalog-body" style="flex:1;overflow-y:auto;min-height:0;">
-        <div style="color:var(--text-muted);font-size:.84rem;">Loading…</div>
+      <input type="search" class="catalog-search" id="catalog-search" placeholder="Search by name, town or state…"
+             oninput="_catalogQuery = this.value; renderCatalog()">
+      <div class="catalog-tabs" id="catalog-tabs"></div>
+      <div class="catalog-note" id="catalog-note" hidden></div>
+      <div class="catalog-body" id="catalog-body">
+        <div class="catalog-empty">Loading…</div>
       </div>
-      <div style="display:flex;align-items:center;justify-content:space-between;gap:.75rem;padding-top:.75rem;margin-top:.75rem;border-top:1px solid var(--border);">
-        <span id="catalog-status" style="font-size:.78rem;font-weight:500;color:var(--text-soft);"></span>
-        <div style="display:flex;gap:.75rem;">
+      <div class="catalog-foot">
+        <span class="catalog-status" id="catalog-status"></span>
+        <div style="display:flex;gap:.75rem;flex-shrink:0;">
           <button class="btn btn-cancel btn-sm" onclick="closeChannelCatalog()">Cancel</button>
           <button class="btn btn-run btn-sm" id="catalog-add-btn" onclick="addCatalogSelected()" disabled>Add Selected</button>
         </div>
@@ -1651,7 +1730,7 @@
     </div>
   </div>
 
-  <script>
+    <script>
     const MASK = '••••••••';
     let _pendingSourceId   = null;
     let _pendingCheckbox   = null;
@@ -2013,6 +2092,19 @@
 
     // ── New-channel review nudge at enable time ───────────────────────────
     const AUTO_ALLOW_NEW_CHANNELS = {{ 'true' if auto_allow_new_channels else 'false' }};
+    const LITE_MODE = {{ ui.lite | tojson }};
+    const SHOW_DRM = {{ ui.show_drm | tojson }};
+
+    async function showAdvancedSources(button) {
+      button.disabled = true;
+      try {
+        await setLiteModePreference(false);
+        window.location.reload();
+      } catch (error) {
+        document.getElementById('advanced-sources-status').textContent = 'Could not save. Please try again.';
+        button.disabled = false;
+      }
+    }
 
     async function maybeOfferReviewHold(sourceId) {
       // Only relevant when the global default would let channels flow straight in
@@ -2041,6 +2133,7 @@
         _pendingSourceId = sourceId;
         _pendingCheckbox = checkbox;
         document.getElementById('modal-source-name').textContent = sourceName;
+        document.getElementById('lite-disable-warning').hidden = !(LITE_MODE && row?.dataset.advanced === 'true');
         document.getElementById('confirm-modal').classList.add('open');
       } else {
         // Custom source or re-enabling: no destructive action needed
@@ -2313,6 +2406,7 @@
             result.total       ? (result.aborted_reason && result.channel_count ? `${result.total} of ${result.channel_count} scanned` : `${result.total} scanned`) + (result.not_in_output ? ` (${result.not_in_output} not in output)` : '') : null,
             result.scope ? (result.scope === 'all' ? 'all channels' : 'linear only') : null,
             result.skipped_events ? `${result.skipped_events} event channels skipped` : null,
+            result.skipped_by_source ? `${result.skipped_by_source} skipped` : null,
             `<span class="aud-ok">${ok} ok</span>`,
             result.dead        ? `<span class="aud-dead">${result.dead} dead</span>`               : null,
             result.vod         ? `<span class="aud-vod">${result.vod} VOD</span>`                  : null,
@@ -2339,6 +2433,7 @@
           const unauthorized = report.channels.filter(c => c.status === 'not-authorized');
           const limited = report.channels.filter(c => c.status === 'rate-limited');
           const errors  = report.channels.filter(c => c.status === 'error');
+          const skipped = report.channels.filter(c => c.status === 'skipped');
 
           const formatReasonText = (reason, status) => {
             const text = String(reason || '').trim();
@@ -2348,6 +2443,7 @@
             if (status === 'not-authorized') return 'Not authorized';
             if (status === 'drm') return 'DRM';
             if (status === 'drm_bridge') return text ? `${text} (bridged)` : 'Bridged';
+            if (status === 'skipped') return text;
             const httpMatch = text.match(/^HTTP\s+(\d{3})(?::\s*(.*))?$/i);
             if (httpMatch) return `HTTP ${httpMatch[1]}`;
             const embeddedHttp = text.match(/\bHTTP\s+(\d{3})\b/i);
@@ -2375,6 +2471,10 @@
           html += renderGroup('Bridged — DRM detected, kept active via a configured capture path', bridged, false);
           html += renderGroup('Blocked — geo/location or rate-limited, not a session problem', limited, false);
           html += renderGroup('Errors', errors, false);
+          if (skipped.length === report.channels.length && result && result.checked > 0) {
+            html += `<div class="audit-no-results" style="color:var(--success-soft);padding:0.75rem 0;">✓ All ${result.total || result.checked} checked channels are healthy.</div>`;
+          }
+          html += renderGroup('Skipped — not checked', skipped, false);
           html += `</div>`;
           _lastRecheckIds[sourceId] = limited.map(c => c.id).filter(Boolean);
         } else if (!result) {
@@ -2486,9 +2586,13 @@
     function _statusText(data) {
       if (data.status === 'queued') return { cls: 'status-queued', text: 'Queued' };
       if (data.status === 'running') {
+        const detail = data.detail ? ` · ${escapeHtml(data.detail)}` : '';
+        if (data.phase === 'channels' && data.total > 0) {
+          return { cls: 'status-running', text: `Channels: network ${data.done + 1} / ${data.total}${detail}` };
+        }
         if (data.phase === 'epg' && data.total > 0) {
           const pct = Math.round(data.done / data.total * 100);
-          return { cls: 'status-running', text: `EPG ${data.done} / ${data.total} (${pct}%)` };
+          return { cls: 'status-running', text: `EPG ${data.done} / ${data.total} (${pct}%)${detail}` };
         }
         if (data.phase === 'desc' && data.total > 0) {
           const pct = Math.round(data.done / data.total * 100);
@@ -2643,6 +2747,7 @@
                                 + (r.not_in_output ? ` (${r.not_in_output} not in output)` : ''));
       if (r.scope)            bits.push(r.scope === 'all' ? 'all channels' : 'linear only');
       if (r.skipped_events)   bits.push(`${r.skipped_events} events skipped`);
+      if (r.skipped_by_source) bits.push(`${r.skipped_by_source} skipped`);
       if (r.checked != null)  bits.push(`${ok} ok`);
       if (r.dead)             bits.push(`${r.dead} dead`);
       if (r.vod)              bits.push(`${r.vod} VOD`);
@@ -2845,7 +2950,7 @@
 
       return `
         <div class="config-title">PBS Settings</div>
-        <div class="config-note">The scraper automatically imports clear (non-DRM) HLS feeds from the curated station list and any ZIP codes below. Individual feeds — clear or DRM — can also be hand-picked below; DRM feeds (main/PBS KIDS) are opt-in only and play through PrismCast Capture or a hardware capture path.</div>
+        <div class="config-note">{% if ui.show_drm %}The scraper automatically imports clear (non-DRM) HLS feeds from the curated station list and any ZIP codes below. Individual feeds — clear or DRM — can also be hand-picked below; DRM feeds (main/PBS KIDS) are opt-in only and play through PrismCast Capture or a hardware capture path.{% else %}Import clear HLS feeds from the curated station list and any ZIP codes below, or choose individual clear feeds in the finder. Feeds you already added stay available.{% endif %}</div>
         <div class="fields-grid">
           <div class="field field-full">
             <div class="config-toggle-field">
@@ -2874,7 +2979,7 @@
 
         <details class="pbs-drm-details" open>
           <summary>Station &amp; Feed Finder</summary>
-          <div class="config-note">Search by ZIP code, then add individual feeds — mix and match clear and DRM per station (e.g. a clear secondary feed plus just the Main DRM feed, skipping PBS KIDS). DRM feeds only play through a DRM bridge — turn on PrismCast Capture or hardware capture in Bridge settings to use them.</div>
+          <div class="config-note">{% if ui.show_drm %}Search by ZIP code, then add individual feeds — mix and match clear and DRM per station (e.g. a clear secondary feed plus just the Main DRM feed, skipping PBS KIDS). DRM feeds only play through a DRM bridge — turn on PrismCast Capture or hardware capture in Bridge settings to use them.{% else %}Search by ZIP code, then add individual clear feeds. Additional protected feeds are available in <a href="/admin/settings#interface-card">advanced mode</a>.{% endif %}</div>
           <div style="display:flex;align-items:flex-end;gap:8px;margin:0.5rem 0;">
             <div class="field" style="margin:0;flex:0 0 auto;max-width:160px;">
               <label for="pbs-drm-zip-${sourceId}">ZIP code</label>
@@ -2907,6 +3012,7 @@
 
     function pbsFeedRowHtml(sourceId, station, feed) {
       const already = (_pbsManualFeedCache[sourceId] || new Set()).has(pbsFeedKey(station.station_id, feed.profile));
+      if (!SHOW_DRM && feed.type === 'drm' && !already) return '';
       const typeLabel = feed.type === 'drm' ? 'DRM' : 'Clear';
       return `
         <div class="pbs-feed-row">
@@ -3315,8 +3421,8 @@
           return;
         }
 
-        // ESPN's and Paramount+'s visible settings are rendered separately from their hidden schemas.
-        if (!schema.length && sourceName !== 'espn' && sourceName !== 'paramount' && !cfg.tve_signin) {
+        // ESPN's, Paramount+'s and Amazon Sports' visible settings are rendered separately from their hidden schemas.
+        if (!schema.length && !['espn', 'paramount', 'amazon_sports', 'b1g_plus'].includes(sourceName) && !cfg.tve_signin) {
           if (badge) {
             badge.textContent = 'Auto';
             badge.className = 'config-badge auto';
@@ -3847,85 +3953,94 @@
     }
     // ── end Philo sign-in ─────────────────────────────────────────────────────
 
-    // ── NESN: NESN account (email → code), then the TV provider ──────────────
-    function renderNesnConfig(sourceId, schema, values, cfg) {
-      const info = (cfg && cfg.nesn) || {};
+    // ── ViewLift sites (NESN, Monumental, Altitude, MyOutdoorTV): an account
+    // on the site (email → code, or email only), then the TV provider ────────
+    function renderViewLiftConfig(sourceId, sourceName, schema, values, cfg) {
+      const info = (cfg && cfg.viewlift) || {};
+      const brand = escapeHtml(info.brand || 'ViewLift');
       const email = String(info.email || values.email || '');
+      const byCode = info.signup === 'otp';
       const tveSignin = cfg && cfg.tve_signin ? renderTveSigninSection(sourceId, cfg.tve_signin) : '';
+      const intro = byCode
+        ? `${brand} links your TV provider to a free ${brand} account. Enter its email (or a new one at ${escapeHtml(info.domain || '')}) and ${brand} emails you a code. There is no password.`
+        : `${brand} links your TV provider to a free ${brand} account. Enter any email address and the account is created right away, with no code or password. ${brand} doesn't check the address.`;
       return `
-        <div class="config-title">NESN Settings</div>
-        <div class="config-subtitle" style="font-weight:600">1. NESN account</div>
+        <div class="config-title">${brand} Settings</div>
+        <div class="config-subtitle" style="font-weight:600">1. ${brand} account</div>
         <div class="config-note">
-          ${info.signed_in
-            ? `Signed in to NESN as ${escapeHtml(email)}. The sign-in renews itself.`
-            : 'NESN links your TV provider to a free NESN account. Enter its email (or a new one at watch.nesn.com) and NESN emails you a code. There is no password.'}
+          ${info.signed_in ? `Signed in to ${brand} as ${escapeHtml(email)}. The sign-in renews itself.` : intro}
         </div>
-        <div class="amazon-autologin-panel" id="nesn-login-${sourceId}">
+        <div class="amazon-autologin-panel" id="viewlift-login-${sourceId}">
           <div class="amazon-autologin-header">
-            <input type="text" id="nesn-email-${sourceId}" class="philo-ident-input"
-                   value="${escapeHtml(email)}" placeholder="NESN account email" autocomplete="username"
-                   onkeydown="if(event.key==='Enter') nesnSendCode(${sourceId})">
-            <button class="btn btn-run" type="button" id="nesn-send-btn-${sourceId}"
-                    onclick="nesnSendCode(${sourceId})">${info.signed_in ? 'Sign in again' : 'Send code'}</button>
+            <input type="text" id="viewlift-email-${sourceId}" class="philo-ident-input"
+                   value="${escapeHtml(email)}" placeholder="${brand} account email" autocomplete="username"
+                   onkeydown="if(event.key==='Enter') viewliftSendCode(${sourceId}, '${sourceName}')">
+            <button class="btn btn-run" type="button" id="viewlift-send-btn-${sourceId}"
+                    onclick="viewliftSendCode(${sourceId}, '${sourceName}')">${info.signed_in ? 'Sign in again' : (byCode ? 'Send code' : 'Sign in')}</button>
           </div>
-          <span class="amazon-status-text" id="nesn-status-${sourceId}">
+          <span class="amazon-status-text" id="viewlift-status-${sourceId}">
             ${info.signed_in ? '<span style="color:var(--success-soft)">&#10003; Signed in</span>' : ''}
           </span>
-          <div class="amazon-otp-row" id="nesn-code-${sourceId}" style="display:none">
-            <label for="nesn-code-input-${sourceId}">Code:</label>
-            <input type="text" id="nesn-code-input-${sourceId}" placeholder="123456"
+          <div class="amazon-otp-row" id="viewlift-code-${sourceId}" style="display:none">
+            <label for="viewlift-code-input-${sourceId}">Code:</label>
+            <input type="text" id="viewlift-code-input-${sourceId}" placeholder="123456"
                    maxlength="8" autocomplete="one-time-code" inputmode="numeric"
-                   onkeydown="if(event.key==='Enter') nesnVerifyCode(${sourceId})">
-            <button class="btn btn-run btn-sm" type="button" onclick="nesnVerifyCode(${sourceId})">Verify</button>
-            <button class="btn btn-cancel btn-sm" type="button" onclick="nesnSendCode(${sourceId})">Resend</button>
+                   onkeydown="if(event.key==='Enter') viewliftVerifyCode(${sourceId}, '${sourceName}')">
+            <button class="btn btn-run btn-sm" type="button" onclick="viewliftVerifyCode(${sourceId}, '${sourceName}')">Verify</button>
+            <button class="btn btn-cancel btn-sm" type="button" onclick="viewliftSendCode(${sourceId}, '${sourceName}')">Resend</button>
           </div>
         </div>
         <div class="config-subtitle" style="font-weight:600">2. TV provider</div>
-        <div class="config-note">NESN plays only for TV provider accounts billed to an address in NESN's New England market.</div>
+        ${info.market_note ? `<div class="config-note">${escapeHtml(info.market_note)}.</div>` : ''}
         ${tveSignin}`;
     }
 
-    async function nesnSendCode(sourceId) {
-      const btn      = document.getElementById(`nesn-send-btn-${sourceId}`);
-      const statusEl = document.getElementById(`nesn-status-${sourceId}`);
-      const email = (document.getElementById(`nesn-email-${sourceId}`)?.value || '').trim();
-      if (!email) { statusEl.innerHTML = '<span style="color:var(--warning-soft)">Enter your NESN account email.</span>'; return; }
+    async function viewliftSendCode(sourceId, sourceName) {
+      const btn      = document.getElementById(`viewlift-send-btn-${sourceId}`);
+      const statusEl = document.getElementById(`viewlift-status-${sourceId}`);
+      const email = (document.getElementById(`viewlift-email-${sourceId}`)?.value || '').trim();
+      if (!email) { statusEl.innerHTML = '<span style="color:var(--warning-soft)">Enter an email address.</span>'; return; }
       btn.disabled = true;
-      statusEl.innerHTML = '<span style="color:var(--text-muted)">Sending code…</span>';
+      statusEl.innerHTML = '<span style="color:var(--text-muted)">Signing in…</span>';
       try {
-        const r = await fetch(`/api/sources/${sourceId}/nesn-login/send-code`, {
+        const r = await fetch(`/api/sources/${sourceId}/viewlift-login/send-code`, {
           method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({email}),
         });
         const d = await r.json().catch(() => ({}));
-        if (!r.ok) { statusEl.innerHTML = `<span style="color:var(--danger-soft)">${escapeHtml(d.error || 'Could not send code.')}</span>`; return; }
+        if (!r.ok) { statusEl.innerHTML = `<span style="color:var(--danger-soft)">${escapeHtml(d.error || 'Could not sign in.')}</span>`; return; }
+        if (d.status === 'signed_in') {
+          statusEl.innerHTML = '<span style="color:var(--success-soft)">&#10003; Signed in</span>';
+          setTimeout(() => loadSourceConfig(sourceId, sourceName), 600);
+          return;
+        }
         statusEl.innerHTML = `<span style="color:var(--success-soft)">Code sent to ${escapeHtml(d.email || email)}. Enter it below.</span>`;
-        document.getElementById(`nesn-code-${sourceId}`).style.display = 'flex';
-        document.getElementById(`nesn-code-input-${sourceId}`)?.focus();
+        document.getElementById(`viewlift-code-${sourceId}`).style.display = 'flex';
+        document.getElementById(`viewlift-code-input-${sourceId}`)?.focus();
       } catch (e) {
-        statusEl.innerHTML = '<span style="color:var(--danger-soft)">Network error sending code.</span>';
+        statusEl.innerHTML = '<span style="color:var(--danger-soft)">Network error signing in.</span>';
       } finally {
         btn.disabled = false;
       }
     }
 
-    async function nesnVerifyCode(sourceId) {
-      const statusEl = document.getElementById(`nesn-status-${sourceId}`);
-      const code = (document.getElementById(`nesn-code-input-${sourceId}`)?.value || '').trim();
+    async function viewliftVerifyCode(sourceId, sourceName) {
+      const statusEl = document.getElementById(`viewlift-status-${sourceId}`);
+      const code = (document.getElementById(`viewlift-code-input-${sourceId}`)?.value || '').trim();
       if (!code) return;
       statusEl.innerHTML = '<span style="color:var(--text-muted)">Verifying…</span>';
       try {
-        const r = await fetch(`/api/sources/${sourceId}/nesn-login/verify`, {
+        const r = await fetch(`/api/sources/${sourceId}/viewlift-login/verify`, {
           method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({code}),
         });
         const d = await r.json().catch(() => ({}));
         if (!r.ok) { statusEl.innerHTML = `<span style="color:var(--danger-soft)">${escapeHtml(d.error || 'Verification failed.')}</span>`; return; }
         statusEl.innerHTML = '<span style="color:var(--success-soft)">&#10003; Signed in</span>';
-        setTimeout(() => loadSourceConfig(sourceId, 'nesn_tve'), 600);
+        setTimeout(() => loadSourceConfig(sourceId, sourceName), 600);
       } catch (e) {
         statusEl.innerHTML = '<span style="color:var(--danger-soft)">Network error verifying code.</span>';
       }
     }
-    // ── end NESN sign-in ──────────────────────────────────────────────────────
+    // ── end ViewLift sign-in ──────────────────────────────────────────────────
 
     // ── ESPN activation-code sign-in (same flow as ESPN's TV apps) ───────────
     const _espnPollTimers = {};
@@ -4112,6 +4227,14 @@
     // Checkbox clicks update rows in place, so the list keeps its scroll
     // position and focus; only mode/service changes rebuild it.
     const _espnOpenSports = {};
+    // Other event sources reuse this picker (Amazon Sports): which preview
+    // events count, in place of ESPN's service checkboxes.
+    const _eventSourceFilter = {};
+
+    function _espnEventVisible(sourceId, event, services) {
+      const filter = _eventSourceFilter[sourceId];
+      return filter ? filter(event) : event.services.some(s => services.includes(s));
+    }
 
     function _espnSelectedServices(sourceId) {
       const keys = {
@@ -4357,7 +4480,7 @@
       const policy = _espnEventPolicy[sourceId];
       const preview = _espnEventPreview[sourceId];
       const services = _espnSelectedServices(sourceId);
-      const events = preview ? preview.events.filter(e => e.services.some(s => services.includes(s))) : [];
+      const events = preview ? preview.events.filter(e => _espnEventVisible(sourceId, e, services)) : [];
       const listed = policy.hide_likely_shows ? events.filter(e => !e.likely_show) : events;
       const bySport = new Map();
       const add = (sport, league, n) => {
@@ -4398,7 +4521,7 @@
       const policy = _espnEventPolicy[sourceId];
       const box = document.getElementById(`espn-filter-${sourceId}`);
       if (!policy || !box) return;
-      box.classList.toggle('is-off', !_espnSelectedServices(sourceId).length);
+      box.classList.toggle('is-off', !_eventSourceFilter[sourceId] && !_espnSelectedServices(sourceId).length);
       const list = document.getElementById(`espn-sports-${sourceId}`);
       list.hidden = policy.sport_mode !== 'selected';
       if (!list.hidden) {
@@ -4462,7 +4585,7 @@
       const sports = Object.entries(policy.sports).sort((a, b) => a[0].localeCompare(b[0]));
       picked.classList.toggle('is-empty', policy.sport_mode === 'selected' && !sports.length);
       picked.innerHTML = policy.sport_mode === 'all'
-        ? 'Every sport and league, including ones ESPN adds later.'
+        ? 'Every sport and league, including ones added later.'
         : sports.length
           ? sports.map(([name, rule]) => `<span class="espn-chip">${escapeHtml(name)}${rule.league_mode === 'selected'
               ? ` <small>· ${escapeHtml(rule.leagues.join(', '))}</small>` : ''}</span>`).join('')
@@ -4475,7 +4598,8 @@
       }
       const {events} = _espnCatalog(sourceId);
       const included = events.filter(e => _espnEventIncluded(e, policy)).length;
-      match.innerHTML = `<strong>${included}</strong> of ${events.length} events in the next ${preview.window_hours}h`;
+      match.innerHTML = `<strong>${included}</strong> of ${events.length} events`
+        + (preview.window_hours ? ` in the next ${preview.window_hours}h` : '');
     }
 
     function espnSetSportMode(sourceId, mode) {
@@ -4528,6 +4652,173 @@
       }
       _espnSyncSport(sourceId, sportIndex);
       _espnSyncSummary(sourceId);
+    }
+
+    // ── Amazon Sports ───────────────────────────────────────────────────
+    // The saved filter adds access to the ESPN picker's sport/league policy:
+    //   {access_mode: 'entitled'|'selected', access: [subscription, ...], ...}
+    // 'entitled' follows what Amazon says this account can play; preview
+    // events carry their access labels (what they play through, or what
+    // would unlock them) and whether this account is entitled.
+    function renderAmazonSportsConfig(sourceId, cfg) {
+      const info = (cfg && cfg.amazon_sports) || {};
+      const policy = JSON.parse(JSON.stringify(info.event_filter
+        || {access_mode: 'entitled', access: [], sport_mode: 'all', sports: {}}));
+      policy.teams = [];
+      _espnEventPolicy[sourceId] = policy;
+      _espnTeamLeague[sourceId] = null;
+      _eventSourceFilter[sourceId] = event => _amazonSportsAccessAllows(sourceId, event);
+      setTimeout(() => amazonSportsInit(sourceId), 0);
+      const account = info.signed_in
+        ? '<span class="espn-auth-state signed-in">&#10003; Signed in</span>'
+        : '<span class="espn-auth-state">Not signed in — sign in on the Amazon Prime Free source</span>';
+      return `
+        <div class="config-title">Amazon Sports Settings</div>
+        <div class="config-note">Uses the Amazon sign-in from the Amazon Prime Free source; that source doesn't need to be on. ${account}</div>
+        <div class="espn-events" id="espn-events-${sourceId}">
+          <div class="espn-events-head">
+            <div class="config-subtitle">Event channels</div>
+            <span class="espn-match" id="espn-match-${sourceId}" aria-live="polite"></span>
+          </div>
+          <div class="config-note">
+            Adds live and upcoming Prime Video sports events as temporary channels, with Amazon's own start and
+            predicted end. Channels retire two hours after the predicted end (later if the event runs over) and are
+            deleted a day later. Playback uses the DRM bridge.
+          </div>
+          <div class="espn-filter">
+            <div class="espn-mode" role="radiogroup" aria-label="Subscriptions">
+              <span class="espn-mode-label">Subscriptions</span>
+              <label><input type="radio" name="amzs-access-mode-${sourceId}" value="entitled"
+                     ${policy.access_mode !== 'selected' ? 'checked' : ''}
+                     onchange="amazonSportsSetAccessMode(${sourceId}, this.value)">What my Amazon account can play</label>
+              <label><input type="radio" name="amzs-access-mode-${sourceId}" value="selected"
+                     ${policy.access_mode === 'selected' ? 'checked' : ''}
+                     onchange="amazonSportsSetAccessMode(${sourceId}, this.value)">Only the ones I pick</label>
+            </div>
+            <div class="espn-picked" id="amzs-access-picked-${sourceId}"></div>
+            <div class="espn-sport-list" id="amzs-access-${sourceId}" hidden></div>
+          </div>
+          <div class="espn-filter" id="espn-filter-${sourceId}" style="margin-top:0.7rem">
+            <div class="espn-mode" role="radiogroup" aria-label="Sports">
+              <span class="espn-mode-label">Sports</span>
+              <label><input type="radio" name="espn-mode-${sourceId}" value="all"
+                     ${policy.sport_mode === 'all' ? 'checked' : ''}
+                     onchange="espnSetSportMode(${sourceId}, this.value)">All, including new ones</label>
+              <label><input type="radio" name="espn-mode-${sourceId}" value="selected"
+                     ${policy.sport_mode === 'selected' ? 'checked' : ''}
+                     onchange="espnSetSportMode(${sourceId}, this.value)">Only the ones I pick</label>
+            </div>
+            <div class="espn-picked" id="espn-picked-${sourceId}"></div>
+            <div class="espn-sport-list" id="espn-sports-${sourceId}" hidden></div>
+          </div>
+        </div>
+        <div class="config-actions">
+          <span class="config-status" id="config-status-${sourceId}"></span>
+          <button class="btn btn-run" type="button" onclick="saveSourceConfig(${sourceId})">Save settings</button>
+        </div>`;
+    }
+
+    function _amazonSportsAccessAllows(sourceId, event) {
+      const policy = _espnEventPolicy[sourceId];
+      if (policy.access_mode !== 'selected') return !!event.entitled;
+      const picked = new Set(policy.access.map(name => name.toLocaleLowerCase()));
+      return (event.access || []).some(label => picked.has(label.toLocaleLowerCase()));
+    }
+
+    // Every subscription the last scrape saw, with its event count and
+    // whether this account plays through it; saved picks no longer listed
+    // stay visible so they can be unticked.
+    function _amazonSportsAccessCatalog(sourceId) {
+      const preview = _espnEventPreview[sourceId];
+      const labels = new Map();
+      for (const e of (preview && preview.events) || []) {
+        for (const label of e.access || []) {
+          if (!labels.has(label)) labels.set(label, {count: 0, entitled: false});
+          const entry = labels.get(label);
+          entry.count += 1;
+          entry.entitled ||= (e.playable_access || []).includes(label);
+        }
+      }
+      for (const label of _espnEventPolicy[sourceId].access) {
+        if (![...labels.keys()].some(l => l.toLocaleLowerCase() === label.toLocaleLowerCase())) {
+          labels.set(label, {count: 0, entitled: false});
+        }
+      }
+      return [...labels].sort((a, b) => (b[1].entitled - a[1].entitled) || a[0].localeCompare(b[0]));
+    }
+
+    function amazonSportsInit(sourceId) {
+      _espnEventPreview[sourceId] = undefined;
+      amazonSportsRefresh(sourceId);
+      fetch(`/api/sources/${sourceId}/amazon-sports-preview`)
+        .then(r => r.json().then(d => { if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`); return d; }))
+        .then(data => { _espnEventPreview[sourceId] = data; amazonSportsRefresh(sourceId); })
+        .catch(err => {
+          _espnEventPreview[sourceId] = null;
+          const match = document.getElementById(`espn-match-${sourceId}`);
+          if (match) match.textContent = 'Event counts unavailable';
+          for (const id of [`amzs-access-${sourceId}`, `espn-sports-${sourceId}`]) {
+            const list = document.getElementById(id);
+            if (list) list.innerHTML = `<div class="espn-list-note">${escapeHtml(err.message)}</div>`;
+          }
+          amazonSportsRefresh(sourceId);
+        });
+    }
+
+    function amazonSportsRefresh(sourceId) {
+      const policy = _espnEventPolicy[sourceId];
+      const list = document.getElementById(`amzs-access-${sourceId}`);
+      const picked = document.getElementById(`amzs-access-picked-${sourceId}`);
+      if (!policy || !list || !picked) return;
+      const preview = _espnEventPreview[sourceId];
+      const catalog = _amazonSportsAccessCatalog(sourceId);
+      const mine = catalog.filter(([, entry]) => entry.entitled).map(([label]) => label);
+      list.hidden = policy.access_mode !== 'selected';
+      if (policy.access_mode !== 'selected') {
+        picked.classList.remove('is-empty');
+        picked.innerHTML = preview
+          ? (mine.length ? `Your account plays: ${mine.map(l => `<span class="espn-chip">${escapeHtml(l)}</span>`).join('')}`
+                         : 'Amazon lists no events this account can play right now.')
+          : '';
+      } else {
+        picked.classList.toggle('is-empty', !policy.access.length);
+        picked.innerHTML = policy.access.length
+          ? policy.access.map(l => `<span class="espn-chip">${escapeHtml(l)}</span>`).join('')
+          : 'No subscriptions picked — no event channels will be added.';
+        if (preview === undefined) {
+          list.innerHTML = '<div class="espn-list-note">Loading subscriptions…</div>';
+        } else if (preview) {
+          const chosen = new Set(policy.access.map(l => l.toLocaleLowerCase()));
+          list.innerHTML = catalog.length ? catalog.map(([label, entry], i) => `
+            <div class="espn-sport"><div class="espn-sport-row">
+              <label><input type="checkbox" ${chosen.has(label.toLocaleLowerCase()) ? 'checked' : ''}
+                     onchange="amazonSportsToggleAccess(${sourceId}, ${i}, this.checked)">
+                ${escapeHtml(label)} <span class="espn-count">${entry.count}</span></label>
+              <span class="espn-count">${entry.entitled ? 'on your account' : 'not on your account'}</span>
+            </div></div>`).join('') : '<div class="espn-list-note">No events right now.</div>';
+          _amazonSportsCatalog[sourceId] = catalog;
+        }
+      }
+      espnEventsRefresh(sourceId);
+    }
+    const _amazonSportsCatalog = {};
+
+    function amazonSportsSetAccessMode(sourceId, mode) {
+      const policy = _espnEventPolicy[sourceId];
+      policy.access_mode = mode;
+      // Start a pick list from what the account already plays.
+      if (mode === 'selected' && !policy.access.length) {
+        policy.access = _amazonSportsAccessCatalog(sourceId).filter(([, entry]) => entry.entitled).map(([label]) => label);
+      }
+      amazonSportsRefresh(sourceId);
+    }
+
+    function amazonSportsToggleAccess(sourceId, index, checked) {
+      const policy = _espnEventPolicy[sourceId];
+      const label = _amazonSportsCatalog[sourceId][index][0];
+      const others = policy.access.filter(l => l.toLocaleLowerCase() !== label.toLocaleLowerCase());
+      policy.access = checked ? [...others, label] : others;
+      amazonSportsRefresh(sourceId);
     }
 
     async function espnTveStart(sourceId) {
@@ -4902,6 +5193,73 @@
                    'Get a code, enter it at paramountplus.com/activate/androidtv on your phone or computer, then sign in with your Paramount+ email and password.')}
         </div>
         <div class="config-note" style="margin-top:0.8rem">Match channels retire an hour after the stream window ends and are deleted a day later.</div>`;
+    }
+    function renderB1gPlusConfig(sourceId, schema, values, cfg) {
+      const info = (cfg && cfg.b1g_plus) || {};
+      let detail = info.signin_error || '';
+      if (info.signed_in) {
+        detail = `Signed in${info.email ? ' as ' + escapeHtml(info.email) : ''}`
+          + (info.subscription_active === false ? ' — this account has no active B1G+ pass' : (info.subscription ? ` — ${escapeHtml(info.subscription)}` : ''));
+      }
+      return `
+        <div class="config-title">B1G+ Settings</div>
+        <div class="config-subtitle" style="font-weight:600">Sign in</div>
+        <div class="config-note">Adds B1G+ live events as temporary channels, one per event in the next two days.
+          Needs a B1G+ subscription. FastChannels counts as one of your account's devices.</div>
+        <div class="espn-auth-options">
+          ${codeLinkOption(sourceId, 'b1g-plus', 'b1g_plus', 'account', 'B1G+', 'B1G+ account',
+                   info.signed_in, detail,
+                   'Get a code, then go to bigtenplus.com/code on your phone or computer, sign in to B1G+ and enter it. Codes last 5 minutes.')}
+        </div>
+        <div class="config-note" style="margin-top:0.8rem">B1G+ doesn't publish end times, so each event gets a typical length for its sport,
+          extended while it's still live. Event channels retire an hour after that and are deleted a day later.</div>
+        ${_b1gPlusFilter(sourceId, info)}
+        ${_saveRow(sourceId)}`;
+    }
+
+    // B1G+ event filter: picked sports and/or picked schools; both must match.
+    function _b1gPlusFilter(sourceId, info) {
+      const policy = info.event_filter || {sport_mode: 'all', sports: [], school_mode: 'all', schools: []};
+      const group = (kind, title, allLabel, names, mode, picked) => {
+        const pickedSet = new Set(picked.map(n => n.toLocaleLowerCase()));
+        return `
+          <div class="espn-filter" style="margin-top:0.7rem">
+            <div class="espn-mode" role="radiogroup" aria-label="${title}">
+              <span class="espn-mode-label">${title}</span>
+              <label><input type="radio" name="b1g-${kind}-mode-${sourceId}" value="all" ${mode !== 'selected' ? 'checked' : ''}
+                     onchange="b1gPlusSetMode(${sourceId}, '${kind}', this.value)">${allLabel}</label>
+              <label><input type="radio" name="b1g-${kind}-mode-${sourceId}" value="selected" ${mode === 'selected' ? 'checked' : ''}
+                     onchange="b1gPlusSetMode(${sourceId}, '${kind}', this.value)">Only the ones I pick</label>
+            </div>
+            <div class="checklist-grid" id="b1g-${kind}-list-${sourceId}" ${mode === 'selected' ? '' : 'hidden'}
+                 style="display:${mode === 'selected' ? 'grid' : 'none'};grid-template-columns:repeat(auto-fill,minmax(11rem,1fr));gap:0.2rem 0.8rem;margin-top:0.4rem">
+              ${names.map(n => `<label style="font-weight:normal"><input type="checkbox" class="b1g-${kind}-${sourceId}"
+                     value="${escapeHtml(n)}" ${pickedSet.has(n.toLocaleLowerCase()) ? 'checked' : ''}> ${escapeHtml(n)}</label>`).join('')}
+            </div>
+          </div>`;
+      };
+      return `
+        <div class="config-subtitle" style="margin-top:0.8rem">Event filter</div>
+        <div class="config-note">Pick sports, schools, or both; an event is added when it matches both. Schools are the Big Ten
+          schools the event belongs to, so "Ohio State" includes every Ohio State event, home or away.</div>
+        ${group('sports', 'Sports', 'All, including new ones', info.sports || [], policy.sport_mode, policy.sports || [])}
+        ${group('schools', 'Schools', 'All', info.schools || [], policy.school_mode, policy.schools || [])}`;
+    }
+
+    function b1gPlusSetMode(sourceId, kind, mode) {
+      const list = document.getElementById(`b1g-${kind}-list-${sourceId}`);
+      if (list) { list.hidden = mode !== 'selected'; list.style.display = mode === 'selected' ? 'grid' : 'none'; }
+    }
+
+    function _b1gPlusCollectFilter(sourceId) {
+      const pick = kind => {
+        const mode = (document.querySelector(`input[name="b1g-${kind}-mode-${sourceId}"]:checked`) || {}).value || 'all';
+        const names = [...document.querySelectorAll(`.b1g-${kind}-${sourceId}:checked`)].map(el => el.value);
+        return [mode, names];
+      };
+      const [sportMode, sports] = pick('sports');
+      const [schoolMode, schools] = pick('schools');
+      return {sport_mode: sportMode, sports, school_mode: schoolMode, schools};
     }
     // ── end activation-code sign-ins ──────────────────────────────────────────
 
@@ -6056,16 +6414,20 @@
         return renderDirectvConfig(sourceId, schema, values, cfg);
       } else if (sourceName === 'philo') {
         return renderPhiloConfig(sourceId, schema, values);
-      } else if (sourceName === 'nesn_tve') {
-        return renderNesnConfig(sourceId, schema, values, cfg);
+      } else if (['nesn_tve', 'monumental_tve', 'altitude_tve', 'myoutdoortv_tve'].includes(sourceName)) {
+        return renderViewLiftConfig(sourceId, sourceName, schema, values, cfg);
       } else if (sourceName === 'espn') {
         return renderEspnConfig(sourceId, schema, values, cfg);
+      } else if (sourceName === 'amazon_sports') {
+        return renderAmazonSportsConfig(sourceId, cfg);
       } else if (sourceName === 'nfl') {
         return renderNflConfig(sourceId, schema, values, cfg);
       } else if (sourceName === 'cbs_sports') {
         return renderCbsSportsConfig(sourceId, schema, values, cfg);
       } else if (sourceName === 'paramount') {
         return renderParamountConfig(sourceId, schema, values, cfg);
+      } else if (sourceName === 'b1g_plus') {
+        return renderB1gPlusConfig(sourceId, schema, values, cfg);
       } else if (sourceName === 'sling') {
         return renderSlingConfig(sourceId, schema, values, cfg);
       } else if (sourceName === 'spectrum') {
@@ -6243,8 +6605,11 @@
         }
         payload[key] = keyFields[0].value;
       });
-      if (getSourceName(sourceId) === 'espn' && _espnEventPolicy[sourceId]) {
+      if (['espn', 'amazon_sports'].includes(getSourceName(sourceId)) && _espnEventPolicy[sourceId]) {
         payload.event_filter = _espnEventPolicy[sourceId];
+      }
+      if (getSourceName(sourceId) === 'b1g_plus' && document.querySelector(`input[name="b1g-sports-mode-${sourceId}"]`)) {
+        payload.event_filter = _b1gPlusCollectFilter(sourceId);
       }
 
       status.textContent = 'Saving…';
@@ -6451,6 +6816,7 @@
     // Turning on a DRM source with no DRM bridge ready: say so on the row
     // before the user finds out from a channel that won't play.
     function _showDrmHeadsUp(sourceId, enabled) {
+      if (!SHOW_DRM) return;
       const row = document.getElementById(`dash-row-${sourceId}`);
       const box = document.getElementById(`drm-heads-up-${sourceId}`);
       if (!row || !box) return;
@@ -7099,76 +7465,162 @@
     // ── Channel Catalog ──────────────────────────────────────────────────────
 
     let _catalogData = null;
+    let _catalogByUrl = {};
+    let _catalogSection = 'All';
+    let _catalogQuery = '';
+    const _catalogSelected = new Set();   // stream_urls
+
+    const _CATALOG_SECTION_NOTES = {
+      'Free Streams': 'Single free channels from networks and their own sites. Player-page links are resolved to the live stream each time they play.',
+      'YouTube Live': '24/7 news and live channels on YouTube, resolved to the live stream each time they play.',
+      'Community TV': 'Public, education and government access channels streamed by their local operators. No guide data, and some only broadcast part of the day.',
+    };
 
     async function openChannelCatalog() {
       document.getElementById('channel-catalog-modal').classList.add('open');
       document.getElementById('catalog-status').textContent = '';
-      document.getElementById('catalog-add-btn').disabled = true;
-      const body = document.getElementById('catalog-body');
-      body.innerHTML = '<div style="color:var(--text-muted);font-size:.84rem;">Loading…</div>';
-
+      document.getElementById('catalog-search').value = '';
+      _catalogQuery = '';
+      _catalogSection = 'All';
+      _catalogSelected.clear();
+      updateCatalogAddBtn();
+      document.getElementById('catalog-body').innerHTML = '<div class="catalog-empty">Loading…</div>';
       try {
-        const r = await fetch('/api/custom-channels/catalog', {cache: 'no-store'});
-        _catalogData = await r.json();
-        renderCatalog(_catalogData);
+        await _loadCatalog();
+        renderCatalog();
       } catch (e) {
-        body.innerHTML = `<div style="color:var(--danger);font-size:.84rem;">Failed to load catalog: ${e.message}</div>`;
+        document.getElementById('catalog-body').innerHTML =
+          `<div class="catalog-empty" style="color:var(--danger);">Failed to load catalog: ${_esc(e.message)}</div>`;
       }
+    }
+
+    async function _loadCatalog() {
+      const r = await fetch('/api/custom-channels/catalog', {cache: 'no-store'});
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      _catalogData = await r.json();
+      _catalogByUrl = {};
+      _catalogData.forEach(g => g.channels.forEach(ch => { _catalogByUrl[ch.stream_url] = ch; }));
     }
 
     function closeChannelCatalog() {
       document.getElementById('channel-catalog-modal').classList.remove('open');
     }
 
-    function renderCatalog(groups) {
-      const body = document.getElementById('catalog-body');
-      if (!groups.length) {
-        body.innerHTML = '<div style="color:var(--text-muted);font-size:.84rem;">No channels in catalog.</div>';
-        return;
-      }
+    function setCatalogSection(section) {
+      _catalogSection = section;
+      renderCatalog();
+      document.getElementById('catalog-body').scrollTop = 0;
+    }
+
+    function _catalogVisible(group) {
+      const terms = _catalogQuery.toLowerCase().split(/\s+/).filter(Boolean);
+      return group.channels.filter(ch => {
+        const hay = `${ch.name} ${ch.note || ''} ${ch.category || ''} ${group.network}`.toLowerCase();
+        return terms.every(t => hay.includes(t));
+      });
+    }
+
+    function renderCatalog() {
+      const groups = _catalogData || [];
+      const all = groups.flatMap(g => g.channels);
+      const added = all.filter(ch => ch.already_added).length;
+      document.getElementById('catalog-sub').textContent =
+        `${all.length} free channels you can add as custom channels` + (added ? ` · ${added} already added` : '');
+
+      const sections = [];
+      groups.forEach(g => {
+        const name = g.section || 'Other';
+        let s = sections.find(x => x.name === name);
+        if (!s) sections.push(s = {name, count: 0});
+        s.count += g.channels.length;
+      });
+      document.getElementById('catalog-tabs').innerHTML = [{name: 'All', count: all.length}, ...sections].map(s =>
+        `<button class="catalog-tab${s.name === _catalogSection ? ' active' : ''}" onclick="setCatalogSection('${_esc(s.name)}')">` +
+        `${_esc(s.name)}<span class="catalog-tab-count">${s.count}</span></button>`).join('');
+
+      const note = document.getElementById('catalog-note');
+      note.textContent = _CATALOG_SECTION_NOTES[_catalogSection] || '';
+      note.hidden = !note.textContent;
 
       let html = '';
-      groups.forEach(group => {
-        html += `<div style="margin-bottom:1.25rem;">
-          <div style="font-size:.72rem;font-weight:700;color:var(--text-soft);text-transform:uppercase;letter-spacing:.06em;margin-bottom:.6rem;">${group.network}</div>`;
-
-        group.channels.forEach((ch, i) => {
-          const key = `${group.network}__${i}`;
-          const disabled = ch.already_added ? 'disabled' : '';
-          const opacity = ch.already_added ? 'opacity:.45;' : '';
+      groups.forEach((group, gi) => {
+        if (_catalogSection !== 'All' && (group.section || 'Other') !== _catalogSection) return;
+        const visible = _catalogVisible(group);
+        if (!visible.length) return;
+        html += `<div class="catalog-group" data-group="${gi}">
+          <div class="catalog-group-head">
+            <div class="catalog-group-title">${_esc(group.network)}<span>${visible.length}</span></div>
+            <button class="catalog-select-all" onclick="toggleCatalogGroup(${gi})"></button>
+          </div>
+          <div class="catalog-grid">`;
+        visible.forEach(ch => {
+          const sel = _catalogSelected.has(ch.stream_url);
+          const meta = [ch.note || ch.category, ch.redetect_on_play ? 'resolved at play' : ''].filter(Boolean).join(' · ');
+          const initials = ch.name.replace(/[^A-Za-z0-9 ]/g, '').split(/\s+/).map(w => w[0]).join('').slice(0, 2).toUpperCase();
           html += `
-          <label style="display:flex;align-items:center;gap:.85rem;padding:.6rem .5rem;border-radius:7px;cursor:${ch.already_added ? 'default' : 'pointer'};${opacity}transition:background .12s;"
-                 onmouseover="if(!${ch.already_added}) this.style.background='color-mix(in srgb, var(--border) 50%, transparent)'"
-                 onmouseout="this.style.background=''">
-            <input type="checkbox" data-catalog-key="${key}" ${disabled}
-                   style="accent-color:var(--accent-strong);cursor:${ch.already_added ? 'default' : 'pointer'};flex-shrink:0;"
-                   onchange="updateCatalogAddBtn()">
-            <img src="${ch.logo_url || ''}" alt="" style="width:40px;height:40px;object-fit:contain;border-radius:5px;flex-shrink:0;background:var(--bg);"
-                 onerror="this.style.display='none'">
-            <div style="flex:1;min-width:0;">
-              <div style="font-size:.87rem;font-weight:600;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${ch.name}</div>
-              <div style="font-size:.74rem;color:var(--text-muted);">${ch.category || ''}${ch.redetect_on_play ? ' · live stream' : ''}</div>
-            </div>
-            ${ch.already_added ? '<span style="font-size:.72rem;font-weight:600;color:var(--text-muted);white-space:nowrap;">Already added</span>' : ''}
-          </label>`;
+            <label class="catalog-item${ch.already_added ? ' added' : ''}${sel ? ' selected' : ''}" title="${_esc(ch.stream_url)}">
+              <input type="checkbox" data-url="${_esc(ch.stream_url)}" ${sel ? 'checked' : ''} ${ch.already_added ? 'disabled' : ''}
+                     onchange="toggleCatalogItem(this)">
+              <span class="catalog-logo">${ch.logo_url
+                ? `<img src="${_esc(ch.logo_url)}" alt="" loading="lazy" onerror="this.replaceWith(document.createTextNode('${_esc(initials)}'))">`
+                : _esc(initials)}</span>
+              <span class="catalog-text">
+                <span class="catalog-name" style="display:block;">${_esc(ch.name)}</span>
+                <span class="catalog-meta" style="display:block;">${_esc(meta)}</span>
+              </span>
+              ${ch.already_added ? '<span class="catalog-badge">Added</span>' : ''}
+            </label>`;
         });
-
-        html += '</div>';
+        html += '</div></div>';
       });
 
-      body.innerHTML = html;
+      const body = document.getElementById('catalog-body');
+      body.innerHTML = html || `<div class="catalog-empty">${groups.length ? 'No channels match.' : 'No channels in catalog.'}</div>`;
+      body.querySelectorAll('.catalog-group').forEach(_syncCatalogGroupButton);
+      updateCatalogAddBtn();
+    }
+
+    function _catalogGroupOpen(gi) {
+      // Channels in the group that are shown and can still be added.
+      return _catalogVisible(_catalogData[gi]).filter(ch => !ch.already_added);
+    }
+
+    function _syncCatalogGroupButton(groupEl) {
+      const open = _catalogGroupOpen(+groupEl.dataset.group);
+      const btn = groupEl.querySelector('.catalog-select-all');
+      btn.disabled = !open.length;
+      btn.textContent = !open.length ? 'All added'
+        : open.every(ch => _catalogSelected.has(ch.stream_url)) ? 'Clear' : 'Select all';
+    }
+
+    function toggleCatalogItem(cb) {
+      if (cb.checked) _catalogSelected.add(cb.dataset.url);
+      else _catalogSelected.delete(cb.dataset.url);
+      cb.closest('.catalog-item').classList.toggle('selected', cb.checked);
+      _syncCatalogGroupButton(cb.closest('.catalog-group'));
+      updateCatalogAddBtn();
+    }
+
+    function toggleCatalogGroup(gi) {
+      const open = _catalogGroupOpen(gi);
+      const selectAll = !open.every(ch => _catalogSelected.has(ch.stream_url));
+      open.forEach(ch => selectAll ? _catalogSelected.add(ch.stream_url) : _catalogSelected.delete(ch.stream_url));
+      const body = document.getElementById('catalog-body');
+      const top = body.scrollTop;
+      renderCatalog();
+      body.scrollTop = top;
     }
 
     function updateCatalogAddBtn() {
-      const checked = document.querySelectorAll('#catalog-body input[type=checkbox]:checked').length;
+      const n = _catalogSelected.size;
       const btn = document.getElementById('catalog-add-btn');
-      btn.disabled = checked === 0;
-      btn.textContent = checked > 0 ? `Add ${checked} Channel${checked > 1 ? 's' : ''}` : 'Add Selected';
+      btn.disabled = n === 0;
+      btn.textContent = n > 0 ? `Add ${n} Channel${n > 1 ? 's' : ''}` : 'Add Selected';
     }
 
     async function addCatalogSelected() {
-      const checkboxes = document.querySelectorAll('#catalog-body input[type=checkbox]:checked');
-      if (!checkboxes.length) return;
+      const chosen = [..._catalogSelected].map(url => _catalogByUrl[url]).filter(Boolean);
+      if (!chosen.length) return;
 
       const btn = document.getElementById('catalog-add-btn');
       const status = document.getElementById('catalog-status');
@@ -7176,26 +7628,14 @@
       status.textContent = 'Adding…';
       status.style.color = 'var(--text-soft)';
 
-      // Build a flat lookup: key → channel object
-      const lookup = {};
-      (_catalogData || []).forEach(group => {
-        group.channels.forEach((ch, i) => {
-          lookup[`${group.network}__${i}`] = ch;
-        });
-      });
-
-      const payload = [];
-      for (const cb of checkboxes) {
-        const ch = lookup[cb.dataset.catalogKey];
-        if (ch) payload.push({
-          name: ch.name,
-          stream_url: ch.stream_url,
-          logo_url: ch.logo_url || null,
-          category: ch.category || null,
-          language: ch.language || 'en',
-          redetect_on_play: ch.redetect_on_play || false,
-        });
-      }
+      const payload = chosen.map(ch => ({
+        name: ch.name,
+        stream_url: ch.stream_url,
+        logo_url: ch.logo_url || null,
+        category: ch.category || null,
+        language: ch.language || 'en',
+        redetect_on_play: ch.redetect_on_play || false,
+      }));
 
       let added = 0;
       try {
@@ -7221,16 +7661,15 @@
         return;
       }
 
-      status.textContent = `${added} channel${added > 1 ? 's' : ''} added`;
+      status.textContent = `${added} channel${added === 1 ? '' : 's'} added`;
       status.style.color = 'var(--accent)';
+      _catalogSelected.clear();
       setTimeout(closeChannelCatalog, 800);
 
       _refreshCustomSourceCount();
       loadCustomChannelList();
       // Re-render with updated already_added state
-      const r2 = await fetch('/api/custom-channels/catalog', {cache: 'no-store'}).catch(() => null);
-      if (r2) { _catalogData = await r2.json(); renderCatalog(_catalogData); }
-      btn.disabled = false;
+      try { await _loadCatalog(); renderCatalog(); } catch (e) { /* modal is closing anyway */ }
     }
 
     // ── Custom channel stream preview ─────────────────────────────────────────

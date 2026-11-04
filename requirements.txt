@@ -11,7 +11,9 @@ pytz==2026.2
 beautifulsoup4==4.15.0
 apscheduler==3.10.4
 playwright
-camoufox
+# Pinned: an unpinned upgrade changed the browser bundle layout silently. The browser
+# itself still floats (camoufox fetch = latest for this package) so anti-detect stays current.
+camoufox==0.5.8
 gpsoauth
 Pillow==12.3.0
 # Ceiling matches yt-dlp's supported curl_cffi range for --impersonate (browser TLS fingerprinting).

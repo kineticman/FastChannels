@@ -30,6 +30,10 @@ def list_channels():
     page     = request.args.get('page', 1, type=int)
     per_page = request.args.get('per_page', 50, type=int)
     q        = Channel.query.join(Source)
+    # Explicit opt-in keeps external listing clients independent of UI mode.
+    if request.args.get('ui') == '1':
+        from ..lite import channels_for_ui
+        q = channels_for_ui(q)
     if request.args.get('feed_eligible') in ('1', 'true', 'yes'):
         q = q.filter(
             Channel.is_active == True,
@@ -46,10 +50,19 @@ def list_channels():
         q = q.filter(Channel.name.ilike(f'%{search}%'))
     pag = q.order_by(Channel.name).paginate(page=page, per_page=per_page, error_out=False)
     if request.args.get('slim') in ('1', 'true'):
+        # bridge_only: the channel goes to a feed's bridge playlists, not its
+        # regular M3U. Taken from the playlists' own query so the feed editor
+        # splits channels exactly the way the output does.
+        from ..generators.m3u import _build_channel_query
+        page_ids = [ch.id for ch in pag.items]
+        bridge_ids = {cid for (cid,) in _build_channel_query(
+            {'channel_ids': page_ids}, activity='drm_bridge',
+        ).with_entities(Channel.id).all()} if page_ids else set()
         items = [{'id': ch.id, 'name': ch.name, 'source_name': ch.source.name,
                   'category': ch.category, 'language': ch.language,
                   'country': ch.country, 'gracenote_id': ch.gracenote_id,
-                  'is_event': is_event_channel(ch)}
+                  'sport': ch.sport, 'is_event': is_event_channel(ch),
+                  'bridge_only': ch.id in bridge_ids}
                  for ch in pag.items]
     else:
         items = [ch.to_dict() for ch in pag.items]
@@ -245,11 +258,25 @@ def update_channel(channel_id):
                  if num == target_number and cid != ch.id),
                 None,
             )
+            where = 'the Default feed'
+            # A lock is channel-wide, so check every numbered feed too (each
+            # numbers independently of Default). The master /m3u numbering is
+            # not checked: when Default has its own start nobody sees it, and
+            # the lock simply wins there, moving that playlist's holder.
+            if holder_id is None:
+                from .feeds_api import _displayed_feed_chnum_map
+                for feed in Feed.query.filter(Feed.is_enabled == True, Feed.chnum_start != None,
+                                              Feed.slug != 'default').all():
+                    holder_id = next((cid for cid, num in _displayed_feed_chnum_map(feed).items()
+                                      if num == target_number and cid != ch.id), None)
+                    if holder_id is not None:
+                        where = f'the {feed.name} feed'
+                        break
             if holder_id is not None:
                 holder = Channel.query.get(holder_id)
                 raise ValueError(
                     f'Channel number {target_number} is currently in use by '
-                    f'"{holder.name if holder else holder_id}" in the Default feed. '
+                    f'"{holder.name if holder else holder_id}" in {where}. '
                     'Choose a different number.'
                 )
             # Or a number a source emits as its own provider number (e.g. DirecTV

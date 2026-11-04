@@ -9,21 +9,20 @@ from sqlalchemy import select, case, func, or_
 from sqlalchemy.orm import load_only, defer
 from ..extensions import db
 from .. import admin_auth
-from ..models import Source, Channel, Feed, FeedChannelNumber, AppSettings, Program
+from ..models import Source, Channel, Feed, AppSettings, Program, SourceCache
 from ..generators.m3u import (
+    _apply_event_filter,
     _build_channel_query,
-    _build_feed_chnum_map,
-    _build_source_chnum_map,
-    _build_sticky_gn_chnum_map,
     apply_provider_numbers,
     _drm_bridge_query_filters,
     _has_gracenote_claim,
-    _selected_channel_stubs,
-    feed_namespace_start,
     feed_to_query_filters,
+    filter_match_clauses,
 )
 from ..scrapers import registry as _scraper_registry
+from ..lite import channels_for_ui, source_visible, ui_context
 from ..channel_tags import event_filter_clause
+from ..sports import KNOWN_SPORTS
 from ..drm_bridge import DRM_BRIDGE_TRUSTED_SOURCES
 from .. import fc_player_bridge as _fc_player_bridge
 from ..source_config import (
@@ -147,48 +146,13 @@ def _duplicate_name_sets() -> tuple[set[str], set[str], set[int]]:
     return duplicate_names, possible_names, gn_duplicate_ids
 
 
-def _source_scheme_chnum_map(std_channels, gn_channels) -> dict[int, int]:
-    """Sequential numbering keyed off Source order — the 'no chnum_start' scheme."""
-    full_map, _ = _build_source_chnum_map(std_channels) if std_channels else ({}, [])
-    if gn_channels:
-        gn_start = (max(full_map.values()) + 1) if full_map else 1
-        full_map.update(_build_sticky_gn_chnum_map(gn_channels, gn_start, set(full_map.values())))
-    return full_map
-
-
 def _default_feed_chnum_map_full() -> dict[int, int]:
-    """The default feed's resolved chnum map for every channel, unfiltered.
-
-    Number every enabled channel with the default feed's numbering scheme
-    (chnum_start / sticky assignment), not just channels that happen to
-    match the default feed's own membership filters — otherwise a channel
-    excluded from that filter (but still shown on this admin page) gets no
-    entry here and renders as a blank dash, even though it's numbered fine
-    in whichever feed actually generates the user's CDVR/M3U import.
-    """
+    """The numbers the Default feed shows, by channel id (the master numbers
+    when the Default feed is off). Channels the Default feed leaves out have
+    no entry here and show a dash."""
+    from ..chnum import MASTER_SCOPE, read_scope
     default_feed = Feed.query.filter_by(slug='default', is_enabled=True).first()
-    std_channels = _selected_channel_stubs({}, gracenote=False)
-    gn_channels  = _selected_channel_stubs({}, gracenote=True)
-
-    if default_feed and default_feed.chnum_start is not None:
-        stored_numbers = {
-            row.channel_id: row.number
-            for row in FeedChannelNumber.query.filter_by(feed_id=default_feed.id).all()
-        }
-        all_stubs = sorted(
-            std_channels + gn_channels,
-            key=lambda ch: (ch.number is None, ch.number or 0, (ch.name or '').lower()),
-        )
-        return (
-            _build_feed_chnum_map(
-                all_stubs,
-                default_feed.chnum_start,
-                stored_numbers=stored_numbers,
-            )
-            if all_stubs else {}
-        )
-
-    return _source_scheme_chnum_map(std_channels, gn_channels)
+    return read_scope(default_feed.id if default_feed else MASTER_SCOPE)
 
 
 def _provider_numbered_ids(items) -> set[int]:
@@ -353,8 +317,7 @@ def _network_facets(source_channel_ids):
 def _apply_admin_feed_membership_filters(query, feed: Feed):
     """Apply a feed's membership rules without forcing enabled/active output constraints."""
     filters = feed_to_query_filters(feed.filters or {})
-    if (event_clause := event_filter_clause(filters.get('event'))) is not None:
-        query = query.filter(event_clause)
+    query = _apply_event_filter(query, filters)
     if channel_ids := filters.get('channel_ids'):
         # A channel pinned into the feed but absent from its explicit whitelist should
         # still count as a member here — same gap as the M3U/EPG generators had (see
@@ -364,19 +327,13 @@ def _apply_admin_feed_membership_filters(query, feed: Feed):
             channel_ids = list(set(channel_ids) | set(pinned_ids))
         query = query.filter(Channel.id.in_(channel_ids))
         return query
-    if sources := filters.get('source'):
-        query = query.filter(Source.name.in_(sources))
-    if categories := filters.get('category'):
-        query = query.filter(Channel.category.in_(categories))
-    if languages := filters.get('languages'):
-        query = query.filter(Channel.language.in_(languages))
-    elif language := filters.get('language'):
-        query = query.filter(Channel.language == language)
-    if gracenote := filters.get('gracenote'):
-        if gracenote == 'has':
-            query = query.filter(Channel.gracenote_id != None, Channel.gracenote_id != '')
-        elif gracenote == 'missing':
-            query = query.filter((Channel.gracenote_id == None) | (Channel.gracenote_id == ''))
+    match = filter_match_clauses(filters)
+    # Pins join past the match filters, as in the feed's own playlists.
+    if match:
+        match_expr = db.and_(*match)
+        if pinned_ids := filters.get('pinned_channel_ids'):
+            match_expr = db.or_(match_expr, Channel.id.in_(pinned_ids))
+        query = query.filter(match_expr)
     if excluded_ids := filters.get('excluded_channel_ids'):
         query = query.filter(Channel.id.notin_(excluded_ids))
     return query
@@ -525,6 +482,8 @@ def _source_channel_mix(sources, scrapers):
         Channel.source_id, Channel.is_enabled, Channel.requires_drm_bridge, Channel.disable_reason,
     ):
         m = mix.setdefault(source_id, {'play': 0, 'drm': 0, 'off': 0, 'off_reasons': {}, 'bridge': 0})
+        if bridge or (reason or '').startswith('DRM'):
+            m['restricted'] = m.get('restricted', 0) + n
         if bridge:
             m['bridge'] += n
         if not enabled:
@@ -592,7 +551,7 @@ def _humanize_until(dt, now):
     return f'in {int(secs // 86400)}d'
 
 
-def _source_status_line(s, *, cfg_status, epg, cfm, retired, mix, now, tz_name, bridge_ready=True):
+def _source_status_line(s, *, cfg_status, epg, cfm, retired, mix, now, tz_name, bridge_ready=True, fill=None):
     """The one line under a source: the most important thing about it right
     now, worst first, and a hover title with the detail. state is the dot's
     colour: ok | warn | error | setup | pending | info."""
@@ -641,6 +600,14 @@ def _source_status_line(s, *, cfg_status, epg, cfm, retired, mix, now, tz_name, 
             return {'state': 'warn', 'text': f'Scrape overdue — was due {_humanize_age(nxt, now)}', 'title': title}
     when = f'next {_humanize_until(nxt, now)}' if nxt else ('clock-aligned' if s.scrape_cron else 'manual only')
     pending = ' · guide arrives with the next scrape' if epg and epg.get('pending') else ''
+    if not pending and fill and fill.get('waiting') and fill.get('total'):
+        # Staged first fill (Roku): a capped number of stations per scrape.
+        waiting, total = fill['waiting'], fill['total']
+        runs = -(-waiting // max(1, fill.get('per_run') or waiting))
+        pending = f' · guide still filling ({total - waiting} of {total} channels)'
+        title = (f'{waiting} channel{"" if waiting == 1 else "s"} still {"has" if waiting == 1 else "have"} no guide yet. '
+                 f'To avoid being rate-limited, the guide is fetched for a limited number of channels per scrape; '
+                 f'the rest arrive over the next {runs} scrape{"" if runs == 1 else "s"}. ' + title)
     return {'state': 'pending' if pending else 'ok', 'text': f'Updated {_humanize_age(s.last_scraped_at, now)} · {when}{pending}',
             'title': title, 'ts': s.last_scraped_at}
 
@@ -674,6 +641,7 @@ def dashboard():
     feeds          = Feed.query.filter_by(is_enabled=True).order_by(Feed.name).all()
     app_settings   = AppSettings.get()
     all_scrapers   = _scraper_registry.get_all_including(s.name for s in sources)
+    sources = [s for s in sources if source_visible(s, all_scrapers.get(s.name))]
     under_development = {
         name: getattr(cls, 'under_development', False)
         for name, cls in all_scrapers.items()
@@ -837,6 +805,9 @@ def sources():
         return 'configured' if has_meaningful_source_config(cls, source.config or {}) else 'optional'
 
     sources_list = Source.query.order_by(Source.display_name).all()
+    visible_sources = [s for s in sources_list if source_visible(s, all_scrapers.get(s.name))]
+    hidden_source_count = len(sources_list) - len(visible_sources)
+    sources_list = visible_sources
     source_config_status = {
         s.id: _config_status(s, all_scrapers[s.name])
         for s in sources_list
@@ -940,11 +911,18 @@ def sources():
                     if source_mix[s.id]['kind'] != 'clear'}
     _tz_name = AppSettings.get().effective_timezone_name()
     _epg_meta = _epg_freshness_meta(sources_list, _now)
+    _epg_fill = dict(
+        db.session.query(SourceCache.source_id, SourceCache.value)
+        .filter(SourceCache.cache_key == 'epg_fill',
+                SourceCache.source_id.in_([s.id for s in sources_list]))
+        .all()
+    )
     source_status = {
         s.id: _source_status_line(
             s, cfg_status=source_config_status.get(s.id), epg=_epg_meta.get(s.id),
             cfm=channel_fetch_meta.get(s.id), retired=source_retired.get(s.id),
-            mix=source_mix[s.id], now=_now, tz_name=_tz_name, bridge_ready=bridge_ready.get(s.id, True))
+            mix=source_mix[s.id], now=_now, tz_name=_tz_name, bridge_ready=bridge_ready.get(s.id, True),
+            fill=_epg_fill.get(s.id))
         for s in sources_list if s.is_enabled and s.name != 'custom'
     }
 
@@ -952,6 +930,8 @@ def sources():
     _app_settings = AppSettings.get()
     return render_template('admin/sources.html',
                            sources=sources_list,
+                           hidden_source_count=hidden_source_count,
+                           advanced_sources={name: cls.is_advanced() for name, cls in all_scrapers.items()},
                            auto_allow_new_channels=_app_settings.auto_allow_new_channels if _app_settings.auto_allow_new_channels is not None else True,
                            chnum_warnings=[],
                            audit_enabled=audit_enabled,
@@ -991,10 +971,13 @@ def channels():
     review_filter    = request.args.get('review', '')
     presence_filter  = request.args.get('presence', '')
     drm_filter       = request.args.get('drm', '')
+    if not ui_context()['show_drm'] and drm_filter in ('1', 'bridge'):
+        drm_filter = ''
     gracenote_filter = request.args.get('gracenote', '')
     gracenote_mode_filter = request.args.get('gracenote_mode', '')
     language_filter  = request.args.get('language', '')
     country_filter   = request.args.get('country', '')
+    sport_filter     = request.args.get('sport', '')
     category_filter  = [c for c in request.args.getlist('category') if c.strip()]
     duplicates_filter = request.args.get('duplicates', '')
     new_filter       = request.args.get('new', '')
@@ -1008,7 +991,7 @@ def channels():
     exact_duplicate_names, possible_duplicate_names, gn_duplicate_ids = _duplicate_name_sets()
     all_duplicate_names = exact_duplicate_names | possible_duplicate_names
 
-    q = Channel.query.join(Source)
+    q = channels_for_ui(Channel.query.join(Source))
 
     selected_feed = None
     if feed_filter == '__none__':
@@ -1102,6 +1085,9 @@ def channels():
     q_before_country = q  # snapshot for country facet (exclude own filter)
     if country_filter:
         q = q.filter(Channel.country == country_filter)
+    q_before_sport = q  # snapshot for sport facet (exclude own filter)
+    if sport_filter:
+        q = q.filter(Channel.sport == sport_filter)
     q_before_category = q  # snapshot for category facet (exclude own filter)
     if (cat_clause := _category_clause(category_filter)) is not None:
         q = q.filter(cat_clause)
@@ -1242,6 +1228,13 @@ def channels():
         .order_by(Channel.country).all()
     countries = [(c, cnt) for c, cnt in country_rows]
 
+    sport_facet_ids = q_before_sport.with_entities(Channel.id).scalar_subquery()
+    sport_rows = db.session.query(Channel.sport, db.func.count(Channel.id))\
+        .filter(Channel.id.in_(sport_facet_ids), Channel.sport != None, Channel.sport != '')\
+        .group_by(Channel.sport)\
+        .order_by(Channel.sport).all()
+    sports = [(sp, cnt) for sp, cnt in sport_rows]
+
     networks = []
     if source_filter == 'free_networks':
         networks = _network_facets(
@@ -1292,7 +1285,7 @@ def channels():
     filter_qs = urlencode({k: v for k, v in {
         'feed': feed_filter, 'source': source_filter, 'network': network_filter, 'search': search,
         'enabled': enabled_filter, 'review': review_filter, 'presence': presence_filter, 'drm': drm_filter,
-        'language': language_filter, 'country': country_filter,
+        'language': language_filter, 'country': country_filter, 'sport': sport_filter,
         'gracenote': gracenote_filter, 'gracenote_mode': gracenote_mode_filter,
         'category': category_filter, 'duplicates': duplicates_filter,
         'new': new_filter,
@@ -1317,6 +1310,7 @@ def channels():
                            language_filter=language_filter, languages=languages,
                            en_count=en_count, non_en_count=non_en_count,
                            country_filter=country_filter, countries=countries,
+                           sport_filter=sport_filter, sports=sports,
                            category_filter=category_filter, categories=categories,
                            missing_category_count=missing_category_count,
                            duplicates_filter=duplicates_filter,
@@ -1402,6 +1396,7 @@ def guide():
         db.session.query(Channel.category, db.func.count(Channel.id))
         .filter(Channel.is_active == True, Channel.category != None)
     )
+    cat_count_q = channels_for_ui(cat_count_q)
     if state == 'enabled':
         cat_count_q = cat_count_q.filter(Channel.is_enabled == True)
     elif state == 'disabled':
@@ -1432,6 +1427,7 @@ def guide():
         Channel.id, Channel.name, Channel.logo_url, Channel.number, Channel.source_id,
         Channel.is_enabled,
     )).filter(Channel.is_active == True)
+    q = channels_for_ui(q)
     if state == 'enabled':
         q = q.filter(Channel.is_enabled == True)
     elif state == 'disabled':
@@ -1728,14 +1724,16 @@ def feeds():
     }
     _cnt_rows = db.session.query(
         Source.name, Channel.is_active, Channel.is_enabled, Channel.stream_url != None,
+        Channel.requires_drm_bridge,
     ).select_from(Channel).join(Source, Channel.source_id == Source.id)\
      .filter(Source.is_enabled == True).all()
-    for name, active, enabled, has_url in _cnt_rows:
+    show_drm = ui_context()['show_drm']
+    for name, active, enabled, has_url, bridge in _cnt_rows:
         entry = source_counts.get(name)
         if entry is None:
             continue
         entry['total'] += 1
-        if active and has_url and not entry['epg_only']:
+        if active and has_url and not entry['epg_only'] and (show_drm or not bridge):
             if enabled:
                 entry['eligible'] += 1
             else:
@@ -1752,14 +1750,20 @@ def feeds():
         .filter(Channel.is_active == True, Channel.country != None, Channel.country != '')\
         .distinct().order_by(Channel.country).all()
     countries = [r[0] for r in country_rows]
+    # Every sport app.sports knows, plus any a source reports or a feed saved,
+    # each with how many events are listed now: a feed can be set up for a
+    # sport before its next game is scheduled.
+    sport_counts = dict(db.session.query(Channel.sport, db.func.count(Channel.id)).join(Source)
+                        .filter(Channel.is_active == True, Channel.is_enabled == True,
+                                Source.is_enabled == True, Channel.sport != None, Channel.sport != '')
+                        .group_by(Channel.sport).all())
+    sport_names = set(KNOWN_SPORTS) | set(sport_counts) | {
+        s for f in feeds for s in (f.filters or {}).get('sports', [])}
+    sports = [(name, sport_counts.get(name, 0)) for name in sorted(sport_names, key=str.casefold)]
     base_url   = public_base_url()
     default_feed = next((f for f in feeds if f.slug == 'default'), None)
-    # chnum_start is now the single source of truth for all feeds including default.
-    # Show the auto-assigned namespace as placeholder for feeds without an explicit value.
+    # Every feed has a chnum_start (app.chnum), so there is no placeholder to show.
     feed_chnum_placeholder = {}
-    for feed in feeds:
-        if feed.chnum_start is None and feed.slug != 'default':
-            feed_chnum_placeholder[feed.id] = feed_namespace_start(feed, gracenote=False)
     feed_split_counts = {
         feed.id: _feed_split_counts(feed)
         for feed in feeds
@@ -1780,10 +1784,12 @@ def feeds():
     return render_template('admin/feeds.html',
                            feeds=feeds, sources=sources,
                            categories=categories, languages=languages, countries=countries,
+                           sports=sports,
                            base_url=base_url,
                            prismcast_enabled=app_settings.prismcast_capture_configured(),
                            fc_player_enabled=_fc_player_bridge.hdmi_bridge_active(app_settings),
                            fc_player_ah4c_configured=_fc_player_bridge.ah4c_bridge_active(app_settings),
+                           native_output_enabled=bool(app_settings.native_output_enabled),
                            feed_summary=feed_summary,
                            feed_split_counts=feed_split_counts,
                            feed_chnum_placeholder=feed_chnum_placeholder,
@@ -1926,6 +1932,7 @@ def _bridge_coverage(methods: list[dict]) -> dict:
 @admin_bp.route('/settings')
 def settings():
     app_settings = AppSettings.get()
+    from ..xml_cache import native_output_activity
     request_base_url = request.host_url.rstrip('/')
     settings_needs_config = []
     _eff_url, _url_source, _url_needs_config = public_base_url_config(app_settings)
@@ -1977,6 +1984,9 @@ def settings():
                            auto_allow_new_channels=app_settings.auto_allow_new_channels if app_settings.auto_allow_new_channels is not None else True,
                            gracenote_auto_fill=app_settings.gracenote_auto_fill if app_settings.gracenote_auto_fill is not None else True,
                            dvr_epg_auto_refresh=app_settings.dvr_epg_auto_refresh if app_settings.dvr_epg_auto_refresh is not None else True,
+                           native_output_enabled=bool(app_settings.native_output_enabled),
+                           native_output_activity=native_output_activity(
+                               f.slug for f in Feed.query.filter_by(is_enabled=True).all()),
                            image_proxy_enabled=app_settings.image_proxy_enabled if app_settings.image_proxy_enabled is not None else True,
                            event_guide_filler=app_settings.event_guide_filler if app_settings.event_guide_filler is not None else True,
                            m3u_rewrite_timestamps=bool(app_settings.m3u_rewrite_timestamps),

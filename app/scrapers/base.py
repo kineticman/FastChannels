@@ -9,6 +9,8 @@ import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
+from ..sports import normalize_league, normalize_sport, sport_for_league
+
 logger = logging.getLogger(__name__)
 
 _SPANISH_LANGUAGE_MARKERS = (
@@ -129,11 +131,12 @@ _LANGUAGE_PHRASE_MARKERS = (
     ('arab series', 'ar'),
     ('al arabiya', 'ar'),        # brand (desc never says "Arabic")
     ('asharq', 'ar'),            # brand (pan-Arab news)
-    # NOTE: Portuguese is intentionally NOT inferred from country references
-    # ("from Brazil", "Samba"): those are bilingual/Latin-music false positives
-    # (e.g. TRACE Latina lists Samba among Salsa/Reggaeton; 3ABN Latino is
-    # Spanish+Portuguese).  Add 'pt' only on an explicit "Portuguese-language"
-    # style statement if one ever appears.
+    # Portuguese is inferred only from an explicit language statement or phrase,
+    # not country references ("from Brazil", "Samba") that can describe
+    # bilingual/Latin-music programming.
+    ('portuguese-language', 'pt'),
+    ('portuguese language', 'pt'),
+    ('em portugues', 'pt'),
     # Spanish phrases the name-based pass (_SPANISH_LANGUAGE_MARKERS) misses
     # because they live in the description rather than the channel name.
     ('spanish speaking', 'es'),
@@ -309,13 +312,18 @@ class ScrapeSkipError(Exception):
     """Raised when a scraper should skip the current run without treating it as a hard failure."""
 
 
+class ScrapeRetrySoonError(ScrapeSkipError):
+    """Skip this run and try again in a few minutes rather than at the next
+    interval: upstream answered, but with a gap that clears up on its own."""
+
+
 class ConfigField:
     """Declares a single config field a scraper needs from the UI."""
     def __init__(self, key: str, label: str, field_type: str = 'text',
                  required: bool = False, secret: bool = False,
                  placeholder: str = '', help_text: str = '', default=None,
                  options: list | None = None, multiple: bool = False,
-                 hidden: bool = False, add_label: str = ''):
+                 hidden: bool = False, add_label: str = '', advanced: bool = False):
         self.key         = key          # key in source.config JSON
         self.label       = label        # human label in UI
         self.field_type  = field_type   # 'text' | 'password' | 'select' | 'toggle' | 'number'
@@ -333,6 +341,7 @@ class ConfigField:
         self.multiple    = multiple
         self.hidden      = hidden       # internal/auto-managed only — never sent to the UI at all
         self.add_label   = add_label    # 'list' fields: text of the add-entry button
+        self.advanced    = advanced     # UI classification only; configured fields stay visible
 
     def to_dict(self):
         d = {
@@ -344,6 +353,7 @@ class ConfigField:
             'placeholder': self.placeholder,
             'help_text':   self.help_text,
             'default':     self.default,
+            'advanced':    self.advanced,
         }
         if self.options:
             d['options'] = self.options
@@ -367,7 +377,8 @@ class ChannelData:
                  guide_key=None, tags=None, description=None,
                  gracenote_mode=None, provider_number=None,
                  guide_title=None, guide_art=None, guide_block_minutes=None,
-                 retire_at=None, delete_at=None, playlist_group=None):
+                 retire_at=None, delete_at=None, playlist_group=None,
+                 sport=None, league=None):
         self.source_channel_id = source_channel_id
         self.name        = name
         self.stream_url  = stream_url
@@ -405,6 +416,10 @@ class ChannelData:
         # Optional lifecycle for event channels; permanent channels leave both unset.
         self.retire_at = retire_at
         self.delete_at = delete_at
+        # An event's sport, in app.sports' one vocabulary so feeds can filter
+        # on it across sources, and its league as the source names it.
+        self.league = (normalize_league(league) or '')[:128] or None
+        self.sport = (normalize_sport(sport) or sport_for_league(self.league) or '')[:64] or None
 
 
 class ProgramData:
@@ -582,6 +597,7 @@ class BaseScraper(ABC):
     min_scrape_interval: int = 30
     max_scrape_interval: int = 10080
     stream_audit_enabled: bool = False  # opt-in; enable Stream Audit (health + DRM scan) for this source
+    stream_audit_in_audit_all: bool = True  # False = only its own Audit button runs it, not Audit All Sources
     # The play proxy re-fetches the resolved manifest in the background after
     # its 302 (DRM/dead check + resolution badge). Off for upstreams that hand
     # the playback session to whoever fetched the manifest last (Zeam), where
@@ -598,6 +614,14 @@ class BaseScraper(ABC):
     config_required: bool = False      # True if source won't return useful channels without user configuration
     is_premium: bool = False           # True for paid/subscription services — shown as a badge in the admin UI
     source_category: str = 'fast'     # 'fast' (free) | 'account' (free with an account) | 'premium' (subscription) | 'tve' | 'local' (antenna tuner)
+    advanced: bool | None = None     # None derives the UI classification from source_category
+
+    @classmethod
+    def is_advanced(cls) -> bool:
+        if cls.advanced is not None:
+            return cls.advanced
+        return cls.source_category in {'premium', 'tve', 'local'}
+
     under_development: bool = False  # shown in the admin UI; source remains opt-in
     is_beta: bool = False            # "Beta" badge: built, but not yet confirmed by real users
     # Sources page only: list this source under another source's row (by source_name),
@@ -609,6 +633,8 @@ class BaseScraper(ABC):
     # filtered out. Reconciliation deactivates existing rows without deleting
     # user settings and excludes these IDs from the lineup-collapse guard.
     excluded_channel_ids: set[str] | frozenset[str] = frozenset()
+    kept_channel_ids: frozenset = frozenset()  # set by fetch_channels(): source_channel_ids absent from this scrape's list only because the listing was incomplete; reconciliation leaves their rows untouched and doesn't count a miss
+    retry_soon: bool = False  # set by fetch_channels() when a scrape succeeded on an incomplete listing: scrape again on the early-retry schedule
     pinned_channel_ids: frozenset = frozenset()  # source_channel_ids born (and kept) scrape_pinned=True — exempt from channel_miss_threshold; for channels that are expected to be intermittently absent from a scrape by design (e.g. a rotating best-effort discovery), not just resilient-by-default
     rehome_by_guide_key: bool = False  # when True, re-use existing DB rows whose guide_key matches an incoming channel whose uuid changed
 
@@ -756,6 +782,13 @@ class BaseScraper(ABC):
     def resolve(self, raw_url: str) -> str:
         """Override to resolve raw stored URLs to playable URLs at request time."""
         return raw_url
+
+    # Shown beside each channel audit_candidates() leaves out.
+    audit_skip_reason: str = 'Not checked by this source\'s audit'
+
+    def audit_candidates(self, query):
+        """Override to narrow the Channel query a stream audit checks."""
+        return query
 
     @classmethod
     def uses_provider_numbers(cls, config: dict | None) -> bool:

@@ -23,6 +23,7 @@ from ._common import UTC, Network, NetChannel, from_epoch, program
 
 _SITES = {'en': 'https://www.aljazeera.com', 'ar': 'https://www.aljazeera.net'}
 _STATE_RE = re.compile(r'__APOLLO_STATE__="([^"]+)"')
+_JSON_STATE_RE = re.compile(r'__APOLLO_STATE__\s*=\s*JSON\.parse\(')
 _PATH_RE = re.compile(r'/([A-Z0-9]+)/index\.m3u8')
 
 # stream path key -> (channel id, name, language, schedule site, schedule tz)
@@ -42,13 +43,19 @@ _LOGOS = {
 
 def _state(s, url):
     r = s.get(url)
-    m = _STATE_RE.search(r.text) if r else None
-    if not m:
+    if not r:
         return {}
     try:
-        return json.loads(base64.b64decode(m.group(1)))
+        m = _STATE_RE.search(r.text)
+        if m:
+            return json.loads(base64.b64decode(m.group(1)))
+        m = _JSON_STATE_RE.search(r.text)
+        if m:
+            encoded, _ = json.JSONDecoder().raw_decode(r.text, m.end())
+            return json.loads(encoded)
     except Exception:
-        return {}
+        pass
+    return {}
 
 
 def _posts(state):
