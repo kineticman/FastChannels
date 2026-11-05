@@ -110,6 +110,7 @@
     const WATCH_DEBUG   = {{ watch_debug | default(false) | tojson }};
     const REQUEST_ID    = {{ request_id | default('') | tojson }};
     const MAX_HEIGHT    = {{ max_height | default(0) | tojson }};
+    const HD_REQUESTED  = {{ hd_requested | default(false) | tojson }};
     const LIVE_EDGE_SYNC = {{ live_edge_sync | default(false) | tojson }};
     const WATCH_DEBUG_URL = {{ url_for('play.watch_debug', channel_id=channel.id) | tojson }};
     const IS_FC_PLAYER_BRIDGE = {{ is_fc_player_bridge | default(false) | tojson }};
@@ -198,6 +199,19 @@
       hint.className = 'hint error';
     }
 
+    // Amazon HD was requested but the license was refused (Linux Chrome gets
+    // 403 Downgrade.Sd): reload once with ?sd=1 so the route serves the SD session.
+    function fallBackToSd(code) {
+      if (!HD_REQUESTED || code !== 6007) return false;
+      const next = new URL(window.location.href);
+      if (next.searchParams.get('sd') === '1') return false;
+      next.searchParams.set('sd', '1');
+      emitWatchDebug('hd-fallback', { code });
+      setStatus('HD refused by the provider, switching to SD');
+      window.location.replace(next.toString());
+      return true;
+    }
+
     function onPlayerError(info) {
       const { phase, err } = info;
       emitWatchDebug('player-error', {
@@ -208,6 +222,7 @@
         data: err && err.data,
         message: info && info.message,
       });
+      if (fallBackToSd(err && err.code)) return;
       if (phase === 'browser-unsupported') {
         setError('Playback is not supported in this browser.');
       } else if (phase === 'drm-insecure') {
@@ -230,7 +245,7 @@
     }
 
     function initPlayer() {
-      emitWatchDebug('init', { viewport: `${window.innerWidth}x${window.innerHeight}`, mode: PLAYBACK_MODE, type: STREAM_TYPE, has_license: Boolean(LICENSE_URL), max_height: MAX_HEIGHT });
+      emitWatchDebug('init', { viewport: `${window.innerWidth}x${window.innerHeight}`, mode: PLAYBACK_MODE, type: STREAM_TYPE, has_license: Boolean(LICENSE_URL), max_height: MAX_HEIGHT, hd_requested: HD_REQUESTED });
       if (PLAYBACK_MODE === 'unsupported' || !PLAY_URL) return;
       _shaka = FCPlayer.load({
         video,

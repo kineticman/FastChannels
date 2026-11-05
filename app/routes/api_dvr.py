@@ -1144,6 +1144,7 @@ def test_prismcast():
             'bridge_enabled': bool(settings.bridge_enabled),
             'prismcast_enabled': bool(settings.prismcast_enabled),
             'prismcast_max_height': int(settings.prismcast_max_height or 0),
+            'prismcast_amazon_hd': bool(settings.prismcast_amazon_hd),
             'diagnostic_runtime_os': _runtime_os,
         },
         'topology': {},

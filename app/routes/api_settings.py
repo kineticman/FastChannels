@@ -329,6 +329,8 @@ def app_settings():
             if max_height not in {0, 360, 480, 720, 1080}:
                 return jsonify({'error': 'Invalid PrismCast max resolution.'}), 422
             row.prismcast_max_height = max_height
+        if 'prismcast_amazon_hd' in data:
+            row.prismcast_amazon_hd = bool(data['prismcast_amazon_hd'])
         bridge_mode_changed = False
         if 'bridge_enabled' in data:
             new_bridge_enabled = bool(data['bridge_enabled'])
@@ -438,6 +440,7 @@ def app_settings():
         'prismcast_url': row.effective_prismcast_url() or '',
         'prismcast_inner_url': row.prismcast_inner_url or '',
         'prismcast_max_height': int(row.prismcast_max_height or 0),
+        'prismcast_amazon_hd': bool(row.prismcast_amazon_hd),
         'bridge_enabled': bool(row.bridge_enabled),
         'prismcast_enabled': bool(row.prismcast_enabled),
         'drm_bridge_enabled': bool(row.bridge_enabled),  # deprecated API alias

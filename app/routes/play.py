@@ -3729,16 +3729,31 @@ def watch(channel_id):
     play_url = info.get('preview_url') or info.get('play_url') or ''
     if play_url and play_url.startswith('/'):
         play_url = urljoin(request.host_url, play_url.lstrip('/'))
+    license_url = info.get('license_url') or ''
+    # Amazon HD: the default session is 480p (SD-policy keys every desktop CDM can
+    # license). When enabled, ask for the 1080p session the FC Player bridge uses.
+    # Amazon licenses it to Windows/macOS Chrome but answers Linux Chrome with
+    # 403 Downgrade.Sd; watch.html then reloads with ?sd=1 to get the SD session.
+    hd_requested = bool(
+        settings.prismcast_amazon_hd
+        and channel.source and channel.source.name in AMAZON_DRM_SOURCES
+        and request.args.get('sd') != '1'
+        and play_url and license_url
+    )
+    if hd_requested:
+        play_url += ('&' if '?' in play_url else '?') + 'hd=1'
+        license_url += ('&' if '?' in license_url else '?') + 'hd=1'
     resp = make_response(render_template(
         'watch.html',
         channel=channel,
         play_url=play_url,
         playback_mode=info.get('playback_mode', 'hls'),
         stream_type=info.get('stream_type', 'hls'),
-        license_url=info.get('license_url') or '',
+        license_url=license_url,
         watch_debug=request.args.get('debug') == '1',
         request_id=getattr(g, 'request_id', ''),
         max_height=max_height,
+        hd_requested=hd_requested,
         live_edge_sync=bool(channel.source and channel.source.name == 'philo'),
         is_fc_player_bridge=info.get('is_fc_player_bridge', False),
     ))

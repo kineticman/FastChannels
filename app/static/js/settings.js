@@ -234,10 +234,12 @@ async function savePrismcastSettings() {
   const url   = document.getElementById('prismcast-url').value.trim();
   const inner = document.getElementById('prismcast-inner-url').value.trim();
   const maxHeight = parseInt(document.getElementById('prismcast-max-height').value || '0', 10);
+  const amazonHd = document.getElementById('prismcast-amazon-hd');
   await saveSettings({
     prismcast_url:       url || null,
     prismcast_inner_url: inner || null,
     prismcast_max_height: Number.isFinite(maxHeight) ? maxHeight : 0,
+    ...(amazonHd ? { prismcast_amazon_hd: amazonHd.checked } : {}),
   }, 'prismcast-status');
 }
 
@@ -1650,6 +1652,7 @@ function formatPrismcastDiagnostics(data) {
     `  Bridge mode enabled: ${settings.bridge_enabled}`,
     `  PrismCast enabled: ${settings.prismcast_enabled}`,
     `  PrismCast max height: ${settings.prismcast_max_height || 0}`,
+    `  PrismCast Amazon HD: ${Boolean(settings.prismcast_amazon_hd)}`,
     `  Diagnostic runtime OS: ${settings.diagnostic_runtime_os || '(unknown)'}`,
     `  Browser origin: ${browserContext.origin || '(unknown)'}`,
     `  Browser isSecureContext: ${browserContext.is_secure_context == null ? '(not reported)' : browserContext.is_secure_context}`,

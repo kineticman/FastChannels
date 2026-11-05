@@ -494,6 +494,7 @@ class AppSettings(db.Model):
     prismcast_url        = db.Column(db.Text, nullable=True)     # PrismCast capture server, e.g. http://192.168.1.x:5589 (DRM bridge)
     prismcast_inner_url  = db.Column(db.Text, nullable=True)     # base URL PrismCast's Chrome uses to reach /watch (loopback/HTTPS for EME secure-context); falls back to public_base_url
     prismcast_max_height = db.Column(db.Integer, nullable=False, default=0, server_default=db.text('0'))  # max source height for /watch playback through PrismCast; 0 = auto
+    prismcast_amazon_hd  = db.Column(db.Boolean, nullable=False, default=False, server_default=db.text('0'))  # /watch requests Amazon's 1080p session (hd=1); Amazon licenses it to Windows/macOS Chrome only, Linux falls back to SD
     # Kept for compatibility with pre-bridge-page clients.  New code uses the two
     # explicit settings below: the global policy gate and the PrismCast method.
     drm_bridge_enabled   = db.Column(db.Boolean, nullable=False, default=False, server_default=db.text('0'))

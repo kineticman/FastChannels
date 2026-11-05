@@ -49,6 +49,18 @@
           <div class="help">Caps the video variant loaded by the browser before PrismCast captures it. Lower this on underpowered servers if DRM streams black out or PrismCast reports buffering/recovery.</div>
         </div>
       </div>
+      <div class="toggle-row" style="max-width:480px">
+        <div class="toggle-row-text">
+          <div class="toggle-row-label">Request HD for Amazon</div>
+          <div class="toggle-row-help">Asks Amazon for its 1080p session on the watch page instead of the default 480p one. Amazon licenses HD to Chrome on Windows and macOS (a Windows VM without a GPU works too), but refuses it on Linux, including PrismCast's Docker image; there the watch page falls back to SD automatically. Leave off unless PrismCast runs on Windows or macOS. Save this card to apply the change.</div>
+        </div>
+        <div class="toggle-row-control">
+          <label class="toggle-switch">
+            <input type="checkbox" id="prismcast-amazon-hd" {% if prismcast_amazon_hd %}checked{% endif %}>
+            <span class="toggle-slider"></span>
+          </label>
+        </div>
+      </div>
       <div class="field-actions">
         <span class="save-status" id="prismcast-status"></span>
         <button class="btn btn-secondary" onclick="testPrismcast()">Test setup</button>

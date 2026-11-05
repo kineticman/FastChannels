@@ -373,6 +373,10 @@ def ensure_runtime_schema(*, fresh_install: bool | None = None) -> None:
                 conn.execute(text("ALTER TABLE app_settings ADD COLUMN prismcast_inner_url TEXT"))
             if "prismcast_max_height" not in cols:
                 conn.execute(text("ALTER TABLE app_settings ADD COLUMN prismcast_max_height INTEGER NOT NULL DEFAULT 0"))
+            if "prismcast_amazon_hd" not in cols:
+                # Off by default: Amazon refuses HD licenses to Linux Chrome (Downgrade.Sd),
+                # which is where most PrismCast installs (the Docker image) run.
+                conn.execute(text("ALTER TABLE app_settings ADD COLUMN prismcast_amazon_hd BOOLEAN NOT NULL DEFAULT 0"))
             if "drm_bridge_enabled" not in cols:
                 # False = audit disables DRM channels (legacy); True = keep them active and
                 # bridge via PrismCast. Default off so non-PrismCast users are unaffected.
