@@ -52,7 +52,7 @@
       <div class="toggle-row" style="max-width:480px">
         <div class="toggle-row-text">
           <div class="toggle-row-label">Request HD for Amazon</div>
-          <div class="toggle-row-help">Asks Amazon for its 1080p session on the watch page instead of the default 480p one. Amazon licenses HD to Chrome on Windows and macOS (a Windows VM without a GPU works too), but refuses it on Linux, including PrismCast's Docker image; there the watch page falls back to SD automatically. Leave off unless PrismCast runs on Windows or macOS. Save this card to apply the change.</div>
+          <div class="toggle-row-help">Asks Amazon for its 1080p session on the watch page instead of the default 480p one. HD needs PrismCast on Windows or macOS with a real display path (a monitor or an HDCP-capable dummy plug on a GPU). Linux, including PrismCast's Docker image, is refused HD, and a machine without an HDCP display (such as a VM without a GPU) gets the HD keys output-restricted; in both cases the watch page falls back to SD automatically. Leave off unless PrismCast runs on such a Windows or macOS host. Save this card to apply the change.</div>
         </div>
         <div class="toggle-row-control">
           <label class="toggle-switch">

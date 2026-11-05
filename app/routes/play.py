@@ -3733,7 +3733,9 @@ def watch(channel_id):
     # Amazon HD: the default session is 480p (SD-policy keys every desktop CDM can
     # license). When enabled, ask for the 1080p session the FC Player bridge uses.
     # Amazon licenses it to Windows/macOS Chrome but answers Linux Chrome with
-    # 403 Downgrade.Sd; watch.html then reloads with ?sd=1 to get the SD session.
+    # 403 Downgrade.Sd, and without an HDCP display path the HD keys come back
+    # output-restricted (Shaka 4012); in both cases watch.html reloads with ?sd=1
+    # to get the SD session.
     hd_requested = bool(
         settings.prismcast_amazon_hd
         and channel.source and channel.source.name in AMAZON_DRM_SOURCES

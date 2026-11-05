@@ -199,15 +199,27 @@
       hint.className = 'hint error';
     }
 
-    // Amazon HD was requested but the license was refused (Linux Chrome gets
-    // 403 Downgrade.Sd): reload once with ?sd=1 so the route serves the SD session.
-    function fallBackToSd(code) {
-      if (!HD_REQUESTED || code !== 6007) return false;
+    // Amazon HD was requested but can't play here; reload once with ?sd=1 so the
+    // route serves the SD session. Two cases:
+    //  - 6007: the license is refused (Linux Chrome gets 403 Downgrade.Sd).
+    //  - 4012 with an 'output-restricted' key status: the license is issued but the
+    //    display path has no HDCP (e.g. a Windows VM without a GPU/monitor), so the
+    //    HD keys are restricted and playback never starts or stalls.
+    function hdUnplayable(err) {
+      const code = err && err.code;
+      if (code === 6007) return true;
+      if (code !== 4012) return false;
+      const details = (err && err.data && err.data[0]) || {};
+      return (details.restrictedKeyStatuses || []).includes('output-restricted');
+    }
+
+    function fallBackToSd(err) {
+      if (!HD_REQUESTED || !hdUnplayable(err)) return false;
       const next = new URL(window.location.href);
       if (next.searchParams.get('sd') === '1') return false;
       next.searchParams.set('sd', '1');
-      emitWatchDebug('hd-fallback', { code });
-      setStatus('HD refused by the provider, switching to SD');
+      emitWatchDebug('hd-fallback', { code: err.code });
+      setStatus('HD not available here, switching to SD');
       window.location.replace(next.toString());
       return true;
     }
@@ -222,7 +234,7 @@
         data: err && err.data,
         message: info && info.message,
       });
-      if (fallBackToSd(err && err.code)) return;
+      if (fallBackToSd(err)) return;
       if (phase === 'browser-unsupported') {
         setError('Playback is not supported in this browser.');
       } else if (phase === 'drm-insecure') {
