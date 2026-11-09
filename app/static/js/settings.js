@@ -865,7 +865,22 @@ function renderAh4cConnectPreview(data) {
     row.insertCell().textContent = r.label;
     row.insertCell().textContent = r.current || '(blank)';
     const after = row.insertCell();
-    if (r.action === 'ok') {
+    if (r.key === 'IPADDRESS' && !r.locked) {
+      // Written into ah4c's M3U for Channels DVR, so it has to be an address the
+      // DVR can reach, not necessarily the one FastChannels used.
+      const input = _el('input', {type: 'text', id: 'ah4c-connect-dvr-address', placeholder: '192.168.1.30:7654', style: 'width:100%'});
+      input.value = r.proposed;
+      after.appendChild(input);
+      if (data.dvr_address_unusable) {
+        after.appendChild(_el('div', {class: 'ah4c-tuner-note'},
+          'Channels DVR can’t reach ah4c at ' + data.dvr_address_unusable + '. Enter ah4c’s address on your network.'));
+      } else if (data.dvr_unreachable_address) {
+        after.appendChild(_el('div', {class: 'ah4c-tuner-note'},
+          'FastChannels reaches ah4c at ' + data.dvr_unreachable_address + ', which Channels DVR can’t use. Enter ah4c’s address on your network.'));
+      } else {
+        after.appendChild(_el('div', {class: 'ah4c-tuner-note'}, 'The address Channels DVR uses to reach ah4c.'));
+      }
+    } else if (r.action === 'ok') {
       after.textContent = 'No change';
     } else if (r.action === 'locked') {
       after.appendChild(_el('span', {class: 'ah4c-tuner-badge warn'}, 'Set in compose'));
@@ -932,6 +947,15 @@ async function applyAh4cConnect() {
     fastchannels_url: data.fastchannels_url,
     allow_streamer_switch: !!(sw && sw.checked),
   };
+  const dvrAddress = document.getElementById('ah4c-connect-dvr-address');
+  if (dvrAddress) {
+    if (!dvrAddress.value.trim()) {
+      _ah4cConnectStatus('Enter the address Channels DVR uses to reach ah4c.', 'error');
+      dvrAddress.focus();
+      return;
+    }
+    payload.dvr_address = dvrAddress.value.trim();
+  }
   if (!data.tuners_locked) {
     payload.tuners = Array.from(document.querySelectorAll('#ah4c-connect-tuners .ah4c-connect-tuner'))
       .map((row) => {

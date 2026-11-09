@@ -18,6 +18,7 @@ ah4c rules this relies on (checked against v2026.09.30.1515):
 """
 from __future__ import annotations
 
+import ipaddress
 import time
 from urllib.parse import urlsplit
 
@@ -55,6 +56,28 @@ def host_port(url: str | None, default_port: int | None = None) -> str:
         host = f'[{host}]'
     port = parts.port or default_port
     return f'{host}:{port}' if port else host
+
+
+_UNREACHABLE_HOSTS = {'localhost', 'host.docker.internal', 'gateway.docker.internal'}
+
+
+def dvr_reachable(address: str) -> bool:
+    """Whether an ah4c 'host:port' could plausibly be reached by Channels DVR on
+    another computer. FastChannels may reach ah4c by a name only it can resolve:
+    a Docker service name ('ah4c'), localhost, or host.docker.internal."""
+    raw = (address or '').strip()
+    if raw.startswith('['):
+        host = raw[1:].split(']', 1)[0]
+    else:
+        host = raw.rsplit(':', 1)[0] if raw.count(':') == 1 else raw
+    host = host.lower().rstrip('.')
+    if not host or host in _UNREACHABLE_HOSTS or host.endswith(('.internal', '.localhost')):
+        return False
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        return '.' in host  # a single-label name is most likely a Docker service name
+    return not (ip.is_loopback or ip.is_unspecified or ip.is_link_local)
 
 
 def _request(method: str, base: str, path: str, **kwargs) -> requests.Response:
@@ -109,16 +132,38 @@ def _catalog(cfg: dict) -> dict[str, dict]:
     return {item.get('key'): item for item in cfg['catalog'] if isinstance(item, dict) and item.get('key')}
 
 
-def _desired(base: str, cfg: dict, fastchannels_url: str, channels_dvr_url: str | None) -> dict[str, str]:
+def _dvr_address(base: str, current: str, override: str | None) -> str:
+    """IPADDRESS: the address Channels DVR uses to reach ah4c, written into ah4c's
+    M3U. The user's entry wins, then what ah4c has. Otherwise it's guessed from
+    the address FastChannels used, but only if Channels DVR could use it too;
+    blank means the user has to enter it."""
+    if override is not None:
+        value = host_port(override, urlsplit(base).port)
+        if not value or not dvr_reachable(value):
+            raise Ah4cConnectError(
+                f'Channels DVR can’t reach ah4c at “{override.strip() or "(blank)"}”. Enter the address '
+                'it uses on your network, such as 192.168.1.30:7654.', status=400)
+        return value
+    if current:
+        return current
+    guess = host_port(base)
+    return guess if dvr_reachable(guess) else ''
+
+
+def _desired(base: str, cfg: dict, fastchannels_url: str, channels_dvr_url: str | None,
+             dvr_address: str | None = None) -> dict[str, str]:
     """What Connect wants each managed setting to be. The ah4c and Channels DVR
     addresses are only filled when blank, so an address the user chose stays."""
     catalog = _catalog(cfg)
     current = {key: str((catalog.get(key) or {}).get('value') or '') for key in _MANAGED_KEYS}
+    ip_item = catalog.get('IPADDRESS') or {}
     desired = {
         'STREAMER_APP': FASTCHANNELS_STREAMER_APP,
         'FASTCHANNELS_URL': fastchannels_url.rstrip('/'),
         'UPDATE_SCRIPTS': 'true',
-        'IPADDRESS': current['IPADDRESS'] or host_port(base),
+        # A locked IPADDRESS is the compose file's; don't propose or check an entry for it.
+        'IPADDRESS': (current['IPADDRESS'] if ip_item.get('locked')
+                      else _dvr_address(base, current['IPADDRESS'], dvr_address)),
         'CHANNELSIP': current['CHANNELSIP'] or host_port(channels_dvr_url, 8089),
     }
     return {key: value for key, value in desired.items() if key in catalog}
@@ -134,7 +179,9 @@ def _plan_rows(cfg: dict, desired: dict[str, str]) -> list[dict]:
         current = str(item.get('value') or '')
         want = desired.get(key, current)
         locked = bool(item.get('locked'))
-        if current == want:
+        if key == 'IPADDRESS' and not want and not locked:
+            action = 'needed'  # no usable guess; the user enters it
+        elif current == want:
             action = 'ok'
         elif locked:
             action = 'locked'
@@ -187,6 +234,11 @@ def inspect(base: str, fastchannels_url: str, channels_dvr_url: str | None) -> d
         'replaces_streamer_app': (streamer['current'] if streamer and streamer['action'] == 'set'
                                   and streamer['current'] else ''),
         'tuners': _tuner_rows(cfg),
+        # What FastChannels reached ah4c at, when Channels DVR couldn't use it.
+        'dvr_unreachable_address': '' if dvr_reachable(host_port(base)) else host_port(base),
+        # ah4c already has an IPADDRESS that Channels DVR couldn't use (e.g. a Docker name).
+        'dvr_address_unusable': next((r['current'] for r in rows if r['key'] == 'IPADDRESS' and not r['locked']
+                                      and r['current'] and not dvr_reachable(r['current'])), ''),
         'tuners_locked': bool(tuners.get('locked') or tuners.get('countLocked')),
         'active_tunes': _active_tunes(base),
         # Saved in ah4c but not running until it restarts (an earlier Connect whose
@@ -286,7 +338,8 @@ def _wait_for_restart(base: str) -> bool:
 
 
 def apply(base: str, fastchannels_url: str, channels_dvr_url: str | None,
-          tuners: list[dict] | None, allow_streamer_switch: bool, clear_tuners: bool = False) -> dict:
+          tuners: list[dict] | None, allow_streamer_switch: bool, clear_tuners: bool = False,
+          dvr_address: str | None = None) -> dict:
     """Write the settings, restart ah4c when needed, and report what happened.
     Re-reads ah4c first, so a change made in ah4c since inspect() is respected."""
     cfg = _get_config(base)
@@ -296,8 +349,12 @@ def apply(base: str, fastchannels_url: str, channels_dvr_url: str | None,
             'ah4c can’t save settings until these folders are mounted into its container: '
             + ', '.join(missing) + '.', status=409, missing_mounts=missing)
 
-    desired = _desired(base, cfg, fastchannels_url, channels_dvr_url)
+    desired = _desired(base, cfg, fastchannels_url, channels_dvr_url, dvr_address)
     rows = _plan_rows(cfg, desired)
+    if any(r['action'] == 'needed' for r in rows):
+        raise Ah4cConnectError(
+            'Enter the address Channels DVR uses to reach ah4c, such as 192.168.1.30:7654. '
+            f'FastChannels reaches it at {host_port(base)}, which only works from here.', status=400)
     streamer = next((r for r in rows if r['key'] == 'STREAMER_APP'), None)
     if (streamer and streamer['action'] == 'set' and streamer['current']
             and not allow_streamer_switch):
