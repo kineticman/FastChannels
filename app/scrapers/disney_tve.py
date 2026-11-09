@@ -45,6 +45,7 @@ from xml.sax.saxutils import escape
 import requests
 
 from .base import BaseScraper, ChannelData, ConfigField, ProgramData
+from .espn import pick_bam_manifest
 from ..gracenote_map import resolve_gracenote
 from ..tve.accounts import tve_account_for
 from ..tve.adobe_pass import (MvpdCooldownMixin, TVEAuthError, TVENotAuthorizedError,
@@ -429,9 +430,7 @@ class DisneyTVEScraper(MvpdCooldownMixin, BaseScraper):
         except ValueError:
             data = {}
         stream = data.get('stream') or {}
-        sources = sorted(stream.get('sources') or [], key=lambda s: s.get('priority') or 99)
-        manifest_url = next((((s.get('slide') or s.get('complete')) or {}).get('url')
-                             for s in sources if (s.get('slide') or s.get('complete'))), None)
+        manifest_url = pick_bam_manifest(stream)
         ctx = (stream.get('playbackRights') or {}).get('playbackRightsContext')
         err = (data.get('errors') or [{}])[0]
         name = _LABELS.get(brand, brand)

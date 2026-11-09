@@ -63,7 +63,7 @@ import unicodedata
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlsplit
 from xml.sax.saxutils import escape
 
 import requests
@@ -88,6 +88,24 @@ _PLAYBACK_URL = 'https://espn.playback.edge.bamgrid.com/v7/playback/ctr-regular'
 _LICENSE_URL = 'https://playback.svcs.plus.espn.com/widevine/v1/channel/obtain-license'
 _EVENT_LICENSE_URL = 'https://playback.svcs.plus.espn.com/widevine/v1/obtain-license'
 _ONEID_TV_BASE = 'https://registerdisney.go.com/jgc/v6/client/ESPN-OTT.GC.ANDTV-PROD'
+
+
+def pick_bam_manifest(stream: dict) -> str | None:
+    """Manifest URL from a BAM playback response's stream.sources.
+
+    BAM lists four CDN edges (akc/cfc/ftc/nsc) in a priority order that varies
+    per channel and per tune. The ftc edge serves a chain ending at Sectigo
+    Public Server Authentication Root R46, which Fire OS and older Android TV
+    trust stores lack, so FastChannels Player fails with "Trust anchor for
+    certification path not found" there. The other edges chain to
+    AAA Certificate Services / USERTrust RSA, which those devices trust. Keep
+    BAM's order but move ftc to the end, still used if it's the only edge.
+    """
+    sources = sorted(stream.get('sources') or [], key=lambda s: s.get('priority') or 99)
+    urls = [((s.get('slide') or s.get('complete')) or {}).get('url') for s in sources]
+    urls = [u for u in urls if u]
+    urls.sort(key=lambda u: '-ftc-' in (urlsplit(u).hostname or ''))
+    return urls[0] if urls else None
 ACTIVATE_URL = 'https://www.espn.com/activate'
 
 _UA = ('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
@@ -1232,9 +1250,7 @@ class ESPNScraper(BaseScraper):
         except ValueError:
             data = {}
         stream = data.get('stream') or {}
-        sources = sorted(stream.get('sources') or [], key=lambda s: s.get('priority') or 99)
-        manifest_url = next((((s.get('slide') or s.get('complete')) or {}).get('url')
-                             for s in sources if (s.get('slide') or s.get('complete'))), None)
+        manifest_url = pick_bam_manifest(stream)
         ctx = (stream.get('playbackRights') or {}).get('playbackRightsContext')
         err = (data.get('errors') or [{}])[0]
         if r.status_code == 403 and err.get('code') in ('not-entitled', 'adobe-pass-failed-authorization'):
