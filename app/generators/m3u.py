@@ -206,15 +206,43 @@ def _drm_bridge_query_filters(filters: dict) -> dict:
     return filters
 
 
+def bridge_only_clause():
+    """SQL for "plays only through a bridge": flagged by the audit
+    (requires_drm_bridge), a DASH stream from a DRM-capable source, or any
+    channel of a source whose channels are all DRM. The query must join Source."""
+    clause = db.func.coalesce(Channel.requires_drm_bridge, False) == True
+    if capable := _drm_bridge_capable_source_names():
+        clause = db.or_(clause, db.and_(
+            db.func.lower(db.func.coalesce(Channel.stream_type, '')) == 'dash',
+            Source.name.in_(capable),
+        ))
+    if all_drm := _all_channels_drm_source_names():
+        clause = db.or_(clause, Source.name.in_(all_drm))
+    return clause
+
+
+def channel_type_clause(value):
+    """Feed "Channel type" limit: 'bridge' keeps only bridge channels,
+    'standard' only channels that play directly. None for no limit."""
+    if value == 'bridge':
+        return bridge_only_clause()
+    if value == 'standard':
+        return db.not_(bridge_only_clause())
+    return None
+
+
 def _apply_event_filter(query, filters: dict):
-    """Include (events only / no events) limits the matched channels; a pin
-    joins regardless, as it does past the other filters."""
-    event_clause = event_filter_clause(filters.get('event'))
-    if event_clause is None:
-        return query
-    if pinned_ids := filters.get('pinned_channel_ids'):
-        event_clause = db.or_(event_clause, Channel.id.in_(pinned_ids))
-    return query.filter(event_clause)
+    """Include (events only / no events) and Channel type (bridge / standard)
+    limit the matched channels; a pin joins regardless, as it does past the
+    other filters."""
+    for clause in (event_filter_clause(filters.get('event')),
+                   channel_type_clause(filters.get('channel_type'))):
+        if clause is None:
+            continue
+        if pinned_ids := filters.get('pinned_channel_ids'):
+            clause = db.or_(clause, Channel.id.in_(pinned_ids))
+        query = query.filter(clause)
+    return query
 
 
 def filter_match_clauses(filters: dict) -> list:
@@ -493,6 +521,8 @@ def feed_to_query_filters(feed_filters: dict) -> dict:
     f = {}
     if feed_filters.get('event') in ('0', '1'):
         f['event'] = feed_filters['event']
+    if feed_filters.get('channel_type') in ('bridge', 'standard'):
+        f['channel_type'] = feed_filters['channel_type']
     if channel_ids := feed_filters.get('channel_ids'):
         # Explicit channel list overrides source/category/language filters.
         f['channel_ids'] = channel_ids

@@ -608,6 +608,11 @@
                 <span class="badge-pill pill-gray">missing gracenote</span>
               {% endif %}
             {% endif %}
+            {% if f.get('channel_type') == 'bridge' %}
+              <span class="badge-pill pill-green">bridge only</span>
+            {% elif f.get('channel_type') == 'standard' %}
+              <span class="badge-pill pill-gray">no bridge</span>
+            {% endif %}
             {% if f.get('event') == '1' %}
               <span class="badge-pill pill-green">events only</span>
             {% elif f.get('event') == '0' %}
@@ -1066,6 +1071,15 @@
         </select>
         <div class="help">Useful when you want a feed that is only Gracenote-capable or only XMLTV-backed.</div>
       </div>
+      <div class="field"{% if not ui.show_drm %} hidden{% endif %}>
+        <label for="f-chtype">Channel type</label>
+        <select id="f-chtype">
+          <option value="">All channels</option>
+          <option value="bridge">Bridge channels only (DRM)</option>
+          <option value="standard">Standard channels only (no bridge)</option>
+        </select>
+        <div class="help">Bridge channels only play through a bridge (PrismCast, FastChannels Player or ah4c), so a bridge-only feed's standard M3U is empty: use its bridge M3U. This also limits channels you select by hand; a pinned channel still joins.</div>
+      </div>
     </fieldset>
 
     <fieldset class="field-box" id="events-box">
@@ -1385,6 +1399,7 @@ function getVisibleChannels({matchOnly = false} = {}) {
   const leftOutCats     = new Set(leftOutValues('.cat-cb'));
   const gracenoteMode   = document.getElementById('f-gracenote').value;
   const eventMode       = document.getElementById('f-event').value;
+  const chType          = document.getElementById('f-chtype').value;
 
   return _allChannels.filter(ch => {
     if (search && !ch.name.toLowerCase().includes(search)) return false;
@@ -1401,8 +1416,16 @@ function getVisibleChannels({matchOnly = false} = {}) {
     if (gracenoteMode === 'missing' && ch.gracenote_id) return false;
     if (eventMode === '1' && !ch.is_event) return false;
     if (eventMode === '0' && ch.is_event) return false;
+    if (!passesChannelType(ch, chType)) return false;
     return true;
   });
+}
+
+// Feed "Channel type" limit; mirrors channel_type_clause on the server.
+function passesChannelType(ch, type) {
+  if (type === 'bridge') return !!ch.bridge_only;
+  if (type === 'standard') return !ch.bridge_only;
+  return true;
 }
 
 function updateChCount() {
@@ -1474,6 +1497,7 @@ async function openModal(feed = null) {
   document.getElementById('f-gracenote').value = feed ? (feed.filters.gracenote || '') : '';
   // New feeds start without events; an existing feed keeps what it saved.
   document.getElementById('f-event').value = feed ? (feed.filters.event || '') : '0';
+  document.getElementById('f-chtype').value = feed ? (feed.filters.channel_type || '') : '';
   document.getElementById('modal-status').textContent = '';
   document.getElementById('ch-search').value  = '';
   setChView('all');
@@ -1642,7 +1666,8 @@ async function updateCountPreview() {
   if (filters.channel_ids) {
     total = filters.channel_ids.filter(id => {
       const ch = _allChannels.find(c => c.id === id);
-      return ch && (!filters.event || (filters.event === '1') === !!ch.is_event);
+      return ch && (!filters.event || (filters.event === '1') === !!ch.is_event)
+        && passesChannelType(ch, filters.channel_type);
     }).length;
   } else if (!SHOW_DRM) {
     total = getVisibleChannels({matchOnly: true}).filter(ch => !_excludedChannelIds.has(ch.id)).length;
@@ -1657,6 +1682,7 @@ async function updateCountPreview() {
     (filters.sports     || []).forEach(s => params.append('sport', s));
     if (filters.gracenote) params.set('gracenote', filters.gracenote);
     if (filters.event) params.set('event', filters.event);
+    if (filters.channel_type) params.set('channel_type', filters.channel_type);
     try {
       const r = await fetch(`/api/stats?${params}`);
       const d = await r.json();
@@ -1681,7 +1707,8 @@ async function updateCountPreview() {
   if (SHOW_DRM && !max && _allChannels.length) {
     const members = filters.channel_ids
       ? _allChannels.filter(ch => _selectedChannelIds.has(ch.id)
-          && (!filters.event || (filters.event === '1') === !!ch.is_event))
+          && (!filters.event || (filters.event === '1') === !!ch.is_event)
+          && passesChannelType(ch, filters.channel_type))
       : getVisibleChannels({matchOnly: true}).filter(ch => !_excludedChannelIds.has(ch.id));
     const bridge = members.filter(ch => ch.bridge_only).length;
     if (bridge) splitNote = ` (${members.length - bridge} standard, <strong>${bridge}</strong> bridge-only)`;
@@ -1723,6 +1750,12 @@ document.querySelectorAll('.src-cb, .cat-cb').forEach(cb => {
     schedulePreview();
     markOrderStale();
   });
+});
+
+document.getElementById('f-chtype').addEventListener('change', () => {
+  renderChannelList();
+  schedulePreview();
+  markOrderStale();
 });
 
 document.getElementById('f-gracenote').addEventListener('change', () => {
@@ -1799,6 +1832,8 @@ function buildFilters() {
   if (_pinnedChannelIds.size > 0) f.pinned_channel_ids = [..._pinnedChannelIds];
   const event = document.getElementById('f-event').value;
   if (event) f.event = event;
+  const chType = document.getElementById('f-chtype').value;
+  if (chType) f.channel_type = chType;
   const max = parseInt(document.getElementById('f-max').value);
   if (max > 0) f.max_channels = max;
   return f;

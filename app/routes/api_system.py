@@ -258,6 +258,9 @@ def stats():
             q = q.filter((Channel.gracenote_id == None) | (Channel.gracenote_id == ''))
     if (event_clause := event_filter_clause(request.args.get('event'))) is not None:
         q = q.filter(event_clause)
+    from ..generators.m3u import channel_type_clause
+    if (type_clause := channel_type_clause(request.args.get('channel_type'))) is not None:
+        q = q.filter(type_clause)
     cat_rows = db.session.query(Channel.category, db.func.count(Channel.id))\
         .filter(Channel.is_active == True).group_by(Channel.category)\
         .order_by(db.func.count(Channel.id).desc()).all()

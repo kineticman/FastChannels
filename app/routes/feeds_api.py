@@ -595,6 +595,8 @@ def _clean_filters(raw: dict) -> dict:
     out = {}
     if raw.get('event') in ('0', '1'):
         out['event'] = raw['event']
+    if raw.get('channel_type') in ('bridge', 'standard'):
+        out['channel_type'] = raw['channel_type']
     if channel_ids := raw.get('channel_ids'):
         out['channel_ids'] = [int(i) for i in channel_ids if str(i).isdigit() or isinstance(i, int)]
         if max_ch := raw.get('max_channels'):
