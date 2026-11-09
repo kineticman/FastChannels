@@ -380,6 +380,10 @@
     .ah4c-tuner-badge.ok { color: var(--success, #3fb950); }
     .ah4c-tuner-badge.warn { color: var(--warning-soft, #d29922); }
     .ah4c-tuner-badge.error { color: var(--danger, #f85149); }
+    .ah4c-connect-notice { border: 1px solid var(--border, #30363d); border-left-width: 3px; border-radius: 6px; padding: 0.6rem 0.75rem; margin: 0 0 0.6rem; line-height: 1.45; font-size: 0.9rem; }
+    .ah4c-connect-notice.warn { border-left-color: var(--warning-soft, #d29922); }
+    .ah4c-connect-notice.error { border-left-color: var(--danger, #f85149); }
+    .ah4c-connect-notice .help { margin-top: 0.35rem; }
     .ah4c-tuner-note {
       margin-top: 0.2rem;
       color: var(--text-soft);

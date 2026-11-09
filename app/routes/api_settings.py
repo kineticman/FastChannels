@@ -1089,6 +1089,76 @@ def export_ah4c_scripts():
     )
 
 
+def _ah4c_connect_urls(data) -> tuple[str | None, str | None]:
+    return (_normalize_server_url(data.get('url'), default_port=7654),
+            _normalize_server_url(data.get('fastchannels_url')))
+
+
+@settings_bp.route('/settings/fc-player/ah4c-connect', methods=['GET'])
+def ah4c_connect_preview():
+    """Read-only look at an ah4c: its settings now, what Connect would change, and
+    what blocks it (missing folders, settings locked by its compose file)."""
+    from .. import ah4c_connect, bridge_devices
+    row = AppSettings.get()
+    base, fastchannels_url = _ah4c_connect_urls(request.args)
+    devices = []
+    try:
+        devices = [d['address'] for d in bridge_devices.known_devices()[0]]
+    except Exception:  # device list is only a convenience for the form
+        pass
+    payload = {
+        'compose': ah4c_connect.compose_snippet(row.effective_timezone_name()),
+        'known_devices': devices,
+    }
+    if not base or not fastchannels_url:
+        return jsonify({'ok': False, 'message': 'Enter the ah4c address and this FastChannels address.', **payload}), 400
+    try:
+        info = ah4c_connect.inspect(base, fastchannels_url, row.effective_channels_dvr_url())
+    except ah4c_connect.Ah4cConnectError as e:
+        return jsonify({'ok': False, 'message': e.message, **e.detail, **payload}), e.status
+    return jsonify({'ok': True, 'url': base, **info, **payload})
+
+
+@settings_bp.route('/settings/fc-player/ah4c-connect', methods=['POST'])
+def ah4c_connect_apply():
+    """Set ah4c up for FastChannels, then turn on FastChannels' own ah4c Capture
+    pointing at it."""
+    from .. import ah4c_connect
+    data = request.get_json(force=True) or {}
+    base, fastchannels_url = _ah4c_connect_urls(data)
+    if not base or not fastchannels_url:
+        return jsonify({'ok': False, 'message': 'Enter the ah4c address and this FastChannels address.'}), 400
+    tuners = data.get('tuners')
+    if tuners is not None and (not isinstance(tuners, list) or not all(isinstance(t, dict) for t in tuners)):
+        return jsonify({'ok': False, 'message': 'tuners must be a list.'}), 400
+    row = AppSettings.get()
+    try:
+        result = ah4c_connect.apply(base, fastchannels_url, row.effective_channels_dvr_url(),
+                                    tuners, bool(data.get('allow_streamer_switch')),
+                                    bool(data.get('clear_tuners')))
+    except ah4c_connect.Ah4cConnectError as e:
+        return jsonify({'ok': False, 'message': e.message, **e.detail}), e.status
+
+    if not result['capture_ready']:
+        # Either ah4c isn't on the FastChannels scripts (typically STREAMER_APP pinned
+        # to another app in its compose file), or it saved them but hasn't restarted
+        # into them (busy, failed, didn't come back). Turning ah4c Capture on here
+        # would route channels to tunes that can't work yet. Running Connect again
+        # after ah4c restarts finds nothing to change and turns Capture on.
+        return jsonify({'ok': True, 'url': base, 'capture_enabled': False, **result})
+
+    # ah4c is running the FastChannels scripts now.
+    hardware_capture_was_active = fc_player_bridge.hardware_bridge_active(row)
+    row.fc_player_bridge_ah4c_url = base
+    row.fc_player_bridge_ah4c_enabled = True
+    row.fc_player_bridge_enabled = True
+    if hardware_capture_was_active != fc_player_bridge.hardware_bridge_active(row):
+        _reconcile_drm_bridge_mode()
+    db.session.commit()
+    _invalidate_and_refresh_xml()
+    return jsonify({'ok': True, 'url': base, 'capture_enabled': True, **result})
+
+
 @settings_bp.route('/settings/fc-player/ah4c-tuners', methods=['POST'])
 def check_ah4c_tuners():
     """Cross-checks ah4c's configured TUNERn_IP list (from its own GET /api/status)

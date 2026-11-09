@@ -734,6 +734,263 @@ function downloadAh4cScripts() {
 }
 
 
+// ── ah4c Connect: FastChannels fills in an existing ah4c's settings ─────────
+let _ah4cConnectPreview = null;
+
+function _el(tag, attrs, text) {
+  const el = document.createElement(tag);
+  Object.entries(attrs || {}).forEach(([k, v]) => { if (v !== undefined && v !== null) el.setAttribute(k, v); });
+  if (text !== undefined) el.textContent = text;
+  return el;
+}
+
+function _ah4cConnectStatus(text, cls) {
+  const el = document.getElementById('ah4c-connect-status');
+  el.textContent = text || '';
+  el.className = 'save-status ' + (cls || '');
+}
+
+async function openAh4cConnectModal() {
+  const urlInput = document.getElementById('ah4c-connect-url');
+  urlInput.value = document.getElementById('fc-player-ah4c-url').value.trim();
+  const fcInput = document.getElementById('ah4c-connect-fc-url');
+  fcInput.value = fcInput.dataset.default || window.location.origin;
+  document.getElementById('ah4c-connect-result').hidden = true;
+  document.getElementById('ah4c-connect-apply-btn').disabled = true;
+  _ah4cConnectPreview = null;
+  _ah4cConnectStatus('');
+  document.getElementById('ah4c-connect-modal').classList.add('open');
+  if (urlInput.value) {
+    previewAh4cConnect();
+  } else {
+    // Nothing to check yet: show the compose file so a new user can start ah4c.
+    document.getElementById('ah4c-connect-compose-details').open = true;
+    try {
+      const resp = await fetch('/api/settings/fc-player/ah4c-connect');
+      const data = await resp.json();
+      if (data.compose) document.getElementById('ah4c-connect-compose').value = data.compose;
+    } catch (e) { /* compose stays empty; Check ah4c fills it */ }
+  }
+}
+
+// Editing either address makes the preview belong to a different ah4c (or a
+// different FastChannels address), so Save waits for a fresh Check ah4c.
+function invalidateAh4cConnectPreview() {
+  if (!_ah4cConnectPreview) return;
+  _ah4cConnectPreview = null;
+  document.getElementById('ah4c-connect-apply-btn').disabled = true;
+  const box = document.getElementById('ah4c-connect-result');
+  box.hidden = true;
+  box.textContent = '';
+  _ah4cConnectStatus('Address changed. Click Check ah4c again.');
+}
+
+function closeAh4cConnectModal() {
+  document.getElementById('ah4c-connect-modal').classList.remove('open');
+}
+
+async function previewAh4cConnect() {
+  const url = document.getElementById('ah4c-connect-url').value.trim();
+  const fcUrl = document.getElementById('ah4c-connect-fc-url').value.trim();
+  const box = document.getElementById('ah4c-connect-result');
+  const applyBtn = document.getElementById('ah4c-connect-apply-btn');
+  applyBtn.disabled = true;
+  _ah4cConnectPreview = null;
+  _ah4cConnectStatus('Checking ah4c…');
+  let data;
+  try {
+    const qs = new URLSearchParams({url, fastchannels_url: fcUrl});
+    const resp = await fetch('/api/settings/fc-player/ah4c-connect?' + qs.toString());
+    data = await resp.json();
+  } catch (e) {
+    _ah4cConnectStatus('Couldn’t ask FastChannels to check ah4c.', 'error');
+    return;
+  }
+  if (data.compose) document.getElementById('ah4c-connect-compose').value = data.compose;
+  box.textContent = '';
+  if (!data.ok) {
+    _ah4cConnectStatus(data.message || 'Check failed.', 'error');
+    box.hidden = true;
+    return;
+  }
+  _ah4cConnectStatus('ah4c ' + (data.version || '') + ' found.', 'ok');
+  // Save goes to exactly the ah4c and FastChannels address that were checked.
+  _ah4cConnectPreview = {...data, fastchannels_url: fcUrl};
+  renderAh4cConnectPreview(data);
+  box.hidden = false;
+  applyBtn.disabled = data.missing_mounts.length > 0;
+}
+
+function _ah4cNotice(box, cls, text) {
+  const div = _el('div', {class: 'ah4c-connect-notice ' + cls});
+  div.textContent = text;
+  box.appendChild(div);
+  return div;
+}
+
+function renderAh4cConnectPreview(data) {
+  const box = document.getElementById('ah4c-connect-result');
+  if (data.missing_mounts.length) {
+    const div = _ah4cNotice(box, 'error',
+      'ah4c won’t save settings until these folders are mounted into its container: ' +
+      data.missing_mounts.join(', ') + '. Add them to its compose file (see the example below), recreate the container, then check again.');
+    div.appendChild(_el('div', {class: 'help'}, 'Using Project One-Click? Install its “ah4c-minimal” action instead of “ah4c”. It mounts every folder and leaves the settings for FastChannels to fill in.'));
+    document.getElementById('ah4c-connect-compose-details').open = true;
+  }
+  if (data.replaces_streamer_app) {
+    const div = _ah4cNotice(box, 'warn', '');
+    const label = _el('label', {style: 'display:flex;gap:0.5rem;align-items:flex-start;cursor:pointer'});
+    const cb = _el('input', {type: 'checkbox', id: 'ah4c-connect-switch'});
+    label.appendChild(cb);
+    label.appendChild(_el('span', {}, 'This ah4c is set up for ' + data.replaces_streamer_app +
+      '. Switching it to FastChannels stops channels that use those scripts. Switch it anyway.'));
+    div.appendChild(label);
+  }
+  if (data.restart_pending) {
+    const what = (data.restart_pending_for || []).join(', ');
+    _ah4cNotice(box, 'warn', 'ah4c has saved changes that apply when it restarts' + (what ? ': ' + what : '') +
+      '. Until then, what’s shown here may not match what ah4c is running. Saving restarts it if nothing is playing.');
+  }
+  if (data.active_tunes) {
+    _ah4cNotice(box, 'warn', 'ah4c is streaming right now. Settings save now, but ah4c won’t restart to apply them until nothing is playing.');
+  }
+
+  box.appendChild(_el('div', {class: 'toggle-row-label', style: 'margin:0.75rem 0 0.25rem'}, 'Settings'));
+  const table = _el('table', {class: 'ah4c-tuners-table'});
+  const head = table.createTHead().insertRow();
+  ['Setting', 'Now', 'After'].forEach((h) => head.appendChild(_el('th', {}, h)));
+  const body = table.createTBody();
+  data.settings.forEach((r) => {
+    const row = body.insertRow();
+    row.insertCell().textContent = r.label;
+    row.insertCell().textContent = r.current || '(blank)';
+    const after = row.insertCell();
+    if (r.action === 'ok') {
+      after.textContent = 'No change';
+    } else if (r.action === 'locked') {
+      after.appendChild(_el('span', {class: 'ah4c-tuner-badge warn'}, 'Set in compose'));
+      after.appendChild(_el('div', {class: 'ah4c-tuner-note'}, 'Change it there to ' + r.key + '=' + r.proposed));
+    } else {
+      after.textContent = r.proposed;
+    }
+  });
+  box.appendChild(table);
+
+  box.appendChild(_el('div', {class: 'toggle-row-label', style: 'margin:1rem 0 0.25rem'}, 'Tuners'));
+  if (data.tuners_locked) {
+    box.appendChild(_el('div', {class: 'help'}, 'ah4c’s tuners are set in its compose file (NUMBER_TUNERS), so FastChannels leaves them alone. Change them there.'));
+    (data.tuners || []).forEach((t, i) => box.appendChild(_el('div', {class: 'help'}, '#' + i + ': ' + (t.tunerIP || '(none)') + ' → ' + (t.encoderURL || t.cmd || '(none)'))));
+    return;
+  }
+  box.appendChild(_el('div', {class: 'help', style: 'margin-bottom:0.5rem'}, 'One row per Fire TV or Android TV and the encoder that captures its HDMI output.'));
+  const list = _el('datalist', {id: 'ah4c-connect-devices'});
+  (data.known_devices || []).forEach((d) => list.appendChild(_el('option', {value: d})));
+  box.appendChild(list);
+  const rows = _el('div', {id: 'ah4c-connect-tuners'});
+  box.appendChild(rows);
+  if (data.tuners.length) {
+    // Each row remembers which ah4c tuner it came from, so removing one row
+    // doesn't move the next tuner's ah4c-only settings onto its neighbour.
+    data.tuners.forEach((t, i) => addAh4cConnectTunerRow(t, i));
+  } else {
+    addAh4cConnectTunerRow({tunerIP: '', encoderURL: '', locked: {}});
+  }
+  const add = _el('button', {class: 'btn btn-secondary', type: 'button', style: 'margin-top:0.5rem'}, 'Add tuner');
+  add.onclick = () => addAh4cConnectTunerRow({tunerIP: '', encoderURL: '', locked: {}});
+  box.appendChild(add);
+}
+
+function addAh4cConnectTunerRow(t, index) {
+  const rows = document.getElementById('ah4c-connect-tuners');
+  const row = _el('div', {class: 'ah4c-connect-tuner', style: 'display:flex;gap:0.5rem;flex-wrap:wrap;margin-bottom:0.4rem'});
+  if (Number.isInteger(index)) row.dataset.index = String(index);
+  const locks = t.locked || {};
+  const ip = _el('input', {type: 'text', class: 'ah4c-connect-ip', placeholder: 'Fire TV address, e.g. 192.168.1.40', list: 'ah4c-connect-devices', style: 'flex:1 1 180px'});
+  ip.value = t.tunerIP || '';
+  ip.disabled = !!locks.tunerIP;
+  const enc = _el('input', {type: 'text', class: 'ah4c-connect-enc', placeholder: 'Encoder URL, e.g. http://192.168.1.50:8090/stream0', style: 'flex:2 1 260px'});
+  enc.value = t.encoderURL || '';
+  enc.disabled = !!locks.encoderURL;
+  if (t.cmd) enc.placeholder = 'Uses a command set in ah4c (CMD)';
+  const del = _el('button', {class: 'btn btn-secondary', type: 'button', title: 'Remove this tuner'}, '✕');
+  del.onclick = () => row.remove();
+  del.disabled = !!(locks.tunerIP || locks.encoderURL);
+  row.append(ip, enc, del);
+  rows.appendChild(row);
+}
+
+async function applyAh4cConnect() {
+  const data = _ah4cConnectPreview;
+  if (!data) return;
+  const sw = document.getElementById('ah4c-connect-switch');
+  if (data.replaces_streamer_app && !(sw && sw.checked)) {
+    _ah4cConnectStatus('Tick the box to confirm switching ah4c to FastChannels.', 'error');
+    return;
+  }
+  const payload = {
+    url: data.url,
+    fastchannels_url: data.fastchannels_url,
+    allow_streamer_switch: !!(sw && sw.checked),
+  };
+  if (!data.tuners_locked) {
+    payload.tuners = Array.from(document.querySelectorAll('#ah4c-connect-tuners .ah4c-connect-tuner'))
+      .map((row) => {
+        const t = {tunerIP: row.querySelector('.ah4c-connect-ip').value.trim(),
+                   encoderURL: row.querySelector('.ah4c-connect-enc').value.trim()};
+        if (row.dataset.index !== undefined) t.index = Number(row.dataset.index);
+        return t;
+      })
+      .filter((t) => t.tunerIP || t.encoderURL);
+    if (!payload.tuners.length && data.tuners.length) {
+      if (!confirm('This removes all ' + data.tuners.length + ' tuner(s) from ah4c, including any settings made in ah4c for them. Remove them all?')) return;
+      payload.clear_tuners = true;
+    }
+  }
+  const btn = document.getElementById('ah4c-connect-apply-btn');
+  btn.disabled = true;
+  _ah4cConnectStatus('Saving to ah4c. If it needs a restart this takes up to a minute…');
+  let result;
+  try {
+    const resp = await fetch('/api/settings/fc-player/ah4c-connect', {
+      method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload)});
+    result = await resp.json();
+  } catch (e) {
+    _ah4cConnectStatus('Lost contact while saving. Click Check ah4c to see where it got to.', 'error');
+    btn.disabled = false;
+    return;
+  }
+  if (!result.ok) {
+    _ah4cConnectStatus(result.message || 'Save failed.', 'error');
+    btn.disabled = false;
+    return;
+  }
+  const pending = {
+    busy: 'Saved, but ah4c is streaming, so it hasn’t restarted. Restart it from ah4c’s Settings page when nothing is playing.',
+    failed: 'Saved, but ah4c wouldn’t restart. Restart its container to apply the settings.',
+    no_return: 'Saved, but ah4c hasn’t come back after restarting. Check that its container has “restart: unless-stopped”, then start it.',
+  };
+  let message;
+  if (result.capture_enabled) {
+    message = result.restart === 'done'
+      ? 'Done. ah4c restarted with the new settings, and ah4c Capture is on here.'
+      : 'Done. ah4c Capture is on here.';
+  } else if (!result.uses_fastchannels_scripts) {
+    const fixes = (result.locked_settings || []).map((r) => r.key + '=' + r.proposed).join(', ');
+    message = 'Saved what FastChannels could, but ah4c isn’t using the FastChannels scripts, so ah4c Capture stays off here. '
+      + (fixes ? 'Change these in ah4c’s compose file or stack: ' + fixes + '. Then recreate the container and run this again. '
+        + 'With Project One-Click, its “ah4c-minimal” action avoids this: it leaves these settings unset.' : '');
+  } else {
+    message = (pending[result.restart] || 'Saved.')
+      + ' ah4c Capture stays off here until ah4c is running the new settings. After it restarts, run Set up ah4c again to turn Capture on.';
+  }
+  _ah4cConnectStatus(message, result.capture_enabled ? 'ok' : 'error');
+  // The server changed the ah4c Capture settings only when it turned Capture on.
+  // Reload then, so the settings form doesn't keep stale toggles that a later
+  // save would write back.
+  if (result.capture_enabled) setTimeout(() => location.reload(), 2500);
+}
+
+
 const tveProviders = settingsBootstrap.tveProviders || [];
 const tveProviderMap = Object.fromEntries(tveProviders.map((p) => [p.id, p]));
 const tvePasswordPlaceholder = settingsBootstrap.tvePasswordPlaceholder || 'TV provider password';
