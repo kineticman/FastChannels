@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+Trust the device's own CA store plus Sectigo's 2021 public roots, which Fire OS
+and older Android TV stores don't carry.
+
+Disney/ESPN's ftc CDN edge (*-ftc-*.media.dssott.com) serves a chain ending at
+Sectigo Public Server Authentication Root R46 with no cross-sign to an older
+root, so without these playback failed with "Trust anchor for certification
+path not found". E46 is the ECC sibling, bundled for the same reason.
+
+cleartextTrafficPermitted must stay here: with a network security config
+present, Android 7+ ignores the manifest's usesCleartextTraffic, and
+FastChannels' own /play URLs are usually plain http on the LAN.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+            <certificates src="@raw/sectigo_public_server_authentication_root_r46" />
+            <certificates src="@raw/sectigo_public_server_authentication_root_e46" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>
