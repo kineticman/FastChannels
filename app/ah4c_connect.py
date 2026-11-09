@@ -61,10 +61,10 @@ def host_port(url: str | None, default_port: int | None = None) -> str:
 _UNREACHABLE_HOSTS = {'localhost', 'host.docker.internal', 'gateway.docker.internal'}
 
 
-def dvr_reachable(address: str) -> bool:
-    """Whether an ah4c 'host:port' could plausibly be reached by Channels DVR on
-    another computer. FastChannels may reach ah4c by a name only it can resolve:
-    a Docker service name ('ah4c'), localhost, or host.docker.internal."""
+def lan_reachable(address: str) -> bool:
+    """Whether a 'host:port' could plausibly be reached from another computer or
+    container. FastChannels may reach ah4c or Channels DVR by a name only it can
+    resolve: a Docker service name ('ah4c'), localhost, or host.docker.internal."""
     raw = (address or '').strip()
     if raw.startswith('['):
         host = raw[1:].split(']', 1)[0]
@@ -132,40 +132,65 @@ def _catalog(cfg: dict) -> dict[str, dict]:
     return {item.get('key'): item for item in cfg['catalog'] if isinstance(item, dict) and item.get('key')}
 
 
-def _dvr_address(base: str, current: str, override: str | None) -> str:
-    """IPADDRESS: the address Channels DVR uses to reach ah4c, written into ah4c's
-    M3U. The user's entry wins, then what ah4c has. Otherwise it's guessed from
-    the address FastChannels used, but only if Channels DVR could use it too;
-    blank means the user has to enter it."""
+# The address settings the modal lets the user edit. Both are used across the
+# network, so neither may be an address that only works from FastChannels:
+#   IPADDRESS  - ah4c's own address, written into its M3U for Channels DVR (required)
+#   CHANNELSIP - Channels DVR's address, which ah4c calls (optional, as in ah4c)
+ADDRESS_KEYS = ('IPADDRESS', 'CHANNELSIP')
+_REQUIRED_ADDRESSES = {'IPADDRESS'}
+_ADDRESS_ERRORS = {
+    'IPADDRESS': 'Channels DVR can’t reach ah4c at “{value}”. Enter the address it uses on your '
+                 'network, such as 192.168.1.30:7654.',
+    'CHANNELSIP': 'ah4c can’t reach Channels DVR at “{value}”. Enter Channels DVR’s address on your '
+                  'network, such as 192.168.1.20:8089, or leave it blank.',
+}
+
+
+def _address_guess(key: str, base: str, channels_dvr_url: str | None) -> str:
+    """The address FastChannels itself uses for that service."""
+    return host_port(base) if key == 'IPADDRESS' else host_port(channels_dvr_url, 8089)
+
+
+def _address(key: str, base: str, channels_dvr_url: str | None, current: str, override: str | None) -> str:
+    """The user's entry wins, then what ah4c has if it works from elsewhere, then
+    the address FastChannels uses if that does. Blank means none (for IPADDRESS,
+    that the user has to enter one). An unusable address ah4c already has is
+    replaced by a usable guess when there is one; otherwise an optional one is
+    left as it is rather than blocking the save, and flagged in the preview."""
+    optional = key not in _REQUIRED_ADDRESSES
     if override is not None:
-        value = host_port(override, urlsplit(base).port)
-        if not value or not dvr_reachable(value):
-            raise Ah4cConnectError(
-                f'Channels DVR can’t reach ah4c at “{override.strip() or "(blank)"}”. Enter the address '
-                'it uses on your network, such as 192.168.1.30:7654.', status=400)
+        if not override.strip() and optional:
+            return ''
+        if optional and override.strip() == current:
+            return current  # untouched; not Connect's to refuse
+        value = host_port(override, urlsplit(base).port if key == 'IPADDRESS' else 8089)
+        if not value or not lan_reachable(value):
+            raise Ah4cConnectError(_ADDRESS_ERRORS[key].format(value=override.strip() or '(blank)'), status=400)
         return value
-    if current:
+    if current and lan_reachable(current):
         return current
-    guess = host_port(base)
-    return guess if dvr_reachable(guess) else ''
+    guess = _address_guess(key, base, channels_dvr_url)
+    if lan_reachable(guess):
+        return guess
+    return current if optional else ''
 
 
 def _desired(base: str, cfg: dict, fastchannels_url: str, channels_dvr_url: str | None,
-             dvr_address: str | None = None) -> dict[str, str]:
+             addresses: dict[str, str] | None = None) -> dict[str, str]:
     """What Connect wants each managed setting to be. The ah4c and Channels DVR
     addresses are only filled when blank, so an address the user chose stays."""
     catalog = _catalog(cfg)
     current = {key: str((catalog.get(key) or {}).get('value') or '') for key in _MANAGED_KEYS}
-    ip_item = catalog.get('IPADDRESS') or {}
+    addresses = addresses or {}
     desired = {
         'STREAMER_APP': FASTCHANNELS_STREAMER_APP,
         'FASTCHANNELS_URL': fastchannels_url.rstrip('/'),
         'UPDATE_SCRIPTS': 'true',
-        # A locked IPADDRESS is the compose file's; don't propose or check an entry for it.
-        'IPADDRESS': (current['IPADDRESS'] if ip_item.get('locked')
-                      else _dvr_address(base, current['IPADDRESS'], dvr_address)),
-        'CHANNELSIP': current['CHANNELSIP'] or host_port(channels_dvr_url, 8089),
     }
+    for key in ADDRESS_KEYS:
+        # A locked address is the compose file's; don't propose or check an entry for it.
+        desired[key] = (current[key] if (catalog.get(key) or {}).get('locked')
+                        else _address(key, base, channels_dvr_url, current[key], addresses.get(key)))
     return {key: value for key, value in desired.items() if key in catalog}
 
 
@@ -179,7 +204,7 @@ def _plan_rows(cfg: dict, desired: dict[str, str]) -> list[dict]:
         current = str(item.get('value') or '')
         want = desired.get(key, current)
         locked = bool(item.get('locked'))
-        if key == 'IPADDRESS' and not want and not locked:
+        if key in _REQUIRED_ADDRESSES and not want and not locked:
             action = 'needed'  # no usable guess; the user enters it
         elif current == want:
             action = 'ok'
@@ -216,6 +241,22 @@ def _tuner_rows(cfg: dict) -> list[dict]:
     return rows
 
 
+def _address_notes(base: str, channels_dvr_url: str | None, rows: list[dict]) -> dict[str, dict]:
+    """Per editable address: one ah4c already has that only works from
+    FastChannels' side ('current'), or the one FastChannels uses when it
+    couldn't be offered as a guess ('guess')."""
+    notes = {}
+    for r in rows:
+        if r['key'] not in ADDRESS_KEYS or r['locked']:
+            continue
+        guess = _address_guess(r['key'], base, channels_dvr_url)
+        notes[r['key']] = {
+            'current': r['current'] if r['current'] and not lan_reachable(r['current']) else '',
+            'guess': guess if guess and not lan_reachable(guess) else '',
+        }
+    return notes
+
+
 def inspect(base: str, fastchannels_url: str, channels_dvr_url: str | None) -> dict:
     """Read-only: what ah4c has now and what Connect would change."""
     cfg = _get_config(base)
@@ -234,11 +275,7 @@ def inspect(base: str, fastchannels_url: str, channels_dvr_url: str | None) -> d
         'replaces_streamer_app': (streamer['current'] if streamer and streamer['action'] == 'set'
                                   and streamer['current'] else ''),
         'tuners': _tuner_rows(cfg),
-        # What FastChannels reached ah4c at, when Channels DVR couldn't use it.
-        'dvr_unreachable_address': '' if dvr_reachable(host_port(base)) else host_port(base),
-        # ah4c already has an IPADDRESS that Channels DVR couldn't use (e.g. a Docker name).
-        'dvr_address_unusable': next((r['current'] for r in rows if r['key'] == 'IPADDRESS' and not r['locked']
-                                      and r['current'] and not dvr_reachable(r['current'])), ''),
+        'address_notes': _address_notes(base, channels_dvr_url, rows),
         'tuners_locked': bool(tuners.get('locked') or tuners.get('countLocked')),
         'active_tunes': _active_tunes(base),
         # Saved in ah4c but not running until it restarts (an earlier Connect whose
@@ -339,7 +376,7 @@ def _wait_for_restart(base: str) -> bool:
 
 def apply(base: str, fastchannels_url: str, channels_dvr_url: str | None,
           tuners: list[dict] | None, allow_streamer_switch: bool, clear_tuners: bool = False,
-          dvr_address: str | None = None) -> dict:
+          addresses: dict[str, str] | None = None) -> dict:
     """Write the settings, restart ah4c when needed, and report what happened.
     Re-reads ah4c first, so a change made in ah4c since inspect() is respected."""
     cfg = _get_config(base)
@@ -349,7 +386,7 @@ def apply(base: str, fastchannels_url: str, channels_dvr_url: str | None,
             'ah4c can’t save settings until these folders are mounted into its container: '
             + ', '.join(missing) + '.', status=409, missing_mounts=missing)
 
-    desired = _desired(base, cfg, fastchannels_url, channels_dvr_url, dvr_address)
+    desired = _desired(base, cfg, fastchannels_url, channels_dvr_url, addresses)
     rows = _plan_rows(cfg, desired)
     if any(r['action'] == 'needed' for r in rows):
         raise Ah4cConnectError(

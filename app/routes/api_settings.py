@@ -1136,7 +1136,9 @@ def ah4c_connect_apply():
         result = ah4c_connect.apply(base, fastchannels_url, row.effective_channels_dvr_url(),
                                     tuners, bool(data.get('allow_streamer_switch')),
                                     bool(data.get('clear_tuners')),
-                                    data.get('dvr_address') if isinstance(data.get('dvr_address'), str) else None)
+                                    {k: v for k, v in (data.get('addresses') or {}).items()
+                                     if k in ah4c_connect.ADDRESS_KEYS and isinstance(v, str)}
+                                    if isinstance(data.get('addresses'), dict) else None)
     except ah4c_connect.Ah4cConnectError as e:
         return jsonify({'ok': False, 'message': e.message, **e.detail}), e.status
 
