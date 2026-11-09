@@ -192,6 +192,7 @@ def preview_order():
         'id':          ch.id,
         'name':        ch.name,
         'source':      ch.source.display_name or ch.source.name,
+        'category':    getattr(ch, 'category', None) or '',
         'number':      num_map.get(ch.id),
         'pinned':      bool((getattr(ch, 'number_pinned', False) and ch.number is not None)
                             or ch.id in fixed_ids),

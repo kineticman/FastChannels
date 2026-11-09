@@ -87,6 +87,7 @@ class _MiniChannel:
     source: _MiniSource
     provider_number: str | None = None
     pinned_chno: str | None = None
+    category: str | None = None
 
 
 def _parse_gracenote_id(ch) -> str | None:
@@ -380,6 +381,7 @@ def _build_channel_stub_query(filters: dict):
         Channel.slug,
         Channel.provider_number,
         Channel.pinned_chno,
+        Channel.category,
         Source.name.label('source_name'),
         Source.display_name.label('source_display_name'),
         Source.chnum_start.label('source_chnum_start'),
@@ -453,6 +455,7 @@ def _selected_channel_stubs(filters: dict | None = None, *, gracenote: bool | No
             ),
             provider_number=row.provider_number,
             pinned_chno=row.pinned_chno,
+            category=row.category,
         )
         for row in rows
     ]

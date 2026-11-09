@@ -1160,6 +1160,7 @@
         <div class="ord-bar">
           <span id="ord-note"></span>
           <button class="ch-bar-btn" type="button" onclick="sortOrderBySourceName()">Sort by source, then name</button>
+          <button class="ch-bar-btn" type="button" onclick="sortOrderByCategoryName()">Sort by category, then name</button>
         </div>
         <div class="ch-src-hint" id="ord-new-hint" style="display:none"></div>
         <div class="ord-list" id="order-list"></div>
@@ -2558,7 +2559,7 @@ function updateOrderNote() {
   hintEl.style.display = fresh ? '' : 'none';
   if (fresh) {
     hintEl.textContent = `⚠ ${fresh} newly matched channel${fresh === 1 ? ' was' : 's were'} placed in free numbers, `
-      + 'so the list may no longer be in order. Use “Sort by source, then name” to tidy it, then save the feed.';
+      + 'so the list may no longer be in order. Use one of the Sort buttons to tidy it, then save the feed.';
   }
 }
 
@@ -2653,6 +2654,22 @@ async function sortOrderBySourceName() {
   if (_orderStale || !_orderRows.length) return;
   _orderRows.sort((a, b) =>
     a.source.localeCompare(b.source, undefined, {sensitivity: 'base'}) ||
+    a.name.localeCompare(b.name, undefined, {sensitivity: 'base'}) ||
+    a.id - b.id
+  );
+  for (const r of _orderRows) r.new = false;
+  _orderDirty = true;
+  renumberOrderRows();
+  renderOrderList();
+}
+
+// Category A-Z, uncategorized channels last, then name within each category.
+async function sortOrderByCategoryName() {
+  if (_orderStale) await refreshOrderPreview();
+  if (_orderStale || !_orderRows.length) return;
+  _orderRows.sort((a, b) =>
+    (!a.category - !b.category) ||
+    (a.category || '').localeCompare(b.category || '', undefined, {sensitivity: 'base'}) ||
     a.name.localeCompare(b.name, undefined, {sensitivity: 'base'}) ||
     a.id - b.id
   );
