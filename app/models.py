@@ -473,9 +473,10 @@ class AppSettings(db.Model):
 
     id                   = db.Column(db.Integer, primary_key=True)
     global_chnum_start   = db.Column(db.Integer, nullable=True)  # master tvg-chno start for ungrouped sources
-    master_chnum_start   = db.Column(db.Integer, nullable=True)  # where new master numbers start (follows the Default feed's start); None = keep scraper numbers, new ones from 5000
-    master_gracenote_chnum_start = db.Column(db.Integer, nullable=True)  # where new /m3u/gracenote numbers start; None = above the master numbers
+    master_chnum_start   = db.Column(db.Integer, nullable=True)  # where the main numbers (Default feed + master playlists) start; follows the Default feed's start
+    master_gracenote_chnum_start = db.Column(db.Integer, nullable=True)  # unused since the main numbers were unified (app.chnum)
     chnum_seeded_at      = db.Column(db.DateTime, nullable=True)  # channel_numbers seeded from the previous numbering (app.chnum.seed_channel_numbers)
+    chnum_unified_at     = db.Column(db.DateTime, nullable=True)  # Default feed and master playlists made one set of numbers (app.chnum.unify_main_numbers)
     channels_dvr_url     = db.Column(db.Text, nullable=True)     # e.g. http://192.168.1.x:8089
     public_base_url      = db.Column(db.Text, nullable=True)     # e.g. http://192.168.1.x:5523
     timezone_name        = db.Column(db.String(64), nullable=True)  # IANA timezone, e.g. America/New_York

@@ -229,7 +229,8 @@ def ensure_runtime_schema(*, fresh_install: bool | None = None) -> None:
             as_cols = {row[1] for row in conn.execute(text("PRAGMA table_info(app_settings)"))}
             for col, ddl in (("master_chnum_start", "INTEGER"),
                              ("master_gracenote_chnum_start", "INTEGER"),
-                             ("chnum_seeded_at", "DATETIME")):
+                             ("chnum_seeded_at", "DATETIME"),
+                             ("chnum_unified_at", "DATETIME")):
                 if col not in as_cols:
                     conn.execute(text(f"ALTER TABLE app_settings ADD COLUMN {col} {ddl}"))
 
@@ -1126,5 +1127,8 @@ def ensure_runtime_schema(*, fresh_install: bool | None = None) -> None:
 
     # Channel numbers move to channel_numbers once, seeded from what the
     # previous numbering serves. ORM use is safe here: every column above exists.
-    from .chnum import seed_channel_numbers
-    seed_channel_numbers()
+    # Then the Default feed and the master playlists become one set of
+    # numbers, keeping the Default feed's.
+    from .chnum import seed_channel_numbers, unify_main_numbers
+    if seed_channel_numbers():
+        unify_main_numbers()

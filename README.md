@@ -180,7 +180,7 @@ As you set filters, the feed modal shows a live count of matching channels.
 - *Anime* — filter categories: Anime
 
 **Other feed options:**
-- **Channel Number Start** — numbers all channels sequentially from a given value. Fresh installs start the built-in Default feed at channel 5000.
+- **Starting number** — where this feed's channel numbers start. Each feed numbers its channels on its own, and a channel keeps its number in that feed. The built-in Default feed and the main `/m3u` playlists share one set of numbers (the ones on the Channels page), starting at 5000 on fresh installs. A locked number (🔒, set on the Channels page) is used in every feed and playlist.
 - **Add to Channels DVR** — registers the feed as a custom M3U source in Channels DVR with one click. Configure the DVR server URL in **Settings** first. Re-adding keeps settings you made in the DVR, such as a stream limit.
 - **Guide Mode** (Beta) — *Separate* (the default) gives a standard playlist and a Gracenote playlist, added to Channels DVR as two sources. *Mixed* puts both in one playlist, so the feed is one source. Mixed needs Channels DVR 2026.08.25 or newer; switching doesn't change channel numbers.
 - **Add Native to Channels DVR** — adds the feed's native output as its own source: every channel in the feed, all using FastChannels' scraped guide instead of Gracenote.

@@ -150,9 +150,41 @@ def _default_feed_chnum_map_full() -> dict[int, int]:
     """The numbers the Default feed shows, by channel id (the master numbers
     when the Default feed is off). Channels the Default feed leaves out have
     no entry here and show a dash."""
-    from ..chnum import MASTER_SCOPE, read_scope
+    from ..chnum import MASTER_SCOPE, feed_scope, read_scope
     default_feed = Feed.query.filter_by(slug='default', is_enabled=True).first()
-    return read_scope(default_feed.id if default_feed else MASTER_SCOPE)
+    return read_scope(feed_scope(default_feed) if default_feed else MASTER_SCOPE)
+
+
+def _chnum_titles(page_items, main_map: dict) -> dict[int, str]:
+    """Hover text for the Channels page number: the channel's number in the
+    Default feed and /m3u, then in each feed that numbers it on its own."""
+    from ..models import ChannelNumber
+    from ..generators.m3u import apply_provider_numbers
+    if not page_items:
+        return {}
+    feeds = dict(Feed.query.filter(Feed.is_enabled == True, Feed.slug != 'default')
+                 .order_by(Feed.name).with_entities(Feed.id, Feed.name).all())
+    by_id = {ch.id: ch for ch in page_items}
+    per_feed: dict[int, dict[int, int]] = {}
+    if feeds:
+        rows = (db.session.query(ChannelNumber.scope_id, ChannelNumber.channel_id, ChannelNumber.number)
+                .filter(ChannelNumber.channel_id.in_(list(by_id)),
+                        ChannelNumber.scope_id.in_(list(feeds)),
+                        ChannelNumber.released_at.is_(None))
+                .all())
+        for scope_id, cid, n in rows:
+            per_feed.setdefault(scope_id, {})[cid] = n
+    shown = {fid: apply_provider_numbers([by_id[c] for c in nums], nums)
+             for fid, nums in per_feed.items()}
+    titles = {}
+    for cid in by_id:
+        lines = [f'Default feed and /m3u: {main_map.get(cid) or "not numbered"}']
+        lines += [f'{name}: {shown[fid][cid]}' for fid, name in feeds.items()
+                  if cid in shown.get(fid, {})]
+        if len(lines) == 1:
+            lines.append('In no other feed.')
+        titles[cid] = '\n'.join(lines)
+    return titles
 
 
 def _provider_numbered_ids(items) -> set[int]:
@@ -970,6 +1002,7 @@ def channels():
     enabled_filter   = request.args.get('enabled', '')
     review_filter    = request.args.get('review', '')
     presence_filter  = request.args.get('presence', '')
+    chnum_filter     = request.args.get('chnum', '')
     drm_filter       = request.args.get('drm', '')
     if not ui_context()['show_drm'] and drm_filter in ('1', 'bridge'):
         drm_filter = ''
@@ -1043,6 +1076,9 @@ def channels():
         q = q.filter(Channel.scrape_pinned == True)
     elif presence_filter == 'active':
         q = q.filter(Channel.is_active == True)
+
+    if chnum_filter == 'locked':
+        q = q.filter(db.or_(Channel.number_pinned == True, Channel.pinned_chno.isnot(None)))
 
     if gracenote_filter == '1':
         q = q.filter(Channel.gracenote_id != None, Channel.gracenote_id != '')
@@ -1167,7 +1203,7 @@ def channels():
         'category': [Channel.category, Channel.name],
         # SQL fallback only; sort=number is done below on the number the page
         # actually shows (see _sort_ids_by_shown_number).
-        'number':   [db.func.coalesce(Source.chnum_start, 999999), db.func.coalesce(Channel.number, 999999), Source.display_name, sort_name, Channel.name],
+        'number':   [db.func.coalesce(Channel.number, 999999), Source.display_name, sort_name, Channel.name],
     }
     _cols = _sort_cols.get(sort_by, [Channel.name])
     if sort_dir == 'desc':
@@ -1284,7 +1320,7 @@ def channels():
     from urllib.parse import urlencode
     filter_qs = urlencode({k: v for k, v in {
         'feed': feed_filter, 'source': source_filter, 'network': network_filter, 'search': search,
-        'enabled': enabled_filter, 'review': review_filter, 'presence': presence_filter, 'drm': drm_filter,
+        'enabled': enabled_filter, 'review': review_filter, 'presence': presence_filter, 'chnum': chnum_filter, 'drm': drm_filter,
         'language': language_filter, 'country': country_filter, 'sport': sport_filter,
         'gracenote': gracenote_filter, 'gracenote_mode': gracenote_mode_filter,
         'category': category_filter, 'duplicates': duplicates_filter,
@@ -1325,6 +1361,8 @@ def channels():
                            duplicate_group_keys=duplicate_group_keys,
                            sort_by=sort_by, sort_dir=sort_dir,
                            chnum_map=chnum_map,
+                           chnum_titles=_chnum_titles(channels.items, chnum_map),
+                           chnum_filter=chnum_filter,
                            chnum_conflicts=chnum_conflicts,
                            provider_numbered=_provider_numbered_ids(channels.items),
                            in_any_feed_ids=in_any_feed_ids,
@@ -1702,6 +1740,7 @@ def channels_chnum_map():
 
     return jsonify({
         'chnum_map':    chnum_map,
+        'titles':       _chnum_titles(page_items, chnum_map),
         'pinned':       pinned,
         'conflict_ids': list(conflict_ids),
         'provider_ids': list(_provider_numbered_ids(page_items)),

@@ -1363,6 +1363,7 @@
       enabled:    {{ enabled_filter   | tojson }},
       review:     {{ review_filter    | tojson }},
       presence:   {{ presence_filter  | tojson }},
+      chnum:      {{ chnum_filter     | tojson }},
       gracenote:  {{ gracenote_filter | tojson }},
       gracenote_mode: {{ gracenote_mode_filter | tojson }},
       new:            {{ new_filter            | tojson }},
@@ -1412,8 +1413,8 @@
           <button type="button" class="btn-resolve-dupes" onclick="openResolveDupesModal()">⚡ Resolve Dupes</button>
         </div>
       </div>
-      {% set _adv_count = (1 if feed_filter else 0) + (1 if category_filter else 0) + (1 if enabled_filter else 0) + (1 if presence_filter else 0) + (1 if drm_filter else 0) + (1 if language_filter else 0) + (1 if country_filter else 0) + (1 if sport_filter else 0) + (1 if gracenote_filter else 0) + (1 if gracenote_mode_filter else 0) + (1 if duplicates_filter else 0) + (1 if new_filter else 0) + (1 if epg_filter else 0) + (1 if resolution_filter else 0) + (1 if featured_filter else 0) + (1 if event_filter in ('0', '1') else 0) %}
-      <details class="toolbar-advanced" id="toolbar-advanced" {% if feed_filter or category_filter or enabled_filter or presence_filter or drm_filter or language_filter or country_filter or sport_filter or gracenote_filter or gracenote_mode_filter or duplicates_filter or new_filter or epg_filter or resolution_filter or featured_filter or event_filter in ('0', '1') %}open{% endif %}>
+      {% set _adv_count = (1 if feed_filter else 0) + (1 if category_filter else 0) + (1 if enabled_filter else 0) + (1 if presence_filter else 0) + (1 if chnum_filter else 0) + (1 if drm_filter else 0) + (1 if language_filter else 0) + (1 if country_filter else 0) + (1 if sport_filter else 0) + (1 if gracenote_filter else 0) + (1 if gracenote_mode_filter else 0) + (1 if duplicates_filter else 0) + (1 if new_filter else 0) + (1 if epg_filter else 0) + (1 if resolution_filter else 0) + (1 if featured_filter else 0) + (1 if event_filter in ('0', '1') else 0) %}
+      <details class="toolbar-advanced" id="toolbar-advanced" {% if feed_filter or category_filter or enabled_filter or presence_filter or chnum_filter or drm_filter or language_filter or country_filter or sport_filter or gracenote_filter or gracenote_mode_filter or duplicates_filter or new_filter or epg_filter or resolution_filter or featured_filter or event_filter in ('0', '1') %}open{% endif %}>
         <summary>More filters{% if _adv_count %} <span class="filter-adv-badge">{{ _adv_count }}</span>{% endif %}</summary>
         <div class="toolbar-secondary">
           <div class="filter-group">
@@ -1471,6 +1472,13 @@
               <option value="missed" {% if presence_filter == 'missed' %}selected{% endif %}>At risk (1+ missed scrapes)</option>
               <option value="pinned" {% if presence_filter == 'pinned' %}selected{% endif %}>Pinned (scrape override)</option>
               <option value="enabled_inactive" {% if presence_filter == 'enabled_inactive' %}selected{% endif %}>Enabled but inactive</option>
+            </select>
+          </div>
+          <div class="filter-group">
+            <label class="filter-label" for="chnum-filter">Channel Number</label>
+            <select id="chnum-filter" name="chnum">
+              <option value="" {% if chnum_filter != 'locked' %}selected{% endif %}>All numbers</option>
+              <option value="locked" {% if chnum_filter == 'locked' %}selected{% endif %}>🔒 Locked</option>
             </select>
           </div>
           <div class="filter-group">
@@ -1633,6 +1641,9 @@
       {% if presence_filter %}
       <span class="filter-chip"><strong>Presence</strong>{% if presence_filter == 'active' %}Active only{% elif presence_filter == 'inactive' %}Inactive only{% elif presence_filter == 'enabled_inactive' %}Enabled but inactive{% elif presence_filter == 'missed' %}Missed recently{% elif presence_filter == 'pinned' %}Pinned{% else %}{{ presence_filter }}{% endif %}</span>
       {% endif %}
+      {% if chnum_filter == 'locked' %}
+      <span class="filter-chip"><strong>Number</strong>Locked</span>
+      {% endif %}
       {% if drm_filter %}
       <span class="filter-chip"><strong>Health</strong>{% if drm_filter == '1' %}DRM only{% elif drm_filter == 'bridge' %}DRM — bridged{% elif drm_filter == 'dead' %}Dead only{% elif drm_filter == 'vod' %}VOD only{% elif drm_filter == '0' %}No DRM / Dead / VOD flag{% endif %}</span>
       {% endif %}
@@ -1668,7 +1679,7 @@
       {% if event_filter in ('0', '1') %}
       <span class="filter-chip"><strong>Events</strong>{{ 'Events only' if event_filter == '1' else 'Non-event channels' }}</span>
       {% endif %}
-      {% if not (search or source_filter or feed_filter or category_filter or enabled_filter or review_filter or presence_filter or drm_filter or language_filter or country_filter or sport_filter or gracenote_filter or gracenote_mode_filter or duplicates_filter in ('1', 'unique') or new_filter in ('1','3','7','14') or epg_filter or featured_filter or event_filter in ('0', '1')) %}
+      {% if not (search or source_filter or feed_filter or category_filter or enabled_filter or review_filter or presence_filter or chnum_filter or drm_filter or language_filter or country_filter or sport_filter or gracenote_filter or gracenote_mode_filter or duplicates_filter in ('1', 'unique') or new_filter in ('1','3','7','14') or epg_filter or featured_filter or event_filter in ('0', '1')) %}
       <span class="filter-chip"><strong>View</strong>All channels</span>
       {% endif %}
       <button type="button" class="btn-hide-disabled{% if enabled_filter == '1' %} active{% endif %}" onclick="toggleHideDisabled()">{% if enabled_filter == '1' %}◉ Hiding disabled{% else %}○ Hide disabled{% endif %}</button>
@@ -1695,6 +1706,9 @@
       <button class="btn-open-external" onclick="bulkGracenoteAction('set_manual')">Set Manual</button>
       <button class="btn-open-external" onclick="bulkGracenoteAction('set_off')">Set Off</button>
       <button class="btn-cancel" onclick="bulkGracenoteAction('clear_ids')">Clear IDs</button>
+      {% endif %}
+      {% if chnum_filter == 'locked' %}
+      <button class="btn-open-external" onclick="bulkUnlockNumbers()">🔓 Unlock Numbers</button>
       {% endif %}
       <button class="btn-cancel"  onclick="clearSelection()">Cancel</button>
     </div>
@@ -1778,7 +1792,7 @@
                 {% endfor %}
               </select>
             </th>
-            <th class="sortable {% if sort_by == 'number' %}active{% endif %}" onclick="sortBy('number')" title="Actual tvg-chno from the Default feed">Ch# <span class="sort-arrow">{% if sort_by == 'number' %}{{ '▲' if sort_dir == 'asc' else '▼' }}{% else %}⇅{% endif %}</span></th>
+            <th class="sortable {% if sort_by == 'number' %}active{% endif %}" onclick="sortBy('number')" title="Number in the Default feed and the /m3u playlists. Other feeds number channels on their own: hover a number to see them.">Default # <span class="sort-arrow">{% if sort_by == 'number' %}{{ '▲' if sort_dir == 'asc' else '▼' }}{% else %}⇅{% endif %}</span></th>
             <th>Gracenote ID</th>
             <th class="actions-col">Actions</th>
             <th class="toggle-col">Enabled</th>
@@ -1840,8 +1854,8 @@
                 data-chnum-cell="1"
                 data-channel-id="{{ ch.id }}"
                 data-pinned="{{ 'true' if (ch.number_pinned or ch.pinned_chno) else 'false' }}">
-              <span class="chnum-display"{% if ch.id in chnum_conflicts %} title="Locked to the same number as another channel. This channel's shown number was reassigned to avoid a clash — unlock one of the two (🔒) or give it a different number."{% endif %}>{{ chnum_map.get(ch.id) or '—' }}</span>
-              {% if ch.number_pinned or ch.pinned_chno %}<button class="chnum-pin-btn" onclick="chnumUnpin(event,{{ ch.id }})" title="Unpin — let feed assign this number">🔒</button>{% elif ch.id in provider_numbered %}<span class="chnum-provider-icon" title="Set by DirecTV channel numbers. Click the number to lock a different one.">🔒</span>{% endif %}
+              <span class="chnum-display" title="{% if ch.id in chnum_conflicts %}Locked to the same number as another channel. This channel's shown number was reassigned to avoid a clash — unlock one of the two (🔒) or give it a different number.{% else %}{{ chnum_titles.get(ch.id, '') }}{% endif %}">{{ chnum_map.get(ch.id) or '—' }}</span>
+              {% if ch.number_pinned or ch.pinned_chno %}<button class="chnum-pin-btn" onclick="chnumUnpin(event,{{ ch.id }})" title="Locked: this number is used in every feed and playlist. Click to unlock.">🔒</button>{% elif ch.id in provider_numbered %}<span class="chnum-provider-icon" title="Set by DirecTV channel numbers. Click the number to lock a different one.">🔒</span>{% endif %}
             </td>
 
             {# ── Gracenote ID cell ── #}
@@ -2004,6 +2018,9 @@
       <button class="btn-open-external" onclick="bulkGracenoteAction('set_manual')">Set Manual</button>
       <button class="btn-open-external" onclick="bulkGracenoteAction('set_off')">Set Off</button>
       <button class="btn-cancel" onclick="bulkGracenoteAction('clear_ids')">Clear IDs</button>
+      {% endif %}
+      {% if chnum_filter == 'locked' %}
+      <button class="btn-open-external" onclick="bulkUnlockNumbers()">🔓 Unlock Numbers</button>
       {% endif %}
       <button class="btn-cancel"  onclick="clearSelection()">Cancel</button>
     </div>
@@ -2863,6 +2880,7 @@
         const pinnedMap   = data.pinned       || {};
         const conflictSet = new Set((data.conflict_ids || []).map(String));
         const providerSet = new Set((data.provider_ids || []).map(String));
+        _chnumTitles = data.titles || {};
         for (const row of rows) {
           const cid  = row.getAttribute('data-channel-id');
           const cell = row.querySelector('[data-chnum-cell]');
@@ -2876,6 +2894,7 @@
       }
     }
 
+    let _chnumTitles = {};
     function _chnumRenderCell(cell, cid, displayVal, pinned, conflict, provider = false) {
       cell.dataset.pinned = pinned ? 'true' : 'false';
       cell.classList.toggle('chnum-pinned',   pinned);
@@ -2902,13 +2921,13 @@
       span.textContent = displayVal;
       span.title = conflict
         ? 'Locked to the same number as another channel. This channel\'s shown number was reassigned to avoid a clash — unlock one of the two (🔒) or give it a different number.'
-        : '';
+        : (_chnumTitles[cid] || span.title || '');
       // Pin button
       let btn = cell.querySelector('.chnum-pin-btn');
       if (pinned && !btn) {
         btn = document.createElement('button');
         btn.className = 'chnum-pin-btn';
-        btn.title = 'Unpin — let feed assign this number';
+        btn.title = 'Locked: this number is used in every feed and playlist. Click to unlock.';
         btn.textContent = '🔒';
         btn.onclick = (e) => chnumUnpin(e, parseInt(cid));
         cell.appendChild(btn);
@@ -3968,6 +3987,28 @@
         setTimeout(() => window.location.reload(), 800);
       } catch (e) {
         showToast('⚠ Bulk request failed — ' + e.message);
+      }
+    }
+
+    async function bulkUnlockNumbers() {
+      const selectedIds = [...document.querySelectorAll('.row-check:checked')].map(cb => parseInt(cb.value, 10));
+      const usingFilter = _bulkSelectionScope === 'filter';
+      const count = usingFilter ? _pageTotalCount : selectedIds.length;
+      if (!count) return;
+      if (!confirm(`Unlock ${count} channel number${count === 1 ? '' : 's'}?\n\nEvery feed numbers these channels on its own again, so their numbers can change and stop matching across feeds.`)) return;
+      try {
+        const payload = usingFilter ? { filters: _pageFilters } : { ids: selectedIds };
+        const r = await fetch('/api/channels/unlock-numbers', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify(payload),
+        });
+        const data = await r.json();
+        if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
+        showToast(`✓ Unlocked ${data.unlocked} channel${data.unlocked !== 1 ? 's' : ''}`);
+        setTimeout(() => window.location.reload(), 800);
+      } catch (e) {
+        showToast('⚠ Unlock failed — ' + e.message);
       }
     }
 

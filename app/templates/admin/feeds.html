@@ -401,9 +401,8 @@
       font-family: monospace; font-variant-numeric: tabular-nums; font-weight: 700;
       color: var(--accent); background: var(--accent-bg); border: 1px solid var(--accent-border);
       border-radius: 5px; padding: 0.05rem 0.45rem; font-size: 0.75rem;
-      flex-shrink: 0; min-width: 3.4rem; text-align: right; cursor: pointer;
+      flex-shrink: 0; min-width: 3.4rem; text-align: right; cursor: default;
     }
-    .ord-row:not(.pinned) .ord-num:hover { border-color: var(--accent); }
     .ord-row.pinned .ord-num { color: var(--success-soft); background: var(--success-bg); border-color: var(--success-border); cursor: default; }
     .ord-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
     .ord-src { color: var(--text-dim); font-size: 0.7rem; flex-shrink: 0; max-width: 8rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -419,11 +418,6 @@
     .ord-actions { display: flex; gap: 0.15rem; flex-shrink: 0; }
     .ord-actions button { background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: 0.8rem; padding: 0 0.2rem; line-height: 1; }
     .ord-actions button:hover { color: var(--accent); }
-    .ord-num-input {
-      width: 4.6rem; font-family: monospace; font-size: 0.75rem; padding: 0.05rem 0.3rem;
-      border-radius: 5px; border: 1px solid var(--accent); background: var(--bg);
-      color: var(--text); outline: none; flex-shrink: 0;
-    }
     .ord-hint { font-size: 0.72rem; color: var(--text-dim); margin-top: 0.4rem; line-height: 1.5; }
     .ord-empty { text-align: center; color: var(--text-dim); padding: 2rem 1rem; font-size: 0.82rem; }
     @media (max-width: 760px) {
@@ -667,16 +661,15 @@
       <div class="feed-settings">
         <div class="inline-setting">
           <div class="field">
-            <label>Master Channel Number Start <span style="color:var(--text-dim);font-weight:400;text-transform:none;font-size:0.75rem">(tvg-chno)</span></label>
+            <label>Starting number <span style="color:var(--text-dim);font-weight:400;text-transform:none;font-size:0.75rem">(tvg-chno)</span></label>
             <div class="inline-controls">
               <input type="number" id="chnum-{{ feed.id }}" min="1" max="999999"
                      placeholder="e.g. 10000" value="{{ feed.chnum_start or '' }}"
                      oninput="checkInlineChnumConflict({{ feed.id }})">
               <button class="btn btn-ghost" type="button" onclick="saveFeedChnum({{ feed.id }})">Save</button>
-              <button class="btn btn-ghost" type="button" onclick="resetFeedChnums({{ feed.id }}, '{{ feed.name|e }}', true, this)" title="Clears all auto-assigned channel numbers and regenerates them sequentially from the saved Master Channel Number Start. Pinned numbers are preserved.">Reset Channel Numbers</button>
-              <button class="btn btn-ghost" type="button" onclick="lockAllFeedChnums({{ feed.id }}, '{{ feed.name|e }}', this)" title="Locks channel numbers globally. Stops if a shared channel has a different number in another feed.">🔒 Lock All</button>
+              <button class="btn btn-ghost" type="button" onclick="resetFeedChnums({{ feed.id }}, '{{ feed.name|e }}', true, this)" title="Numbers the Default feed and the /m3u playlists again from the starting number. Locked channels keep their numbers.">Renumber</button>
             </div>
-            <div class="help">Applies to all sources without their own channel number start.{% if default_chnum_from_env %} Currently inherited from env var <code>MASTER_CHANNEL_NUMBER_START</code> — saving here overrides it.{% endif %}</div>
+            <div class="help">The Default feed and the main playlists (<code>/m3u</code>, <code>/m3u/gracenote</code>, <code>/m3u/mixed</code> and the main bridge playlists) share one set of numbers, starting here. These are the numbers on the Channels page.{% if default_chnum_from_env %} Currently inherited from env var <code>MASTER_CHANNEL_NUMBER_START</code> — saving here overrides it.{% endif %}</div>
             <div id="chnum-conflict-{{ feed.id }}" style="margin-top:4px;font-size:0.78rem;line-height:1.6"></div>
           </div>
           <span class="save-status" id="chnum-status-{{ feed.id }}"></span>
@@ -686,17 +679,16 @@
       <div class="feed-settings">
         <div class="inline-setting">
           <div class="field">
-            <label>Channel Number Start <span style="color:var(--text-dim);font-weight:400;text-transform:none;font-size:0.75rem">(tvg-chno)</span></label>
+            <label>Starting number for this feed <span style="color:var(--text-dim);font-weight:400;text-transform:none;font-size:0.75rem">(tvg-chno)</span></label>
             <div class="inline-controls">
               <input type="number" id="chnum-{{ feed.id }}" min="1" max="99999"
                      placeholder="{{ feed_chnum_placeholder.get(feed.id, 'auto') }}"
                      value="{{ feed.chnum_start or '' }}"
                      oninput="checkInlineChnumConflict({{ feed.id }})">
               <button class="btn btn-ghost" type="button" onclick="saveFeedChnum({{ feed.id }})">Save</button>
-              <button class="btn btn-ghost" type="button" onclick="resetFeedChnums({{ feed.id }}, '{{ feed.name|e }}', false, this)" title="Clears this feed's sticky channel-number assignments and regenerates them sequentially from the saved Channel Number Start.">Reset Channel Numbers</button>
-              <button class="btn btn-ghost" type="button" onclick="lockAllFeedChnums({{ feed.id }}, '{{ feed.name|e }}', this)" title="Locks channel numbers globally. Stops if a shared channel has a different number in another feed.">🔒 Lock All</button>
+              <button class="btn btn-ghost" type="button" onclick="resetFeedChnums({{ feed.id }}, '{{ feed.name|e }}', false, this)" title="Numbers this feed's channels again from its starting number, replacing any order you set. Locked channels keep their numbers.">Renumber</button>
             </div>
-            <div class="help">This feed's channels are numbered from here. Raising it renumbers the channels below the new start; every other channel keeps its number.</div>
+            <div class="help">This feed numbers its channels on its own, starting here, so a channel can have a different number here than on the Channels page. Each channel keeps its number in this feed. Raising the start renumbers the channels below it; every other channel keeps its number.</div>
             <div id="chnum-conflict-{{ feed.id }}" style="margin-top:4px;font-size:0.78rem;line-height:1.6"></div>
           </div>
           <span class="save-status" id="chnum-status-{{ feed.id }}"></span>
@@ -715,7 +707,7 @@
                 <option value="mixed" {% if mixed_guide %}selected{% endif %}>One mixed playlist</option>
               </select>
             </div>
-            <div class="help">Mixed puts this feed's XMLTV and Gracenote channels in a single playlist, so Channels DVR needs one source instead of two. Requires Channels DVR 2026.08.25 or newer. Channel numbers do not change{% if not feed.chnum_start %}; switching fills in Channel Number Start so they stay put{% endif %}. After switching, use Add to Channels DVR again.</div>
+            <div class="help">Mixed puts this feed's XMLTV and Gracenote channels in a single playlist, so Channels DVR needs one source instead of two. Requires Channels DVR 2026.08.25 or newer. Channel numbers do not change{% if not feed.chnum_start %}; switching fills in the starting number so they stay put{% endif %}. After switching, use Add to Channels DVR again.</div>
           </div>
           <span class="save-status" id="guide-mode-status-{{ feed.id }}"></span>
         </div>
@@ -1106,9 +1098,9 @@
     <fieldset class="field-box">
       <legend>Numbering</legend>
       <div class="field">
-        <label for="f-chnum">Starting channel number <span class="label-note">tvg-chno</span></label>
+        <label for="f-chnum">Starting number for this feed <span class="label-note">tvg-chno</span></label>
         <input type="number" id="f-chnum" min="1" placeholder="auto" oninput="checkChnumConflict(); onChnumInputForOrder()">
-        <div class="help" id="f-chnum-help">Leave blank to get a free block of numbers. This feed's channels are numbered from here.</div>
+        <div class="help" id="f-chnum-help">This feed numbers its channels on its own, starting here, so they can differ from the numbers on the Channels page. Leave blank to get a free block of numbers.</div>
         <div id="f-chnum-ranges" style="margin-top:6px;font-size:0.78rem;color:var(--text-soft);line-height:1.6"></div>
       </div>
       <div class="field">
@@ -1159,8 +1151,8 @@
         <div class="ord-list" id="order-list"></div>
         <div class="ord-hint">
           Sort or drag rows to reorder, then save the feed. Locked and provider numbers stay fixed, so those rows may appear outside the sorted groups. tvg-chno is reassigned sequentially from the starting number as you go.
-          Use ⤒ / ⤓ to move a row. Feed numbers are saved with this feed and normally stay put. Click a number and press Enter to set a global lock; pressing Enter without changing it locks its current number. The Lock globally button does the same. A global lock changes this channel's number in every feed, so it is blocked when another feed uses a different number.
-          🔒 rows have a fixed number (locked, or the provider's own, e.g. DirecTV) and can't be dragged; ✕ unlocks your own locks. PIN-badged rows are pinned into this feed and reorder freely.
+          Use ⤒ / ⤓ to move a row. These numbers belong to this feed and normally stay put.
+          🔒 rows have a fixed number (locked on the Channels page, or the provider's own, e.g. DirecTV) and can't be dragged; ✕ unlocks your own locks. PIN-badged rows are pinned into this feed and reorder freely.
           Channels that match your filters later are appended to the end of the order.
         </div>
       </div>
@@ -2398,8 +2390,8 @@ async function saveFeedChnum(feedId) {
 async function resetFeedChnums(feedId, feedName, isDefault, btn) {
   const status = document.getElementById(`chnum-status-${feedId}`);
   const message = isDefault
-    ? `Warning: reset channel numbers for "${feedName}"?\n\nThis will overwrite the current sticky channel-number assignments for the master feed and regenerate them from the saved start number.\n\nThis is destructive and cannot be undone automatically.`
-    : `Warning: reset channel numbers for "${feedName}"?\n\nThis will overwrite this feed's sticky channel-number assignments — including any manual drag-drop ordering — and regenerate them from the saved Channel Number Start.\n\nThis is destructive and cannot be undone automatically.`;
+    ? `Renumber "${feedName}"?\n\nThe Default feed and the /m3u playlists (the numbers on the Channels page) are numbered again from the starting number. Locked channels keep their numbers.\n\nThis can't be undone, and Channels DVR will see new numbers.`
+    : `Renumber "${feedName}"?\n\nThis feed's channels are numbered again from its starting number, replacing any order you set. Locked channels keep their numbers.\n\nThis can't be undone, and Channels DVR will see new numbers.`;
   if (!confirm(message)) return;
 
   const orig = btn.textContent;
@@ -2417,31 +2409,6 @@ async function resetFeedChnums(feedId, feedName, isDefault, btn) {
   } catch (e) {
     status.textContent = '✗ ' + e.message;
     status.className   = 'save-status error';
-  } finally {
-    btn.disabled = false;
-    btn.textContent = orig;
-  }
-}
-
-async function lockAllFeedChnums(feedId, feedName, btn) {
-  const message = `Lock every channel currently in "${feedName}" to its shown number?\n\nLocks apply across all feeds. If any shared channel has a different number in another feed, Lock All will stop without changing anything.`;
-  if (!confirm(message)) return;
-
-  const status = document.getElementById(`chnum-status-${feedId}`);
-  const orig = btn.textContent;
-  btn.disabled = true;
-  status.textContent = 'Locking…';
-  status.className = 'save-status';
-  try {
-    const r = await fetch(`/api/feeds/${feedId}/chnum-lock-all`, { method: 'POST' });
-    const data = await r.json().catch(() => ({}));
-    if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
-    status.textContent = `✓ Locked ${data.locked} channel${data.locked === 1 ? '' : 's'}`;
-    status.className = 'save-status ok';
-    setTimeout(() => { status.textContent = ''; }, 3000);
-  } catch (e) {
-    status.textContent = '✗ ' + e.message;
-    status.className = 'save-status error';
   } finally {
     btn.disabled = false;
     btn.textContent = orig;
@@ -2595,9 +2562,9 @@ function renderOrderList() {
     if (!r.pinned) row.draggable = true;
     row.innerHTML =
       `<span class="ord-grip">${r.pinned ? '🔒' : '⋮⋮'}</span>` +
-      `<span class="ord-num" title="${r.locked ? 'Locked globally. Click to change it, ✕ to unlock.'
-                                    : r.number_source === 'provider' ? 'Set by provider channel numbers. Click to set a global lock.'
-                                    : 'Click and press Enter to lock this number globally, or enter a different global number.'}"></span>` +
+      `<span class="ord-num" title="${r.locked ? 'Locked on the Channels page: this number is used in every feed and playlist. ✕ unlocks it.'
+                                    : r.number_source === 'provider' ? 'Set by provider channel numbers.'
+                                    : 'This feed\'s number for the channel.'}"></span>` +
       `<span class="ord-name"></span>` +
       (r.feed_pinned ? `<span class="ord-fpin" title="Manually pinned into this feed — included regardless of filters">PIN</span>` : '') +
       (r.gracenote ? `<span class="ord-gn" title="Served from this feed's Gracenote M3U">GN</span>` : '') +
@@ -2606,7 +2573,6 @@ function renderOrderList() {
         ? `<span class="ord-actions"><button type="button" data-act="unlock" title="Unlock — back to automatic numbering">✕</button></span>`
         : r.pinned ? '' :
         `<span class="ord-actions">` +
-          `<button type="button" data-act="lock" title="Lock this number globally in every feed">Lock globally</button>` +
           `<button type="button" data-act="top" title="Move to top">⤒</button>` +
           `<button type="button" data-act="bottom" title="Move to bottom">⤓</button>` +
         `</span>`);
@@ -2679,70 +2645,10 @@ function _clearDropMarkers() {
     .forEach(r => r.classList.remove('drop-above', 'drop-below'));
 }
 
-function beginNumEdit(id, chip) {
-  const cur = _orderRows.find(r => r.id === id);
-  if (!cur) return;
-  const input = document.createElement('input');
-  input.type = 'text';
-  input.inputMode = 'decimal';
-  input.className = 'ord-num-input';
-  input.value = cur.number ?? '';
-  chip.replaceWith(input);
-  input.focus();
-  input.select();
-  let done = false;
-  const commit = () => {
-    if (done) return;
-    done = true;
-    const raw = String(input.value).trim();
-    if (!raw || (cur.locked && raw === String(cur.number ?? ''))) {
-      renderOrderList();
-      return;
-    }
-    const decimal = raw.includes('.');
-    if (decimal ? (!/^\d{1,5}\.\d{1,3}$/.test(raw) || /\.0+$/.test(raw)) : !/^\d+$/.test(raw) || parseInt(raw, 10) < 1) {
-      alert('Enter a whole number like 500, or a decimal like 700.1.');
-      renderOrderList();
-      return;
-    }
-    confirmFeedNumberLock(cur, raw);
-  };
-  // Leaving the field is a cancel, not a global channel-number change.
-  input.addEventListener('blur', () => { if (!done) renderOrderList(); });
-  input.addEventListener('keydown', ev => {
-    if (ev.key === 'Enter')  { ev.preventDefault(); commit(); }
-    if (ev.key === 'Escape') { done = true; renderOrderList(); }
-  });
-}
-
-function confirmFeedNumberLock(row, raw) {
-  if (_orderDirty || _orderStale || !document.getElementById('edit-id').value) {
-    alert('Save this feed first, then lock the number. Unsaved feed changes cannot be used for a global lock.');
-    renderOrderList();
-    return;
-  }
-  const action = row.locked ? 'Change the global lock' : 'Lock globally';
-  let impact = row.locked
-    ? 'This changes the number in every feed containing the channel.'
-    : 'This number applies in every feed containing the channel. If another feed shows a different number, the lock will be blocked.';
-  if (raw !== String(row.number ?? '')) {
-    impact += ' Changing a number may replace saved feed assignments; unlocking may not restore them.';
-  }
-  if (!confirm(`${action} for "${row.name}" to channel ${raw}?\n\n` +
-               impact)) {
-    renderOrderList();
-    return;
-  }
-  saveChannelNumber(row.id, raw, !row.locked);
-}
-
-// Lock a channel to `raw` ("500" or "700.1") everywhere, or unlock it (raw=null),
-// through the same channel API the Channels page uses, then refresh the preview.
-async function saveChannelNumber(id, raw, fromFeed = false) {
-  const body = raw === null ? {number_pinned: false}
-             : raw.includes('.') ? {pinned_chno: raw}
-             : {number: parseInt(raw, 10), number_pinned: true};
-  if (fromFeed) body.lock_from_feed_id = parseInt(document.getElementById('edit-id').value, 10);
+// Unlock a channel's number through the same channel API the Channels page
+// uses, then refresh the preview. Locks are set on the Channels page.
+async function unlockChannelNumber(id) {
+  const body = {number_pinned: false};
   try {
     const r = await fetch(`/api/channels/${id}`, {
       method: 'PATCH',
@@ -2818,20 +2724,15 @@ async function saveChannelNumber(id, raw, fromFeed = false) {
     const btn = e.target.closest('.ord-actions button');
     if (btn && btn.dataset.act === 'unlock') {
       const current = _orderRows.find(r => r.id === id);
-      if (current && confirm(`Unlock "${current.name}" globally?\n\nIts numbers may be reassigned. Previous feed numbers are not guaranteed to return.`)) {
+      if (current && confirm(`Unlock "${current.name}"?\n\nEach feed numbers it on its own again, so its numbers may change, and the ones it had before the lock may not come back.`)) {
         if (_orderDirty || _orderStale) {
           alert('Save this feed first, then unlock the channel.');
         } else {
-          saveChannelNumber(id, null);
+          unlockChannelNumber(id);
         }
       }
-    } else if (btn && btn.dataset.act === 'lock') {
-      const current = _orderRows.find(r => r.id === id);
-      if (current && current.number != null) confirmFeedNumberLock(current, String(current.number));
     } else if (btn) {
       moveOrderRow(id, btn.dataset.act === 'top' ? 0 : _orderRows.length);
-    } else if (e.target.classList.contains('ord-num')) {
-      beginNumEdit(id, e.target);
     }
   });
 })();
