@@ -3,7 +3,9 @@
 
 Stream: the embed player (trillertv.com/embed/v1/<id>/) asks
 /embed/play/<id>.m3u8?site=fite&format=json and gets a CloudFront-signed
-master URL, good for about 30 minutes, so it's fetched per tune. The master
+master URL, good for about 30 minutes, so it's fetched per tune. We swap
+its 24-hour DVR playlist (playlist_dvr.m3u8) for the live one beside it
+(playlist.m3u8, ~8-segment variants). The master
 lists its variants as bare relative paths, and they (and the segments and the
 AES-128 hls.key under them) are authorized by CloudFront cookies the master
 sets, which a client following our 302 never has. The same Policy/Signature/
@@ -91,4 +93,7 @@ class Triller(Network):
         url = (r.json() or {}).get('url')
         if not url:
             raise RuntimeError(f'TrillerTV gave no stream for {ref}')
-        return url
+        # The player gets the 24-hour DVR playlist (~14,400 segments, ~10 MB
+        # per refresh once every URI carries the signature); the live one
+        # beside it (~8 segments) is covered by the same signature.
+        return url.replace('/playlist_dvr.m3u8', '/playlist.m3u8', 1)

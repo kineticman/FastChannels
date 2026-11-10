@@ -98,11 +98,14 @@ _SUCCESS_SUPPRESS_PATTERNS = (
 # per viewer, plus a key fetch at tune; proxy.m3u8 (the tune) still logs.
 # Warner TVE (TBS/TNT/truTV/TCM) relays everything below the master: a variant
 # refresh and a segment every ~6s per viewer, plus a key per rotation.
+# Free Networks' playlist proxy (TrillerTV) refreshes a variant every ~6s per
+# viewer; the tune still shows as the app's [play] request line.
 _SUCCESS_SUPPRESS_RE = re.compile(
     r'(?:GET|HEAD) /play/directv/browser-asset\?url=|(?:GET|HEAD) /play/dazn_tve/[^/]+/seg/'
     r'|(?:GET|HEAD) /play/vix/[^/]+/(?:seg\?|browser\.mpd\?s=)'
     r'|(?:GET|HEAD) /play/paramount/[^/]+/(?:variant\.m3u8|key)\?url='
-    r'|(?:GET|HEAD) /play/warner_tve/[^/]+/(?:variant\.m3u8|key|segment\.ts)\?url=')
+    r'|(?:GET|HEAD) /play/warner_tve/[^/]+/(?:variant\.m3u8|key|segment\.ts)\?url='
+    r'|(?:GET|HEAD) /play/free_networks/[^/]+/variant\.m3u8\?url=')
 _DASH_RE = re.compile(r'(?:GET|HEAD) /play/(amazon_prime_free|amazon_sports|cox|philo|sling|pbs|vidaa|fubo|dazn_tve)/[^/]+/dash\.mpd')
 # DirecTV/cox use path-form license URLs (/license/<id>), while vidaa/fubo/sling use
 # query-form URLs (/license?channel_id=<id>) — matched via the separator below. Sling's
@@ -111,6 +114,8 @@ _LICENSE_RE = re.compile(r'POST /play/(directv|cox|vidaa|fubo|sling|espn|dazn_tv
 _PLUTO_VARIANT_QUERY_RE = re.compile(r'("(?:GET|HEAD) /play/pluto/variant)\?[^ ]+')
 # Warner's ?url= carries the CDN token; ~8h valid, so keep it out of the log.
 _WARNER_PROXY_QUERY_RE = re.compile(r'("(?:GET|HEAD) /play/warner_tve/[^/]+/(?:variant\.m3u8|key|segment\.ts))\?[^ ]+')
+# Free Networks proxy variants carry signed CDN URLs too.
+_FREE_NETWORKS_PROXY_QUERY_RE = re.compile(r'("(?:GET|HEAD) /play/free_networks/[^/]+/variant\.m3u8)\?[^ ]+')
 
 
 class _AccessFilter(logging.Filter):
@@ -140,6 +145,9 @@ class _AccessFilter(logging.Filter):
         # Same for Warner proxy failures.
         elif _WARNER_PROXY_QUERY_RE.search(msg):
             record.msg = _WARNER_PROXY_QUERY_RE.sub(r'\1?[redacted]', msg)
+            record.args = ()
+        elif _FREE_NETWORKS_PROXY_QUERY_RE.search(msg):
+            record.msg = _FREE_NETWORKS_PROXY_QUERY_RE.sub(r'\1?[redacted]', msg)
             record.args = ()
         return True
 
