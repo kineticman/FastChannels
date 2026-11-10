@@ -538,6 +538,8 @@ def get_source_config(source_id):
                              'signin_error': saved.get('signin_error')}
     if source.name == 'nsn':
         extra['nsn'] = _nsn_filter_info(source, saved)
+    if source.name == 'gray_local':
+        extra['gray_local'] = _gray_local_info(saved)
     if source.name == 'paramount':
         extra['paramount'] = {'signed_in': bool((saved.get('cookies') or {}).get('CBS_COM')),
                               'account_status': saved.get('account_status'),
@@ -740,6 +742,12 @@ def save_source_config(source_id):
             current['event_filter'] = clean_event_filter(data['event_filter'])
         except ValueError as exc:
             return jsonify({'error': str(exc)}), 422
+    if source.name == 'gray_local' and 'station_filter' in data:
+        from ..scrapers.gray_local import clean_station_filter
+        try:
+            current['station_filter'] = clean_station_filter(data['station_filter'])
+        except ValueError as exc:
+            return jsonify({'error': str(exc)}), 422
     if source.name == 'nsn' and 'event_filter' in data:
         from ..scrapers.nsn import clean_event_filter
         try:
@@ -838,6 +846,8 @@ def save_source_config(source_id):
         _b1g_plus_event_filter(old) != _b1g_plus_event_filter(current))
     nsn_filter_changed = source.name == 'nsn' and (
         _nsn_event_filter(old) != _nsn_event_filter(current))
+    gray_stations_changed = source.name == 'gray_local' and (
+        (old.get('station_filter') or []) != (current.get('station_filter') or []))
     if source.name == 'espn' and espn_any_events and not hasattr(Channel, 'retire_at'):
         return jsonify({'error': 'ESPN events require a FastChannels image rebuild and restart.'}), 503
     if creds_changed or sling_subscription_changed:
@@ -983,6 +993,9 @@ def save_source_config(source_id):
         full_scrape_queued = True
     elif nsn_filter_changed and source.is_enabled:
         trigger_scrape('nsn', force_full=True)
+        full_scrape_queued = True
+    elif gray_stations_changed and source.is_enabled:
+        trigger_scrape('gray_local', force_full=True)
         full_scrape_queued = True
     elif networks_reenabled and source.is_enabled:
         trigger_scrape(source.name, force_full=True)
@@ -2128,6 +2141,18 @@ def _b1g_plus_filter_info(source, saved: dict) -> dict:
     schools = list(dict.fromkeys([*BIG_TEN_SCHOOLS, *policy['schools']]))
     return {'event_filter': policy, 'sports': sorted(sports, key=lambda s: s.split("'s ")[-1] + s),
             'schools': schools}
+
+
+def _gray_local_info(saved: dict) -> dict:
+    """Gray Local News: the picked stations and every station the picker offers, by market."""
+    from ..scrapers.gray_local import STATIONS, clean_station_filter, station_label
+    try:
+        picked = clean_station_filter(saved.get('station_filter'))
+    except ValueError:
+        picked = []
+    return {'station_filter': picked,
+            'stations': [{'site': site, 'call': site.upper(), 'domain': dom, 'market': market,
+                          'label': station_label(site)} for site, dom, market in STATIONS]}
 
 
 def _nsn_event_filter(cfg: dict) -> dict | None:

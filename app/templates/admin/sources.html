@@ -728,6 +728,29 @@
     .espn-team-list label { display: flex; align-items: center; gap: 0.45rem; padding: 0.2rem 0.15rem; font-size: 0.8rem; color: var(--text); cursor: pointer; min-width: 0; }
     .espn-team-list label > span:first-of-type { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .espn-team-list .espn-list-note { grid-column: 1 / -1; }
+    .gray-picker .espn-picked { margin: 0.5rem 0 0.2rem; }
+    .gray-head { display: flex; align-items: baseline; gap: 0.75rem; }
+    .gray-head .config-subtitle { font-weight: 600; font-size: 0.9rem; margin: 0; }
+    .gray-head .gray-clear { margin-left: auto; }
+    .gray-chip { display: inline-flex !important; align-items: center; gap: 0.3rem; }
+    .gray-chip button { background: none; border: 0; padding: 0 0 0 0.15rem; color: var(--text-muted); font-size: 0.9rem; line-height: 1; cursor: pointer; }
+    .gray-chip button:hover { color: var(--danger); }
+    .gray-picker .espn-team-search { margin-top: 0.6rem; }
+    .gray-list {
+      margin-top: 0.5rem; max-height: 300px; overflow-y: auto; border-top: 1px solid var(--border); padding-top: 0.2rem;
+      display: grid; grid-template-columns: repeat(auto-fill, minmax(270px, 1fr)); gap: 0 1rem; align-content: start;
+    }
+    .gray-state {
+      grid-column: 1 / -1; margin-top: 0.55rem; padding-bottom: 0.15rem; border-bottom: 1px solid var(--border);
+      font-size: 0.7rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-soft);
+    }
+    .gray-state[hidden], .gray-station[hidden] { display: none; }
+    .gray-station { display: flex; align-items: baseline; gap: 0.45rem; padding: 0.22rem 0.15rem; font-size: 0.82rem; color: var(--text); cursor: pointer; min-width: 0; }
+    .gray-station input { accent-color: var(--focus-accent); align-self: center; margin: 0; flex: none; }
+    .gray-city, .gray-call { flex: none; white-space: nowrap; }
+    .gray-call { font-weight: 600; font-variant-numeric: tabular-nums; }
+    .gray-domain { flex: 1 1 auto; min-width: 0; color: var(--text-muted); font-size: 0.74rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .gray-station:hover .gray-city { color: var(--text); text-decoration: underline; text-decoration-color: var(--border); }
     .espn-picked .espn-chip-btn { background: none; border: 0; padding: 0 0 0 0.3rem; color: var(--text-muted); cursor: pointer; font-size: 0.85rem; }
     .espn-picked .espn-chip-btn:hover { color: var(--text); }
     .espn-picked .espn-chip-link { background: none; border: 0; padding: 0; color: inherit; font: inherit; cursor: pointer; text-align: left; }
@@ -3422,7 +3445,7 @@
         }
 
         // ESPN's, Paramount+'s and Amazon Sports' visible settings are rendered separately from their hidden schemas.
-        if (!schema.length && !['espn', 'paramount', 'amazon_sports', 'b1g_plus', 'nsn'].includes(sourceName) && !cfg.tve_signin) {
+        if (!schema.length && !['espn', 'paramount', 'amazon_sports', 'b1g_plus', 'nsn', 'gray_local'].includes(sourceName) && !cfg.tve_signin) {
           if (badge) {
             badge.textContent = 'Auto';
             badge.className = 'config-badge auto';
@@ -5229,6 +5252,100 @@
         ${_saveRow(sourceId)}`;
     }
 
+    // Gray Local News: a station picker (search, picked chips, list grouped by state).
+    const _grayStations = {};
+    function renderGrayLocalConfig(sourceId, schema, values, cfg) {
+      const info = (cfg && cfg.gray_local) || {};
+      const picked = new Set(info.station_filter || []);
+      const stations = info.stations || [];
+      _grayStations[sourceId] = stations;
+      setTimeout(() => grayLocalRefresh(sourceId), 0);  // count + chips once the card is in the page
+      const byState = new Map();
+      stations.forEach(st => {
+        const state = (st.market || '').split(', ').pop() || 'Other';
+        if (!byState.has(state)) byState.set(state, []);
+        byState.get(state).push(st);
+      });
+      const groups = [...byState.entries()].map(([state, list]) => `
+        <div class="gray-state" data-state="${escapeHtml(state)}">${escapeHtml(state === 'National' ? 'National' : state)}</div>
+        ${list.map(st => {
+          const city = (st.market || '').replace(/, [A-Z]{2}$/, '');
+          const search = `${st.market} ${st.call} ${st.domain}`.toLowerCase();
+          return `<label class="gray-station" data-search="${escapeHtml(search)}" data-state="${escapeHtml(state)}">
+              <input type="checkbox" class="gray-st-${sourceId}" value="${escapeHtml(st.site)}" ${picked.has(st.site) ? 'checked' : ''}
+                     onchange="grayLocalRefresh(${sourceId})">
+              <span class="gray-city">${escapeHtml(city)}</span>
+              <span class="gray-call">${escapeHtml(st.call)}</span>
+              <span class="gray-domain">${escapeHtml(st.domain)}</span>
+            </label>`;
+        }).join('')}`).join('');
+      return `
+        <div class="config-title">Gray Local News Settings</div>
+        <div class="config-note">Live streams from Gray Media's local TV stations: newscasts, 24/7 weather, breaking news and
+          live events, plus station sports and Telemundo channels where a station has them. InvestigateTV and Local News Live
+          are always included.</div>
+        <div class="espn-filter gray-picker">
+          <div class="gray-head">
+            <span class="config-subtitle">Stations</span>
+            <span class="espn-match" id="gray-count-${sourceId}"></span>
+            <button type="button" class="btn btn-sm gray-clear" id="gray-clear-${sourceId}" onclick="grayLocalClear(${sourceId})">Clear</button>
+          </div>
+          <div class="espn-picked" id="gray-picked-${sourceId}"></div>
+          <input type="search" class="espn-team-search" placeholder="Search by city, state or call letters"
+                 oninput="grayLocalFilter(${sourceId}, this.value)">
+          <div class="gray-list" id="gray-list-${sourceId}">
+            ${groups}
+            <div class="espn-list-note gray-empty" id="gray-empty-${sourceId}" hidden>No stations match.</div>
+          </div>
+        </div>
+        ${_saveRow(sourceId)}`;
+    }
+
+    function grayLocalRefresh(sourceId) {
+      const stations = _grayStations[sourceId] || [];
+      const bySite = Object.fromEntries(stations.map(st => [st.site, st]));
+      const checked = [...document.querySelectorAll(`.gray-st-${sourceId}:checked`)].map(el => el.value);
+      const count = document.getElementById(`gray-count-${sourceId}`);
+      if (count) count.innerHTML = `<strong>${checked.length}</strong> of ${stations.length} picked`;
+      const clear = document.getElementById(`gray-clear-${sourceId}`);
+      if (clear) clear.hidden = !checked.length;
+      const box = document.getElementById(`gray-picked-${sourceId}`);
+      if (!box) return;
+      box.classList.toggle('is-empty', !checked.length);
+      box.innerHTML = checked.length
+        ? checked.map(site => {
+            const st = bySite[site] || {call: site.toUpperCase(), market: ''};
+            return `<span class="espn-chip gray-chip">${escapeHtml(st.call)} <small>${escapeHtml(st.market)}</small>
+              <button type="button" aria-label="Remove ${escapeHtml(st.call)}" onclick="grayLocalRemove(${sourceId}, '${escapeHtml(site)}')">×</button></span>`;
+          }).join('')
+        : 'No stations picked yet: only InvestigateTV and Local News Live will be added.';
+    }
+
+    function grayLocalRemove(sourceId, site) {
+      document.querySelectorAll(`.gray-st-${sourceId}`).forEach(el => { if (el.value === site) el.checked = false; });
+      grayLocalRefresh(sourceId);
+    }
+
+    function grayLocalClear(sourceId) {
+      document.querySelectorAll(`.gray-st-${sourceId}`).forEach(el => { el.checked = false; });
+      grayLocalRefresh(sourceId);
+    }
+
+    function grayLocalFilter(sourceId, text) {
+      const q = (text || '').trim().toLowerCase();
+      const list = document.getElementById(`gray-list-${sourceId}`);
+      if (!list) return;
+      const shown = new Set();
+      list.querySelectorAll('.gray-station').forEach(el => {
+        const hit = !q || el.dataset.search.includes(q) || el.dataset.state.toLowerCase() === q;
+        el.hidden = !hit;
+        if (hit) shown.add(el.dataset.state);
+      });
+      list.querySelectorAll('.gray-state').forEach(el => { el.hidden = !shown.has(el.dataset.state); });
+      const empty = document.getElementById(`gray-empty-${sourceId}`);
+      if (empty) empty.hidden = shown.size > 0;
+    }
+
     // Event filter (B1G+, NSN): picked sports and/or picked schools; both must match.
     function _b1gPlusFilter(sourceId, info, note) {
       const policy = info.event_filter || {sport_mode: 'all', sports: [], school_mode: 'all', schools: []};
@@ -6442,6 +6559,8 @@
         return renderB1gPlusConfig(sourceId, schema, values, cfg);
       } else if (sourceName === 'nsn') {
         return renderNsnConfig(sourceId, schema, values, cfg);
+      } else if (sourceName === 'gray_local') {
+        return renderGrayLocalConfig(sourceId, schema, values, cfg);
       } else if (sourceName === 'sling') {
         return renderSlingConfig(sourceId, schema, values, cfg);
       } else if (sourceName === 'spectrum') {
@@ -6621,6 +6740,9 @@
       });
       if (['espn', 'amazon_sports'].includes(getSourceName(sourceId)) && _espnEventPolicy[sourceId]) {
         payload.event_filter = _espnEventPolicy[sourceId];
+      }
+      if (getSourceName(sourceId) === 'gray_local' && document.getElementById(`gray-list-${sourceId}`)) {
+        payload.station_filter = [...document.querySelectorAll(`.gray-st-${sourceId}:checked`)].map(el => el.value);
       }
       if (['b1g_plus', 'nsn'].includes(getSourceName(sourceId)) && document.querySelector(`input[name="b1g-sports-mode-${sourceId}"]`)) {
         payload.event_filter = _b1gPlusCollectFilter(sourceId);
