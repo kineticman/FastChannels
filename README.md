@@ -206,7 +206,8 @@ these sources. An alternate HDMI-capture front end, [ah4c](https://github.com/su
 is also supported for installs that already have that hardware in place. Not every
 DRM source can ride this bridge. Hardware-and-software
 setup, not a toggle: **[docs/fc-player-setup.md](docs/fc-player-setup.md)** is the
-full walkthrough.
+full walkthrough. Tuners that control their own devices without ADB (such as APITuner)
+can use the Player through the **[external tuner API](docs/external-tuner-api.md)**.
 
 The Bridge page's **audio** setting controls Dolby audio: *Auto* passes it through when the
 HDMI device accepts it, *Decode to PCM* decodes it on the stick, and *Stereo* uses the channel's
