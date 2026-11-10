@@ -3528,7 +3528,6 @@ def play_fc_player_bridge(source_name: str, channel_id: str):
 
     from .. import fc_player_bridge
     from ..models import AppSettings
-    from .api_playback import _get_playback_info
 
     settings = AppSettings.get()
     encoder_url = settings.effective_fc_player_bridge_encoder_url()
@@ -3540,22 +3539,13 @@ def play_fc_player_bridge(source_name: str, channel_id: str):
         )
         return Response('Hardware capture is not enabled or configured.\n', status=503, mimetype='text/plain')
 
-    info = _get_playback_info(channel, fast_mode=False)
-    manifest_url = info.get('preview_url') or info.get('play_url') or ''
-    if source_name in AMAZON_DRM_SOURCES:
-        from urllib.parse import quote as _quote
-        encoded_id = _quote(channel.source_channel_id, safe='')
-        manifest_url = f'/play/{source_name}/{encoded_id}/dash.mpd?hd=1'
-        license_url = (f'{request.host_url.rstrip("/")}/play/{source_name}/license'
-                       f'?channel_id={encoded_id}&hd=1')
-    else:
-        license_url = info.get('license_url') or None
-    if manifest_url.startswith('/'):
-        manifest_url = urljoin(request.host_url, manifest_url.lstrip('/'))
-
-    if not manifest_url:
-        logger.error('[fc-player] no manifest URL resolved for %s/%s', source_name, channel_id)
+    try:
+        extras = fc_player_bridge.prepare_player_extras(channel, request.host_url)
+    except fc_player_bridge.PlayerPrepareError as e:
+        logger.error('[fc-player] %s for %s/%s', e, source_name, channel_id)
         return _unavailable_response()
+    manifest_url = extras['stream_url']
+    license_url = extras.get('license_url')
 
     adb_override = _fc_player_adb_override(request.args.get('adb'))
     if not adb_override and not settings.effective_fc_player_bridge_adb_address():

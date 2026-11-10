@@ -812,6 +812,16 @@ def bridge_healthcheck():
     else:
         add('skip', 'PrismCast Capture', 'Disabled. Its dedicated diagnostic was not run.')
 
+    if fc_player_bridge.external_player_configured():
+        add('info', 'External tuner API',
+            f'On ({fc_player_bridge.EXTERNAL_PLAYER_TOKEN_ENV} is set). An external tuner such as '
+            'APITuner can list bridge channels and start FastChannels Player itself, using its own '
+            'device control and HDMI encoder.')
+    else:
+        add('skip', 'External tuner API',
+            f'Off. Set {fc_player_bridge.EXTERNAL_PLAYER_TOKEN_ENV} to let an external tuner such as '
+            'APITuner use FastChannels Player.')
+
     failed = sum(check['status'] == 'fail' for check in checks)
     warned = sum(check['status'] == 'warn' for check in checks)
     overall = 'fail' if failed else ('warn' if warned else 'ok')

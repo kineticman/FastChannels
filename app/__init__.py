@@ -236,6 +236,7 @@ def create_app(config_class=Config):
     from .routes.admin import admin_bp
     from .routes.play import play_bp
     from .routes.images import images_bp
+    from .routes.external_player import external_player_bp
 
     app.register_blueprint(output_bp)
     # Split out of a single 6,000+ line api.py (2026-08-25) into per-domain
@@ -245,6 +246,7 @@ def create_app(config_class=Config):
     app.register_blueprint(playlists_bp, url_prefix='/api')
     app.register_blueprint(channels_bp, url_prefix='/api')
     app.register_blueprint(playback_bp, url_prefix='/api')
+    app.register_blueprint(external_player_bp, url_prefix='/api/external-player/v1')
     app.register_blueprint(gracenote_bp, url_prefix='/api')
     app.register_blueprint(system_bp, url_prefix='/api')
     app.register_blueprint(settings_bp, url_prefix='/api')

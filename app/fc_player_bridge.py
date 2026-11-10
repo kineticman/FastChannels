@@ -358,10 +358,30 @@ def ah4c_capture_configured(settings=None) -> bool:
     )
 
 
+EXTERNAL_PLAYER_TOKEN_ENV = 'FC_EXTERNAL_PLAYER_TOKEN'
+
+
+def external_player_token() -> str:
+    """Shared secret for /api/external-player/v1 (app/routes/external_player.py).
+    Empty means the API is off."""
+    return (os.environ.get(EXTERNAL_PLAYER_TOKEN_ENV) or '').strip()
+
+
+def external_player_configured() -> bool:
+    """Whether an external tuner (APITuner) may prepare Player playback. It owns
+    the device and the HDMI encoder, so no FastChannels-side capture settings
+    are needed."""
+    return bool(external_player_token())
+
+
 def hardware_capture_configured(settings=None) -> bool:
-    """Whether either hardware capture path can actually accept a tune."""
+    """Whether any hardware capture path can actually accept a tune: HDMI
+    Capture or ah4c through our adb trigger, or an external tuner launching the
+    Player itself. Counting the external tuner keeps DRM channels active and
+    marked for bridge output on installs that have no adb device at all."""
     settings = settings or AppSettings.get()
-    return hdmi_capture_configured(settings) or ah4c_capture_configured(settings)
+    return (hdmi_capture_configured(settings) or ah4c_capture_configured(settings)
+            or external_player_configured())
 
 
 def hardware_bridge_active(settings=None) -> bool:
@@ -1910,3 +1930,57 @@ def trigger_channel(manifest_url: str, license_url: str | None = None, *, name: 
         logger.warning('[fc-player] trigger_channel am start failed: rc=%s stdout=%s stderr=%s',
                         result.returncode, (result.stdout or '').strip(), (result.stderr or '').strip())
     return ok
+
+
+PLAYER_PACKAGE = 'com.fastchannels.player'
+
+
+class PlayerPrepareError(RuntimeError):
+    """No playable manifest/license pair for this channel. The message is safe to
+    log: it never carries a resolved URL."""
+
+
+def prepare_player_extras(channel, base_url: str) -> dict:
+    """The PlaybackActivity intent extras for one channel, without touching a device.
+
+    Shared by our adb trigger (play_fc_player_bridge) and external tuners
+    (/api/external-player/v1/prepare), so both always hand the Player the same
+    manifest and license pairing. base_url is the address the Player reaches us
+    at; relative proxy routes are made absolute against it. Needs a request
+    context (_get_playback_info reads request.host_url for some sources).
+
+    The keys match trigger_channel's am start extras; license_url is present only
+    for DRM channels.
+    """
+    from urllib.parse import quote, urljoin
+    from .routes.api_playback import _get_playback_info
+    from .scrapers.amazon_prime_free import AMAZON_DRM_SOURCES
+
+    base = base_url.rstrip('/') + '/'
+    source_name = channel.source.name
+    if source_name in AMAZON_DRM_SOURCES:
+        # The HD DASH route and its license have to be used together.
+        encoded_id = quote(channel.source_channel_id, safe='')
+        manifest_url = f'/play/{source_name}/{encoded_id}/dash.mpd?hd=1'
+        license_url = f'/play/{source_name}/license?channel_id={encoded_id}&hd=1'
+    else:
+        info = _get_playback_info(channel, fast_mode=False)
+        manifest_url = info.get('preview_url') or info.get('play_url') or ''
+        license_url = info.get('license_url') or None
+    if not manifest_url:
+        raise PlayerPrepareError('no manifest URL resolved')
+    manifest_url = urljoin(base, manifest_url.lstrip('/')) if manifest_url.startswith('/') else manifest_url
+    if license_url and license_url.startswith('/'):
+        license_url = urljoin(base, license_url.lstrip('/'))
+
+    extras = {
+        'stream_url': manifest_url,
+        'title': channel.name or 'FastChannels',
+        'channel_key': f'{source_name}:{channel.source_channel_id}',
+        'drm': bool(license_url),
+        'captions': captions_enabled(),
+        'audio_mode': audio_mode(),
+    }
+    if license_url:
+        extras['license_url'] = license_url
+    return extras
