@@ -4007,6 +4007,23 @@ class StreamDetector:
                     logger.debug('[youtube] client=%s returned no info', client)
                     continue
 
+                # Custom channels pass a live stream through; an upload (or an
+                # ended livestream) only yields one progressive file, which
+                # clients choke on as a channel (issue #93).  Same answer from
+                # every client, so stop here.
+                live_status = info.get('live_status')
+                if live_status in ('not_live', 'was_live', 'post_live'):
+                    logger.info('[youtube] %s is not live (live_status=%s)', url[:80], live_status)
+                    return DetectionResult(
+                        error=(
+                            "This YouTube video isn't a live stream. Custom channels need a live "
+                            'stream; to make a channel from videos or playlists, use a tool such '
+                            'as ErsatzTV or Tunarr.'
+                        ),
+                        is_youtube=True,
+                        resolver='yt-dlp',
+                    )
+
                 headers = self._extract_http_headers(info)
                 protocol = str(info.get('protocol') or '')
                 # Prefer manifest_url for m3u8 protocols (HLS playlist), else url
