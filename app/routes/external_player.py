@@ -9,8 +9,9 @@ That means our adb-only extras don't apply to these tunes: idle-stop, the Sling
 block-boundary adb retune (the Player's own boundary swap still runs), logcat
 diagnostics and the Bridge page's device list.
 
-Off unless FC_EXTERNAL_PLAYER_TOKEN is set; requests then need
-`Authorization: Bearer <token>`. The paths and response shapes are APITuner's v1
+Off unless Bridge → External tuners is on (FastChannels generates the token) or
+FC_EXTERNAL_PLAYER_TOKEN is set; requests then need `Authorization: Bearer <token>`.
+See fc_player_bridge.external_player_token and docs/external-tuner-api.md. The paths and response shapes are APITuner's v1
 contract (its v0.1.35-fastchannels.1 client), so keep them compatible: add fields,
 don't rename or remove them.
 """

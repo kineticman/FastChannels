@@ -361,17 +361,37 @@ def ah4c_capture_configured(settings=None) -> bool:
 EXTERNAL_PLAYER_TOKEN_ENV = 'FC_EXTERNAL_PLAYER_TOKEN'
 
 
-def external_player_token() -> str:
-    """Shared secret for /api/external-player/v1 (app/routes/external_player.py).
-    Empty means the API is off."""
+def external_player_token_from_env() -> str:
     return (os.environ.get(EXTERNAL_PLAYER_TOKEN_ENV) or '').strip()
 
 
-def external_player_configured() -> bool:
+def external_player_token(settings=None) -> str:
+    """Bearer token for /api/external-player/v1 (app/routes/external_player.py).
+    Empty means the API is off.
+
+    Normally the Bridge page's External tuners toggle, with the token
+    FastChannels generated when it was turned on. FC_EXTERNAL_PLAYER_TOKEN, when
+    set, turns the API on with that token instead, for installs that keep their
+    configuration in compose."""
+    from_env = external_player_token_from_env()
+    if from_env:
+        return from_env
+    settings = settings or AppSettings.get()
+    if not settings.external_player_enabled:
+        return ''
+    return (settings.external_player_token or '').strip()
+
+
+def new_external_player_token() -> str:
+    import secrets
+    return secrets.token_urlsafe(24)
+
+
+def external_player_configured(settings=None) -> bool:
     """Whether an external tuner (APITuner) may prepare Player playback. It owns
     the device and the HDMI encoder, so no FastChannels-side capture settings
     are needed."""
-    return bool(external_player_token())
+    return bool(external_player_token(settings))
 
 
 def hardware_capture_configured(settings=None) -> bool:
@@ -381,7 +401,7 @@ def hardware_capture_configured(settings=None) -> bool:
     marked for bridge output on installs that have no adb device at all."""
     settings = settings or AppSettings.get()
     return (hdmi_capture_configured(settings) or ah4c_capture_configured(settings)
-            or external_player_configured())
+            or external_player_configured(settings))
 
 
 def hardware_bridge_active(settings=None) -> bool:

@@ -395,6 +395,10 @@ def app_settings():
             row.fc_player_bridge_ah4c_enabled = bool(data['fc_player_ah4c_enabled'])
         if 'fc_player_ah4c_url' in data:
             row.fc_player_bridge_ah4c_url = _normalize_server_url(data['fc_player_ah4c_url'], default_port=None)
+        if 'external_player_enabled' in data:
+            row.external_player_enabled = bool(data['external_player_enabled'])
+            if row.external_player_enabled and not (row.external_player_token or '').strip():
+                row.external_player_token = fc_player_bridge.new_external_player_token()
         # Both hardware methods run through the FastChannels Player app, so switching
         # either one on switches the shared hardware-capture toggle on with it — a
         # method toggle that silently does nothing is the trap this avoids. Turning
@@ -450,11 +454,37 @@ def app_settings():
         'fc_player_audio_mode': row.fc_player_bridge_audio_mode or 'auto',
         'fc_player_ah4c_enabled': bool(row.fc_player_bridge_ah4c_enabled),
         'fc_player_ah4c_url': row.fc_player_bridge_ah4c_url or '',
+        **_external_player_state(row),
         'channels_dvr_url_source': 'db' if (row.channels_dvr_url or '').strip() else ('env' if row.env_channels_dvr_url() is not None else 'unset'),
         'public_base_url_source': 'db' if (row.public_base_url or '').strip() else ('env' if row.effective_public_base_url() else 'unset'),
         'timezone_name_source': 'db' if (row.timezone_name or '').strip() else 'system',
         'debug_logging_enabled': bool(row.debug_logging_enabled),
     })
+
+
+def _external_player_state(row) -> dict:
+    """Bridge → External tuners, for the settings API. The token is shown to the
+    admin so they can paste it into the external tuner; this route sits behind the
+    admin login like the rest of /api/settings."""
+    from_env = fc_player_bridge.external_player_token_from_env()
+    return {
+        'external_player_enabled': bool(from_env) or bool(row.external_player_enabled),
+        'external_player_token': from_env or (row.external_player_token or ''),
+        'external_player_token_source': 'env' if from_env else 'db',
+    }
+
+
+@settings_bp.route('/settings/external-player/token', methods=['POST'])
+def regenerate_external_player_token():
+    """Replace the External tuners token. Tuners using the old one get 401 until
+    they're given the new one."""
+    if fc_player_bridge.external_player_token_from_env():
+        return jsonify({'error': f'The token is set by {fc_player_bridge.EXTERNAL_PLAYER_TOKEN_ENV}; '
+                                 'change it in your container configuration.'}), 409
+    row = AppSettings.get()
+    row.external_player_token = fc_player_bridge.new_external_player_token()
+    db.session.commit()
+    return jsonify(_external_player_state(row))
 
 
 @settings_bp.route('/settings/fc-player/test', methods=['POST'])
@@ -812,14 +842,14 @@ def bridge_healthcheck():
     else:
         add('skip', 'PrismCast Capture', 'Disabled. Its dedicated diagnostic was not run.')
 
-    if fc_player_bridge.external_player_configured():
-        add('info', 'External tuner API',
-            f'On ({fc_player_bridge.EXTERNAL_PLAYER_TOKEN_ENV} is set). An external tuner such as '
-            'APITuner can list bridge channels and start FastChannels Player itself, using its own '
-            'device control and HDMI encoder.')
+    if fc_player_bridge.external_player_configured(settings):
+        how = (f'token from {fc_player_bridge.EXTERNAL_PLAYER_TOKEN_ENV}'
+               if fc_player_bridge.external_player_token_from_env() else 'turned on below')
+        add('info', 'External tuners',
+            f'On ({how}). An external tuner such as APITuner can list bridge channels and start '
+            'FastChannels Player itself, using its own device control and HDMI encoder.')
     else:
-        add('skip', 'External tuner API',
-            f'Off. Set {fc_player_bridge.EXTERNAL_PLAYER_TOKEN_ENV} to let an external tuner such as '
+        add('skip', 'External tuners', 'Off. Turn it on under External tuners to let a tuner such as '
             'APITuner use FastChannels Player.')
 
     failed = sum(check['status'] == 'fail' for check in checks)

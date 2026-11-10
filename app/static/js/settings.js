@@ -2255,6 +2255,46 @@ async function savePrismcastToggle() {
   setTimeout(() => location.reload(), 700);
 }
 
+async function saveExternalPlayerToggle() {
+  const enabled = document.getElementById('external-player-enabled').checked;
+  if (await saveSettings({ external_player_enabled: enabled }, 'external-player-status')) {
+    setTimeout(() => location.reload(), 700);
+  }
+}
+
+async function copyExternalPlayerToken() {
+  const box = document.getElementById('external-player-token');
+  if (!box || !box.value) return;
+  try {
+    await navigator.clipboard.writeText(box.value);
+  } catch (e) {
+    box.select();
+    document.execCommand('copy');
+  }
+  const btn = document.getElementById('external-player-token-copy');
+  if (btn) {
+    btn.textContent = 'Copied';
+    setTimeout(() => { btn.textContent = 'Copy'; }, 1500);
+  }
+}
+
+async function regenerateExternalPlayerToken() {
+  if (!confirm('Make a new token? Tuners using the current one stop working until you give them the new one.')) return;
+  const status = document.getElementById('external-player-status');
+  try {
+    const r = await fetch('/api/settings/external-player/token', { method: 'POST' });
+    const payload = await r.json().catch(() => null);
+    if (!r.ok) throw new Error(payload?.error || `HTTP ${r.status}`);
+    document.getElementById('external-player-token').value = payload.external_player_token;
+    status.className = 'save-status ok';
+    status.textContent = '✓ New token';
+    setTimeout(() => { status.textContent = ''; }, 2500);
+  } catch (e) {
+    status.className = 'save-status error';
+    status.textContent = '✕ ' + e.message;
+  }
+}
+
 let _lastBridgeHealthcheckReport = '';
 
 function _bridgeHealthcheckEsc(value) {

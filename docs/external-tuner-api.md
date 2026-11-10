@@ -24,36 +24,47 @@ provider's license server, and only the device's HDMI output is captured.
 
 ## Turning it on
 
-1. Pick a long random secret and set it as `FC_EXTERNAL_PLAYER_TOKEN` on the
-   FastChannels container, then recreate the container (a restart doesn't pick up a
-   new environment variable):
-
-   ```yaml
-   services:
-     fastchannels:
-       environment:
-         - FC_EXTERNAL_PLAYER_TOKEN=change-me-to-a-long-random-string
-   ```
-
-   Give the same value to the external tuner. FastChannels doesn't generate this token.
-2. Turn on **Bridge mode** on the **Bridge** page (switch to **Advanced** mode first if
-   the Bridge page is hidden).
-3. Run a scrape, or a Stream Audit, of the DRM sources you want to bridge. That marks
+1. On the **Bridge** page, find **External tuners** under Settings and turn on
+   **Allow external tuners**. (Switch to **Advanced** mode first if the Bridge page is
+   hidden.) FastChannels generates a token and shows it with the URL to give the tuner.
+2. Copy the token into the external tuner (in APITuner it's the FastChannels token).
+3. Turn on **Bridge mode** at the top of the same page.
+4. Run a scrape, or a Stream Audit, of the DRM sources you want to bridge. That marks
    their channels for bridge output.
 
-You don't need to set up HDMI Capture, ah4c or a device IP. A configured token counts
-as a capture method, so DRM channels stay active and marked for bridge output on an
-install with no ADB device at all. The Bridge healthcheck shows **External tuner API:
-On** when the token is set.
+You don't need to set up HDMI Capture, ah4c or a device IP. External tuners count as a
+capture method, so DRM channels stay active and marked for bridge output on an install
+with no ADB device at all. The Bridge page shows the method as **Live**, and the Bridge
+healthcheck reports **External tuners: On**.
 
-Without the token the API answers every request with `503`.
+**New token** on the same card replaces the token; tuners using the old one get `401`
+until they're given the new one. Turning the toggle off keeps the token, so turning it
+back on doesn't break a configured tuner.
+
+While it's off, the API answers every request with `503`.
+
+### Setting the token in compose instead
+
+If you keep configuration in your compose file, set `FC_EXTERNAL_PLAYER_TOKEN` on the
+FastChannels container and recreate it (a restart doesn't pick up a new environment
+variable):
+
+```yaml
+services:
+  fastchannels:
+    environment:
+      - FC_EXTERNAL_PLAYER_TOKEN=a-long-random-string
+```
+
+When it's set, the API is on with that token whatever the toggle says, and the Bridge
+page shows the token as set by the container configuration.
 
 ## Authentication
 
 Every request needs:
 
 ```
-Authorization: Bearer <FC_EXTERNAL_PLAYER_TOKEN>
+Authorization: Bearer <token>
 ```
 
 A missing or wrong token gets `401`. The API doesn't use the admin login, so it works

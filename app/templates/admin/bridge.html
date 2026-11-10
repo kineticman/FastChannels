@@ -29,13 +29,18 @@
       'blurb': 'Best for a budget, one-stream setup: one Android/Fire TV device and one fixed HDMI capture input. It cannot serve simultaneous channels.',
       'links': [('HDMI Capture setup guide', 'https://github.com/kineticman/FastChannels/blob/development/docs/fc-player-setup.md#1-set-up-and-test-hdmi-capture-single-stream')],
     },
+    'external': {
+      'kicker': 'APITuner and other tuners',
+      'blurb': 'For tuners that control their own Android TV devices and HDMI encoders without ADB, such as APITuner. FastChannels gives them the channel list, the playback details and the guide; they start FastChannels Player and capture it themselves.',
+      'links': [('External tuner API', 'https://github.com/kineticman/FastChannels/blob/development/docs/external-tuner-api.md'), ('APITuner', 'https://github.com/matthewfkoch/APITuner')],
+    },
     'prismcast': {
       'kicker': 'Browser capture',
       'blurb': 'Choose this for hardware-free Chrome capture. PrismCast plays DRM in a browser and captures it in software, avoiding a dedicated device and HDMI encoder.',
       'links': [('PrismCast documentation', 'https://github.com/hjdhjd/prismcast')],
     },
   } %}
-  {% set method_anchor = {'ah4c': 'bridge-card-ah4c', 'hdmi': 'bridge-card-single-encoder', 'prismcast': 'bridge-card-prismcast'} %}
+  {% set method_anchor = {'ah4c': 'bridge-card-ah4c', 'hdmi': 'bridge-card-single-encoder', 'external': 'bridge-card-external', 'prismcast': 'bridge-card-prismcast'} %}
   {% set state_labels = {'live': 'Live', 'ready': 'Ready', 'setup': 'Needs setup', 'off': 'Not set up'} %}
   {% set step_method = usable_methods|length > 0 %}
   {% set step_source = bridge_coverage.enabled|length > 0 %}
@@ -149,6 +154,7 @@
             <th scope="col" class="bridge-cov-method">PrismCast</th>
             <th scope="col" class="bridge-cov-method">HDMI</th>
             <th scope="col" class="bridge-cov-method">ah4c</th>
+            <th scope="col" class="bridge-cov-method">External</th>
             <th scope="col">Channels</th>
             <th scope="col">Next step</th>
           </tr>
@@ -166,6 +172,7 @@
                 <td class="bridge-cov-method">{{ cell(row.cells.prismcast) }}</td>
                 <td class="bridge-cov-method">{{ cell(row.cells.hdmi) }}</td>
                 <td class="bridge-cov-method">{{ cell(row.cells.ah4c) }}</td>
+                <td class="bridge-cov-method">{{ cell(row.cells.external) }}</td>
                 {% if row.candidate_count %}
                 <td><span class="bridge-cov-ready">{{ row.candidate_count }} ready</span> <span class="bridge-cov-of">of {{ row.channel_count }}</span></td>
                 {% elif row.channel_count %}
@@ -200,6 +207,7 @@
                   <td class="bridge-cov-method">{{ cell(row.cells.prismcast) }}</td>
                   <td class="bridge-cov-method">{{ cell(row.cells.hdmi) }}</td>
                   <td class="bridge-cov-method">{{ cell(row.cells.ah4c) }}</td>
+                  <td class="bridge-cov-method">{{ cell(row.cells.external) }}</td>
                   <td><span class="bridge-cov-of">—</span></td>
                   <td><a href="/admin/sources">Enable source →</a></td>
                 </tr>
@@ -214,7 +222,7 @@
           <span><span class="bridge-dot bridge-dot-idle">○</span> supported, not live here</span>
           <span><span class="bridge-dot bridge-dot-na">–</span> not verified for this method</span>
         </div>
-        <div class="help">PrismCast's browser capture works for any source exposing DRM license handling. HDMI and ah4c Capture use FastChannels Player's native bridge, which is re-tested one source at a time. Each live method's bridge playlist is on <a href="/admin/feeds">Feeds</a>; import it alongside your regular feed, which excludes bridge-only DRM channels.</div>
+        <div class="help">PrismCast's browser capture works for any source exposing DRM license handling. HDMI Capture, ah4c Capture and external tuners use FastChannels Player's native bridge, which is re-tested one source at a time. Each live method's bridge playlist is on <a href="/admin/feeds">Feeds</a>; import it alongside your regular feed, which excludes bridge-only DRM channels.</div>
       </div>
     </div>
 
@@ -224,6 +232,7 @@
       {% include 'admin/bridge/devices.html' %}
       {% include 'admin/bridge/ah4c.html' %}
       {% include 'admin/bridge/single_encoder.html' %}
+      {% include 'admin/bridge/external.html' %}
       {% include 'admin/settings/prismcast.html' %}
     </div>
   </div>

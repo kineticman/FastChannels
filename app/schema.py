@@ -420,6 +420,11 @@ def ensure_runtime_schema(*, fresh_install: bool | None = None) -> None:
                 # the HDMI device says it accepts it); the other modes are opt-in for
                 # capture cards that only handle stereo PCM.
                 conn.execute(text("ALTER TABLE app_settings ADD COLUMN fc_player_bridge_audio_mode TEXT NOT NULL DEFAULT 'auto'"))
+            if "external_player_enabled" not in cols:
+                # Default off — the external tuner API (APITuner, issue #94) is opt-in.
+                conn.execute(text("ALTER TABLE app_settings ADD COLUMN external_player_enabled BOOLEAN NOT NULL DEFAULT 0"))
+            if "external_player_token" not in cols:
+                conn.execute(text("ALTER TABLE app_settings ADD COLUMN external_player_token TEXT"))
             if "fc_player_bridge_ah4c_enabled" not in cols:
                 # Default off — ah4c (github.com/sullrich/ah4c) is an alternate HDMI-capture
                 # front end for the bridge; unrelated installs shouldn't get a new M3U/DVR-push

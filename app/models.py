@@ -512,6 +512,8 @@ class AppSettings(db.Model):
     fc_player_bridge_audio_mode   = db.Column(db.Text, nullable=False, default='auto', server_default=db.text("'auto'"))  # 'auto' | 'pcm' (decode Dolby on the device) | 'stereo' (prefer a stereo AAC track, else pcm)
     fc_player_bridge_ah4c_enabled = db.Column(db.Boolean, nullable=False, default=False, server_default=db.text('0'))  # ah4c (github.com/sullrich/ah4c) as the HDMI-capture front end instead of the single fixed encoder_url
     fc_player_bridge_ah4c_url     = db.Column(db.Text, nullable=True)  # ah4c's own base URL, e.g. http://192.168.1.30:7654 — where its /play/tuner/<channel> lives
+    external_player_enabled       = db.Column(db.Boolean, nullable=False, default=False, server_default=db.text('0'))  # Bridge → External tuners: /api/external-player/v1 for tuners like APITuner (app/routes/external_player.py)
+    external_player_token         = db.Column(db.Text, nullable=True)  # bearer token for that API, generated when it's turned on; FC_EXTERNAL_PLAYER_TOKEN overrides it
     # JSON snapshot of the Fire TV's display settings immediately before FastChannels
     # first applies its headless preset. Lets the Device Controls modal restore the
     # user's own values instead of guessing what “normal” means for their device.

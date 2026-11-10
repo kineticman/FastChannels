@@ -1851,7 +1851,7 @@ def _drm_bridge_recoverable_count() -> int:
 
 
 def _bridge_methods(settings) -> list[dict]:
-    """The three bridge methods and where each stands, for the Bridge page tiles.
+    """The bridge methods and where each stands, for the Bridge page tiles.
 
     `state` walks the setup chain: 'off' (untouched) → 'setup' (started, still
     missing something) → 'ready' (usable, but global Bridge mode is off) → 'live'.
@@ -1893,6 +1893,15 @@ def _bridge_methods(settings) -> list[dict]:
                                  ('capture stream URL', encoder_url)]),
         },
         {
+            'key': 'external',
+            'label': 'External tuners',
+            # The token is generated the moment the toggle goes on, so there's no
+            # half-configured state to report.
+            'state': _state(_fc_player_bridge.external_player_configured(settings),
+                            _fc_player_bridge.external_player_configured(settings)),
+            'missing': '',
+        },
+        {
             'key': 'prismcast',
             'label': 'PrismCast Capture',
             'state': _state(bool(settings.prismcast_enabled or prismcast_url),
@@ -1927,7 +1936,7 @@ def _bridge_coverage(methods: list[dict]) -> dict:
 
     def _cells(name: str, enabled: bool) -> dict:
         cells = {}
-        for key in ('prismcast', 'hdmi', 'ah4c'):
+        for key in ('prismcast', 'hdmi', 'ah4c', 'external'):
             if key != 'prismcast' and name not in DRM_BRIDGE_TRUSTED_SOURCES:
                 cells[key] = 'na'
             elif not enabled:
@@ -2103,6 +2112,10 @@ def bridge():
         fc_player_audio_mode=app_settings.fc_player_bridge_audio_mode or 'auto',
         fc_player_ah4c_enabled=bool(app_settings.fc_player_bridge_ah4c_enabled),
         fc_player_ah4c_url=app_settings.fc_player_bridge_ah4c_url or '',
+        external_player_enabled=_fc_player_bridge.external_player_configured(app_settings),
+        external_player_token=_fc_player_bridge.external_player_token(app_settings),
+        external_player_token_from_env=bool(_fc_player_bridge.external_player_token_from_env()),
+        external_player_env_name=_fc_player_bridge.EXTERNAL_PLAYER_TOKEN_ENV,
         fc_player_configured=bool(
             app_settings.fc_player_bridge_enabled
             and app_settings.effective_fc_player_bridge_adb_address()
