@@ -112,6 +112,19 @@ NETWORKS = [
                    category='Sports', gracenote_id='200290',
                    description="The PBA's free 24/7 bowling channel."),
     ]),
+    StaticNetwork('aew', 'Watch AEW', [
+        # All Elite Wrestling's free 24/7 channel. myaew.com plays it through
+        # Kiswe (JWT sessions); the channel itself is this Amagi playout,
+        # clear 1080p with no token (LG Channels lists it with ad macros, which
+        # it doesn't need). Gracenote is the FAST station Tubi carries.
+        # Checked 2026-11-10.
+        NetChannel('watchaew', 'Watch AEW',
+                   'https://amg16221-amg16221c1-amgplt0023.playout.now3.amagi.tv/ts-us-e2-n1/playlist/'
+                   'amg16221-amg16221c1-amgplt0023/playlist.m3u8',
+                   logo='https://preview-amagicloud-aew-automation-aew.cloudport.amagi.tv/Images/S3/WATCH-AEW-400x200.png',
+                   category='Sports', gracenote_id='206205',
+                   description="All Elite Wrestling's free 24/7 channel: matches, shows and replays."),
+    ]),
     StaticNetwork('eplustv6', 'EPlusTV 6', [
         # Bundled PNG rendered from eplustv6.com/assets/svgs/tv6-logo.svg: the
         # logo cache can't decode SVG and Channels DVR apps can't display it.
