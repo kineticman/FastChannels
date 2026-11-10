@@ -86,6 +86,117 @@ def league_for(b: dict) -> str:
     return f'NCAA {prefix}{sport}'
 
 
+# ── event filter (sports and/or schools, like B1G+) ──────────────────────────
+
+# NSN's member schools (its Colleges and High Schools menus), listed in the
+# picker even before they have a game scheduled; schools seen on the schedule
+# are added.
+BASE_SCHOOLS = (
+    'Amherst', 'Bates', 'Bowdoin', 'Colby', 'Connecticut College', 'Hamilton', 'Middlebury',
+    'Norwich', 'NVU-Lyndon', 'Trinity', 'Tufts', 'Wesleyan', 'Williams',
+    'Berlin', 'Blue Mountain', 'Colebrook', 'Danville', 'Essex', 'Gorham', 'Groveton', 'Lamoille',
+    'Littleton', 'NCU', 'PCDS', 'Stowe', 'Twinfield', 'Woodsville',
+)
+BASE_SPORTS = ('Football', "Men's Basketball", "Women's Basketball", "Men's Hockey", "Women's Hockey",
+               "Women's Volleyball", "Men's Soccer", "Women's Soccer", 'Field Hockey',
+               "Men's Lacrosse", "Women's Lacrosse", 'Baseball', 'Softball',
+               "Boys' Basketball", "Girls' Basketball")
+_ONE_GENDER_SPORTS = frozenset({'Football', 'Baseball', 'Softball', 'Field Hockey'})
+SEEN_SPORTS_CACHE_KEY = 'nsn_seen_sports'
+SEEN_SCHOOLS_CACHE_KEY = 'nsn_seen_schools'
+# Site names that aren't a school (a conference's championship page).
+_NOT_A_SCHOOL_RE = re.compile(r'championship|tournament|conference|\bnescac\b|\bnewmac\b', re.I)
+# "Connecticut College" keeps its suffix; "Connecticut" alone would be the state.
+_KEEP_FULL_NAME = frozenset({'connecticut college'})
+
+
+def school_name(site_title: str | None) -> str | None:
+    """The picker's name for a school site: "Bowdoin College" → "Bowdoin", "Tufts (NSN)" → "Tufts"."""
+    name = re.sub(r'\s*\(NSN\)\s*$', '', ' '.join(str(site_title or '').split()), flags=re.I)
+    if not name or _NOT_A_SCHOOL_RE.search(name):
+        return None
+    if name.casefold() in _KEEP_FULL_NAME:
+        return name
+    short = re.sub(r'\s+(college|university|high school|school|academy)$', '', name, flags=re.I).strip()
+    short = re.sub(r'^(university of|college of)\s+', '', short, flags=re.I).strip()
+    return short or name
+
+
+def sport_label(b: dict) -> str:
+    """The picker's name for a broadcast's sport: "Men's Hockey", "Football", "Girls' Basketball"."""
+    sport, gender = sport_and_gender(b)
+    sport = sport or 'Other'
+    if gender not in ('M', 'W') or sport in _ONE_GENDER_SPORTS:
+        return sport
+    if is_high_school(b):
+        return f"{'Boys' if gender == 'M' else 'Girls'}' {sport}"
+    return f"{'Men' if gender == 'M' else 'Women'}'s {sport}"
+
+
+def _side_is_school(side: str, school: str) -> bool:
+    side, school = side.casefold().strip(), school.casefold()
+    return side == school or side.startswith(school + ' ') or side.endswith(' ' + school)
+
+
+def event_schools(b: dict, known: list[str] | tuple[str, ...] = BASE_SCHOOLS) -> list[str]:
+    """The NSN schools a broadcast involves: the school whose site carries it,
+    plus any known school named on either side of "A vs B", so "Colby" also
+    picks up Colby's away games shown on another school's site."""
+    names = []
+    home = school_name(b.get('site_title'))
+    if home:
+        names.append(home)
+    for shared in b.get('shared_sites') or []:
+        name = school_name(shared.get('title') if isinstance(shared, dict) else None)
+        if name:
+            names.append(name)
+    title = re.sub(r'#\d+\s*', '', str(b.get('title') or ''))
+    sides = re.split(r'\s+(?:vs\.?|v\.?|at|@)\s+', title, maxsplit=1, flags=re.I)
+    if len(sides) == 2:
+        for school in known:
+            if any(_side_is_school(side, school) for side in sides):
+                names.append(school)
+    return list(dict.fromkeys(names))
+
+
+def _clean_names(value, what: str) -> list[str]:
+    if not isinstance(value, list) or len(value) > 200 or any(
+            not isinstance(v, str) or not v.strip() or len(v) > 100 for v in value):
+        raise ValueError(f'Invalid {what}')
+    return list(dict.fromkeys(v.strip() for v in value))
+
+
+def clean_event_filter(value) -> dict:
+    """Validate the saved filter; 'all' includes sports and schools added later."""
+    if value is None:
+        return {'sport_mode': 'all', 'sports': [], 'school_mode': 'all', 'schools': []}
+    if not isinstance(value, dict):
+        raise ValueError('Invalid event filter')
+    sport_mode, school_mode = value.get('sport_mode', 'all'), value.get('school_mode', 'all')
+    if sport_mode not in ('all', 'selected'):
+        raise ValueError('Sports must be All or Only the ones I pick')
+    if school_mode not in ('all', 'selected'):
+        raise ValueError('Schools must be All or Only the ones I pick')
+    return {'sport_mode': sport_mode, 'sports': _clean_names(value.get('sports', []), 'sport'),
+            'school_mode': school_mode, 'schools': _clean_names(value.get('schools', []), 'school')}
+
+
+def event_matches_filter(b: dict, config: dict, known_schools=BASE_SCHOOLS) -> bool:
+    try:
+        policy = clean_event_filter((config or {}).get('event_filter'))
+    except ValueError:
+        return True
+    if policy['sport_mode'] == 'selected' and sport_label(b).casefold() not in {
+            s.casefold() for s in policy['sports']}:
+        return False
+    if policy['school_mode'] == 'selected':
+        picked = {s.casefold() for s in policy['schools']}
+        known = list(dict.fromkeys([*known_schools, *policy['schools']]))
+        if not any(s.casefold() in picked for s in event_schools(b, known)):
+            return False
+    return True
+
+
 def _start(b: dict) -> datetime | None:
     try:
         return datetime.fromtimestamp(int(b.get('date')) / 1000, tz=timezone.utc)
@@ -126,6 +237,7 @@ class NSNScraper(BaseScraper):
     source_name = 'nsn'
     display_name = 'Northeast Sports Network'
     source_category = 'fast'
+    grouped_under = 'free_networks'   # a small free network's own website, listed under Free Networks
     scrape_interval = 120
     # Every channel is an event; an upcoming one has no stream to audit.
     stream_audit_enabled = False
@@ -152,7 +264,22 @@ class NSNScraper(BaseScraper):
         now = datetime.now(timezone.utc)
         horizon = now + timedelta(hours=_EVENT_LOOKAHEAD_HOURS)
         out: dict[str, tuple[dict, datetime, datetime]] = {}
-        for b in self._schedule():
+        self.excluded_channel_ids = set()
+        schedule = self._schedule()
+        # Remember sports and schools seen on the schedule (any date) for the picker.
+        stamp = int(time.time())
+        seen_sports = dict(self.cache.get(SEEN_SPORTS_CACHE_KEY) or {})
+        seen_schools = dict(self.cache.get(SEEN_SCHOOLS_CACHE_KEY) or {})
+        for b in schedule:
+            seen_sports[sport_label(b)] = stamp
+            home = school_name(b.get('site_title'))
+            if home:
+                seen_schools[home] = stamp
+        cutoff = stamp - 365 * 24 * 3600
+        self._update_cache(SEEN_SPORTS_CACHE_KEY, {k: v for k, v in seen_sports.items() if v >= cutoff})
+        self._update_cache(SEEN_SCHOOLS_CACHE_KEY, {k: v for k, v in seen_schools.items() if v >= cutoff})
+        known_schools = list(dict.fromkeys([*BASE_SCHOOLS, *sorted(seen_schools)]))
+        for b in schedule:
             bid = str(b.get('id') or '')
             start = _start(b)
             if not bid.isdigit() or not start or str(b.get('status') or '').lower() == 'archived':
@@ -163,6 +290,9 @@ class NSNScraper(BaseScraper):
             if end <= now or start >= horizon:
                 continue
             if not is_available(b):
+                continue
+            if not event_matches_filter(b, self.config, known_schools):
+                self.excluded_channel_ids.add(f'{EVENT_CHANNEL_PREFIX}{bid}')
                 continue
             out.setdefault(bid, (b, start, end))
         return sorted(out.values(), key=lambda e: (e[1], e[0]['id']))

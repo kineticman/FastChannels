@@ -3422,7 +3422,7 @@
         }
 
         // ESPN's, Paramount+'s and Amazon Sports' visible settings are rendered separately from their hidden schemas.
-        if (!schema.length && !['espn', 'paramount', 'amazon_sports', 'b1g_plus'].includes(sourceName) && !cfg.tve_signin) {
+        if (!schema.length && !['espn', 'paramount', 'amazon_sports', 'b1g_plus', 'nsn'].includes(sourceName) && !cfg.tve_signin) {
           if (badge) {
             badge.textContent = 'Auto';
             badge.className = 'config-badge auto';
@@ -5217,8 +5217,20 @@
         ${_saveRow(sourceId)}`;
     }
 
-    // B1G+ event filter: picked sports and/or picked schools; both must match.
-    function _b1gPlusFilter(sourceId, info) {
+    function renderNsnConfig(sourceId, schema, values, cfg) {
+      const info = (cfg && cfg.nsn) || {};
+      return `
+        <div class="config-title">Northeast Sports Network Settings</div>
+        <div class="config-note">Adds NSN's live New England college and high-school games as temporary channels, one per game
+          in the next two days. NSN doesn't publish end times, so each game gets a typical length for its sport, extended while
+          it's still live. Event channels retire an hour after that and are deleted a day later.</div>
+        ${_b1gPlusFilter(sourceId, info, `Pick sports, schools, or both; a game is added when it matches both. A school includes
+          its home games and any game it's named in, so "Colby" includes Colby's away games too.`)}
+        ${_saveRow(sourceId)}`;
+    }
+
+    // Event filter (B1G+, NSN): picked sports and/or picked schools; both must match.
+    function _b1gPlusFilter(sourceId, info, note) {
       const policy = info.event_filter || {sport_mode: 'all', sports: [], school_mode: 'all', schools: []};
       const group = (kind, title, allLabel, names, mode, picked) => {
         const pickedSet = new Set(picked.map(n => n.toLocaleLowerCase()));
@@ -5240,8 +5252,8 @@
       };
       return `
         <div class="config-subtitle" style="margin-top:0.8rem">Event filter</div>
-        <div class="config-note">Pick sports, schools, or both; an event is added when it matches both. Schools are the Big Ten
-          schools the event belongs to, so "Ohio State" includes every Ohio State event, home or away.</div>
+        <div class="config-note">${note || `Pick sports, schools, or both; an event is added when it matches both. Schools are the Big Ten
+          schools the event belongs to, so "Ohio State" includes every Ohio State event, home or away.`}</div>
         ${group('sports', 'Sports', 'All, including new ones', info.sports || [], policy.sport_mode, policy.sports || [])}
         ${group('schools', 'Schools', 'All', info.schools || [], policy.school_mode, policy.schools || [])}`;
     }
@@ -6428,6 +6440,8 @@
         return renderParamountConfig(sourceId, schema, values, cfg);
       } else if (sourceName === 'b1g_plus') {
         return renderB1gPlusConfig(sourceId, schema, values, cfg);
+      } else if (sourceName === 'nsn') {
+        return renderNsnConfig(sourceId, schema, values, cfg);
       } else if (sourceName === 'sling') {
         return renderSlingConfig(sourceId, schema, values, cfg);
       } else if (sourceName === 'spectrum') {
@@ -6608,7 +6622,7 @@
       if (['espn', 'amazon_sports'].includes(getSourceName(sourceId)) && _espnEventPolicy[sourceId]) {
         payload.event_filter = _espnEventPolicy[sourceId];
       }
-      if (getSourceName(sourceId) === 'b1g_plus' && document.querySelector(`input[name="b1g-sports-mode-${sourceId}"]`)) {
+      if (['b1g_plus', 'nsn'].includes(getSourceName(sourceId)) && document.querySelector(`input[name="b1g-sports-mode-${sourceId}"]`)) {
         payload.event_filter = _b1gPlusCollectFilter(sourceId);
       }
 
