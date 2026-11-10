@@ -371,6 +371,13 @@ def ensure_runtime_schema(*, fresh_install: bool | None = None) -> None:
                 conn.execute(text(
                     "ALTER TABLE app_settings ADD COLUMN auto_allow_new_channels BOOLEAN NOT NULL DEFAULT 1"
                 ))
+            if "event_channels_skip_review" not in cols:
+                # New event channels (fc:event) skip the review queue by default so
+                # short-lived events aren't missed waiting for approval (#83).
+                # Only affects future inserts; existing pending rows stay pending.
+                conn.execute(text(
+                    "ALTER TABLE app_settings ADD COLUMN event_channels_skip_review BOOLEAN NOT NULL DEFAULT 1"
+                ))
             if "prismcast_url" not in cols:
                 conn.execute(text("ALTER TABLE app_settings ADD COLUMN prismcast_url TEXT"))
             if "prismcast_inner_url" not in cols:

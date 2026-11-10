@@ -13,3 +13,18 @@
           <span class="save-status" id="auto-allow-status"></span>
         </div>
       </div>
+      <div class="toggle-row">
+        <div class="toggle-row-text">
+          <div class="toggle-row-label">Event channels skip review</div>
+          <div class="toggle-row-help">Newly found event channels (games and other scheduled events from your sport, league, team or event-group picks) go straight into feeds, even when new channels are held for review &mdash; including sources set to &ldquo;Hold for review&rdquo;. Events already waiting in review stay there. When off, events follow the normal new-channel rules.</div>
+        </div>
+        <div class="toggle-row-control">
+          <span class="settings-autosave">Auto-saves</span>
+          <label class="toggle-switch">
+            <input type="checkbox" id="event-channels-skip-review" {% if event_channels_skip_review %}checked{% endif %}
+                   onchange="saveSettings({event_channels_skip_review: this.checked}, 'event-skip-review-status')">
+            <span class="toggle-slider"></span>
+          </label>
+          <span class="save-status" id="event-skip-review-status"></span>
+        </div>
+      </div>

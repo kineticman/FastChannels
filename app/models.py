@@ -484,6 +484,7 @@ class AppSettings(db.Model):
     timezone_name        = db.Column(db.String(64), nullable=True)  # IANA timezone, e.g. America/New_York
     lite_mode            = db.Column(db.Boolean, nullable=False, default=False, server_default=db.text('0'))  # UI preference only; fresh installs opt in during schema setup
     auto_allow_new_channels = db.Column(db.Boolean, nullable=False, default=True, server_default=db.text('1'))  # newly-scraped channels enter feeds enabled (vs. held for review)
+    event_channels_skip_review = db.Column(db.Boolean, nullable=False, default=True, server_default=db.text('1'))  # new fc:event channels enter enabled even when the source policy is review (#83)
     gracenote_auto_fill  = db.Column(db.Boolean, nullable=False, default=True, server_default=db.text('1'))  # scrapers auto-assign Gracenote IDs
     dvr_epg_auto_refresh = db.Column(db.Boolean, nullable=False, default=True, server_default=db.text('1'))  # hourly PUT to Channels DVR lineups
     native_output_enabled = db.Column(db.Boolean, nullable=False, default=True, server_default=db.text('1'))  # publish native scraped-only feed M3U and XML outputs

@@ -1434,7 +1434,7 @@
                     <option value="review"  {% if _pol == 'review'  %}selected{% endif %}>Hold for review</option>
                   </select>
                   <span class="save-status" id="newchan-status-{{ source.id }}"></span>
-                  <div class="help">How channels found by a scrape enter. "Hold for review" adds them disabled — find them in Channels under the "Needs review" filter and enable the ones you want.</div>
+                  <div class="help">How channels found by a scrape enter. "Hold for review" adds them disabled — find them in Channels under the "Needs review" filter and enable the ones you want.{% if event_channels_skip_review %} New event channels skip review (<a href="/admin/settings#settings-section-feeds">Settings</a>).{% endif %}</div>
                 </div>
 
                 <div class="delete-inactive-row">

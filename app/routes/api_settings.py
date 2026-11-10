@@ -353,6 +353,8 @@ def app_settings():
             row.timezone_name = tz_name
         if 'auto_allow_new_channels' in data:
             row.auto_allow_new_channels = bool(data['auto_allow_new_channels'])
+        if 'event_channels_skip_review' in data:
+            row.event_channels_skip_review = bool(data['event_channels_skip_review'])
         if 'gracenote_auto_fill' in data:
             row.gracenote_auto_fill = bool(data['gracenote_auto_fill'])
         if 'dvr_epg_auto_refresh' in data:
@@ -431,6 +433,7 @@ def app_settings():
         'public_base_url':   row.effective_public_base_url(),
         'timezone_name':     row.effective_timezone_name(),
         'auto_allow_new_channels': row.auto_allow_new_channels if row.auto_allow_new_channels is not None else True,
+        'event_channels_skip_review': row.event_channels_skip_review if row.event_channels_skip_review is not None else True,
         'gracenote_auto_fill': row.gracenote_auto_fill if row.gracenote_auto_fill is not None else True,
         'dvr_epg_auto_refresh': row.dvr_epg_auto_refresh if row.dvr_epg_auto_refresh is not None else True,
         'native_output_enabled': bool(row.native_output_enabled),
