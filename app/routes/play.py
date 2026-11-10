@@ -55,6 +55,7 @@ from .fox_tve_proxy import (
     fox_tve_proxy_bp,
 )
 from .paramount_proxy import configure_paramount_proxy, paramount_proxy_bp
+from .free_networks_proxy import configure_free_networks_proxy, free_networks_proxy_bp, needs_proxy as _free_networks_needs_proxy
 from .warner_proxy import configure_warner_proxy, warner_proxy_bp
 
 
@@ -361,6 +362,13 @@ configure_paramount_proxy(
     channel_is_retired=_channel_is_retired,
 )
 play_bp.register_blueprint(paramount_proxy_bp)
+configure_free_networks_proxy(
+    unavailable_response=_unavailable_response,
+    gone_response=_gone_response,
+    refresh_stream_info_async=_refresh_stream_info_async,
+    channel_is_retired=_channel_is_retired,
+)
+play_bp.register_blueprint(free_networks_proxy_bp)
 configure_warner_proxy(
     unavailable_response=_unavailable_response,
     gone_response=_gone_response,
@@ -3127,6 +3135,16 @@ def play(source_name: str, channel_id: str):
         encoded_id = _quote(channel.source_channel_id, safe='')
         return redirect(
             f"{request.host_url.rstrip('/')}/play/paramount/{encoded_id}/proxy.m3u8",
+            302,
+        )
+
+    # Free Networks whose playlists need rewriting (Network.proxied, e.g.
+    # TrillerTV's CloudFront signature) go through the Free Networks proxy.
+    if source_name == 'free_networks' and _free_networks_needs_proxy(channel):
+        from urllib.parse import quote as _quote
+        encoded_id = _quote(channel.source_channel_id, safe='')
+        return redirect(
+            f"{request.host_url.rstrip('/')}/play/free_networks/{encoded_id}/proxy.m3u8",
             302,
         )
 

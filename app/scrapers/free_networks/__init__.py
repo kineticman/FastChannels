@@ -16,7 +16,7 @@ from ._common import UA, EmptyPlaylistError, NetChannel
 from . import (
     aetn, aljazeera, arirang, beond, bloomberg, cbn, cbsnews, cineverse, cw, dw, ewtn, freetv, fstv, gameandfish, hsn,
     i24news, ksl, mansa, newsmax, newsnation, nhk, nwsl, og_network, outside, positiv, qvc, scripps, simple, sinclair,
-    sotal_partners, tastemade, tbn, trt,
+    sotal_partners, tastemade, tbn, triller, trt,
 )
 
 logger = logging.getLogger(__name__)
@@ -27,7 +27,7 @@ NETWORKS = [
     newsmax.Newsmax(), newsnation.NewsNation(), fstv.FreeSpeechTV(), ewtn.EWTN(), positiv.PosiTV(), tbn.TBN(),
     hsn.HSN(), qvc.QVC(), tastemade.Tastemade(), aetn.AETN(), ksl.KSL(), cbn.CBN(),
     gameandfish.GameAndFish(), outside.OutsideTV(), cw.CW(), cineverse.Cineverse(), og_network.OGNetwork(),
-    *sotal_partners.NETWORKS, beond.BeOND(), mansa.Mansa(), freetv.FreeTV(), nwsl.NWSL(),
+    *sotal_partners.NETWORKS, beond.BeOND(), mansa.Mansa(), freetv.FreeTV(), nwsl.NWSL(), triller.Triller(),
     *simple.NETWORKS,
 ]
 _BY_KEY = {n.key: n for n in NETWORKS}
@@ -124,7 +124,7 @@ class FreeNetworksScraper(BaseScraper):
     NHK, Arirang, Bloomberg, CBS News, Scripps, Newsmax2 + World at War, NewsNation, Free Speech TV, Sky
     News, Global News, KSL), faith (EWTN, PosiTV, TBN, CBN, NRB, theDove), shopping
     (HSN, QVC), Sinclair's diginets (Comet, Charge!, TheNest), Tastemade, A+E's
-    FAST channels, The CW's FAST lineup, Cineverse's channels, OG Network, TrueTVplus, Flou TV, FreeTV, BeOND, Mansa, Outside TV, Game & Fish TV, NWSL+ 24/7, Bowling TV and a few
+    FAST channels, The CW's FAST lineup, Cineverse's channels, OG Network, TrueTVplus, Flou TV, FreeTV, BeOND, Mansa, Outside TV, Game & Fish TV, NWSL+ 24/7, Bowling TV, TrillerTV's free channels and a few
     singles.
 
     Each network is a small module in this package (see _common.Network) with
@@ -374,6 +374,11 @@ class FreeNetworksScraper(BaseScraper):
         logger.info('[%s] %d EPG entries: %s (%.1fs)', self.source_name, len(programs), summary,
                     time.monotonic() - run_t0)
         return programs
+
+    def network_for(self, raw_url: str):
+        """The Network a freenet:// stream URL belongs to, or None."""
+        parsed = self._split_url(raw_url)
+        return _BY_KEY.get(parsed[0]) if parsed else None
 
     def resolve(self, raw_url: str) -> str:
         parsed = self._split_url(raw_url)
