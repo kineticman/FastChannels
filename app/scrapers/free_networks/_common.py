@@ -52,6 +52,22 @@ class Network:
     proxied = False
     proxy_hosts: tuple[str, ...] = ()
 
+    def proxy_allows(self, url: str) -> bool:
+        """Whether the proxy may fetch this playlist URL: its host is one of
+        proxy_hosts or a subdomain of one."""
+        from urllib.parse import urlsplit
+        host = (urlsplit(url).hostname or '').lower()
+        return bool(host) and any(host == h or host.endswith('.' + h) for h in self.proxy_hosts)
+
+    def proxies(self, url: str) -> bool:
+        """Whether this resolved stream needs the proxy; when not, the proxy
+        just redirects to it. Lets a network proxy only some of its streams."""
+        return True
+
+    def proxy_headers(self) -> dict:
+        """Extra headers the proxy sends when fetching this network's playlists."""
+        return {}
+
     def child_url(self, parent_url: str, uri: str) -> str:
         """The absolute URL for a URI inside a playlist fetched from parent_url.
         Default: resolved against the parent, carrying the parent's query when

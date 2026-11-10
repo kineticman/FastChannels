@@ -19,7 +19,7 @@ import time as _time
 from urllib.parse import quote, unquote, urlsplit, urlunsplit
 
 import requests as _requests
-from flask import Blueprint, Response, abort, current_app, request
+from flask import Blueprint, Response, abort, current_app, redirect, request
 
 from ..models import Channel, Source
 from ..scrapers import registry
@@ -83,8 +83,7 @@ def needs_proxy(channel: Channel) -> bool:
 
 
 def _allowed(net, url: str) -> bool:
-    host = _host(url)
-    return bool(host) and host in {h.lower() for h in net.proxy_hosts}
+    return bool(_host(url)) and net.proxy_allows(url)
 
 
 def _playlist_response(body: str) -> Response:
@@ -102,8 +101,8 @@ def _with_query(url: str, query: str) -> str:
     return urlunsplit((parts.scheme, parts.netloc, parts.path, query, parts.fragment))
 
 
-def _get(url: str):
-    return _HTTP.get(url, timeout=10, headers={'User-Agent': _UA})
+def _get(url: str, net=None):
+    return _HTTP.get(url, timeout=10, headers={'User-Agent': _UA, **(net.proxy_headers() if net else {})})
 
 
 @free_networks_proxy_bp.route('/play/free_networks/<channel_id>/proxy.m3u8')
@@ -123,11 +122,14 @@ def free_networks_proxy(channel_id: str):
     except Exception as exc:  # noqa: BLE001
         logger.warning('[free_networks proxy] resolve failed for %s: %s', sid, exc)
         return _unavailable_response()
+    if not net.proxies(master_url):
+        # This stream plays as-is; only some of the network's need the proxy.
+        return redirect(master_url, 302)
     if not _allowed(net, master_url):
         logger.warning('[free_networks proxy] unexpected master host for %s: %s', sid, _host(master_url))
         return _unavailable_response()
     try:
-        r = _get(master_url)
+        r = _get(master_url, net)
         r.raise_for_status()
     except _requests.RequestException as exc:
         logger.warning('[free_networks proxy] master fetch failed for %s: %s', sid, exc)
@@ -161,7 +163,7 @@ def free_networks_variant_proxy(channel_id: str):
     if fresh and urlsplit(url).query and _time.time() - fresh[1] < _FRESH_QUERY_TTL:
         url = _with_query(url, fresh[0])
     try:
-        r = _get(url)
+        r = _get(url, net)
         if r.status_code in (401, 403) and urlsplit(url).query:
             # The signature expired: sign again and retry with the new query.
             master_url = scraper.resolve(channel.stream_url)
@@ -169,7 +171,7 @@ def free_networks_variant_proxy(channel_id: str):
             if query and _allowed(net, master_url):
                 _FRESH_QUERY[sid] = (query, _time.time())
                 url = _with_query(url, query)
-                r = _get(url)
+                r = _get(url, net)
         r.raise_for_status()
     except StreamDeadError as exc:
         logger.info('[free_networks proxy] %s: %s', sid, exc)
