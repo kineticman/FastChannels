@@ -254,6 +254,24 @@ def _source_label(m) -> str:
     return (m.source.display_name or m.source.name or '').lower()
 
 
+def source_rank(source_order):
+    """Sort key for a feed's source order: listed sources first, in the
+    listed order, then every other source together (0 for all without one)."""
+    ranks = {name: i for i, name in enumerate(source_order or [])}
+    rest = len(ranks)
+    return lambda m: ranks.get(getattr(m.source, 'name', None), rest)
+
+
+def feed_order_key(source_order, main_number):
+    """Order a feed numbers new channels in. With a source order: those
+    sources first, then the rest by source name, channel name within each.
+    Without one: the main numbers' order. `main_number(m)` is m's main number."""
+    if source_order:
+        rank = source_rank(source_order)
+        return lambda m: (rank(m), _source_label(m), (m.name or '').lower(), m.id)
+    return lambda m: (main_number(m), (m.name or '').lower(), m.id)
+
+
 def settle() -> None:
     """Settle every scope's numbers. Flushes; the caller commits."""
     from .generators.m3u import (
@@ -285,15 +303,17 @@ def settle() -> None:
     live = _selected_channel_stubs({}, gracenote=None)
     start = main_start(settings)
     existing = _existing(MASTER_SCOPE)
+    default = _default_feed()
+    main_rank = source_rank(default.source_order if default is not None else None)
     master = allocate(
         live, existing, floor=lambda m: start,
         new_floor=lambda m: start or UNCONFIGURED_START,
-        order_key=lambda m: (_source_label(m), (m.name or '').lower(),
+        order_key=lambda m: (main_rank(m), _source_label(m), (m.name or '').lower(),
                              m.source_channel_id or ''),
         absent_locks_win=True, **common)
     writes = _write(MASTER_SCOPE, existing, master)
     master_live = {cid: n for cid, (n, rel) in master.items() if rel is None}
-    by_master = lambda m: (master_live.get(m.id, float('inf')), (m.name or '').lower(), m.id)  # noqa: E731
+    main_number = lambda m: master_live.get(m.id, float('inf'))  # noqa: E731
 
     feeds = Feed.query.filter(Feed.is_enabled == True, Feed.slug != 'default').all()
     for feed in feeds:
@@ -306,7 +326,8 @@ def settle() -> None:
         existing = _existing(feed.id)
         rows = allocate(
             members, existing, floor=lambda m, s=feed.chnum_start: s,
-            new_floor=lambda m, s=feed.chnum_start: s, order_key=by_master,
+            new_floor=lambda m, s=feed.chnum_start: s,
+            order_key=feed_order_key(feed.source_order, main_number),
             absent_locks_win=False, **common)
         writes += _write(feed.id, existing, rows)
 
@@ -339,7 +360,8 @@ def _mirror_master_numbers(master: dict[int, int]) -> None:
         db.session.expire_all()
 
 
-def plan_numbers(members, start: int, existing: dict | None = None) -> dict[int, int]:
+def plan_numbers(members, start: int, existing: dict | None = None,
+                 source_order=None) -> dict[int, int]:
     """Numbers an unsaved feed (or a saved one with edited filters or start)
     would get, by the same rules, without storing anything. `existing` is the
     feed's rows when it has some."""
@@ -348,7 +370,7 @@ def plan_numbers(members, start: int, existing: dict | None = None) -> dict[int,
     master = read_scope(MASTER_SCOPE)
     rows = allocate(
         members, existing, floor=lambda m: start, new_floor=lambda m: start,
-        order_key=lambda m: (master.get(m.id, float('inf')), (m.name or '').lower(), m.id),
+        order_key=feed_order_key(source_order, lambda m: master.get(m.id, float('inf'))),
         locks=lock_map(), provider=_reserved_provider_numbers(),
         holdable={cid: rel for cid, (_, rel) in existing.items() if rel is not None},
         absent_locks_win=False)

@@ -395,6 +395,7 @@ class Feed(db.Model):
     filters     = db.Column(db.JSON, default=dict)
     chnum_start = db.Column(db.Integer, nullable=True)   # starting tvg-chno for this feed's M3U output
     guide_mode  = db.Column(db.String(16), nullable=False, default='mixed', server_default='mixed')  # 'split' = separate XMLTV + Gracenote playlists; 'mixed' = one playlist (Channels DVR 2026.08.25+)
+    source_order = db.Column(db.JSON, nullable=True)   # Source.name list numbered first, in this order (app.chnum); applies to new numbers, so to all on Renumber
     is_enabled  = db.Column(db.Boolean, default=True)
     created_at  = db.Column(db.DateTime(timezone=True),
                             default=lambda: datetime.now(timezone.utc))
@@ -420,6 +421,7 @@ class Feed(db.Model):
             'filters':     self.filters or {},
             'chnum_start': self.chnum_start,
             'guide_mode':  self.guide_mode or 'split',
+            'source_order': list(self.source_order or []),
             'is_enabled':  self.is_enabled,
             'created_at':  self.created_at.isoformat() if self.created_at else None,
             'updated_at':  self.updated_at.isoformat() if self.updated_at else None,

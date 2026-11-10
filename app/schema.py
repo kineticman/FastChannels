@@ -205,6 +205,9 @@ def ensure_runtime_schema(*, fresh_install: bool | None = None) -> None:
             conn.execute(text(
                 "ALTER TABLE feeds ADD COLUMN guide_mode VARCHAR(16) NOT NULL DEFAULT 'split'"
             ))
+        # feeds.source_order: sources numbered first, in order (app/chnum.py).
+        if "source_order" not in feed_cols:
+            conn.execute(text("ALTER TABLE feeds ADD COLUMN source_order JSON"))
 
         # channel_numbers: the one store of channel numbers (app/chnum.py). No
         # foreign key on scope_id: 0, -1 and -2 are the master scopes, the rest

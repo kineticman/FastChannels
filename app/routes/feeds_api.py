@@ -176,7 +176,12 @@ def preview_order():
         # Members the overlaid order doesn't cover get appended after it.
         placed_ids = set(order_ids)
     else:
-        num_map = plan_numbers(stubs, start, rows)
+        source_order = (_clean_source_order(data['source_order']) if 'source_order' in data
+                        else (feed.source_order if feed is not None else None))
+        if feed is not None and source_order != (feed.source_order or None):
+            # An edited source order previews the renumber that saving offers.
+            rows = {}
+        num_map = plan_numbers(stubs, start, rows, source_order=source_order)
         # With saved numbers, members that have none are slotted into whatever
         # numbers are free (gaps first, then the end). No rows means everything
         # is numbered fresh, so nothing is "new".
@@ -314,6 +319,7 @@ def create_feed():
         chnum_start = _parse_chnum_start(data.get('chnum_start')),
         guide_mode  = guide_mode,
         is_enabled  = data.get('is_enabled', True),
+        source_order = _clean_source_order(data.get('source_order')),
     )
     db.session.add(feed)
     err = _safe_flush()  # make new feed visible to overlap check
@@ -366,8 +372,8 @@ def update_feed(feed_id):
         return jsonify({'error': 'guide_mode must be "split" or "mixed"'}), 400
 
     if feed.slug in SYSTEM_FEED_SLUGS:
-        # System feeds only allow chnum_start and guide_mode to be changed.
-        disallowed = set(data.keys()) - {'chnum_start', 'guide_mode'}
+        # System feeds only allow the numbering and guide mode to be changed.
+        disallowed = set(data.keys()) - {'chnum_start', 'guide_mode', 'source_order'}
         if disallowed:
             return jsonify({'error': 'Built-in feeds cannot be edited.'}), 403
     else:
@@ -393,6 +399,10 @@ def update_feed(feed_id):
         feed.chnum_start = available_feed_start(feed)
     if 'guide_mode' in data:
         feed.guide_mode = data['guide_mode']
+    # Numbers are sticky: a new source order numbers new channels by it, and
+    # every channel once the feed is renumbered.
+    if 'source_order' in data:
+        feed.source_order = _clean_source_order(data['source_order'])
 
     err = _safe_flush()  # make changes visible to overlap check
     if err:
@@ -585,6 +595,14 @@ def _parse_chnum_start(val) -> int | None:
         return n if n > 0 else None
     except (ValueError, TypeError):
         return None
+
+
+def _clean_source_order(raw) -> list[str] | None:
+    """A feed's source order: source names, no repeats; None when empty."""
+    if not isinstance(raw, list):
+        return None
+    order = list(dict.fromkeys(str(s).strip() for s in raw if s and str(s).strip()))
+    return order or None
 
 
 def _clean_filters(raw: dict) -> dict:
