@@ -18,7 +18,7 @@ it, checked together — any ONE is sufficient:
     remember to check for it individually; baked into env_flag_enabled
     itself, not something callers list.
   - AppSettings.debug_logging_enabled, a single DB-backed toggle editable
-    from Settings (System Stats card) — the accessible path for anyone who
+    from Settings → Advanced — the accessible path for anyone who
     can't touch the container's environment, which is most real users. This
     is what makes "turn on debug logging and try again" an actually usable
     ask when helping someone troubleshoot remotely.
