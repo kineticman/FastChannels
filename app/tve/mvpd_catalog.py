@@ -186,6 +186,18 @@ def accepted_providers() -> dict[str, str]:
     return {i: names.get(i, i) for i in ids if not _excluded(i, names.get(i, ''))}
 
 
+def requestor_providers(requestor: str) -> dict[str, str] | None:
+    """{mvpd id: display name} for the providers one network's Adobe list
+    accepts, or None when the catalog has no list for it (unknown requestor,
+    never fetched): callers then let Adobe decide."""
+    catalog = load_catalog()
+    listed = (catalog.get('sources') or {}).get(requestor)
+    if not listed:
+        return None
+    names = catalog.get('names') or {}
+    return {i: names.get(i, i) for i in listed}
+
+
 def refresh_catalog(force: bool = False) -> bool:
     """Fetch the lists and write the /data copy. Skipped while the copy is
     under a day old unless `force`. Returns True when it wrote one."""
