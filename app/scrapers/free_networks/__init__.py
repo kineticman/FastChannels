@@ -124,7 +124,7 @@ class FreeNetworksScraper(BaseScraper):
     NHK, Arirang, Bloomberg, CBS News, Scripps, Newsmax2 + World at War, NewsNation, Free Speech TV, Sky
     News, Global News, KSL), faith (EWTN, PosiTV, TBN, CBN, NRB, theDove), shopping
     (HSN, QVC), Sinclair's diginets (Comet, Charge!, TheNest), Tastemade, A+E's
-    FAST channels, The CW's FAST lineup, Cineverse's channels, OG Network, TrueTVplus, Flou TV, FreeTV, BeOND, Mansa, Outside TV, Game & Fish TV, NWSL+ 24/7 and a few
+    FAST channels, The CW's FAST lineup, Cineverse's channels, OG Network, TrueTVplus, Flou TV, FreeTV, BeOND, Mansa, Outside TV, Game & Fish TV, NWSL+ 24/7, Bowling TV and a few
     singles.
 
     Each network is a small module in this package (see _common.Network) with

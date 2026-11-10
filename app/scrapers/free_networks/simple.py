@@ -101,6 +101,17 @@ NETWORKS = [
                    logo='https://thedove.us/wp-content/uploads/2026/04/doveLive.png', category='Faith',
                    gracenote_id='65731'),
     ]),
+    StaticNetwork('bowlingtv', 'Bowling TV', [
+        # PBA's 24/7 channel: watchbowling.tv/live frames tripleb.tv/bowling-tv,
+        # whose hls.js player loads this fixed Ottera URL (clear, 1080p, no
+        # token). Gracenote is the FAST station Sling carries; tvtv lists it.
+        # Checked 2026-11-10.
+        NetChannel('bowlingtv', 'Bowling TV', 'https://bbb-bowl-streamstak.otteravision.com/bbb/bowl/bowl.m3u8',
+                   logo='https://static1.squarespace.com/static/6a0f1667e14e7d311009eebc/t/6a1463af54041973688f1081/'
+                        '1779721135229/Bowling+TV_16by9.png?format=500w',
+                   category='Sports', gracenote_id='200290',
+                   description="The PBA's free 24/7 bowling channel."),
+    ]),
     StaticNetwork('eplustv6', 'EPlusTV 6', [
         # Bundled PNG rendered from eplustv6.com/assets/svgs/tv6-logo.svg: the
         # logo cache can't decode SVG and Channels DVR apps can't display it.
