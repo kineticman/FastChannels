@@ -220,8 +220,9 @@ def _stream_problem(s, tenant, url: str) -> str | None:
     time), or a variant that lists no segments. A timeout or connection error
     lets the URL through for the player to try (some origins are just slow).
     resolve() reports a problem as EmptyPlaylistError: playback gets a quick
-    503 instead of a redirect to a dead stream, and the audit retries once
-    and then turns the channel off until it comes back."""
+    503 instead of a redirect to a dead stream, and the audit (see
+    FreeNetworksScraper.audit_resolve) marks the channel dead after repeated
+    tries."""
     def dead(r) -> bool:
         return r.status_code in (404, 410) or r.status_code >= 500
     try:

@@ -73,6 +73,50 @@ def _outside(extra: list[ProgramData], rows: list[ProgramData]) -> list[ProgramD
     return [p for p in extra if not any(p.start_time < b and a < p.end_time for a, b in spans)]
 
 
+# The audit calls a stream dead only after this many unplayable tries.
+_AUDIT_TRIES = 3
+_AUDIT_RETRY_SECS = 5
+
+
+def _probe_stream(scraper, net, url: str) -> str | None:
+    """Why a resolved Free Networks stream can't play, or None. Only definite
+    answers count: the master or first variant answering 404/410/5xx, or a
+    variant listing no segments. Timeouts, connection errors and anything
+    that isn't an http(s) URL pass, for the audit's own checks (which report
+    a hostname that doesn't resolve as dead). Fetches use the network's proxy
+    headers, and a proxied network's child_url for the variant (signed
+    CloudFront variants need the master's query)."""
+    if not url or not url.startswith('http'):
+        return None
+    hdrs = {'User-Agent': UA, **(net.proxy_headers() if net is not None else {})}
+
+    def dead(r) -> bool:
+        return r.status_code in (404, 410) or r.status_code >= 500
+
+    try:
+        r = scraper.session.get(url, headers=hdrs, timeout=15)
+        if dead(r):
+            return f'stream answered HTTP {r.status_code}'
+        if not r.ok or '#EXT-X-STREAM-INF' not in r.text:
+            return None
+        variant = next((ln.strip() for ln in r.text.splitlines() if ln.strip() and not ln.startswith('#')), None)
+        if not variant:
+            return None
+        from urllib.parse import urljoin
+        # The network's child_url only for a stream that goes through the proxy:
+        # elsewhere a copied query can break the variant (noisypeak answers 500).
+        proxied = net is not None and net.proxied and net.proxies(url)
+        vurl = net.child_url(url, variant) if proxied else urljoin(r.url, variant)
+        v = scraper.session.get(vurl, headers=hdrs, timeout=15)
+        if dead(v):
+            return f'stream variant answered HTTP {v.status_code}'
+        if v.ok and '#EXTINF' not in v.text:
+            return 'stream variant lists no segments'
+        return None
+    except Exception:  # noqa: BLE001 — a probe failure is not proof of a dead stream
+        return None
+
+
 class NetworkBudgetExceeded(requests.exceptions.Timeout):
     """A network used up its time limit. A Timeout, so the networks' own
     request-error handling treats it like any other timed-out request."""
@@ -389,18 +433,38 @@ class FreeNetworksScraper(BaseScraper):
         return net.resolve(self, ref) if net else ref
 
     def audit_resolve(self, raw_url: str) -> str:
-        """resolve() for the stream audit: a stream whose playlist is empty twice,
-        3s apart (some Sotal channels need a moment after the session opens), is
-        dead, so the audit turns it off; it re-activates it if it comes back.
-        Playback keeps the plain 503, so one empty fetch never disables a channel."""
-        try:
-            return self.resolve(raw_url)
-        except EmptyPlaylistError:
-            time.sleep(3)
+        """resolve() for the stream audit, plus a probe of the stream itself
+        with its network's own headers. A stream that is unplayable on all
+        _AUDIT_TRIES tries, _AUDIT_RETRY_SECS apart (empty playlist, or the
+        master/first variant answering 404/410/5xx; some origins 5xx for a few
+        seconds now and then), is dead: the audit marks it inactive and disabled.
+        A later audit re-activates it if it plays again (is_enabled stays off
+        until the user turns it back on, as for every source). The probe is needed because the audit treats a
+        5xx as the source rate-limiting (back off, skip), which is right for a
+        one-host source but not for Free Networks' ~40 origins, where it means
+        one dead channel. Playback keeps the plain 503, so one bad fetch never
+        disables a channel.
+
+        A stream that only plays through the proxy with the network's headers
+        (MediaTailor on Sotal) returns the opaque URL: the probe has confirmed
+        it, and the audit's own fetch, made without those headers, would get a
+        5xx and back off."""
+        net = self.network_for(raw_url)
+        url = raw_url
+        for attempt in range(_AUDIT_TRIES):
             try:
-                return self.resolve(raw_url)
+                url = self.resolve(raw_url)
+                problem = _probe_stream(self, net, url)
+                if problem:
+                    raise EmptyPlaylistError(problem)
+                break
             except EmptyPlaylistError as exc:
-                raise StreamDeadError(str(exc)) from exc
+                if attempt == _AUDIT_TRIES - 1:
+                    raise StreamDeadError(str(exc)) from exc
+                time.sleep(_AUDIT_RETRY_SECS)
+        if net is not None and net.proxied and net.proxy_headers() and net.proxies(url):
+            return raw_url
+        return url
 
     # ── Internals ────────────────────────────────────────────
 
