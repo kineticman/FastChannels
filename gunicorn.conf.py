@@ -100,12 +100,15 @@ _SUCCESS_SUPPRESS_PATTERNS = (
 # refresh and a segment every ~6s per viewer, plus a key per rotation.
 # Free Networks' playlist proxy (TrillerTV) refreshes a variant every ~6s per
 # viewer; the tune still shows as the app's [play] request line.
+# Pluto's "Route playlists through FastChannels" refreshes a video and an audio
+# variant every ~5s per viewer; the tune still shows as the app's [play] request line.
 _SUCCESS_SUPPRESS_RE = re.compile(
     r'(?:GET|HEAD) /play/directv/browser-asset\?url=|(?:GET|HEAD) /play/dazn_tve/[^/]+/seg/'
     r'|(?:GET|HEAD) /play/vix/[^/]+/(?:seg\?|browser\.mpd\?s=)'
     r'|(?:GET|HEAD) /play/paramount/[^/]+/(?:variant\.m3u8|key)\?url='
     r'|(?:GET|HEAD) /play/warner_tve/[^/]+/(?:variant\.m3u8|key|segment\.ts)\?url='
-    r'|(?:GET|HEAD) /play/free_networks/[^/]+/variant\.m3u8\?url=')
+    r'|(?:GET|HEAD) /play/free_networks/[^/]+/variant\.m3u8\?url='
+    r'|(?:GET|HEAD) /play/pluto/variant\?')
 _DASH_RE = re.compile(r'(?:GET|HEAD) /play/(amazon_prime_free|amazon_sports|cox|philo|sling|pbs|vidaa|fubo|dazn_tve)/[^/]+/dash\.mpd')
 # DirecTV/cox use path-form license URLs (/license/<id>), while vidaa/fubo/sling use
 # query-form URLs (/license?channel_id=<id>) — matched via the separator below. Sling's

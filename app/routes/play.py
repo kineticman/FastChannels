@@ -759,8 +759,12 @@ def pluto_manifest_proxy(channel_id: str):
     effective_url = r.url
     base_url = request.host_url.rstrip('/')
 
+    # The region rides along so the variant proxy can send the same
+    # X-Forwarded-For: the stitcher decides ads on the variant fetches too (#92).
+    _region_qs = f'c={_quote(_country, safe="")}&' if _PLUTO_X_FORWARD.get(_country, {}).get('X-Forwarded-For') else ''
+
     def _proxy_url(abs_url: str) -> str:
-        return f'{base_url}/play/pluto/variant?url={_quote(abs_url, safe="")}'
+        return f'{base_url}/play/pluto/variant?{_region_qs}url={_quote(abs_url, safe="")}'
 
     def _abs(rel: str) -> str:
         return rel if rel.startswith('http') else urljoin(effective_url, rel)
@@ -809,7 +813,7 @@ def pluto_variant_proxy():
         abort(403)
     if _PRIVATE_IP_RE.match(host):
         abort(403)
-    from ..scrapers.pluto import BOOT_HEADERS as _PLUTO_BOOT_HEADERS
+    from ..scrapers.pluto import BOOT_HEADERS as _PLUTO_BOOT_HEADERS, X_FORWARD as _PLUTO_X_FORWARD
     _variant_hdrs = {
         'accept': '*/*',
         'accept-language': 'en-US,en;q=0.9',
@@ -817,6 +821,10 @@ def pluto_variant_proxy():
         'referer': 'https://pluto.tv/',
         'user-agent': _PLUTO_BOOT_HEADERS.get('user-agent', ''),
     }
+    # Only known regions; the value never comes from the request itself.
+    _xff = _PLUTO_X_FORWARD.get(request.args.get('c', ''), {}).get('X-Forwarded-For')
+    if _xff:
+        _variant_hdrs['X-Forwarded-For'] = _xff
     try:
         r = _requests.get(url, headers=_variant_hdrs, timeout=10)
         r.raise_for_status()
@@ -3157,6 +3165,22 @@ def play(source_name: str, channel_id: str):
             f"{request.host_url.rstrip('/')}/play/warner_tve/{encoded_id}/proxy.m3u8",
             302,
         )
+
+    # Pluto with "Route playlists through FastChannels": the stitcher picks ads by
+    # the IP fetching the playlists, so the proxy fetches them with the channel
+    # region's X-Forwarded-For. A 302 straight to the stitcher would leave a
+    # viewer outside that region with the looping error slate in every break (#92).
+    # 'local' already uses the server's own IP, so it gains nothing from the proxy.
+    if source_name == 'pluto' and (channel.stream_url or '').startswith('pluto://') \
+            and not channel.stream_url.startswith('pluto://local/'):
+        from ..scrapers.pluto import routes_playlists as _pluto_routes_playlists
+        if _pluto_routes_playlists(channel.source.config):
+            from urllib.parse import quote as _quote
+            encoded_id = _quote(channel.source_channel_id, safe='')
+            return redirect(
+                f"{request.host_url.rstrip('/')}/play/pluto/{encoded_id}/proxy.m3u8",
+                302,
+            )
 
     # NBC and PBS's DASH manifests have no BaseURL and relative segment paths.
     # A 302 straight to them works only in clients that resolve those against
