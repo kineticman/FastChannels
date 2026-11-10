@@ -499,10 +499,14 @@ public class PlaybackActivity extends Activity {
             // Multi-session: a stream that rotates keys mid-stream (a new pssh in each
             // fragment, e.g. Versant) needs a new license for each key. With one session
             // Media3 keeps the first key and fails with "Crypto key not available".
+            // Forced sessions keep clear periods (server-inserted ads, e.g. Amazon Sports)
+            // on the secure decoder too. Otherwise every clear/encrypted switch swaps
+            // between the plain and .secure codec and drops frames (#85).
             itemBuilder.setDrmConfiguration(
                     new MediaItem.DrmConfiguration.Builder(C.WIDEVINE_UUID)
                             .setLicenseUri(activeLicenseUrl)
                             .setMultiSession(true)
+                            .setForceSessionsForAudioAndVideoTracks(true)
                             .build());
         }
         player.setMediaItem(itemBuilder.build());
