@@ -3773,7 +3773,7 @@ def seed_sources():
         if untested:
             logger.warning('DRM sources not on DRM_BRIDGE_TRUSTED_SOURCES (PrismCast only until tested with '
                            'FastChannels Player): %s', ', '.join(untested))
-        default_disabled_sources = {'amazon_prime_free', 'amazon_sports', 'aenetworks_tve', 'fox_tve', 'discovery_tve', 'amcn_tve', 'fox_one', 'nbc_tve', 'warner_tve', 'cspan', 'sling', 'localnow', 'pluto', 'frndlytv', 'fubo', 'hdhomerun', 'freecast', 'vidaa', 'philo', 'directv', 'pbs', 'tubi', 'spectrum', 'espn', 'nfl', 'cbs_sports', 'free_networks', 'versant_tve', 'zeam', 'vix', 'univision_tve', 'disney_tve', 'tennis_tve', 'dazn_tve', 'cspan_tve', 'sundance_tve', 'cnn_tve', 'nesn_tve', 'monumental_tve', 'altitude_tve', 'myoutdoortv_tve', 'sportsnet_pittsburgh_tve', 'paramount', 'reelz_tve', 'b1g_plus'}
+        default_disabled_sources = {'amazon_prime_free', 'amazon_sports', 'aenetworks_tve', 'fox_tve', 'discovery_tve', 'amcn_tve', 'fox_one', 'nbc_tve', 'warner_tve', 'cspan', 'sling', 'localnow', 'pluto', 'frndlytv', 'fubo', 'hdhomerun', 'freecast', 'vidaa', 'philo', 'directv', 'pbs', 'tubi', 'spectrum', 'espn', 'nfl', 'cbs_sports', 'free_networks', 'versant_tve', 'zeam', 'vix', 'univision_tve', 'disney_tve', 'tennis_tve', 'dazn_tve', 'cspan_tve', 'sundance_tve', 'cnn_tve', 'nesn_tve', 'monumental_tve', 'altitude_tve', 'myoutdoortv_tve', 'sportsnet_pittsburgh_tve', 'paramount', 'reelz_tve', 'b1g_plus', 'nsn'}
         # Custom Channels source: always seeded, always enabled, never auto-scraped
         if not Source.query.filter_by(name='custom').first():
             db.session.add(Source(
