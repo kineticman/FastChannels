@@ -12,6 +12,7 @@ import android.view.WindowManager;
 import androidx.media3.common.C;
 import androidx.media3.common.Format;
 import androidx.media3.common.MediaItem;
+import androidx.media3.common.MediaMetadata;
 import androidx.media3.common.MimeTypes;
 import androidx.media3.common.PlaybackException;
 import androidx.media3.common.Player;
@@ -123,6 +124,19 @@ public class PlaybackActivity extends Activity {
     private DefaultTrackSelector trackSelector;
     private MediaSession mediaSession;
     private String activeChannelKey;
+    private String activeTitle;
+    // Wall-clock time this tune first rendered video, 0 until it does. Published in the
+    // MediaSession extras (publishSessionExtras) and the dumpsys status.
+    private long firstFrameAtMs = 0;
+
+    // MediaSession extras for controllers that can't use adb (APITuner's Agent reads
+    // sessions through Notification Access, issue #94). With the MediaItem's mediaId
+    // (= channel_key) and title they say which channel this tune is and whether it
+    // has shown a picture yet; PlaybackState alone only says "this package plays".
+    static final String SESSION_EXTRA_CHANNEL_KEY = "channel_key";
+    static final String SESSION_EXTRA_TUNE_STARTED_MS = "tune_started_ms";
+    static final String SESSION_EXTRA_FIRST_FRAME_MS = "first_frame_ms";
+    private long tuneStartedAtMs = 0;
     private final Handler retryHandler = new Handler(Looper.getMainLooper());
     private final Runnable resetRetryCount = () -> retryCount = 0;
     private int retryCount = 0;
@@ -338,6 +352,18 @@ public class PlaybackActivity extends Activity {
             }
 
             @Override
+            public void onRenderedFirstFrame() {
+                // Fires again after every reprepare (gap rejoin, Lever 2 swap); only the
+                // tune's first picture is recorded.
+                if (firstFrameAtMs == 0 && activeChannelKey != null) {
+                    firstFrameAtMs = System.currentTimeMillis();
+                    Log.i(TAG, "first frame channel_key=" + activeChannelKey + " after "
+                            + (firstFrameAtMs - tuneStartedAtMs) + "ms");
+                    publishSessionExtras();
+                }
+            }
+
+            @Override
             public void onTimelineChanged(Timeline timeline, int reason) {
                 // Remembered because a gap retry swaps in a fresh MediaItem whose timeline
                 // isn't known yet when its first error arrives.
@@ -432,6 +458,10 @@ public class PlaybackActivity extends Activity {
         liveGapStartedAtMs = 0;
         activeIsLive = false;
         activeChannelKey = intent.getStringExtra(EXTRA_CHANNEL_KEY);
+        activeTitle = title;
+        tuneStartedAtMs = System.currentTimeMillis();
+        firstFrameAtMs = 0;
+        publishSessionExtras();
         activeStreamUrl = streamUrl;
         activeDrm = drm;
         activeLicenseUrl = licenseUrl;
@@ -456,7 +486,15 @@ public class PlaybackActivity extends Activity {
      * STATE_IDLE, so a genuine re-fetch of a changed manifest needs a fresh MediaItem, not
      * just another prepare() call. */
     private void reprepare() {
-        MediaItem.Builder itemBuilder = new MediaItem.Builder().setUri(activeStreamUrl);
+        // mediaId and title reach the platform session as METADATA_KEY_MEDIA_ID and
+        // METADATA_KEY_TITLE / DISPLAY_TITLE, readable without adb.
+        MediaItem.Builder itemBuilder = new MediaItem.Builder()
+                .setUri(activeStreamUrl)
+                .setMediaId(activeChannelKey == null ? "" : activeChannelKey)
+                .setMediaMetadata(new MediaMetadata.Builder()
+                        .setTitle(activeTitle)
+                        .setDisplayTitle(activeTitle)
+                        .build());
         if (activeDrm && activeLicenseUrl != null && !activeLicenseUrl.isEmpty()) {
             // Multi-session: a stream that rotates keys mid-stream (a new pssh in each
             // fragment, e.g. Versant) needs a new license for each key. With one session
@@ -470,6 +508,19 @@ public class PlaybackActivity extends Activity {
         player.setMediaItem(itemBuilder.build());
         player.prepare();
         player.setPlayWhenReady(true);
+    }
+
+    /** Sets the MediaSession extras to the current tune (see SESSION_EXTRA_*). An empty
+     * Bundle when nothing is tuned. Main thread only, like every MediaSession call. */
+    private void publishSessionExtras() {
+        if (mediaSession == null) return;
+        Bundle extras = new Bundle();
+        if (activeChannelKey != null) {
+            extras.putString(SESSION_EXTRA_CHANNEL_KEY, activeChannelKey);
+            extras.putLong(SESSION_EXTRA_TUNE_STARTED_MS, tuneStartedAtMs);
+            extras.putLong(SESSION_EXTRA_FIRST_FRAME_MS, firstFrameAtMs);
+        }
+        mediaSession.setSessionExtras(extras);
     }
 
     private void recordStatusEvent(String kind) {
@@ -488,6 +539,7 @@ public class PlaybackActivity extends Activity {
             status.put("updated_ms", System.currentTimeMillis());
             status.put("channel_key", activeChannelKey == null ? JSONObject.NULL : activeChannelKey);
             status.put("playing", player.isPlaying());
+            if (firstFrameAtMs > 0) status.put("first_frame_ms", firstFrameAtMs);
             VideoSize size = player.getVideoSize();
             if (size.width > 0) status.put("video_width", size.width).put("video_height", size.height);
             Format format = player.getVideoFormat();
@@ -740,6 +792,9 @@ public class PlaybackActivity extends Activity {
         player.stop();
         player.clearMediaItems();
         activeChannelKey = null;
+        activeTitle = null;
+        firstFrameAtMs = 0;
+        publishSessionExtras();
         // Stay foregrounded instead of moveTaskToBack(): backgrounding exposed the Fire TV
         // launcher for the entire gap until the next tune's am start arrives (1-2.5s observed
         // live), and doesn't speed up the retune.
