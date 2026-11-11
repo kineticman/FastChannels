@@ -848,6 +848,8 @@ def save_source_config(source_id):
         _nsn_event_filter(old) != _nsn_event_filter(current))
     gray_stations_changed = source.name == 'gray_local' and (
         (old.get('station_filter') or []) != (current.get('station_filter') or []))
+    ncaa_filter_changed = source.name == 'ncaa' and any(
+        (old.get(k) or '') != (current.get(k) or '') for k in ('disabled_game_sports', 'disabled_game_divisions'))
     if source.name == 'espn' and espn_any_events and not hasattr(Channel, 'retire_at'):
         return jsonify({'error': 'ESPN events require a FastChannels image rebuild and restart.'}), 503
     if creds_changed or sling_subscription_changed:
@@ -996,6 +998,9 @@ def save_source_config(source_id):
         full_scrape_queued = True
     elif gray_stations_changed and source.is_enabled:
         trigger_scrape('gray_local', force_full=True)
+        full_scrape_queued = True
+    elif ncaa_filter_changed and source.is_enabled:
+        trigger_scrape('ncaa', force_full=True)
         full_scrape_queued = True
     elif networks_reenabled and source.is_enabled:
         trigger_scrape(source.name, force_full=True)
