@@ -160,6 +160,10 @@
       --cat-color: var(--info-soft, #7eb8f7);
       --cat-border: var(--info-border, #2a5080);
     }
+    .source-category-header.cat-network {
+      --cat-color: var(--teal-soft);
+      --cat-border: var(--teal);
+    }
     .source-category-header.cat-account {
       --cat-color: var(--success-soft);
       --cat-border: var(--success-fill);
@@ -179,6 +183,7 @@
     .cat-header-action { float: right; text-transform: none; letter-spacing: normal; margin: -0.2rem 0; }
     .cat-chevron { display: inline-block; width: 0.9em; margin-right: 0.3em; }
     .cat-count { font-weight: 600; opacity: 0.75; margin-left: 0.6em; letter-spacing: normal; text-transform: none; }
+    .cat-hint { font-weight: 500; color: var(--text-muted); margin-left: 0.6em; letter-spacing: normal; text-transform: none; }
 
     /* Quick access bar: filter + category jump chips */
     .sources-quicknav {
@@ -204,7 +209,6 @@
     /* Row visibility: collapsed category or filtered-out by search */
     tr.dash-row.cat-collapsed, tr.config-panel-row.cat-collapsed, tr.source-off-divider.cat-collapsed,
     tr.source-off-divider.filter-hidden,
-    tr.dash-row.child-collapsed, tr.config-panel-row.child-collapsed,
     tr.dash-row.filter-hidden, tr.config-panel-row.filter-hidden,
     tr.source-category-header.filter-hidden {
       display: none !important;
@@ -229,8 +233,7 @@
     .meta-stale { color: var(--danger); font-weight: 600; }
     .meta-pending { color: var(--text-soft); font-style: italic; }
 
-    /* Anything open — a source with its Configure panel showing, or a source with
-       the sources listed under it shown — reads as one raised block: a neutral tint
+    /* A source with its Configure panel showing reads as one raised block: a neutral tint
        on its rows and a stronger line above and below it. Not blue and no left
        edge: a blue tint with a left bar is a running scrape, and the coloured left
        edge is the group header. */
@@ -238,40 +241,10 @@
     :root[data-theme="light"] .dashboard-table { --open-bg: color-mix(in srgb, var(--text) 7%, var(--surface)); }
     /* An off row fades by opacity, which would fade the block's tint with it and
        stripe the block; fade what's in the cells instead. */
-    .dashboard-table tbody tr.dash-row.disabled:is(.child-row, .config-open) { opacity: 1; }
-    .dashboard-table tbody tr.dash-row.disabled:is(.child-row, .config-open) > td > * { opacity: 0.6; }
-    .dashboard-table tbody tr.dash-row.config-open,
-    .dashboard-table tbody tr.dash-row.has-open-children,
-    .dashboard-table tbody tr.dash-row.child-row { background: var(--open-bg); }
-    .dashboard-table tbody tr.dash-row.config-open:not(.child-row),
-    .dashboard-table tbody tr.dash-row.has-open-children { border-top: 2px solid var(--border-strong); }
+    .dashboard-table tbody tr.dash-row.disabled.config-open { opacity: 1; }
+    .dashboard-table tbody tr.dash-row.disabled.config-open > td > * { opacity: 0.6; }
+    .dashboard-table tbody tr.dash-row.config-open { background: var(--open-bg); border-top: 2px solid var(--border-strong); }
     .config-panel-row td { border-bottom: 2px solid var(--border-strong); }
-    .dashboard-table tbody tr.dash-row.child-row.child-last { border-bottom: 2px solid var(--border-strong); }
-
-    /* Sources listed under another source's row (grouped_under): no dividers
-       inside the block, and each name hangs off a ↳ under the parent's name. */
-    tr.dash-row.child-row > td.col-source { padding-left: 2.6rem; }
-    tr.dash-row.child-row .source-name::before {
-      content: '↳'; display: inline-block; width: 1.2rem; margin-left: -1.2rem;
-      color: var(--text-muted); font-weight: 400;
-    }
-    tr.dash-row.child-row .source-name { font-size: 0.88rem; }
-    .dashboard-table tbody tr.dash-row.has-open-children:not(.config-open),
-    .dashboard-table tbody tr.dash-row.child-row:not(.child-last):not(.config-open) { border-bottom: none; }
-    .dashboard-table tbody tr.dash-row.has-open-children > td { padding-bottom: 0.4rem; }
-    .dashboard-table tbody tr.dash-row.child-row > td { padding-top: 0.35rem; padding-bottom: 0.35rem; }
-    .dashboard-table tbody tr.dash-row.child-row.child-last > td { padding-bottom: 0.7rem; }
-    .config-panel-row[data-parent] td { border-bottom: 1px solid var(--border); }
-    .child-toggle {
-      display: inline-flex; align-items: center; gap: 0.4rem; margin-top: 0.45rem;
-      background: var(--bg); color: var(--text-soft); border: 1px solid var(--border-strong);
-      border-radius: 999px; padding: 0.25rem 0.75rem; cursor: pointer;
-      font: inherit; font-size: 0.78rem; font-weight: 600; text-align: left;
-    }
-    .child-toggle:hover { color: var(--text); border-color: var(--text-muted); }
-    .child-toggle[aria-expanded="true"] { color: var(--accent-soft); border-color: var(--accent-soft); }
-    .child-toggle-names { font-weight: 500; color: var(--text-muted); }
-    .child-toggle-count { font-weight: 500; opacity: 0.75; white-space: nowrap; }
 
     /* ── Row health: one status line + a channel bar; quiet when all is well ── */
     .row-health {
@@ -1151,8 +1124,6 @@
           {% set this_cat = source_categories.get(source.name, 'fast') if not is_custom else 'custom' %}
           {% set mix = source_mix.get(source.id, {}) %}
           {% set status = source_status.get(source.id) %}
-          {% set parent_name = source_parent.get(source.name) %}
-          {% set block_on = source_block_on.get(source.name, source.is_enabled) %}
           {% if this_cat != ns.last_cat %}
             {% if ns.last_cat is not none %}
         </tbody>
@@ -1168,7 +1139,7 @@
             <tr class="source-category-header cat-{{ this_cat }}" id="cat-header-{{ this_cat }}"
                 data-cat="{{ this_cat }}" onclick="toggleCategoryCollapse('{{ this_cat }}')">
               <td colspan="4">
-                <span class="cat-chevron" id="cat-chevron-{{ this_cat }}">▾</span>{{ _CAT_LABELS.get(this_cat, this_cat | title) }}<span class="cat-count"><span class="cat-on-count" id="cat-on-count-{{ this_cat }}">{{ category_on_counts.get(this_cat, 0) }}</span> of {{ category_counts.get(this_cat, 0) }} on</span>
+                <span class="cat-chevron" id="cat-chevron-{{ this_cat }}">▾</span>{{ _CAT_LABELS.get(this_cat, this_cat | title) }}{% if source_category_hints.get(this_cat) %}<span class="cat-hint">{{ source_category_hints[this_cat] }}</span>{% endif %}<span class="cat-count"><span class="cat-on-count" id="cat-on-count-{{ this_cat }}">{{ category_on_counts.get(this_cat, 0) }}</span> of {{ category_counts.get(this_cat, 0) }} on</span>
                 {% if this_cat == 'custom' %}
                 <button type="button" class="btn btn-run btn-sm cat-header-action"
                         onclick="event.stopPropagation(); openPlaylistModal()"
@@ -1178,16 +1149,16 @@
             </tr>
           {% endif %}
 
-          {% if block_on %}{% set ns.any_on = True %}{% endif %}
+          {% if source.is_enabled %}{% set ns.any_on = True %}{% endif %}
           {# Only between on and off sources: a group with none on says so in its header. #}
-          {% if ns.last_on and not block_on %}
+          {% if ns.last_on and not source.is_enabled %}
             {% set ns.last_on = False %}
             {% if ns.any_on %}
             <tr class="source-off-divider" data-cat="{{ this_cat }}"><td colspan="4">Off</td></tr>
             {% endif %}
           {% endif %}
-          <tr class="dash-row {% if not source.is_enabled %}disabled{% endif %}{% if parent_name %} child-row{% if source_children[parent_name][-1] is sameas source %} child-last{% endif %}{% endif %}" id="dash-row-{{ source.id }}"
-              data-cat="{{ this_cat }}"{% if parent_name %} data-parent="{{ parent_name }}"{% endif %} data-search="{{ (source.display_name ~ ' ' ~ source.name) | lower }}"
+          <tr class="dash-row {% if not source.is_enabled %}disabled{% endif %}" id="dash-row-{{ source.id }}"
+              data-cat="{{ this_cat }}" data-search="{{ (source.display_name ~ ' ' ~ source.name) | lower }}"
               data-playback="{{ mix.get('kind', 'clear') }}"
               data-fc-player="{{ 'true' if mix.get('fc_player') else 'false' }}"
               data-advanced="{{ 'true' if advanced_sources.get(source.name) else 'false' }}"
@@ -1260,16 +1231,6 @@
               </div>
               {% if ui.lite and not ui.show_drm and mix.get('restricted', 0) %}
               <div class="config-note">{{ mix.restricted }} protected channel{{ 's' if mix.restricted != 1 else '' }} excluded from standard playlists.</div>
-              {% endif %}
-              {% set children = source_children.get(source.name) %}
-              {% if children %}
-              <button type="button" class="child-toggle" id="child-toggle-{{ source.name }}" aria-expanded="false"
-                      onclick="toggleChildSources('{{ source.name }}')"
-                      title="Separate sources for networks' own websites, listed here to save space">
-                <span class="child-toggle-chevron">▸</span>
-                <span>{{ children | length }} more sources <span class="child-toggle-names">{{ children | map(attribute='display_name') | join(' · ') }}</span></span>
-                <span class="child-toggle-count"><span id="child-on-count-{{ source.name }}">{{ children | selectattr('is_enabled') | list | length }}</span> on</span>
-              </button>
               {% endif %}
               <div class="drm-heads-up" id="drm-heads-up-{{ source.id }}" hidden></div>
               {% if not is_custom %}
@@ -1345,7 +1306,7 @@
 
           <!-- Custom source: collapsible channel list panel -->
           {% if is_custom %}
-          <tr class="config-panel-row" id="config-panel-row-{{ source.id }}" data-cat="{{ this_cat }}"{% if parent_name %} data-parent="{{ parent_name }}"{% endif %} style="display:none">
+          <tr class="config-panel-row" id="config-panel-row-{{ source.id }}" data-cat="{{ this_cat }}" style="display:none">
             <td colspan="4" class="config-panel-cell">
               <div class="config-panel" id="card-{{ source.id }}">
                 <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1rem;">
@@ -1365,7 +1326,7 @@
 
           <!-- Collapsible config panel row (not shown for custom source) -->
           {% if not is_custom %}
-          <tr class="config-panel-row" id="config-panel-row-{{ source.id }}" data-cat="{{ this_cat }}"{% if parent_name %} data-parent="{{ parent_name }}"{% endif %} style="display:none">
+          <tr class="config-panel-row" id="config-panel-row-{{ source.id }}" data-cat="{{ this_cat }}" style="display:none">
             <td colspan="4" class="config-panel-cell">
               <div class="config-panel" id="card-{{ source.id }}"
                    data-source-name="{{ source.name }}"
@@ -1763,10 +1724,6 @@
       const row = document.getElementById(`config-panel-row-${sourceId}`);
       if (!row) return;
       const isOpen = row.style.display !== 'none';
-      // A source with sources listed under it shows one thing beneath its row at
-      // a time: its panel or those sources, never the sources below the panel.
-      const childToggle = document.querySelector(`#dash-row-${sourceId} .child-toggle[aria-expanded="true"]`);
-      if (!isOpen && childToggle) toggleChildSources(childToggle.id.replace('child-toggle-', ''));
       row.style.display = isOpen ? 'none' : '';
       if (isOpen) {  // no-ops unless a sign-in is waiting here
         espnAbandon(sourceId);
@@ -1803,7 +1760,6 @@
         _saveCollapsedCats(collapsedCats);
         _applyCategoryCollapse(cat, false);
       }
-      if (row?.classList.contains('child-collapsed')) _applyChildCollapse(row.dataset.parent, false);
       if (!row || row.style.display !== 'none') {
         row?.scrollIntoView({ behavior: 'smooth', block: 'start' });
         return;
@@ -2207,7 +2163,6 @@
       }
       if (dashRow) dashRow.classList.toggle('disabled', !enabled);
       if (dashRow) _refreshCategoryOnCount(dashRow.dataset.cat);
-      if (dashRow?.dataset.parent) _refreshChildOnCount(dashRow.dataset.parent);
       runBtns.forEach(btn => { btn.disabled = !enabled; });
       if (auditBtn) auditBtn.disabled = !enabled;
       if (dashRow?.dataset.custom === 'true') {
@@ -6891,55 +6846,6 @@
       if (el) el.textContent = document.querySelectorAll(`tr.dash-row[data-cat="${cat}"]:not(.disabled)`).length;
     }
 
-    // Sources listed under another source's row start tucked away; which parents
-    // are open is remembered per browser. One with a problem opens by itself.
-    const SOURCES_EXPANDED_KEY = 'fc_sources_expanded_parents';
-
-    function _loadExpandedParents() {
-      try { return new Set(JSON.parse(localStorage.getItem(SOURCES_EXPANDED_KEY)) || []); }
-      catch { return new Set(); }
-    }
-    function _saveExpandedParents(set) {
-      try { localStorage.setItem(SOURCES_EXPANDED_KEY, JSON.stringify([...set])); } catch {}
-    }
-    function _refreshChildOnCount(parent) {
-      const el = document.getElementById(`child-on-count-${parent}`);
-      if (el) el.textContent = document.querySelectorAll(`tr.dash-row[data-parent="${parent}"]:not(.disabled)`).length;
-    }
-    function _applyChildCollapse(parent, collapsed) {
-      document.querySelectorAll(`tr.dash-row[data-parent="${parent}"], tr.config-panel-row[data-parent="${parent}"]`)
-        .forEach(row => row.classList.toggle('child-collapsed', collapsed));
-      const btn = document.getElementById(`child-toggle-${parent}`);
-      if (btn) {
-        btn.closest('tr.dash-row')?.classList.toggle('has-open-children', !collapsed);
-        btn.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
-        btn.querySelector('.child-toggle-chevron').textContent = collapsed ? '▸' : '▾';
-      }
-    }
-    function _childNeedsAttention(parent) {
-      return !!document.querySelector(`tr.dash-row[data-parent="${parent}"][data-issue="true"]:not(.disabled)`);
-    }
-    function _restoreChildCollapse() {
-      const expanded = _loadExpandedParents();
-      document.querySelectorAll('.child-toggle').forEach(btn => {
-        const parent = btn.id.replace('child-toggle-', '');
-        _applyChildCollapse(parent, !expanded.has(parent) && !_childNeedsAttention(parent));
-      });
-    }
-    function toggleChildSources(parent) {
-      const expanded = _loadExpandedParents();
-      const willExpand = document.getElementById(`child-toggle-${parent}`)?.getAttribute('aria-expanded') !== 'true';
-      if (willExpand) expanded.add(parent); else expanded.delete(parent);
-      _saveExpandedParents(expanded);
-      // Its own panel closes first, so the sources open right under its row.
-      const parentRow = document.getElementById(`child-toggle-${parent}`)?.closest('tr.dash-row');
-      const parentId = parentRow?.id.replace('dash-row-', '');
-      if (willExpand && parentId && document.getElementById(`config-panel-row-${parentId}`)?.style.display !== 'none') {
-        toggleConfigPanel(parentId);
-      }
-      _applyChildCollapse(parent, !willExpand);
-    }
-
     function _applyCategoryCollapse(cat, collapsed) {
       document.querySelectorAll(`tr.dash-row[data-cat="${cat}"], tr.config-panel-row[data-cat="${cat}"], tr.source-off-divider[data-cat="${cat}"]`)
         .forEach(row => row.classList.toggle('cat-collapsed', collapsed));
@@ -7043,12 +6949,6 @@
         // user's persisted collapse choice once the query is cleared.
         _applyCategoryCollapse(cat, filtering ? false : collapsedCats.has(cat));
       });
-      if (filtering) {
-        document.querySelectorAll('.child-toggle').forEach(btn =>
-          _applyChildCollapse(btn.id.replace('child-toggle-', ''), false));
-      } else {
-        _restoreChildCollapse();
-      }
 
       const noResultsRow = document.getElementById('no-sources-match-row');
       if (noResultsRow) {
@@ -7060,7 +6960,6 @@
     // ── Page load ─────────────────────────────────────────────────────────
     document.addEventListener('DOMContentLoaded', () => {
       _loadCollapsedCats().forEach(cat => _applyCategoryCollapse(cat, true));
-      _restoreChildCollapse();
 
       // Load persisted audit results
       document.querySelectorAll('[id^="audit-last-result-"]').forEach(el => {

@@ -490,11 +490,16 @@ def _humanize_age(dt, now):
 # Grouped by what it takes to get a source's channels. Whether they play in
 # any player or only through FastChannels Player is a separate per-source
 # badge (_source_channel_mix), since every group has both kinds.
-_SOURCE_CATEGORY_ORDER = ('fast', 'account', 'premium', 'tve', 'local', 'custom', 'retired')
+_SOURCE_CATEGORY_ORDER = ('fast', 'network', 'account', 'premium', 'tve', 'local', 'custom', 'retired')
 _SOURCE_CATEGORY_LABELS = {
-    'fast': 'Free Sources', 'account': 'Free with an Account', 'premium': 'Subscription Sources',
-    'tve': 'TV Provider Sources', 'local': 'Local Antenna', 'custom': 'Custom Sources',
-    'retired': 'Retired Sources',
+    'fast': 'Free Sources', 'network': 'Direct from Networks', 'account': 'Free with an Account',
+    'premium': 'Subscription Sources', 'tve': 'TV Provider Sources', 'local': 'Local Antenna',
+    'custom': 'Custom Sources', 'retired': 'Retired Sources',
+}
+# A short line beside a group header, where the label alone doesn't say what's in it.
+_SOURCE_CATEGORY_HINTS = {
+    'fast': 'Apps that bundle many channels',
+    'network': "Streams from the networks' own websites",
 }
 
 
@@ -902,31 +907,8 @@ def sources():
     def _cat_for(s):
         return _source_category(s, all_scrapers)
 
-    # Sources listed under another source's row (grouped_under) sort right after
-    # it, when that source is listed in the same group; otherwise they stand alone.
-    _by_name = {s.name: s for s in sources_list}
-    source_parent = {}
-    for s in sources_list:
-        parent = _by_name.get(getattr(all_scrapers.get(s.name), 'grouped_under', None))
-        if parent is not None and parent is not s and _cat_for(parent) == _cat_for(s):
-            source_parent[s.name] = parent.name
-    source_children = {}
-    for s in sorted(sources_list, key=lambda s: s.display_name):
-        if s.name in source_parent:
-            source_children.setdefault(source_parent[s.name], []).append(s)
-
     # Within a group, sources that are on come first, then the ones that are off.
-    # A source with sources listed under it counts as on when any of them is.
-    def _block_on(top):
-        return top.is_enabled or any(c.is_enabled for c in source_children.get(top.name, []))
-
-    def _sort_key(s):
-        parent = _by_name.get(source_parent.get(s.name)) or s
-        return (_CAT_ORDER.get(_cat_for(s), 99), not _block_on(parent), parent.display_name,
-                parent is not s, s.display_name)
-
-    sources_list.sort(key=_sort_key)
-    source_block_on = {s.name: _block_on(_by_name.get(source_parent.get(s.name)) or s) for s in sources_list}
+    sources_list.sort(key=lambda s: (_CAT_ORDER.get(_cat_for(s), 99), not s.is_enabled, s.display_name))
 
     category_counts = {}
     category_on_counts = {}
@@ -972,14 +954,12 @@ def sources():
                            under_development=under_development,
                            beta_sources=beta_sources,
                            source_categories=source_categories,
-                           source_parent=source_parent,
-                           source_children=source_children,
-                           source_block_on=source_block_on,
                            source_mix=source_mix,
                            bridge_ready=bridge_ready,
                            source_status=source_status,
                            issue_count=sum(1 for st in source_status.values() if st['state'] in ('error', 'warn', 'setup')),
                            source_category_labels=_SOURCE_CATEGORY_LABELS,
+                           source_category_hints=_SOURCE_CATEGORY_HINTS,
                            source_category_order=_SOURCE_CATEGORY_ORDER,
                            source_interval_meta=source_interval_meta,
                            source_config_status=source_config_status,

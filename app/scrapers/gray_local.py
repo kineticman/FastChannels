@@ -225,8 +225,7 @@ def _category(name: str) -> str:
 class GrayLocalScraper(BaseScraper):
     source_name = 'gray_local'
     display_name = 'Gray Local News'
-    source_category = 'fast'
-    grouped_under = 'free_networks'   # a free network's own sites, listed under Free Networks
+    source_category = 'network'   # a network's own website: Sources → Direct from Networks
     scrape_interval = 360
     stream_audit_enabled = True
 

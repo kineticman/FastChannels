@@ -105,7 +105,7 @@ class PBSScraper(BaseScraper):
     display_name = "PBS"
     scrape_interval = 360
     stream_audit_enabled = True
-    source_category = 'fast'
+    source_category = 'network'   # a network's own website: Sources → Direct from Networks
     config_required = False
     epg_quality = "basic"
 

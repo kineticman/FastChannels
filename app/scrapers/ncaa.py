@@ -190,8 +190,7 @@ def parse_stream_url(raw_url: str) -> tuple[str, str, int | None]:
 class NCAAScraper(BaseScraper):
     source_name = 'ncaa'
     display_name = 'NCAA'
-    source_category = 'fast'
-    grouped_under = 'free_networks'   # free, no login; listed with the other free networks
+    source_category = 'network'   # a network's own website: Sources → Direct from Networks
     scrape_interval = 120
     # Games are events (an upcoming one has nothing to audit); audit_resolve
     # skips them and checks the 24/7 channels.

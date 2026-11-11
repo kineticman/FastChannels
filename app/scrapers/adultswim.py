@@ -33,8 +33,7 @@ class AdultSwimScraper(BaseScraper):
     channel_miss_threshold = 5
     stream_audit_enabled = True
     epg_quality = "partial"
-    source_category = 'fast'
-    grouped_under = 'free_networks'   # a free network's own website, listed under Free Networks
+    source_category = 'network'   # a network's own website: Sources → Direct from Networks
     config_schema = []
 
     BASE_URL = "https://www.adultswim.com"

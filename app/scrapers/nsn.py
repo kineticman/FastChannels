@@ -236,8 +236,7 @@ def parse_event_url(raw_url: str) -> tuple[str, int | None]:
 class NSNScraper(BaseScraper):
     source_name = 'nsn'
     display_name = 'Northeast Sports Network'
-    source_category = 'fast'
-    grouped_under = 'free_networks'   # a small free network's own website, listed under Free Networks
+    source_category = 'network'   # a network's own website: Sources → Direct from Networks
     scrape_interval = 120
     # Every channel is an event; an upcoming one has no stream to audit.
     stream_audit_enabled = False

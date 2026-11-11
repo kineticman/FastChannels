@@ -613,8 +613,12 @@ class BaseScraper(ABC):
     license_url: str = None  # DRM license server URL; enables /play/<source>/license proxy endpoint
     config_required: bool = False      # True if source won't return useful channels without user configuration
     is_premium: bool = False           # True for paid/subscription services — shown as a badge in the admin UI
-    source_category: str = 'fast'     # 'fast' (free) | 'account' (free with an account) | 'premium' (subscription) | 'tve' | 'local' (antenna tuner)
-    advanced: bool | None = None     # None derives the UI classification from source_category
+    # 'fast' (free apps that bundle many channels) | 'network' (free, from a network's own
+    # website) | 'account' (free with an account) | 'premium' (subscription) | 'tve' | 'local' (antenna tuner)
+    source_category: str = 'fast'
+    # None derives it from source_category: premium/tve/local are advanced (hidden in lite
+    # mode unless on, and an enabled one turns on the DRM UI via drm_in_use()).
+    advanced: bool | None = None
 
     @classmethod
     def is_advanced(cls) -> bool:
@@ -624,9 +628,6 @@ class BaseScraper(ABC):
 
     under_development: bool = False  # shown in the admin UI; source remains opt-in
     is_beta: bool = False            # "Beta" badge: built, but not yet confirmed by real users
-    # Sources page only: list this source under another source's row (by source_name),
-    # tucked away until expanded. Channels, IDs and play URLs stay its own.
-    grouped_under: str | None = None
     channel_refresh_hours: int = 0   # 0 = refresh channels every run; >0 = only refresh channels after N hours
     channel_miss_threshold: int = 3  # missed scrapes before is_active=False; override per scraper
     # Reset/populate per fetch_channels() with upstream IDs intentionally
