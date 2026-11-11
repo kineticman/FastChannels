@@ -2016,6 +2016,53 @@ def cnn_manifest_response(manifest_url: str):
     )
 
 
+def _is_hudl_master(url: str) -> bool:
+    try:
+        return urlsplit(url).netloc.lower() == 'vcloud.hudl.com'
+    except Exception:
+        return False
+
+
+def hudl_master_response(master_url: str):
+    """Hudl's live master served from our URL, so a browser can play it.
+
+    vcloud.hudl.com answers the master with no Access-Control-Allow-Origin,
+    so after our 302 Shaka's fetch() is blocked (NETWORK.HTTP_ERROR, status 0).
+    The variants, subtitles and segments it lists are on CloudFront, which
+    sends ACAO *, so only the master needs relaying: its URIs are made
+    absolute and the player fetches everything else straight from the CDN.
+    Used by NCAA and NSN games. On a failed fetch the caller's plain 302 is
+    returned, which every non-browser client plays.
+    """
+    try:
+        r = _requests.get(master_url, timeout=10)
+        r.raise_for_status()
+    except Exception as e:
+        logger.warning('[hudl] master fetch failed, redirecting instead: %s', e)
+        return redirect(master_url, 302)
+    upstream = str(r.url)
+
+    def _abs(uri: str) -> str:
+        return uri if re.match(r'https?://', uri) else urljoin(upstream, uri)
+
+    lines = []
+    for line in r.text.splitlines():
+        stripped = line.strip()
+        if stripped and not stripped.startswith('#'):
+            line = _abs(stripped)
+        elif 'URI="' in stripped:
+            line = re.sub(r'URI="([^"]+)"', lambda m: f'URI="{_abs(m.group(1))}"', line)
+        lines.append(line)
+    return Response(
+        '\n'.join(lines) + '\n',
+        mimetype='application/vnd.apple.mpegurl',
+        headers={
+            'Cache-Control': 'no-cache',
+            'Access-Control-Allow-Origin': '*',
+        },
+    )
+
+
 def _dazn_stream(channel_id: str):
     """(source, scraper, resolved stream) for a DAZN channel; the stream's
     cache entry is persisted so the segment relay and license proxy see it."""
@@ -3533,6 +3580,8 @@ def play(source_name: str, channel_id: str):
         )
     if source_name == 'cnn_tve':
         return cnn_manifest_response(resolved_url)
+    if _is_hudl_master(resolved_url):
+        return hudl_master_response(resolved_url)
     return redirect(resolved_url, 302)
 
 
