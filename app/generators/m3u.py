@@ -10,6 +10,7 @@ from ..channel_tags import event_filter_clause, event_sport_clause
 from ..url import proxy_logo_url
 from ..scrapers import registry as _scraper_registry
 from ..drm_bridge import DRM_BRIDGE_TRUSTED_SOURCES
+from .. import folded_sources
 
 log = logging.getLogger(__name__)
 
@@ -255,10 +256,12 @@ def filter_match_clauses(filters: dict) -> list:
     not true, for an uncategorized channel, so leaving out News must not also
     drop every channel without a category."""
     match = []
+    # Source names as feeds know them: a source folded into Free Networks
+    # keeps its old name (app/folded_sources.py).
     if sources := filters.get('source'):
-        match.append(Source.name.in_(sources))
+        match.append(folded_sources.source_clause(sources))
     if excluded_sources := filters.get('exclude_source'):
-        match.append(Source.name.notin_(excluded_sources))
+        match.append(folded_sources.exclude_clause(excluded_sources))
     if categories := filters.get('category'):
         match.append(Channel.category.in_(categories))
     if excluded_categories := filters.get('exclude_category'):
@@ -1666,7 +1669,9 @@ def generate_prismcast_m3u(filters: dict = None, base_url: str = None, *,
 
 
 def _tvg_id(ch) -> str:
-    return f'{ch.source.name}.{ch.source_channel_id}'
+    # '<source>.<id>'; a channel of a source folded into Free Networks keeps
+    # its old '<old source>.<id>' (app/folded_sources.py).
+    return folded_sources.tvg_id(ch)
 
 
 def _try_fix_mojibake(s: str) -> str:

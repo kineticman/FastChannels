@@ -45,6 +45,7 @@ from sqlalchemy import delete, insert, update, bindparam
 
 from .channel_tags import AUTO_EVENT_REASONS, EVENT_RETIRED_REASON
 from .extensions import db
+from .folded_sources import output_source_display, output_source_name
 from .models import AppSettings, Channel, ChannelNumber, Feed, FeedChannelNumber, Source
 
 logger = logging.getLogger(__name__)
@@ -251,15 +252,17 @@ def _write(scope_id: int, existing: dict, final: dict) -> int:
 
 
 def _source_label(m) -> str:
-    return (m.source.display_name or m.source.name or '').lower()
+    return output_source_display(m).lower()
 
 
 def source_rank(source_order):
     """Sort key for a feed's source order: listed sources first, in the
-    listed order, then every other source together (0 for all without one)."""
+    listed order, then every other source together (0 for all without one).
+    Sources go by their feed names: one folded into Free Networks keeps its
+    old name (app/folded_sources.py)."""
     ranks = {name: i for i, name in enumerate(source_order or [])}
     rest = len(ranks)
-    return lambda m: ranks.get(getattr(m.source, 'name', None), rest)
+    return lambda m: ranks.get(output_source_name(m), rest)
 
 
 def feed_order_key(source_order, main_number):

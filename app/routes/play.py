@@ -86,6 +86,18 @@ logger = logging.getLogger(__name__)
 
 play_bp = Blueprint('play', __name__)
 
+
+@play_bp.url_value_preprocessor
+def _folded_source_urls(endpoint, values):
+    """/play/<old source>/<id>... from before Adult Swim, Bally Sports Live and
+    Hallmark became Free Networks networks (cached M3Us, saved links) plays the
+    moved channel: free_networks/<old source>.<id> (app/folded_sources.py)."""
+    if values and 'source_name' in values and 'channel_id' in values:
+        from ..folded_sources import legacy_play_target
+        target = legacy_play_target(values['source_name'], values['channel_id'])
+        if target:
+            values['source_name'], values['channel_id'] = target
+
 _BROWSER_UA = (
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
     'AppleWebKit/537.36 (KHTML, like Gecko) '

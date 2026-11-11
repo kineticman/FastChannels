@@ -4,10 +4,12 @@ import math
 import re
 import unicodedata
 from urllib.parse import urlsplit
+from types import SimpleNamespace
 from flask import Blueprint, current_app, jsonify, render_template, request
 from sqlalchemy import select, case, func, or_
 from sqlalchemy.orm import load_only, defer
 from ..extensions import db
+from .. import folded_sources
 from .. import admin_auth
 from ..models import Source, Channel, Feed, AppSettings, Program, SourceCache
 from ..generators.m3u import (
@@ -1732,6 +1734,13 @@ def channels_chnum_map():
 def feeds():
     app_settings = AppSettings.get()
     sources    = Source.query.filter_by(is_enabled=True).order_by(Source.display_name).all()
+    # Sources folded into Free Networks stay pickable under their old names,
+    # which is what saved feeds hold; "Free Networks" picks its other networks.
+    if any(s.name == folded_sources.HOST for s in sources):
+        sources = sorted(
+            [*sources, *(SimpleNamespace(name=k, display_name=v, epg_only=False)
+                         for k, v in folded_sources.FOLDED.items())],
+            key=lambda s: (s.display_name or s.name).casefold())
     feeds      = Feed.query.order_by(Feed.name).all()
     # Per-source channel tallies for the feed modal: how many channels each
     # source can actually contribute to a feed (mirrors the feed_eligible
@@ -1743,13 +1752,13 @@ def feeds():
         for s in sources
     }
     _cnt_rows = db.session.query(
-        Source.name, Channel.is_active, Channel.is_enabled, Channel.stream_url != None,
+        Source.name, Channel.source_channel_id, Channel.is_active, Channel.is_enabled, Channel.stream_url != None,
         Channel.requires_drm_bridge,
     ).select_from(Channel).join(Source, Channel.source_id == Source.id)\
      .filter(Source.is_enabled == True).all()
     show_drm = ui_context()['show_drm']
-    for name, active, enabled, has_url, bridge in _cnt_rows:
-        entry = source_counts.get(name)
+    for name, scid, active, enabled, has_url, bridge in _cnt_rows:
+        entry = source_counts.get(folded_sources.folded_key(name, scid) or name)
         if entry is None:
             continue
         entry['total'] += 1

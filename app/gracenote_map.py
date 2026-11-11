@@ -290,6 +290,13 @@ def lookup_gracenote(provider: str, key: str | None) -> dict[str, str] | None:
         _, suffix = key_name.split("-", 1)
         if suffix:
             return mapping.get((provider_name, suffix))
+    if provider_name == "free_networks" and "." in key_name:
+        # A network that was once its own source (app/folded_sources.py):
+        # rows under the old provider name ("hallmark,hallmark_hits") still count.
+        from .folded_sources import FOLDED
+        net, local_id = key_name.split(".", 1)
+        if net in FOLDED:
+            return mapping.get((net, local_id))
     return None
 
 

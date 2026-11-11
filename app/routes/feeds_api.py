@@ -8,6 +8,7 @@ from sqlalchemy.exc import OperationalError
 from ..extensions import db
 from ..generators.m3u import get_global_chnum_overlaps, _selected_channel_stubs, feed_to_query_filters
 from ..models import AppSettings, Channel, Feed, Source
+from ..folded_sources import output_source_display
 from ..url import public_base_url
 from ..xml_cache import delete_xml_artifact, invalidate_xml_cache
 from .tasks import trigger_xml_refresh, trigger_xml_refresh_catchup
@@ -196,7 +197,7 @@ def preview_order():
     rows = [{
         'id':          ch.id,
         'name':        ch.name,
-        'source':      ch.source.display_name or ch.source.name,
+        'source':      output_source_display(ch),
         'category':    getattr(ch, 'category', None) or '',
         'number':      num_map.get(ch.id),
         'pinned':      bool((getattr(ch, 'number_pinned', False) and ch.number is not None)

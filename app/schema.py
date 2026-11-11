@@ -130,6 +130,112 @@ def _merge_source_name(conn, old_name: str, new_name: str) -> None:
         conn.execute(text("DELETE FROM sources WHERE id = :source_id"), {"source_id": old_source_id})
 
 
+def _fold_into_free_networks(conn) -> None:
+    """Move Adult Swim, Bally Sports Live and Hallmark into Free Networks, whose
+    networks they now are (app/folded_sources.py). Runs while an old source row
+    exists, so it is a no-op on fresh installs and after it has run.
+
+    Channel rows move in place: same id, so channel numbers, locks, Gracenote
+    IDs, name/logo/category overrides, enabled state, guide and feed channel
+    lists all stay. source_channel_id becomes "<old source>.<old id>" and the
+    stream URL is wrapped as freenet://<old source>/<old URL>, which is what a
+    Free Networks scrape writes for them. Outputs keep the old tvg-ids, play
+    URLs and feed source names (app/folded_sources.py).
+
+    On/off carries over: a folded source that was on turns Free Networks on;
+    if Free Networks was off, every one of its other networks starts unticked,
+    and if it was on, a folded source that was off is unticked.
+    """
+    import json
+    from urllib.parse import quote
+    from .folded_sources import FOLDED, HOST
+
+    names = list(FOLDED)
+    marks = ", ".join(f":n{i}" for i in range(len(names)))
+    params = {f"n{i}": n for i, n in enumerate(names)}
+    old = conn.execute(
+        text(f"SELECT id, name, is_enabled FROM sources WHERE name IN ({marks}) ORDER BY id"), params,
+    ).fetchall()
+    if not old:
+        return
+
+    host = conn.execute(
+        text("SELECT id, is_enabled, config FROM sources WHERE name = :n"), {"n": HOST},
+    ).fetchone()
+    if host is None:
+        values = {"name": HOST, "display_name": "Free Networks", "scrape_interval": 360,
+                  "is_enabled": 0, "config": "{}", "epg_only": 0}
+        # Fill any NOT NULL column without a SQL default (create_all leaves some).
+        for _cid, col, _type, notnull, dflt, pk in conn.execute(text("PRAGMA table_info(sources)")):
+            if not pk and notnull and dflt is None and col not in values:
+                values[col] = 'inherit' if col == 'new_channel_policy' else 0
+        cols = ", ".join(values)
+        conn.execute(text(f"INSERT INTO sources ({cols}) VALUES ({', '.join(':' + c for c in values)})"), values)
+        host = conn.execute(
+            text("SELECT id, is_enabled, config FROM sources WHERE name = :n"), {"n": HOST},
+        ).fetchone()
+    host_id, host_on, raw_cfg = host[0], bool(host[1]), host[2]
+    try:
+        cfg = json.loads(raw_cfg) if isinstance(raw_cfg, str) else dict(raw_cfg or {})
+    except (TypeError, ValueError):
+        cfg = {}
+    if not isinstance(cfg, dict):
+        cfg = {}
+    disabled = {k.strip() for k in str(cfg.get("disabled_networks") or "").split(",") if k.strip()}
+    on = {name for _id, name, enabled in old if enabled}
+    turn_on = False
+    if host_on:
+        disabled -= on
+        disabled |= {name for _id, name, enabled in old if not enabled}
+    elif on:
+        try:
+            from .scrapers.free_networks import NETWORKS
+            disabled = {n.key for n in NETWORKS} - on
+            turn_on = True
+        except Exception:
+            logger.exception("Free Networks fold: could not read the network list; leaving Free Networks off "
+                             "(turn it on and untick the networks you don't want)")
+    cfg["disabled_networks"] = ",".join(sorted(disabled))
+    conn.execute(
+        text("UPDATE sources SET config = :cfg" + (", is_enabled = 1" if turn_on else "") + " WHERE id = :id"),
+        {"cfg": json.dumps(cfg), "id": host_id},
+    )
+
+    moved = merged = 0
+    for old_id, name, _enabled in old:
+        for ch_id, scid, stream_url in conn.execute(
+            text("SELECT id, source_channel_id, stream_url FROM channels WHERE source_id = :s"), {"s": old_id},
+        ).fetchall():
+            new_scid = f"{name}.{scid}"
+            existing = conn.execute(
+                text("SELECT id FROM channels WHERE source_id = :s AND source_channel_id = :c"),
+                {"s": host_id, "c": new_scid},
+            ).fetchone()
+            if existing:
+                # Moved before, then an older image brought the source back:
+                # keep the first-moved row (the user's numbers and settings).
+                for table in ("programs", "channel_numbers", "feed_channel_numbers"):
+                    if not conn.execute(text("SELECT 1 FROM sqlite_master WHERE type='table' AND name=:t"),
+                                        {"t": table}).fetchone():
+                        continue
+                    conn.execute(text(f"DELETE FROM {table} WHERE channel_id = :c"), {"c": ch_id})
+                conn.execute(text("DELETE FROM channels WHERE id = :c"), {"c": ch_id})
+                merged += 1
+                continue
+            conn.execute(
+                text("UPDATE channels SET source_id = :s, source_channel_id = :c, stream_url = :u WHERE id = :id"),
+                {"s": host_id, "c": new_scid, "id": ch_id,
+                 "u": f"freenet://{name}/{quote(stream_url, safe='')}" if stream_url else None},
+            )
+            moved += 1
+        conn.execute(text("DELETE FROM source_cache WHERE source_id = :s"), {"s": old_id})
+        conn.execute(text("DELETE FROM sources WHERE id = :s"), {"s": old_id})
+    logger.info("Folded %s into Free Networks: %d channels moved%s; Free Networks %s, unticked networks: %d",
+                ", ".join(name for _id, name, _e in old), moved,
+                f", {merged} duplicates dropped" if merged else "",
+                "turned on" if turn_on else ("on" if host_on else "off"), len(disabled))
+
+
 def _ensure_app_settings_row(conn) -> None:
     """Create the app_settings singleton (id=1) if it's missing.
 
@@ -862,6 +968,10 @@ def ensure_runtime_schema(*, fresh_install: bool | None = None) -> None:
         # Older installs may have both names present due to alias seeding, so
         # merge rows first to avoid violating the unique constraint.
         _merge_source_name(conn, "amazon-prime-free", "amazon_prime_free")
+
+        # Adult Swim, Bally Sports Live and Hallmark became Free Networks networks.
+        if "channels" in tables and "sources" in tables:
+            _fold_into_free_networks(conn)
 
         # Backfill stream_type='dash' for existing Amazon Prime Free channels
         # so the Shaka player is selected in the preview panel without a re-scrape.
