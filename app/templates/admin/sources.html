@@ -93,6 +93,14 @@
       text-transform: uppercase; color: var(--text-muted);
       border-top: 1px solid var(--border-strong);
     }
+    /* Lite mode: the Off label is a toggle, and a group's off sources start tucked away. */
+    .source-off-divider .off-toggle {
+      all: unset; cursor: pointer; display: inline-flex; align-items: center; gap: 0.35em;
+      font: inherit; letter-spacing: inherit; text-transform: inherit; color: inherit;
+    }
+    .source-off-divider .off-toggle:hover { color: var(--text-soft); }
+    .source-off-divider .off-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 3px; }
+    .off-toggle .off-chevron { display: inline-block; width: 0.9em; }
     .dashboard-table {
       width: 100%; border-collapse: collapse;
     }
@@ -208,6 +216,7 @@
 
     /* Row visibility: collapsed category or filtered-out by search */
     tr.dash-row.cat-collapsed, tr.config-panel-row.cat-collapsed, tr.source-off-divider.cat-collapsed,
+    tr.dash-row.off-collapsed, tr.config-panel-row.off-collapsed,
     tr.source-off-divider.filter-hidden,
     tr.dash-row.filter-hidden, tr.config-panel-row.filter-hidden,
     tr.source-category-header.filter-hidden {
@@ -1150,10 +1159,14 @@
           {% endif %}
 
           {% if source.is_enabled %}{% set ns.any_on = True %}{% endif %}
-          {# Only between on and off sources: a group with none on says so in its header. #}
+          {# Only between on and off sources: a group with none on says so in its header.
+             Lite mode tucks a group's off sources behind it, so there it's always shown. #}
           {% if ns.last_on and not source.is_enabled %}
             {% set ns.last_on = False %}
-            {% if ns.any_on %}
+            {% if ui.lite %}
+            <tr class="source-off-divider" data-cat="{{ this_cat }}"><td colspan="4"><button type="button" class="off-toggle" aria-expanded="false"
+                onclick="toggleOffSources('{{ this_cat }}')"><span class="off-chevron">▸</span>Off · <span class="off-count"></span></button></td></tr>
+            {% elif ns.any_on %}
             <tr class="source-off-divider" data-cat="{{ this_cat }}"><td colspan="4">Off</td></tr>
             {% endif %}
           {% endif %}
@@ -1760,6 +1773,7 @@
         _saveCollapsedCats(collapsedCats);
         _applyCategoryCollapse(cat, false);
       }
+      if (cat && row.classList.contains('off-collapsed')) toggleOffSources(cat, true);
       if (!row || row.style.display !== 'none') {
         row?.scrollIntoView({ behavior: 'smooth', block: 'start' });
         return;
@@ -2163,6 +2177,7 @@
       }
       if (dashRow) dashRow.classList.toggle('disabled', !enabled);
       if (dashRow) _refreshCategoryOnCount(dashRow.dataset.cat);
+      if (dashRow) _refreshOffCount(dashRow.dataset.cat);
       runBtns.forEach(btn => { btn.disabled = !enabled; });
       if (auditBtn) auditBtn.disabled = !enabled;
       if (dashRow?.dataset.custom === 'true') {
@@ -6846,6 +6861,62 @@
       if (el) el.textContent = document.querySelectorAll(`tr.dash-row[data-cat="${cat}"]:not(.disabled)`).length;
     }
 
+    // Lite mode: each group's off sources sit behind its Off toggle; which groups
+    // are open is remembered per browser. Rows don't move when switched, so a
+    // source turned on below the toggle stays shown, and one turned off stays
+    // until the group is next collapsed.
+    const SOURCES_OFF_EXPANDED_KEY = 'fc_sources_off_expanded';
+    function _loadOffExpanded() {
+      try { return new Set(JSON.parse(localStorage.getItem(SOURCES_OFF_EXPANDED_KEY)) || []); }
+      catch { return new Set(); }
+    }
+    function _saveOffExpanded(set) {
+      try { localStorage.setItem(SOURCES_OFF_EXPANDED_KEY, JSON.stringify([...set])); } catch {}
+    }
+    function _offRowsAfter(divider) {
+      const rows = [];
+      for (let r = divider.nextElementSibling; r; r = r.nextElementSibling) {
+        if (r.classList.contains('dash-row')) rows.push(r);
+      }
+      return rows;
+    }
+    function _refreshOffCount(cat) {
+      const divider = document.querySelector(`tr.source-off-divider[data-cat="${cat}"]`);
+      const el = divider?.querySelector('.off-count');
+      if (!el) return;
+      const n = _offRowsAfter(divider).filter(r => r.classList.contains('disabled')).length;
+      el.textContent = `${n} source${n === 1 ? '' : 's'}`;
+    }
+    function _applyOffCollapse(cat, collapsed) {
+      const divider = document.querySelector(`tr.source-off-divider[data-cat="${cat}"]`);
+      const btn = divider?.querySelector('.off-toggle');
+      if (!btn) return;
+      _offRowsAfter(divider).forEach(row => {
+        const hide = collapsed && row.classList.contains('disabled');
+        row.classList.toggle('off-collapsed', hide);
+        document.getElementById(`config-panel-row-${row.id.replace('dash-row-', '')}`)
+          ?.classList.toggle('off-collapsed', hide);
+      });
+      btn.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+      btn.querySelector('.off-chevron').textContent = collapsed ? '▸' : '▾';
+      _refreshOffCount(cat);
+    }
+    function _restoreOffCollapse() {
+      const expanded = _loadOffExpanded();
+      document.querySelectorAll('tr.source-off-divider .off-toggle').forEach(btn => {
+        const cat = btn.closest('tr').dataset.cat;
+        _applyOffCollapse(cat, !expanded.has(cat));
+      });
+    }
+    function toggleOffSources(cat, expand) {
+      const expanded = _loadOffExpanded();
+      const btn = document.querySelector(`tr.source-off-divider[data-cat="${cat}"] .off-toggle`);
+      const willExpand = expand ?? btn?.getAttribute('aria-expanded') !== 'true';
+      if (willExpand) expanded.add(cat); else expanded.delete(cat);
+      _saveOffExpanded(expanded);
+      _applyOffCollapse(cat, !willExpand);
+    }
+
     function _applyCategoryCollapse(cat, collapsed) {
       document.querySelectorAll(`tr.dash-row[data-cat="${cat}"], tr.config-panel-row[data-cat="${cat}"], tr.source-off-divider[data-cat="${cat}"]`)
         .forEach(row => row.classList.toggle('cat-collapsed', collapsed));
@@ -6936,7 +7007,9 @@
         const rowsAfter = [], rowsBefore = [];
         for (let r = divider.nextElementSibling; r; r = r.nextElementSibling) rowsAfter.push(r);
         for (let r = divider.previousElementSibling; r && !r.classList.contains('source-category-header'); r = r.previousElementSibling) rowsBefore.push(r);
-        divider.classList.toggle('filter-hidden', !(rowsBefore.some(shown) && rowsAfter.some(shown)));
+        // The lite-mode toggle stays whenever something below it matches.
+        const isToggle = !!divider.querySelector('.off-toggle');
+        divider.classList.toggle('filter-hidden', !(rowsAfter.some(shown) && (isToggle || rowsBefore.some(shown))));
       });
 
       let anyMatch = false;
@@ -6949,6 +7022,12 @@
         // user's persisted collapse choice once the query is cleared.
         _applyCategoryCollapse(cat, filtering ? false : collapsedCats.has(cat));
       });
+      if (filtering) {
+        document.querySelectorAll('tr.source-off-divider .off-toggle').forEach(btn =>
+          _applyOffCollapse(btn.closest('tr').dataset.cat, false));
+      } else {
+        _restoreOffCollapse();
+      }
 
       const noResultsRow = document.getElementById('no-sources-match-row');
       if (noResultsRow) {
@@ -6960,6 +7039,7 @@
     // ── Page load ─────────────────────────────────────────────────────────
     document.addEventListener('DOMContentLoaded', () => {
       _loadCollapsedCats().forEach(cat => _applyCategoryCollapse(cat, true));
+      _restoreOffCollapse();
 
       // Load persisted audit results
       document.querySelectorAll('[id^="audit-last-result-"]').forEach(el => {
