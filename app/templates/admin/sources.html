@@ -3339,6 +3339,24 @@
           <div class="help">${escapeHtml(poolField.help_text || '')}</div>
         </div>` : '';
 
+      // #92: viewers outside the selected region need the stitcher to see the
+      // region's address on every playlist fetch, not only at boot.
+      const routeField = schema.find(f => f.key === 'route_playlists');
+      const routeOn = ['1', 'true', 'yes', 'on'].includes(String(values.route_playlists ?? routeField?.default ?? '').trim().toLowerCase());
+      const routeHtml = routeField ? `
+        <div class="field field-full">
+          <div class="config-toggle-field">
+            <div class="config-toggle-text">
+              <label for="cfg-${sourceId}-route_playlists">${escapeHtml(routeField.label)}</label>
+              <div class="help">${escapeHtml(routeField.help_text || '')}</div>
+            </div>
+            <label class="toggle" title="${escapeHtml(routeField.label)}">
+              <input type="checkbox" id="cfg-${sourceId}-route_playlists" data-key="route_playlists" data-secret="false"${routeOn ? ' checked' : ''}>
+              <span class="slider"></span>
+            </label>
+          </div>
+        </div>` : '';
+
       return `
         <div class="config-title">Source Settings</div>
         <div class="config-note">Choose one or more Pluto regions. The selector is limited to the live regions we verified.</div>
@@ -3352,6 +3370,7 @@
           <div class="help">${escapeHtml(regionField.help_text || '')}</div>
         </div>
         ${poolHtml ? `<div class="fields-grid">${poolHtml}</div>` : ''}
+        ${routeHtml}
         <div class="config-actions">
           <span class="config-status" id="config-status-${sourceId}"></span>
           <button class="btn btn-cancel" type="button" onclick="clearConfigFields(${sourceId})">Clear</button>
