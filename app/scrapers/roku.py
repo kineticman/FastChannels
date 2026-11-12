@@ -70,7 +70,11 @@ _UA = (
     "Chrome/145.0.0.0 Safari/537.36"
 )
 
-_EPG_URL = f"{_BASE}/api/v2/epg"
+# Channel list. The web app reads /api/v4/epg when its "epg.v2" feature flag is
+# on and /api/v2/epg otherwise (getChannelList in the app bundle, 2026-11-12);
+# both return the same collections. v4 first, v2 as the fallback.
+_EPG_URL = f"{_BASE}/api/v4/epg"
+_EPG_URL_LEGACY = f"{_BASE}/api/v2/epg"
 _EPG_SCHEDULE_TPL = f"{_BASE}/api/v4/epg/{{sid}}"
 _EPG_SCHEDULE_INCLUDE = (
     "seasonNumber,episodeNumber,description,descriptions,title,"
@@ -109,6 +113,13 @@ _OSM_BASE = "https://osm.sr.roku.com"
 # OSM stream URL pattern: /osm/v1/hls/master/{selector_uuid}/{session_token}/index.m3u8
 _OSM_STREAM_RE = re.compile(r"/osm/v1/hls/master/([0-9a-f-]{36})/([0-9a-f]+)/index\.m3u8")
 _SELECTOR_UUID_RE = re.compile(r"/v1/([0-9a-f-]{36})$")
+# Newer playback URLs carry a JWT instead of a session token in the path
+# (/osm/v1/hls/master/{uuid}/live.m3u8?jwt=..., seen 2026-11-12 mixed with the
+# token form). They play, but can't seed the synthetic-URL fallback. Once only
+# this form has been seen for _OSM_JWT_ONLY_AFTER, seeding is skipped instead of
+# spending playback calls on a token that never comes; any token URL re-enables it.
+_OSM_JWT_MASTER_RE = re.compile(r"/osm/v1/hls/master/[0-9a-f-]{36}/live\.m3u8$")
+_OSM_JWT_ONLY_AFTER = 3 * 24 * 60 * 60
 _LIVE_TV_403_RETRIES = 3
 _CACHE_WARM_RETRY_WORKERS = 3
 _EPG_WORKERS = 3
@@ -465,6 +476,18 @@ class RokuScraper(BaseScraper):
         if m:
             trace = (parse_qs(urlparse(stream_url).query).get("traceId") or [""])[0]
             self._osm_session = (m.group(2), trace)
+            if self.cache.get("osm_jwt_only_since") is not None:
+                self._update_cache("osm_jwt_only_since", None)
+            return
+        parsed = urlparse(stream_url)
+        if _OSM_JWT_MASTER_RE.search(parsed.path) and "jwt" in parse_qs(parsed.query):
+            if self.cache.get("osm_jwt_only_since") is None:
+                self._update_cache("osm_jwt_only_since", time.time())
+
+    def _osm_jwt_only(self) -> bool:
+        """True once Roku has served only JWT-form playback URLs for _OSM_JWT_ONLY_AFTER."""
+        since = self.cache.get("osm_jwt_only_since")
+        return isinstance(since, (int, float)) and (time.time() - since) >= _OSM_JWT_ONLY_AFTER
 
     def _load_osm_session(self) -> None:
         """Load a previously persisted OSM session token from the source cache."""
@@ -660,6 +683,9 @@ class RokuScraper(BaseScraper):
         """Seed a fresh OSM session using cached play metadata for another station."""
         if self._cached_osm_session():
             return True
+        if self._osm_jwt_only():
+            logger.debug("[roku] resolve fallback: playback URLs are JWT-only; no osm_session to seed")
+            return False
         if self._cooldown_active() or not self._ensure_session():
             return False
 
@@ -738,6 +764,9 @@ class RokuScraper(BaseScraper):
         because a per-channel playback 403 is not a site-wide rate-limit, the
         seed never trips the global cooldown (set_cooldown_on_403=False).
         """
+        if self._osm_jwt_only():
+            logger.debug("[roku] prewarm seed skipped: playback URLs are JWT-only")
+            return False
         if self._cooldown_active():
             logger.debug("[roku] prewarm seed skipped — cooldown active")
             return False
@@ -869,7 +898,7 @@ class RokuScraper(BaseScraper):
             for attempt in range(5):
                 r2 = self.session.get(_CSRF_URL, timeout=10)
                 if r2.status_code == 200:
-                    csrf = r2.json().get("csrf")
+                    csrf = self._json_body(r2, "csrf").get("csrf")
                     break
                 wait = 2 ** attempt
                 logger.warning("[roku] csrf attempt %d returned %d, retry in %ds",
@@ -952,32 +981,106 @@ class RokuScraper(BaseScraper):
         )
 
     @staticmethod
-    def _json_body(response, label: str) -> dict:
+    def _describe_non_json(response) -> str:
+        """One-line summary of a non-JSON reply: status, type, final URL, redirects, body start."""
+        try:
+            body = (response.text or "")[:200]
+        except Exception:
+            body = ""
+        body = " ".join(body.split())
+        hops = " -> ".join(
+            f"{h.status_code} {h.url}" for h in (getattr(response, "history", None) or [])
+        )
+        return (
+            f"status={response.status_code} content_type={response.headers.get('content-type', '?')} "
+            f"url={getattr(response, 'url', '?')}"
+            + (f" redirects=[{hops}]" if hops else "")
+            + f" cf_pop={response.headers.get('x-amz-cf-pop')} body={body!r}"
+        )
+
+    @classmethod
+    def _json_body(cls, response, label: str, expect: type = dict):
         """Parse a Roku API response, naming the cause when Roku answers with HTML.
 
         Roku's web host serves its HTML shell with a 200 for any path it doesn't
         route, so a moved or retired endpoint shows up as a JSON decode error.
+        A regional/CDN block or geo page looks the same, so the reply's details
+        are logged to tell those apart.
         """
         try:
             data = response.json()
         except ValueError:
             ctype = response.headers.get("content-type", "?")
+            logger.warning("[roku] %s returned non-JSON: %s", label, cls._describe_non_json(response))
             raise RuntimeError(
-                f"[roku] {label} returned non-JSON ({ctype}); Roku may have moved this API"
+                f"[roku] {label} returned non-JSON ({ctype}) from {getattr(response, 'url', '?')}; "
+                "Roku may have moved this API, or is serving this network a block/region page"
             ) from None
-        return data if isinstance(data, dict) else {}
+        return data if isinstance(data, expect) else expect()
+
+    def _get_epg_list(self) -> tuple[Optional[object], Optional[dict]]:
+        """Fetch the channel list: /api/v4/epg, falling back to /api/v2/epg.
+
+        Returns (response, payload); payload is None when neither gave JSON with
+        a 200, and response is the last one tried (None if no request was made).
+        A 403 stops at once, since it arms the cooldown. Raises RuntimeError
+        (from _json_body) only when every endpoint answered 200 with non-JSON.
+        """
+        response = None
+        non_json: RuntimeError | None = None
+        for url in (_EPG_URL, _EPG_URL_LEGACY):
+            label = "epg" if url == _EPG_URL else "epg (legacy v2)"
+            response = self._api_get(url, timeout=20, label=label)
+            if response is None or response.status_code == 403:
+                return response, None
+            if response.status_code != 200:
+                logger.warning("[roku] %s returned %d", label, response.status_code)
+                continue
+            try:
+                return response, self._json_body(response, label)
+            except RuntimeError as exc:
+                non_json = exc
+        if non_json is not None and response is not None and response.status_code == 200:
+            raise non_json
+        return response, None
+
+    def _rida(self) -> str:
+        """Stable per-install advertising id, as the web player keeps one per browser."""
+        rida = self.config.get("rida")
+        if not rida:
+            rida = str(uuid.uuid4())
+            self._update_config("rida", rida)
+        return rida
+
+    @staticmethod
+    def _tz_offset() -> str:
+        """Local UTC offset as the web player sends it, e.g. '-05:00'."""
+        off = datetime.now().astimezone().utcoffset() or timedelta(0)
+        mins = int(off.total_seconds() // 60)
+        sign = "-" if mins < 0 else "+"
+        return f"{sign}{abs(mins) // 60:02d}:{abs(mins) % 60:02d}"
 
     def _api_headers(self) -> dict:
-        return {
+        # The x-roku-reserved-* set matches the web player (HAR, 2026-11-12);
+        # session-id is the _usn cookie, the same value sent as sessionId in
+        # playbackContextParams.
+        headers = {
             "csrf-token":                         self._csrf_token or "",
             "origin":                             _BASE,
             "referer":                            _HOME,
             "content-type":                       "application/json",
             "x-roku-reserved-amoeba-ids":         "",
+            "x-roku-reserved-culture-code":       "en-US",
             "x-roku-reserved-experiment-configs": "e30=",
             "x-roku-reserved-experiment-state":   "W10=",
             "x-roku-reserved-lat":                "0",
+            "x-roku-reserved-rida":               self._rida(),
+            "x-roku-reserved-time-zone-offset":   self._tz_offset(),
         }
+        session_id = self.session.cookies.get("_usn")
+        if session_id:
+            headers["x-roku-reserved-session-id"] = session_id
+        return headers
 
     # ── Content proxy helper ───────────────────────────────────────────────────
 
@@ -989,7 +1092,7 @@ class RokuScraper(BaseScraper):
         try:
             r = self._api_get(proxy_url, timeout=10, label=f"content proxy for {station_id}")
             if r.status_code == 200:
-                return r.json()
+                return self._json_body(r, f"content proxy for {station_id}")
             if _raise_on_404 and r.status_code == 404:
                 raise StreamDeadError(format_http_reason("[roku] channel not found", 404, station_id))
         except StreamDeadError:
@@ -1025,10 +1128,9 @@ class RokuScraper(BaseScraper):
             # ── Phase 1: /api/v2/epg — returns all ~795 live channels ────────
             # Each collection item has features.station with full channel metadata.
             try:
-                r = self._api_get(_EPG_URL, timeout=20, label="epg")
+                r, payload = self._get_epg_list()
                 epg_status = getattr(r, 'status_code', None)
-                if r and r.status_code == 200:
-                    payload = r.json()
+                if payload is not None:
                     collections = payload.get("collections", [])
                     epg_collections = len(collections)
                     self._last_epg_ok = time.time()
@@ -1045,6 +1147,11 @@ class RokuScraper(BaseScraper):
                     if r.status_code == 403:
                         self._clear_cached_session()
                     logger.warning("[roku] EPG returned %d", r.status_code)
+            except RuntimeError as exc:
+                # Non-JSON from the EPG (HTML shell, geo/block page). The billboard
+                # alone lists a handful of channels, so continuing would replace
+                # the full lineup with them: keep the previous channels instead.
+                raise ScrapeSkipError(f"{exc}; keeping previous channel data") from None
             except Exception as exc:
                 logger.warning("[roku] EPG fetch failed: %s", exc)
 
@@ -1057,7 +1164,7 @@ class RokuScraper(BaseScraper):
                 )
                 billboard_status = r2.status_code
                 if r2.status_code == 200:
-                    items = r2.json()
+                    items = self._json_body(r2, "billboard", expect=list)
                     billboard_items = len(items)
                     for item in items:
                         sid = (item.get("meta") or {}).get("id")
@@ -1225,9 +1332,12 @@ class RokuScraper(BaseScraper):
         # caches. The station's shouldRequestSchedule flag applies to the short
         # content schedule, not the dated guide endpoint.
         if (time.time() - self._last_epg_ok) > 60:
-            epg_probe = self._api_get(_EPG_URL, timeout=20, label="epg")
-            if not epg_probe or epg_probe.status_code != 200:
-                if epg_probe and epg_probe.status_code == 403:
+            try:
+                epg_probe, probe_payload = self._get_epg_list()
+            except RuntimeError as exc:
+                raise ScrapeSkipError(f"{exc}; keeping previous EPG data") from None
+            if probe_payload is None:
+                if epg_probe is not None and epg_probe.status_code == 403:
                     self._clear_cached_session()
                 logger.warning("[roku] EPG validation returned %s before threaded fetch",
                                getattr(epg_probe, "status_code", "no response"))
@@ -1235,7 +1345,7 @@ class RokuScraper(BaseScraper):
             self._last_epg_ok = time.time()
             now = time.time()
             warmed_from_epg = 0
-            for col in epg_probe.json().get("collections", []):
+            for col in probe_payload.get("collections", []):
                 station = col.get("features", {}).get("station") or {}
                 sid = (station.get("meta") or {}).get("id")
                 if not sid:
