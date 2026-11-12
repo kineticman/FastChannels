@@ -116,21 +116,23 @@ def _parse_fragment_airings(html: str, start: datetime, end: datetime) -> list[d
 
         subtitle_el = airing.select_one(".gridSubtitle")
         subtitle = subtitle_el.get_text(" ", strip=True) if subtitle_el else None
-        title_el = airing.find("div", recursive=False)
-        if title_el is not None:
-            title = title_el.get_text(" ", strip=True)
-        else:
-            title_parts: list[str] = []
-            for child in airing.children:
-                if isinstance(child, NavigableString):
-                    text = str(child).strip()
-                    if text:
-                        title_parts.append(text)
-                elif getattr(child, "name", None) != "span":
-                    text = child.get_text(" ", strip=True)
-                    if text:
-                        title_parts.append(text)
-            title = " ".join(title_parts).strip()
+        # The airing is either `Title<span class=gridSubtitle>…</span>` or the
+        # same wrapped in a <div>; take the title from whichever holds it,
+        # skipping the subtitle span so it isn't glued onto the title.
+        title_el = airing.find("div", recursive=False) or airing
+        title_parts: list[str] = []
+        for child in title_el.children:
+            if isinstance(child, NavigableString):
+                text = str(child).strip()
+                if text:
+                    title_parts.append(text)
+            elif getattr(child, "name", None) != "span":
+                text = child.get_text(" ", strip=True)
+                if text:
+                    title_parts.append(text)
+        title = " ".join(title_parts).strip()
+        if subtitle and subtitle == title:
+            subtitle = None
 
         program_id = airing.get("data-id")
         key = (program_id or "", start_ms)
@@ -285,16 +287,24 @@ def _fetch_batch_via_fragments(session, station_ids: list[str],
 # ---------------------------------------------------------------------------
 
 def _upsert_rows(rows: list[dict]) -> int:
-    """Bulk-insert rows, ignoring duplicates (station_id, start_time)."""
+    """Bulk-upsert rows on (station_id, start_time).
+
+    A re-fetched airing overwrites the cached one, so guide corrections
+    (title, subtitle, runtime) land on the next refresh instead of waiting
+    for the old row to expire.
+    """
+    from sqlalchemy.dialects.sqlite import insert as sqlite_insert
     from .extensions import db
     from .models import TvtvProgramCache
     if not rows:
         return 0
-    # SQLite INSERT OR IGNORE honours the UNIQUE constraint.
-    db.session.execute(
-        TvtvProgramCache.__table__.insert().prefix_with("OR IGNORE"),
-        rows,
+    stmt = sqlite_insert(TvtvProgramCache.__table__)
+    stmt = stmt.on_conflict_do_update(
+        index_elements=["station_id", "start_time"],
+        set_={col: stmt.excluded[col] for col in
+              ("lineup", "program_id", "title", "subtitle", "end_time", "fetched_at")},
     )
+    db.session.execute(stmt, rows)
     return len(rows)
 
 
