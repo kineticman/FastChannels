@@ -326,6 +326,7 @@ def ensure_runtime_schema(*, fresh_install: bool | None = None) -> None:
             " channel_id INTEGER NOT NULL REFERENCES channels(id) ON DELETE CASCADE,"
             " number INTEGER NOT NULL,"
             " released_at DATETIME,"
+            " locked BOOLEAN NOT NULL DEFAULT 0,"
             " PRIMARY KEY (scope_id, channel_id),"
             " CONSTRAINT uq_channel_numbers_scope_number UNIQUE (scope_id, number)"
             ")"
@@ -333,6 +334,12 @@ def ensure_runtime_schema(*, fresh_install: bool | None = None) -> None:
         conn.execute(text(
             "CREATE INDEX IF NOT EXISTS ix_channel_numbers_channel_id ON channel_numbers (channel_id)"
         ))
+        # Feed locks (5.10): a number the user set in a feed's editor.
+        cn_cols = {row[1] for row in conn.execute(text("PRAGMA table_info(channel_numbers)"))}
+        if "locked" not in cn_cols:
+            conn.execute(text(
+                "ALTER TABLE channel_numbers ADD COLUMN locked BOOLEAN NOT NULL DEFAULT 0"
+            ))
         tables.add("channel_numbers")
         if "app_settings" in tables:
             as_cols = {row[1] for row in conn.execute(text("PRAGMA table_info(app_settings)"))}

@@ -452,6 +452,7 @@ class ChannelNumber(db.Model):
     scope_id is a feed id, or one of the master scopes (0, -1, -2, see
     app.chnum), so it has no foreign key. released_at is set
     while the channel is out of the scope and its number is held for it.
+    locked marks a number the user set in a feed's editor (a feed lock).
     Written only by app.chnum. (FeedChannelNumber is the previous store, left
     untouched so a downgrade still finds its numbers.)
     """
@@ -462,6 +463,8 @@ class ChannelNumber(db.Model):
                             primary_key=True, autoincrement=False)
     number      = db.Column(db.Integer, nullable=False)
     released_at = db.Column(db.DateTime, nullable=True)
+    locked      = db.Column(db.Boolean, nullable=False, default=False,
+                            server_default=db.text('0'))
 
     __table_args__ = (
         db.UniqueConstraint('scope_id', 'number', name='uq_channel_numbers_scope_number'),

@@ -144,7 +144,7 @@ def preview_order():
       - order (optional): explicit channel-id sequence to overlay, so the UI can
         preview an unsaved drag-drop ordering merged with current membership.
     """
-    from ..chnum import feed_scope, plan_numbers, scope_rows
+    from ..chnum import MASTER_SCOPE, feed_scope, plan_numbers, scope_locks, scope_rows
     from ..generators.m3u import (
         build_manual_order_map, apply_provider_numbers, chnum_sort_key,
     )
@@ -164,8 +164,12 @@ def preview_order():
     stubs, gn_ids = _feed_member_stubs(q_filters)
     # The feed's rows: a saved feed previews what it shows, and an edit to
     # its filters or start previews what the next settle would make of them.
-    rows = scope_rows(feed_scope(feed)) if feed is not None else {}
+    scope = feed_scope(feed) if feed is not None else None
+    rows = scope_rows(scope) if feed is not None else {}
     held = {n for n, released_at in rows.values() if released_at is not None}
+    # The feed's own locks (numbers typed in this editor); the Default feed
+    # has none, its lock is the Channels-page one.
+    locks = scope_locks(scope) if scope not in (None, MASTER_SCOPE) else {}
 
     order_ids = data.get('order') or []
     if order_ids:
@@ -173,7 +177,7 @@ def preview_order():
             order_ids = [int(i) for i in order_ids]
         except (TypeError, ValueError):
             return jsonify({'error': 'order must contain integer channel ids'}), 400
-        num_map = build_manual_order_map(stubs, order_ids, start, reserved=held)
+        num_map = build_manual_order_map(stubs, order_ids, start, reserved=held, fixed=locks)
         # Members the overlaid order doesn't cover get appended after it.
         placed_ids = set(order_ids)
     else:
@@ -182,39 +186,59 @@ def preview_order():
         if feed is not None and source_order != (feed.source_order or None):
             # An edited source order previews the renumber that saving offers.
             rows = {}
-        num_map = plan_numbers(stubs, start, rows, source_order=source_order)
+        num_map = plan_numbers(stubs, start, rows, source_order=source_order, scope_locks=locks)
         # With saved numbers, members that have none are slotted into whatever
         # numbers are free (gaps first, then the end). No rows means everything
         # is numbered fresh, so nothing is "new".
         placed_ids = {cid for cid, (_, released_at) in rows.items() if released_at is None} or None
+    member_ids = {ch.id for ch in stubs}
+    num_map = {cid: n for cid, n in num_map.items() if cid in member_ids}
     app_map = num_map
-    num_map = apply_provider_numbers(stubs, num_map)
+    num_map = apply_provider_numbers(stubs, num_map, fixed=locks.keys())
     # Rows whose number is fixed outside this feed's ordering (a provider number
     # like DirecTV "305.1", or a decimal lock) -- the dialog treats them as pinned.
     fixed_ids = {cid for cid, num in num_map.items() if app_map.get(cid) != num}
 
     feed_pinned_ids = set(filters.get('pinned_channel_ids') or [])
+
+    def whole_lock(ch):
+        return bool(getattr(ch, 'number_pinned', False) and ch.number is not None)
+
     rows = [{
         'id':          ch.id,
         'name':        ch.name,
         'source':      output_source_display(ch),
         'category':    getattr(ch, 'category', None) or '',
         'number':      num_map.get(ch.id),
-        'pinned':      bool((getattr(ch, 'number_pinned', False) and ch.number is not None)
-                            or ch.id in fixed_ids),
-        'number_source': ('lock' if getattr(ch, 'pinned_chno', None) else 'provider')
-                         if ch.id in fixed_ids else None,
-        # Channel-wide lock (whole or decimal number) the dialog can unlock.
-        'locked':      bool((getattr(ch, 'number_pinned', False) and ch.number is not None)
-                            or getattr(ch, 'pinned_chno', None)),
+        'pinned':      bool(ch.id in locks or whole_lock(ch) or ch.id in fixed_ids),
+        'number_source': ('feed_lock' if ch.id in locks
+                          else ('lock' if getattr(ch, 'pinned_chno', None) else 'provider')
+                          if ch.id in fixed_ids else None),
+        # Locked in this feed (a number typed here); the dialog can unlock it.
+        'feed_locked': ch.id in locks,
+        # Channel-wide lock (whole or decimal number) the dialog can unlock;
+        # a feed lock outranks it here.
+        'locked':      bool(ch.id not in locks
+                            and (whole_lock(ch) or getattr(ch, 'pinned_chno', None))),
         'feed_pinned': ch.id in feed_pinned_ids,
         'gracenote':   ch.id in gn_ids,
         # Newly matched since the order was saved -- sits outside the sorted
         # order until the user re-sorts. Fixed-number rows never move, so skip.
         'new':         bool(placed_ids is not None and ch.id not in placed_ids
-                            and ch.id not in fixed_ids
-                            and not (getattr(ch, 'number_pinned', False) and ch.number is not None)),
+                            and ch.id not in fixed_ids and ch.id not in locks
+                            and not whole_lock(ch)),
     } for ch in stubs]
+    # Feed locks of channels out of the feed (off, gone upstream, no longer
+    # matched): their numbers stay taken until unlocked, so list them.
+    absent = [cid for cid in locks if cid not in member_ids]
+    if absent:
+        for ch in Channel.query.filter(Channel.id.in_(absent)).all():
+            rows.append({
+                'id': ch.id, 'name': ch.name, 'source': output_source_display(ch),
+                'category': ch.category or '', 'number': locks[ch.id], 'pinned': True,
+                'number_source': 'feed_lock', 'feed_locked': True, 'locked': False,
+                'feed_pinned': False, 'gracenote': False, 'new': False, 'absent': True,
+            })
     rows.sort(key=lambda r: chnum_sort_key(r['number']) + (r['name'].lower(),))
     return jsonify({'start': start, 'channels': rows})
 
@@ -227,7 +251,7 @@ def set_channel_order(feed_id):
     step keeps them; channels that newly match the filters get the lowest
     free numbers.
     """
-    from ..chnum import clear_rows, replace_rows, scope_rows
+    from ..chnum import clear_rows, replace_rows, scope_locks, scope_rows
     from ..generators.m3u import available_feed_start, build_manual_order_map
     feed = Feed.query.get_or_404(feed_id)
     if feed.slug in SYSTEM_FEED_SLUGS:
@@ -258,11 +282,13 @@ def set_channel_order(feed_id):
     member_ids = {ch.id for ch in stubs}
     rows = scope_rows(feed.id)
     clear_rows(feed.id, [cid for cid, (_, released_at) in rows.items()
-                         if cid not in member_ids and released_at is None])
+                         if cid not in member_ids and released_at is None], keep_locked=True)
     held = {n for cid, (n, released_at) in rows.items()
             if cid not in member_ids and released_at is not None}
-    num_map = build_manual_order_map(stubs, order_ids, feed.chnum_start, reserved=held)
-    replace_rows(feed.id, num_map)
+    # Feed locks keep their rows; the order numbers everyone else around them.
+    locks = scope_locks(feed.id)
+    num_map = build_manual_order_map(stubs, order_ids, feed.chnum_start, reserved=held, fixed=locks)
+    replace_rows(feed.id, {cid: n for cid, n in num_map.items() if cid not in locks})
 
     err = _safe_flush()
     if err:
@@ -460,7 +486,8 @@ def reset_feed_channel_numbers(feed_id):
     if feed.slug == 'default':
         _reset_default_channel_numbers()
     else:
-        clear_rows(feed.id)
+        # Numbers locked in this feed stay.
+        clear_rows(feed.id, keep_locked=True)
 
     err = _safe_flush()
     if err:
@@ -478,6 +505,95 @@ def reset_feed_channel_numbers(feed_id):
         'message': 'Channel numbers regenerated from the current start value.',
         'feed': feed.to_dict(public_base_url()),
     })
+
+
+@feeds_api_bp.route('/<int:feed_id>/channel-number/<int:channel_id>', methods=['PUT'])
+def lock_feed_channel_number(feed_id, channel_id):
+    """Lock a channel to a number in this feed only. Body: {number}.
+
+    The number is the channel's in this feed until unlocked: renumbering,
+    reordering, a new start, a Channels-page lock or a provider number don't
+    move it, and it is kept while the channel is out of the feed. An unlocked
+    channel on that number in this feed moves to a free one; a number another
+    channel has locked (here or on the Channels page), a provider's number, or
+    one that would repeat another feed's number is refused."""
+    from ..chnum import lock_row, scope_locks
+    from ..generators.m3u import _reserved_provider_numbers
+    feed = Feed.query.get_or_404(feed_id)
+    if feed.slug in SYSTEM_FEED_SLUGS:
+        return jsonify({'error': 'The Default feed uses the main numbers: lock them on the Channels page.'}), 403
+    ch = Channel.query.get_or_404(channel_id)
+    data = request.get_json() or {}
+    raw = data.get('number')
+    try:
+        number = int(str(raw).strip())
+    except (TypeError, ValueError):
+        number = None
+    if number is None or number < 1 or str(raw).strip() != str(number):
+        return jsonify({'error': 'Enter a whole channel number (1 or more).'}), 400
+    if feed.chnum_start is None:
+        return jsonify({'error': 'Save the feed first.'}), 409
+
+    stubs, _ = _feed_member_stubs(feed_to_query_filters(feed.filters or {}))
+    by_id = {s.id: s for s in stubs}
+    if ch.id not in by_id:
+        return jsonify({'error': f'"{ch.name}" is not in this feed.'}), 409
+    locks = scope_locks(feed.id)
+    holder = next((cid for cid, n in locks.items() if n == number and cid != ch.id), None)
+    if holder is not None:
+        other = Channel.query.get(holder)
+        return jsonify({'error': f'{number} is already locked to "{other.name if other else holder}" '
+                                 'in this feed. Unlock it first or choose a different number.'}), 409
+    other = next((s for s in stubs if s.id != ch.id and s.id not in locks
+                  and getattr(s, 'number_pinned', False) and s.number == number), None)
+    if other is not None:
+        return jsonify({'error': f'{number} is locked to "{other.name}" on the Channels page. '
+                                 'Unlock it there first or choose a different number.'}), 409
+    if (str(number) != (ch.provider_number or '').strip()
+            and number in _reserved_provider_numbers()):
+        return jsonify({'error': f'{number} is used by a channel numbered by its provider '
+                                 '(e.g. DirecTV channel numbers). Choose a different number.'}), 409
+
+    baseline_warnings = set(get_global_chnum_overlaps())
+    lock_row(feed.id, ch.id, number)
+    err = _safe_flush()
+    if err:
+        return err
+    from ..worker import _refresh_auto_channel_numbers
+    _refresh_auto_channel_numbers()
+    err = _safe_flush()
+    if err:
+        return err
+    new_warnings = [w for w in get_global_chnum_overlaps() if w not in baseline_warnings]
+    if new_warnings:
+        db.session.rollback()
+        return jsonify({'error': 'Channel number overlaps detected', 'warnings': new_warnings}), 409
+    err = _safe_commit()
+    if err:
+        return err
+    _invalidate_and_refresh_xml()
+    return jsonify({'status': 'locked', 'feed_id': feed.id, 'channel_id': ch.id, 'number': number})
+
+
+@feeds_api_bp.route('/<int:feed_id>/channel-number/<int:channel_id>', methods=['DELETE'])
+def unlock_feed_channel_number(feed_id, channel_id):
+    """Unlock a channel's number in this feed. It is numbered like any other
+    channel again: a member keeps the number unless it is below the start."""
+    from ..chnum import unlock_row
+    feed = Feed.query.get_or_404(feed_id)
+    if feed.slug in SYSTEM_FEED_SLUGS:
+        return jsonify({'error': 'The Default feed has no feed locks.'}), 403
+    unlock_row(feed.id, channel_id)
+    err = _safe_flush()
+    if err:
+        return err
+    from ..worker import _refresh_auto_channel_numbers
+    _refresh_auto_channel_numbers()
+    err = _safe_commit()
+    if err:
+        return err
+    _invalidate_and_refresh_xml()
+    return jsonify({'status': 'unlocked', 'feed_id': feed.id, 'channel_id': channel_id})
 
 
 @feeds_api_bp.route('/<int:feed_id>', methods=['DELETE'])

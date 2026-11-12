@@ -623,24 +623,39 @@ def _reserved_provider_numbers() -> set[int]:
     return {int(pn) for (pn,) in rows if pn and pn.strip().isdigit()}
 
 
-def apply_provider_numbers(channels, chnum_map: dict, sources: set[str] | None = None) -> dict:
+def apply_provider_numbers(channels, chnum_map: dict, sources: set[str] | None = None,
+                           fixed=frozenset()) -> dict:
     """Overlay text channel numbers onto a resolved chnum map (output only):
 
-    * a decimal lock (Channel.pinned_chno, e.g. "700.1") always wins;
+    * a feed lock (`fixed`: channel ids locked in the feed being rendered)
+      keeps its number, and no overlay may take that number;
+    * then a decimal lock (Channel.pinned_chno, e.g. "700.1");
     * then, for opted-in sources, the stored provider_number ("305.1"),
       unless the channel has a whole-number lock;
     * everything else keeps its app-assigned number.
     """
-    pinned = {ch.id: (getattr(ch, 'pinned_chno', None) or '').strip() for ch in channels}
+    fixed = {cid for cid in fixed if chnum_map.get(cid) is not None}
+    pinned = {ch.id: (getattr(ch, 'pinned_chno', None) or '').strip() for ch in channels
+              if ch.id not in fixed}
     pinned = {cid: pc for cid, pc in pinned.items() if pc}
     if sources is None:
         sources = _provider_number_sources()
     if not sources and not pinned:
         return chnum_map
-    overrides: dict[int, str] = dict(pinned)
-    claimed: dict[str, int] = {pc: cid for cid, pc in pinned.items()}
+    claimed: dict[str, int] = {str(chnum_map[cid]): cid for cid in fixed}
+    overrides: dict[int, str] = {}
+    for cid, pc in pinned.items():
+        # A decimal lock repeating a feed lock's number loses it in that feed
+        # (two decimal locks on one number stay as they are: the Channels page
+        # flags those).
+        if pc in claimed:
+            log.warning('channel number %s claimed by channels %d and %d; keeping %d',
+                        pc, claimed[pc], cid, claimed[pc])
+            continue
+        overrides[cid] = pc
+    claimed.update({pc: cid for cid, pc in overrides.items()})
     for ch in channels:
-        if ch.id in overrides:
+        if ch.id in overrides or ch.id in fixed:
             continue
         src = getattr(ch, 'source', None)
         if src is None or getattr(src, 'name', None) not in sources:
@@ -677,7 +692,8 @@ def chnum_sort_key(value):
 
 
 def build_manual_order_map(channels, order_ids: list[int], start: int,
-                           reserved: set[int] = frozenset()) -> dict[int, int]:
+                           reserved: set[int] = frozenset(),
+                           fixed: dict[int, int] | None = None) -> dict[int, int]:
     """
     Number `channels` sequentially from `start` following an explicit
     user-chosen `order_ids` sequence (drag-drop ordering from the feed modal).
@@ -688,7 +704,8 @@ def build_manual_order_map(channels, order_ids: list[int], start: int,
     was captured) are appended after the ordered block in master-number order.
     Ids in `order_ids` that are no longer feed members are ignored.
     `reserved` numbers are skipped too (numbers held for channels out of the
-    feed, see app.chnum).
+    feed, see app.chnum). `fixed` are the feed's locks, {channel_id: number}:
+    those channels keep them, ahead of any master pin.
     """
     by_id = {ch.id: ch for ch in channels}
     ordered = [by_id[cid] for cid in order_ids if cid in by_id]
@@ -700,8 +717,14 @@ def build_manual_order_map(channels, order_ids: list[int], start: int,
 
     result: dict[int, int] = {}
     used: set[int] = set()
+    for cid, n in (fixed or {}).items():
+        if cid in by_id:
+            result[cid] = n
+        used.add(n)
     for ch in ordered:
-        if getattr(ch, 'number_pinned', False) and ch.number is not None:
+        if ch.id in result:
+            continue
+        if getattr(ch, 'number_pinned', False) and ch.number is not None and ch.number not in used:
             result[ch.id] = ch.number
             used.add(ch.number)
     used |= _reserved_provider_numbers() | set(reserved)
@@ -735,7 +758,13 @@ def _resolve_chnum_map(channels, *, feed_chnum_start: int = None,
         channels, feed_chnum_start=feed_chnum_start,
         namespace_start=namespace_start, feed_id=feed_id, bridge=bridge,
     )
-    return apply_provider_numbers(channels, chnum_map), warnings
+    fixed = frozenset()
+    if feed_id is not None:
+        from ..chnum import MASTER_SCOPE, feed_scope, scope_locks
+        scope = feed_scope(feed_id)
+        if scope != MASTER_SCOPE:
+            fixed = scope_locks(scope).keys()
+    return apply_provider_numbers(channels, chnum_map, fixed=fixed), warnings
 
 
 def feed_number_kwargs(feed: Feed) -> dict:

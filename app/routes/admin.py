@@ -168,21 +168,27 @@ def _chnum_titles(page_items, main_map: dict) -> dict[int, str]:
                  .order_by(Feed.name).with_entities(Feed.id, Feed.name).all())
     by_id = {ch.id: ch for ch in page_items}
     per_feed: dict[int, dict[int, int]] = {}
+    feed_locked: dict[int, set[int]] = {}
     if feeds:
-        rows = (db.session.query(ChannelNumber.scope_id, ChannelNumber.channel_id, ChannelNumber.number)
+        rows = (db.session.query(ChannelNumber.scope_id, ChannelNumber.channel_id,
+                                 ChannelNumber.number, ChannelNumber.locked)
                 .filter(ChannelNumber.channel_id.in_(list(by_id)),
                         ChannelNumber.scope_id.in_(list(feeds)),
                         ChannelNumber.released_at.is_(None))
                 .all())
-        for scope_id, cid, n in rows:
+        for scope_id, cid, n, locked in rows:
             per_feed.setdefault(scope_id, {})[cid] = n
-    shown = {fid: apply_provider_numbers([by_id[c] for c in nums], nums)
+            if locked:
+                feed_locked.setdefault(scope_id, set()).add(cid)
+    shown = {fid: apply_provider_numbers([by_id[c] for c in nums], nums,
+                                         fixed=feed_locked.get(fid, ()))
              for fid, nums in per_feed.items()}
     titles = {}
     for cid in by_id:
         lines = [f'Default feed and /m3u: {main_map.get(cid) or "not numbered"}']
-        lines += [f'{name}: {shown[fid][cid]}' for fid, name in feeds.items()
-                  if cid in shown.get(fid, {})]
+        lines += [f'{name}: {shown[fid][cid]}'
+                  + (' (locked in this feed)' if cid in feed_locked.get(fid, ()) else '')
+                  for fid, name in feeds.items() if cid in shown.get(fid, {})]
         if len(lines) == 1:
             lines.append('In no other feed.')
         titles[cid] = '\n'.join(lines)
