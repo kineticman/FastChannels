@@ -75,6 +75,8 @@ If you prefer Docker Compose with the published image:
 docker compose -f docker-compose.ghcr.yml up -d
 ```
 
+On Windows 11 without Docker Desktop, see [FastChannels on Windows 11](docs/FastChannels-Windows-11.md) (WSL Containers).
+
 ## Getting Started
 
 After deploying, follow these steps to get a clean, working lineup:
