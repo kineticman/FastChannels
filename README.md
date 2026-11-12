@@ -10,7 +10,8 @@ Sources are grouped the same way as on the **Sources** page. A handful of free s
 
 | Group | Sources |
 |-------|---------|
-| **Free** | The Roku Channel, Samsung TV Plus, Plex, Xumo Play, LG Channels, Vizio WatchFree+, TCL TV+, Whale TV+, STIRR, FreeLiveSports, Pluto TV, Sling Freestream, Local Now, Vidaa Free TV, PBS, C-SPAN, ViX, Zeam, and **Free Networks** (nearly 40 networks that stream on their own sites: DW, NHK, Al Jazeera, Bloomberg, CBS News, NewsNation, The CW's FAST lineup, OG Network, Cineverse, HSN, QVC, Adult Swim, Bally Sports Live, Hallmark and more) |
+| **Free** | The Roku Channel, Samsung TV Plus, Plex, Xumo Play, LG Channels, Vizio WatchFree+, TCL TV+, Whale TV+, STIRR, FreeLiveSports, Pluto TV, Sling Freestream, Local Now, Vidaa Free TV, ViX, Zeam |
+| **Direct from Networks** (free) | **Free Networks** (over 50 networks that stream on their own sites: DW, NHK, Al Jazeera, Bloomberg, CBS News, NewsNation, The CW's FAST lineup, OG Network, Cineverse, Heartland+, Shout! TV, TrillerTV, HSN, QVC, Adult Swim, Bally Sports Live, Hallmark and more), Gray Local News, NCAA, Northeast Sports Network, PBS, C-SPAN |
 | **Free with an account** | Tubi, Amazon Prime Free Channels, FreeCast |
 | **Subscription** | DirecTV Stream, Spectrum, Fubo, Philo, Frndly TV, ESPN, NFL, CBS, FOX One, Paramount+, Amazon Sports, B1G+ |
 | **TV provider** (TV Everywhere) | Sign in with your cable or streaming provider: A+E Networks, AMC Networks, SundanceTV, CNN, C-SPAN, DAZN (YES, MSG), Discovery, Disney (ABC, FX, Nat Geo, Disney Channel), FOX, NBCUniversal, Versant (USA, E!, Syfy, CNBC, MS NOW, Golf), Warner Bros. Discovery (TBS, TNT, truTV, TCM), Univision, Tennis Channel, NESN, SportsNet Pittsburgh, Monumental Sports, Altitude, MyOutdoorTV, REELZ |
@@ -23,7 +24,7 @@ Sources are grouped the same way as on the **Sources** page. A handful of free s
 - **Fresh streams**: playlist entries point at FastChannels, which resolves a live stream URL each time a channel is tuned, so nothing goes stale.
 - **DRM playback**: Widevine-protected channels play through a real DRM bridge, either browser-based [PrismCast](https://github.com/hjdhjd/prismcast) or FastChannels' own Fire TV / Android TV player app, instead of being dropped.
 - **Guide data**: each source's own guide, plus Gracenote station IDs (native or from a community map) for Channels DVR's guide.
-- **Event channels**: ESPN+, NFL, CBS, Paramount+, Amazon Prime Video and B1G+ games show up as temporary channels, titled with full team names, and leave when they're over.
+- **Event channels**: ESPN+, NFL, CBS, Paramount+, Amazon Prime Video, B1G+, NCAA championship and Northeast Sports Network games show up as temporary channels, titled with full team names, and leave when they're over.
 - **Lineup cleanup**: Stream Audit flags dead and DRM channels, and the duplicate resolver picks one copy of a channel carried by several sources.
 
 ## Deploy with Portainer
@@ -167,6 +168,7 @@ Feed outputs are cached and served from disk — fast for players polling on a s
 - **Languages** — filter by language code (e.g. `en`, `es`)
 - **Gracenote** — only channels that have a matched Gracenote ID; great for a clean-EPG feed
 - **Events** — only event channels, or none of them (see [Event channels](#event-channels)). **Sports** narrows the events to the sports you pick, while the other filters still choose the 24/7 channels; pinned channels always join
+- **Channel type** — all channels, only bridge (DRM) channels, or only standard ones. A bridge-only feed picks up new DRM channels from any source on its own
 - **Manual selection** — pick specific channels by hand for full control
 
 As you set filters, the feed modal shows a live count of matching channels.
@@ -180,7 +182,7 @@ As you set filters, the feed modal shows a live count of matching channels.
 - *Anime* — filter categories: Anime
 
 **Other feed options:**
-- **Starting number** — where this feed's channel numbers start. Each feed numbers its channels on its own, and a channel keeps its number in that feed. The built-in Default feed and the main `/m3u` playlists share one set of numbers (the ones on the Channels page), starting at 5000 on fresh installs. A locked number (🔒, set on the Channels page) is used in every feed and playlist. A feed can also list sources to number first (**Source order**): those sources get its lowest numbers, then the rest by source name, channels alphabetical within each. Numbers stay put, so a new order applies to every channel when you renumber the feed.
+- **Starting number** — where this feed's channel numbers start. Each feed numbers its channels on its own, and a channel keeps its number in that feed. The built-in Default feed and the main `/m3u` playlists share one set of numbers (the ones on the Channels page), starting at 5000 on fresh installs. A locked number (🔒, set on the Channels page) is used in every feed and playlist. A feed can also list sources to number first (**Source order**): those sources get its lowest numbers, then the rest by source name, channels alphabetical within each. **Sort by category** numbers channels by category instead (A–Z, uncategorized last), then by name. Numbers stay put, so a new order applies to every channel when you renumber the feed.
 - **Add to Channels DVR** — registers the feed as a custom M3U source in Channels DVR with one click. Configure the DVR server URL in **Settings** first. Re-adding keeps settings you made in the DVR, such as a stream limit.
 - **Guide Mode** (Beta) — *Separate* (the default) gives a standard playlist and a Gracenote playlist, added to Channels DVR as two sources. *Mixed* puts both in one playlist, so the feed is one source. Mixed needs Channels DVR 2026.08.25 or newer; switching doesn't change channel numbers.
 - **Add Native to Channels DVR** — adds the feed's native output as its own source: every channel in the feed, all using FastChannels' scraped guide instead of Gracenote.
@@ -297,7 +299,7 @@ FastChannels never connects to a playlist's streams itself, so it adds nothing t
 
 ### Event channels
 
-Some sources carry one-off events rather than 24/7 channels. FastChannels adds each event as a temporary channel with its own guide entry and removes it automatically when it's over. Seven sources produce them today:
+Some sources carry one-off events rather than 24/7 channels. FastChannels adds each event as a temporary channel with its own guide entry and removes it automatically when it's over. Nine sources produce them today:
 
 - **ESPN** — opt-in ESPN+, ACC Extra and SEC Plus events in the next 48 hours, filtered by sport and league on the ESPN source card. An event channel retires two hours after its scheduled end (leaving room for overtime) and is deleted a day later. Events dropped from ESPN's schedule, or excluded by your filter, leave the output right away.
 - **NFL** — opt-in live games in the next 48 hours that your sign-in can play (in-market games through your TV provider or NFL+). Games carried on NFL Network stay on that channel. Same retire/delete timing as ESPN.
@@ -305,9 +307,11 @@ Some sources carry one-off events rather than 24/7 channels. FastChannels adds e
 - **Paramount+** — live sports matches (UEFA, Serie A, EFL, UFC and more), each as its own channel.
 - **Amazon Sports** — live and upcoming Prime Video sports events your account can play, with Amazon's own start and end times.
 - **B1G+** — Big Ten Plus live events in the next two days, filtered by sport and school on the B1G+ source card.
+- **NCAA** — NCAA championship games (mostly DII and DIII) live now or starting within 48 hours, filtered by sport and division on the NCAA source card.
+- **Northeast Sports Network** — free New England college and high-school games (NESCAC, NEWMAC, CNE, NEPSAC and more) live now or starting within 48 hours, filtered by sport and school on the source card.
 - **Custom playlists** — any group set to **Event** (see [Custom Playlists](#custom-playlists)).
 
-Each event channel carries a sport and league, which feeds and the Channels page can filter on. Game titles use full team names ("NBA: Boston Celtics at New York Knicks") so DVR passes can match a team; ESPN supplies its own, and CBS, Paramount+ and Amazon games are matched against ESPN's public scoreboard. Event channels are marked with a calendar icon on the Channels and Guide pages. Channels, Guide and feed filters can show events only or leave them out. A channel you disable yourself stays disabled; FastChannels only brings back events it hid automatically.
+Each event channel carries a sport and league, which feeds and the Channels page can filter on. Game titles use full team names ("NBA: Boston Celtics at New York Knicks") so DVR passes can match a team; ESPN supplies its own, and CBS, Paramount+ and Amazon games are matched against ESPN's public scoreboard. Event channels are marked with a calendar icon on the Channels and Guide pages. Channels, Guide and feed filters can show events only or leave them out. A channel you disable yourself stays disabled; FastChannels only brings back events it hid automatically. New event channels skip the new-channel review queue, even on sources set to review, so a game isn't over before it's approved; turn off **Event channels skip review** in Settings → Feeds & Guide to review them like other channels.
 
 ### HDHomeRun
 
@@ -348,7 +352,7 @@ Disabling a source deletes all its channels from the DB. Re-enabling and running
 | Whale TV+ | None | Public API |
 | STIRR | None | Public API |
 | FreeLiveSports | None | Public API |
-| Pluto TV | None (login optional) | **Default off.** Works anonymously out of the box; signing in with a Pluto account is optional; per-country feeds; configurable session pool (default 10); JWT stitcher auth |
+| Pluto TV | None (login optional) | **Default off.** Works anonymously out of the box; signing in with a Pluto account is optional; per-country feeds; configurable session pool (default 10); JWT stitcher auth. **Route playlists through FastChannels** (off by default) fetches the playlists with the channel's region so viewers outside that region get real ads instead of Pluto's error slate |
 | Sling Freestream | Optional (paid) | **Default off.** Two modes: Freestream-only (free, anonymous) or a paid Sling account for premium channels; streams are DRM-only for generic IPTV clients |
 | Local Now | None | **Default off.** Public API |
 | Vidaa Free TV | None | **Default off.** Free, unauthenticated; most channels are clear HLS but some are Widevine DRM, played through the DRM bridge |
@@ -356,7 +360,10 @@ Disabling a source deletes all its channels from the DB. Re-enabling and running
 | C-SPAN | None | **Default off.** Free congressional/public-affairs event streams (floor sessions, hearings, Washington Journal). The 24/7 C-SPAN 1/2/3 networks are a separate [TV provider](#tv-provider-tv-everywhere) source |
 | ViX | None | **Default off.** About 80 free Spanish-language channels (N+ Univision news, telenovelas, movies, comedy, sports). Nearly all are Widevine DRM, so they play through the DRM bridge |
 | Zeam | None | **Default off.** Syncbak's free local-news and FAST service (formerly VUit): about 400 channels across every market. Clear HLS |
-| Free Networks | None | **Default off.** Over 40 networks that stream free on their own websites: news (DW, Al Jazeera, TRT, NHK, Arirang, Bloomberg, CBS News, Scripps, Newsmax, NewsNation, Sky News, KSL and more), faith (EWTN, TBN, CBN), shopping (HSN, QVC), Sinclair's diginets, The CW's FAST lineup, A+E's FAST channels, OG Network (and its partner apps TrueTVplus and Flou TV), Cineverse (with RetroCrush and JoySauce), BeOND TV, Mansa TV, FreeTV (12 Spanish channels), i24NEWS, NWSL+ 24/7, Tastemade, Outside TV, CBS's free Judge Judy, Hot Bench and Car Chase channels, Adult Swim's 24/7 marathon streams, Bally Sports Live and Hallmark's Non-Stop channels. Adult Swim, Bally Sports Live and Hallmark used to be separate sources; upgrading moves their channels into Free Networks with the same channel ids, numbers, settings, play URLs and feed selections. Channels already carried by another network are mostly skipped (BeOND lists all of its own), and each network can be switched off on the source card. Each network is fetched separately, so one outage doesn't affect the others |
+| Free Networks | None | **Default off.** Over 50 networks that stream free on their own websites: news (DW, Al Jazeera, TRT, NHK, Arirang, Bloomberg, CBS News, Scripps, Newsmax, NewsNation, Sky News, KSL and more), faith (EWTN, TBN, CBN), shopping (HSN, QVC), Sinclair's diginets, The CW's FAST lineup, A+E's FAST channels, OG Network (and its partner apps TrueTVplus and Flou TV), Cineverse (with RetroCrush and JoySauce), BeOND TV, Mansa TV, FreeTV (12 Spanish channels), i24NEWS, NWSL+ 24/7, Tastemade, Outside TV, Heartland+ (about 40 channels, including Stingray's), Shout! TV (MST3K, Johnny Carson, Carol Burnett and more), TrillerTV, Bowling TV, Watch AEW, CBS's free Judge Judy, Hot Bench and Car Chase channels, Adult Swim's 24/7 marathon streams, Bally Sports Live and Hallmark's Non-Stop channels. Adult Swim, Bally Sports Live and Hallmark used to be separate sources; upgrading moves their channels into Free Networks with the same channel ids, numbers, settings, play URLs and feed selections. Channels already carried by another network are mostly skipped (BeOND lists all of its own), and each network can be switched off on the source card. Each network is fetched separately, so one outage doesn't affect the others |
+| Gray Local News | None | **Default off.** Gray Media's local TV station streams: pick stations from 112 markets on the source card, and each adds its newscast, 24/7 weather and breaking-news channels. InvestigateTV and Local News Live are always included. Clear HLS |
+| NCAA | None | **Default off.** NCAA.com's 16 always-on 24/7 sport channels, plus championship games as [event channels](#event-channels), filtered by sport and division. Clear HLS |
+| Northeast Sports Network | None | **Default off.** Free live New England college and high-school games from nsnsports.net as [event channels](#event-channels), filtered by sport and school. Pay-per-view games are left out. Clear HLS |
 
 ### Free with an account
 
