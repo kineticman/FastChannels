@@ -140,6 +140,13 @@ class _RokuEPGRateLimited(ScrapeSkipError):
 
 # ── Category helpers ───────────────────────────────────────────────────────────
 
+def _is_playlist_row(item: dict) -> bool:
+    """Roku's personalized VOD playlists listed as guide rows (Binge Fest, Watchlist,
+    ... numbered 6000+): mediaType 'playlist', no viewOptions, nothing live to play.
+    The content lookup 404s for every one, so the audit would only mark them dead."""
+    return ((item.get("meta") or {}).get("mediaType") or "").lower() == "playlist"
+
+
 def _category_from_station(station: dict) -> str:
     """Derive a human-readable category from an EPG station object."""
     if station.get("kidsDirected"):
@@ -1124,6 +1131,7 @@ class RokuScraper(BaseScraper):
             epg_station_rows = 0
             billboard_status = None
             billboard_items = 0
+            playlist_rows = 0
 
             # ── Phase 1: /api/v2/epg — returns all ~795 live channels ────────
             # Each collection item has features.station with full channel metadata.
@@ -1141,6 +1149,10 @@ class RokuScraper(BaseScraper):
                         epg_station_rows += 1
                         sid = station.get("meta", {}).get("id")
                         if not sid or sid in seen:
+                            continue
+                        if _is_playlist_row(station):
+                            seen.add(sid)  # keep the billboard from adding it either
+                            playlist_rows += 1
                             continue
                         self._add_channel_from_station(channels, seen, sid, station)
                 elif r is not None:
@@ -1168,12 +1180,14 @@ class RokuScraper(BaseScraper):
                     billboard_items = len(items)
                     for item in items:
                         sid = (item.get("meta") or {}).get("id")
-                        if not sid or sid in seen:
+                        if not sid or sid in seen or _is_playlist_row(item):
                             continue
                         self._add_channel_from_content(channels, seen, sid, item)
             except Exception as exc:
                 logger.warning("[roku] billboard fetch failed: %s", exc)
 
+            if playlist_rows:
+                logger.info("[roku] skipped %d personalized playlist rows (no live stream)", playlist_rows)
             return channels, {
                 'epg_status': epg_status,
                 'epg_collections': epg_collections,
