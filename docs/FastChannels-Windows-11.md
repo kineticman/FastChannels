@@ -64,6 +64,32 @@ Your database, settings, and Android pairing keys are kept in the named volumes.
 wslc logs --tail 80 fastchannels
 ```
 
+## Uninstall
+
+In a normal PowerShell, stop and remove the container:
+
+```powershell
+wslc stop fastchannels
+wslc remove fastchannels
+```
+
+Your data is kept, so running the install command again picks up where you left off. To delete everything, also run:
+
+```powershell
+# Delete the database, settings, and Android pairing keys (cannot be undone)
+wslc volume remove fastchannels_data fastchannels_adb
+
+# Delete the image (about 3 GB)
+wslc image remove ghcr.io/kineticman/fastchannels:latest
+```
+
+Then, in an Administrator PowerShell, remove the firewall rule (and the sign-in task, if you created one):
+
+```powershell
+Remove-NetFirewallRule -DisplayName FastChannels
+schtasks /delete /tn "FastChannels" /f
+```
+
 ## Advanced
 
 **`wslc` is not recognized.** Your WSL is too old. Run `wsl --update`, then close and reopen PowerShell.
