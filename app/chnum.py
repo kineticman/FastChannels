@@ -38,8 +38,9 @@ a scrape; playlists, admin pages and APIs only read. Its rules, in order:
      provider number has.
 
 A Gracenote ID change moves no one: every scope holds both kinds of channel.
-Provider numbers and decimal locks stay output overlays
-(m3u.apply_provider_numbers).
+Provider numbers and decimal locks stay output overlays, applied with the
+feed locks by m3u.shown_numbers, the one helper every playlist and page
+uses to turn a scope's rows into the numbers it prints.
 
 Channel.number is the user's lock while number_pinned is set. Otherwise
 settle() writes the main number there as a copy for pages and sorting;

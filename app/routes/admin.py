@@ -12,10 +12,11 @@ from ..extensions import db
 from .. import folded_sources
 from .. import admin_auth
 from ..models import Source, Channel, Feed, AppSettings, Program, SourceCache
+from ..chnum import MASTER_SCOPE
 from ..generators.m3u import (
     _apply_event_filter,
     _build_channel_query,
-    apply_provider_numbers,
+    shown_numbers,
     _drm_bridge_query_filters,
     _has_gracenote_claim,
     feed_to_query_filters,
@@ -161,7 +162,7 @@ def _chnum_titles(page_items, main_map: dict) -> dict[int, str]:
     """Hover text for the Channels page number: the channel's number in the
     Default feed and /m3u, then in each feed that numbers it on its own."""
     from ..models import ChannelNumber
-    from ..generators.m3u import apply_provider_numbers
+    from ..generators.m3u import shown_numbers
     if not page_items:
         return {}
     feeds = dict(Feed.query.filter(Feed.is_enabled == True, Feed.slug != 'default')
@@ -180,8 +181,7 @@ def _chnum_titles(page_items, main_map: dict) -> dict[int, str]:
             per_feed.setdefault(scope_id, {})[cid] = n
             if locked:
                 feed_locked.setdefault(scope_id, set()).add(cid)
-    shown = {fid: apply_provider_numbers([by_id[c] for c in nums], nums,
-                                         fixed=feed_locked.get(fid, ()))
+    shown = {fid: shown_numbers([by_id[c] for c in nums], nums, fid)
              for fid, nums in per_feed.items()}
     titles = {}
     for cid in by_id:
@@ -239,7 +239,7 @@ def _sort_ids_by_shown_number(q, full_map: dict, *, descending: bool) -> list[in
                         source=SimpleNamespace(name=r.source_name))
         for r in rows
     ]
-    shown = apply_provider_numbers(stubs, full_map)
+    shown = shown_numbers(stubs, full_map, MASTER_SCOPE)
 
     def name_key(name):
         n = (name or '').lower()
@@ -277,7 +277,8 @@ def _page_default_feed_chnum_map(page_items, full_map: dict | None = None) -> di
     persist or compare as integers."""
     if not page_items:
         return {}
-    full_map = apply_provider_numbers(page_items, full_map if full_map is not None else _default_feed_chnum_map_full())
+    full_map = shown_numbers(page_items, full_map if full_map is not None else _default_feed_chnum_map_full(),
+                             MASTER_SCOPE)
     page_ids = {ch.id for ch in page_items}
     return {channel_id: chnum for channel_id, chnum in full_map.items() if channel_id in page_ids}
 

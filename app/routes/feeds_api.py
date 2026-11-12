@@ -146,7 +146,7 @@ def preview_order():
     """
     from ..chnum import MASTER_SCOPE, feed_scope, plan_numbers, scope_locks, scope_rows
     from ..generators.m3u import (
-        build_manual_order_map, apply_provider_numbers, chnum_sort_key,
+        build_manual_order_map, chnum_sort_key, shown_numbers,
     )
     data = request.get_json() or {}
     filters = _clean_filters(data.get('filters') or {})
@@ -194,7 +194,7 @@ def preview_order():
     member_ids = {ch.id for ch in stubs}
     num_map = {cid: n for cid, n in num_map.items() if cid in member_ids}
     app_map = num_map
-    num_map = apply_provider_numbers(stubs, num_map, fixed=locks.keys())
+    num_map = shown_numbers(stubs, num_map, scope)
     # Rows whose number is fixed outside this feed's ordering (a provider number
     # like DirecTV "305.1", or a decimal lock) -- the dialog treats them as pinned.
     fixed_ids = {cid for cid, num in num_map.items() if app_map.get(cid) != num}

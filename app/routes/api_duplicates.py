@@ -71,6 +71,7 @@ def channel_duplicates(channel_id):
     # The number each copy currently shows in the default lineup (on copies only).
     from .admin import _default_feed_chnum_map_full
     from ..channel_transfer import shown_number
+    from ..chnum import MASTER_SCOPE
     lineup = _default_feed_chnum_map_full() if any(
         c.is_enabled for c in [ch, *strict, *soft, *gn_matches]) else {}
 
@@ -78,7 +79,7 @@ def channel_duplicates(channel_id):
         si = c.stream_info or {}
         app_number = lineup.get(c.id) if c.is_enabled else None
         return {
-            'lineup_number':  shown_number(c, app_number) if app_number is not None else None,
+            'lineup_number':  shown_number(c, app_number, MASTER_SCOPE) if app_number is not None else None,
             'id':             c.id,
             'name':           c.name,
             'source':         c.source.display_name,

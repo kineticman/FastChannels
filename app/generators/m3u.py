@@ -623,9 +623,27 @@ def _reserved_provider_numbers() -> set[int]:
     return {int(pn) for (pn,) in rows if pn and pn.strip().isdigit()}
 
 
+def shown_numbers(channels, chnum_map: dict, scope: int | None = None) -> dict:
+    """The tvg-chno a playlist in `scope` prints for these channels, from
+    their app numbers in that scope: the scope's feed locks, then the output
+    overlays (apply_provider_numbers). `scope` is a feed's scope
+    (chnum.feed_scope), MASTER_SCOPE, or None for an unsaved feed.
+
+    The one place feed locks meet the overlays: playlists, the feed editor
+    preview, the Channels page and the transfer report all come through
+    here, so what a page shows can't drift from what a playlist prints."""
+    fixed = frozenset()
+    if scope is not None:
+        from ..chnum import MASTER_SCOPE, scope_locks
+        if scope != MASTER_SCOPE:
+            fixed = frozenset(scope_locks(scope))
+    return apply_provider_numbers(channels, chnum_map, fixed=fixed)
+
+
 def apply_provider_numbers(channels, chnum_map: dict, sources: set[str] | None = None,
                            fixed=frozenset()) -> dict:
-    """Overlay text channel numbers onto a resolved chnum map (output only):
+    """Overlay text channel numbers onto a resolved chnum map (output only).
+    Call shown_numbers() instead when rendering a scope; it supplies `fixed`.
 
     * a feed lock (`fixed`: channel ids locked in the feed being rendered)
       keeps its number, and no overlay may take that number;
@@ -758,13 +776,10 @@ def _resolve_chnum_map(channels, *, feed_chnum_start: int = None,
         channels, feed_chnum_start=feed_chnum_start,
         namespace_start=namespace_start, feed_id=feed_id, bridge=bridge,
     )
-    fixed = frozenset()
-    if feed_id is not None:
-        from ..chnum import MASTER_SCOPE, feed_scope, scope_locks
-        scope = feed_scope(feed_id)
-        if scope != MASTER_SCOPE:
-            fixed = scope_locks(scope).keys()
-    return apply_provider_numbers(channels, chnum_map, fixed=fixed), warnings
+    from ..chnum import MASTER_SCOPE, feed_scope
+    scope = feed_scope(feed_id) if feed_id is not None else (
+        None if feed_chnum_start is not None else MASTER_SCOPE)
+    return shown_numbers(channels, chnum_map, scope), warnings
 
 
 def feed_number_kwargs(feed: Feed) -> dict:

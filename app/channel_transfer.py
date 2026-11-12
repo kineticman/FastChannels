@@ -44,11 +44,17 @@ def _is_member(feed, channel_id: int) -> bool:
                for ch in _selected_channel_stubs(filters, gracenote=gracenote))
 
 
-def shown_number(channel: Channel, app_number):
-    """The tvg-chno a playlist actually prints for this channel: a decimal lock
-    or an opted-in provider number replaces the app number."""
-    from .generators.m3u import apply_provider_numbers
-    return apply_provider_numbers([channel], {channel.id: app_number}).get(channel.id, app_number)
+def shown_number(channel: Channel, app_number, scope: int):
+    """The tvg-chno a playlist in `scope` prints for this channel (see
+    m3u.shown_numbers: a feed lock keeps its number, else a decimal lock or an
+    opted-in provider number replaces the app number)."""
+    from .generators.m3u import shown_numbers
+    return shown_numbers([channel], {channel.id: app_number}, scope).get(channel.id, app_number)
+
+
+def _scope(feed) -> int:
+    from .chnum import feed_scope
+    return feed_scope(feed)
 
 
 def _check_can_enable(new: Channel) -> None:
@@ -97,7 +103,7 @@ def transfer_channel(old: Channel, new: Channel) -> dict:
     live_feeds = [f for f in all_feeds if f.is_enabled]
     before_maps = _feed_member_numbers(live_feeds)
     before = {
-        fid: shown_number(old, nums[old.id])
+        fid: shown_number(old, nums[old.id], _scope(fid))
         for fid, nums in before_maps.items() if old.id in nums
     }
     # Shown numbers that come from the old source's own numbering (provider
@@ -213,7 +219,7 @@ def transfer_channel(old: Channel, new: Channel) -> dict:
     for feed in live_feeds:
         was = before.get(feed.id)
         now = after_maps[feed.id].get(new.id)
-        now = shown_number(new, now) if now is not None else None
+        now = shown_number(new, now, _scope(feed)) if now is not None else None
         if was is None and now is None:
             continue
         feeds_report.append({
