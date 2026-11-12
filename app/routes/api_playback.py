@@ -822,6 +822,13 @@ def _get_playback_info(ch, fast_mode=True, browser=False):
     }
 
 
+def _free_network_name(ch) -> str | None:
+    if not ch.source or ch.source.name != 'free_networks':
+        return None
+    from ..scrapers.free_networks import network_name
+    return network_name(ch.source_channel_id)
+
+
 @playback_bp.route('/channels/<int:channel_id>/preview', methods=['GET'])
 def preview_channel(channel_id):
     ch = Channel.query.get_or_404(channel_id)
@@ -902,6 +909,7 @@ def preview_channel(channel_id):
             'source_name': ch.source.name if ch.source else None,
             'source_display_name': ch.source.display_name if ch.source else None,
             'source_channel_id': ch.source_channel_id,
+            'network_display_name': _free_network_name(ch),
             'stream_type': stream_type or None,
             'playback_mode': playback_mode,
             'category': ch.category,

@@ -2374,7 +2374,7 @@
             <div>
               <div class="preview-title">${escapeHtml(ch.name || 'Channel')}</div>
               <div class="preview-meta">
-                ${escapeHtml(ch.source_display_name || 'Unknown source')}
+                ${escapeHtml(ch.source_display_name || 'Unknown source')}${ch.network_display_name ? ` (${escapeHtml(ch.network_display_name)})` : ''}
                 ${ch.country ? ` · ${escapeHtml(ch.country)}` : ''}
                 ${ch.category ? ` · ${escapeHtml(ch.category)}` : ''}
                 ${ch.sport ? ` · ${escapeHtml(ch.sport)}${ch.league ? ` (${escapeHtml(ch.league)})` : ''}` : ''}

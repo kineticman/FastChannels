@@ -1175,7 +1175,7 @@
           ? `<img class="gm-poster" src="${escapeHtml(prog.poster)}" alt="" loading="lazy" onerror="this.remove()">`
           : '';
 
-        const metaParts = [ch.source_display_name, ch.category, ch.language].filter(Boolean);
+        const metaParts = [ch.source_display_name && ch.network_display_name ? `${ch.source_display_name} (${ch.network_display_name})` : ch.source_display_name, ch.category, ch.language].filter(Boolean);
 
         const warningHtml = ch.disable_reason
           ? `<div class="gm-warning">Channel flagged: <strong>${escapeHtml(ch.disable_reason)}</strong> — playback may fail.</div>`

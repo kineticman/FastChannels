@@ -35,6 +35,14 @@ NETWORKS = [
 ]
 _BY_KEY = {n.key: n for n in NETWORKS}
 
+
+def network_name(source_channel_id: str | None) -> str | None:
+    """Display name of the network a Free Networks channel comes from."""
+    if not source_channel_id or '.' not in source_channel_id:
+        return None
+    net = _BY_KEY.get(source_channel_id.split('.', 1)[0])
+    return (net.name or net.key) if net else None
+
 # A network taking at least this long gets its own INFO line; the rest only
 # show up in the per-phase summary (per-network detail is at DEBUG).
 _SLOW_NETWORK_SECS = 5.0
