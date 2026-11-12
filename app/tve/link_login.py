@@ -45,6 +45,30 @@ _POLL_MAX_SECONDS = 15.0
 _MVPD_ALIASES = {'DTV': 'ATTOTT', 'ATTOTT': 'DTV'}
 
 
+def _provider_not_accepted(adapter, mso_id: str) -> str | None:
+    """A user-facing reason when the adapter's network doesn't take this TV
+    provider at all, else None. Adobe answers such a /sessions start with a
+    bare 400 (MyOutdoorTV lists 4 providers; Cox and Sling users hit it).
+    Only adapters that set `adobe_requestor` are checked, and only when the
+    catalog has that network's list."""
+    requestor = getattr(adapter, 'adobe_requestor', '') or ''
+    if not requestor:
+        return None
+    from .mvpd_catalog import requestor_providers
+    accepted = requestor_providers(requestor)
+    if not accepted or mso_id in accepted or _MVPD_ALIASES.get(mso_id) in accepted:
+        return None
+    from .mvpd_catalog import accepted_providers
+    provider = accepted_providers().get(mso_id) or mso_id
+    names = sorted(set(accepted.values()), key=str.lower)
+    brand = getattr(adapter, 'brand_label', '') or requestor
+    if len(names) > 8:
+        return (f"{brand}'s TV provider sign-in doesn't accept {provider} "
+                f"({len(names)} other providers are accepted).")
+    return (f"{brand}'s TV provider sign-in doesn't accept {provider}. "
+            f"It only accepts: {', '.join(names)}.")
+
+
 def job_timeout(family: str) -> int:
     targets = {'amcn': 4, 'disney': 2, 'dazn': 2}.get(family, 1)
     return targets * _PER_TARGET_TIMEOUT + 300
@@ -345,6 +369,7 @@ class _ViewLift(_Versant):
             raise TVEAuthError(f'Sign in to your {cls.brand} account first '
                                f'(Sources → {cls.display_name} → Sign in to {cls.brand}).')
         self.scraper = cls(config=dict(self.source.config or {}))
+        self.adobe_requestor, self.brand_label = cls.requestor_id, cls.brand
 
     def targets(self):
         return [self.scraper.brand]
@@ -895,6 +920,7 @@ class _Snp:
     device, then trade the Adobe client's token for an SNP session that
     carries the TV-provider licence."""
     error_key = 'snp'
+    adobe_requestor, brand_label = 'ATTSPORTSNET', 'SportsNet Pittsburgh'
 
     def __init__(self, account, mso_id: str, requestor_id: str | None):
         from ..models import Source
@@ -1403,6 +1429,13 @@ def run_link_login(family: str, requestor_id: str | None, mso_id: str, run_id: s
             set_status('error', f'Could not start: {str(exc)[:200]}')
             return
         steps.extend({'label': label, 'state': 'pending'} for label in targets)
+
+        not_accepted = _provider_not_accepted(adapter, mso_id)
+        if not_accepted:
+            logger.info('[link-login] %s: %s', family, not_accepted)
+            _record_tve_login_error(adapter.error_key, not_accepted)
+            set_status('error', not_accepted)
+            return
 
         for i, label in enumerate(targets):
             if quit_if_superseded(label):

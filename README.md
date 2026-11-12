@@ -10,7 +10,7 @@ Sources are grouped the same way as on the **Sources** page. A handful of free s
 
 | Group | Sources |
 |-------|---------|
-| **Free** | The Roku Channel, Samsung TV Plus, Plex, Xumo Play, LG Channels, Vizio WatchFree+, TCL TV+, Whale TV+, STIRR, FreeLiveSports, Bally Sports Live, Hallmark, Adult Swim, Pluto TV, Sling Freestream, Local Now, Vidaa Free TV, PBS, C-SPAN, ViX, Zeam, and **Free Networks** (nearly 40 networks that stream on their own sites: DW, NHK, Al Jazeera, Bloomberg, CBS News, NewsNation, The CW's FAST lineup, OG Network, Cineverse, HSN, QVC and more). On the Sources page, Bally Sports Live, Hallmark and Adult Swim are listed under Free Networks |
+| **Free** | The Roku Channel, Samsung TV Plus, Plex, Xumo Play, LG Channels, Vizio WatchFree+, TCL TV+, Whale TV+, STIRR, FreeLiveSports, Pluto TV, Sling Freestream, Local Now, Vidaa Free TV, PBS, C-SPAN, ViX, Zeam, and **Free Networks** (nearly 40 networks that stream on their own sites: DW, NHK, Al Jazeera, Bloomberg, CBS News, NewsNation, The CW's FAST lineup, OG Network, Cineverse, HSN, QVC, Adult Swim, Bally Sports Live, Hallmark and more) |
 | **Free with an account** | Tubi, Amazon Prime Free Channels, FreeCast |
 | **Subscription** | DirecTV Stream, Spectrum, Fubo, Philo, Frndly TV, ESPN, NFL, CBS, FOX One, Paramount+, Amazon Sports, B1G+ |
 | **TV provider** (TV Everywhere) | Sign in with your cable or streaming provider: A+E Networks, AMC Networks, SundanceTV, CNN, C-SPAN, DAZN (YES, MSG), Discovery, Disney (ABC, FX, Nat Geo, Disney Channel), FOX, NBCUniversal, Versant (USA, E!, Syfy, CNBC, MS NOW, Golf), Warner Bros. Discovery (TBS, TNT, truTV, TCM), Univision, Tennis Channel, NESN, SportsNet Pittsburgh, Monumental Sports, Altitude, MyOutdoorTV, REELZ |
@@ -89,7 +89,7 @@ Go to **Admin → Settings** and set two things:
 **3. Configure Sources.**
 Go to **Admin → Sources**. Enable or disable sources to taste, and expand any source card to enter credentials. Changes take effect on the next scrape.
 
-Only free sources that need nothing from you start enabled: The Roku Channel, Samsung TV Plus, Plex, Xumo Play, LG Channels, Vizio WatchFree+, TCL TV+, Whale TV+, STIRR, FreeLiveSports, Bally Sports Live, Hallmark and Adult Swim. Everything else ships **disabled** because it needs an account, a TV provider, a local device or a DRM bridge. Enable the ones you want and expand the card to sign in. Many sign-ins are a code or link you approve on your phone, so no password is stored. TV-provider sources share one sign-in from **Settings → TV Everywhere**. Note that **Tubi needs a free account** now. See [Source Notes](#source-notes) for per-source details.
+Only free sources that need nothing from you start enabled: The Roku Channel, Samsung TV Plus, Plex, Xumo Play, LG Channels, Vizio WatchFree+, TCL TV+, Whale TV+, STIRR and FreeLiveSports. Everything else ships **disabled** because it needs an account, a TV provider, a local device or a DRM bridge. Enable the ones you want and expand the card to sign in. Many sign-ins are a code or link you approve on your phone, so no password is stored. TV-provider sources share one sign-in from **Settings → TV Everywhere**. Note that **Tubi needs a free account** now. See [Source Notes](#source-notes) for per-source details.
 
 **Lite and Advanced mode.** New installs start in **Lite** mode, which shows only the free sources. Subscription, TV Everywhere and DRM sources, the **Bridge** page and **Settings → TV Everywhere** are hidden until you switch to **Advanced** with the **Lite mode / Advanced mode** menu at the top right of every admin page (or **Settings → Interface**). The mode only changes what the admin UI shows: no source, channel, feed or playlist changes, and anything you already use stays visible in Lite. Existing installs start in Advanced mode when they update.
 
@@ -180,7 +180,7 @@ As you set filters, the feed modal shows a live count of matching channels.
 - *Anime* — filter categories: Anime
 
 **Other feed options:**
-- **Channel Number Start** — numbers all channels sequentially from a given value. Fresh installs start the built-in Default feed at channel 5000.
+- **Starting number** — where this feed's channel numbers start. Each feed numbers its channels on its own, and a channel keeps its number in that feed. The built-in Default feed and the main `/m3u` playlists share one set of numbers (the ones on the Channels page), starting at 5000 on fresh installs. A locked number (🔒, set on the Channels page) is used in every feed and playlist. A feed can also list sources to number first (**Source order**): those sources get its lowest numbers, then the rest by source name, channels alphabetical within each. Numbers stay put, so a new order applies to every channel when you renumber the feed.
 - **Add to Channels DVR** — registers the feed as a custom M3U source in Channels DVR with one click. Configure the DVR server URL in **Settings** first. Re-adding keeps settings you made in the DVR, such as a stream limit.
 - **Guide Mode** (Beta) — *Separate* (the default) gives a standard playlist and a Gracenote playlist, added to Channels DVR as two sources. *Mixed* puts both in one playlist, so the feed is one source. Mixed needs Channels DVR 2026.08.25 or newer; switching doesn't change channel numbers.
 - **Add Native to Channels DVR** — adds the feed's native output as its own source: every channel in the feed, all using FastChannels' scraped guide instead of Gracenote.
@@ -206,7 +206,8 @@ these sources. An alternate HDMI-capture front end, [ah4c](https://github.com/su
 is also supported for installs that already have that hardware in place. Not every
 DRM source can ride this bridge. Hardware-and-software
 setup, not a toggle: **[docs/fc-player-setup.md](docs/fc-player-setup.md)** is the
-full walkthrough.
+full walkthrough. Tuners that control their own devices without ADB (such as APITuner)
+can use the Player through the **[external tuner API](docs/external-tuner-api.md)**.
 
 The Bridge page's **audio** setting controls Dolby audio: *Auto* passes it through when the
 HDMI device accepts it, *Decode to PCM* decodes it on the stick, and *Stereo* uses the channel's
@@ -347,9 +348,6 @@ Disabling a source deletes all its channels from the DB. Re-enabling and running
 | Whale TV+ | None | Public API |
 | STIRR | None | Public API |
 | FreeLiveSports | None | Public API |
-| Bally Sports Live | None | Free, unauthenticated |
-| Hallmark | None | Free, unauthenticated |
-| Adult Swim | None | 24/7 marathon streams |
 | Pluto TV | None (login optional) | **Default off.** Works anonymously out of the box; signing in with a Pluto account is optional; per-country feeds; configurable session pool (default 10); JWT stitcher auth |
 | Sling Freestream | Optional (paid) | **Default off.** Two modes: Freestream-only (free, anonymous) or a paid Sling account for premium channels; streams are DRM-only for generic IPTV clients |
 | Local Now | None | **Default off.** Public API |
@@ -358,7 +356,7 @@ Disabling a source deletes all its channels from the DB. Re-enabling and running
 | C-SPAN | None | **Default off.** Free congressional/public-affairs event streams (floor sessions, hearings, Washington Journal). The 24/7 C-SPAN 1/2/3 networks are a separate [TV provider](#tv-provider-tv-everywhere) source |
 | ViX | None | **Default off.** About 80 free Spanish-language channels (N+ Univision news, telenovelas, movies, comedy, sports). Nearly all are Widevine DRM, so they play through the DRM bridge |
 | Zeam | None | **Default off.** Syncbak's free local-news and FAST service (formerly VUit): about 400 channels across every market. Clear HLS |
-| Free Networks | None | **Default off.** Nearly 40 networks that stream free on their own websites: news (DW, Al Jazeera, TRT, NHK, Arirang, Bloomberg, CBS News, Scripps, Newsmax, NewsNation, Sky News, KSL and more), faith (EWTN, TBN, CBN), shopping (HSN, QVC), Sinclair's diginets, The CW's FAST lineup, A+E's FAST channels, OG Network (and its partner apps TrueTVplus and Flou TV), Cineverse (with RetroCrush and JoySauce), BeOND TV, Mansa TV, FreeTV (12 Spanish channels), i24NEWS, NWSL+ 24/7, Tastemade, Outside TV, and CBS's free Judge Judy, Hot Bench and Car Chase channels. Channels already carried by another network are mostly skipped (BeOND lists all of its own), and each network can be switched off on the source card. Each network is fetched separately, so one outage doesn't affect the others |
+| Free Networks | None | **Default off.** Over 40 networks that stream free on their own websites: news (DW, Al Jazeera, TRT, NHK, Arirang, Bloomberg, CBS News, Scripps, Newsmax, NewsNation, Sky News, KSL and more), faith (EWTN, TBN, CBN), shopping (HSN, QVC), Sinclair's diginets, The CW's FAST lineup, A+E's FAST channels, OG Network (and its partner apps TrueTVplus and Flou TV), Cineverse (with RetroCrush and JoySauce), BeOND TV, Mansa TV, FreeTV (12 Spanish channels), i24NEWS, NWSL+ 24/7, Tastemade, Outside TV, CBS's free Judge Judy, Hot Bench and Car Chase channels, Adult Swim's 24/7 marathon streams, Bally Sports Live and Hallmark's Non-Stop channels. Adult Swim, Bally Sports Live and Hallmark used to be separate sources; upgrading moves their channels into Free Networks with the same channel ids, numbers, settings, play URLs and feed selections. Channels already carried by another network are mostly skipped (BeOND lists all of its own), and each network can be switched off on the source card. Each network is fetched separately, so one outage doesn't affect the others |
 
 ### Free with an account
 

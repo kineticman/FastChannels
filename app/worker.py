@@ -2896,11 +2896,18 @@ def _upsert_channels(source, channel_data_list, gracenote_auto_fill: bool = True
     # until a user approves).  Per-source policy wins; 'inherit' defers to the
     # global AppSettings.auto_allow_new_channels switch.  Only affects true inserts;
     # returning/rehomed channels keep their prior state.
+    # Event channels (fc:event) are an exception when
+    # AppSettings.event_channels_skip_review is on (default): they enter enabled
+    # even under an inherited or explicit per-source 'review' policy, because the
+    # sport/league/team/event-group choice already selected them and a held event
+    # can miss its window (#83).
+    _app_settings = AppSettings.get()
     _policy = (getattr(source, 'new_channel_policy', None) or 'inherit')
     if _policy == 'inherit':
-        _auto_allow = getattr(AppSettings.get(), 'auto_allow_new_channels', True)
+        _auto_allow = getattr(_app_settings, 'auto_allow_new_channels', True)
         _policy = 'enabled' if _auto_allow else 'review'
-    _born_pending = _policy == 'review'
+    _policy_review = _policy == 'review'
+    _events_skip_review = getattr(_app_settings, 'event_channels_skip_review', True) is not False
 
     for cd in channel_data_list:
         if cd.name:
@@ -3042,6 +3049,9 @@ def _upsert_channels(source, channel_data_list, gracenote_auto_fill: bool = True
                 elif gracenote_id is not None:
                     ch.gracenote_id = gracenote_id
         else:
+            _born_pending = _policy_review and not (
+                _events_skip_review and EVENT_CHANNEL_TAG in (getattr(cd, 'tags', None) or ())
+            )
             new_channel = Channel(
                 source_id         = source.id,
                 source_channel_id = cd.source_channel_id,
@@ -3763,7 +3773,7 @@ def seed_sources():
         if untested:
             logger.warning('DRM sources not on DRM_BRIDGE_TRUSTED_SOURCES (PrismCast only until tested with '
                            'FastChannels Player): %s', ', '.join(untested))
-        default_disabled_sources = {'amazon_prime_free', 'amazon_sports', 'aenetworks_tve', 'fox_tve', 'discovery_tve', 'amcn_tve', 'fox_one', 'nbc_tve', 'warner_tve', 'cspan', 'sling', 'localnow', 'pluto', 'frndlytv', 'fubo', 'hdhomerun', 'freecast', 'vidaa', 'philo', 'directv', 'pbs', 'tubi', 'spectrum', 'espn', 'nfl', 'cbs_sports', 'free_networks', 'versant_tve', 'zeam', 'vix', 'univision_tve', 'disney_tve', 'tennis_tve', 'dazn_tve', 'cspan_tve', 'sundance_tve', 'cnn_tve', 'nesn_tve', 'monumental_tve', 'altitude_tve', 'myoutdoortv_tve', 'sportsnet_pittsburgh_tve', 'paramount', 'reelz_tve', 'b1g_plus'}
+        default_disabled_sources = {'amazon_prime_free', 'amazon_sports', 'aenetworks_tve', 'fox_tve', 'discovery_tve', 'amcn_tve', 'fox_one', 'nbc_tve', 'warner_tve', 'cspan', 'sling', 'localnow', 'pluto', 'frndlytv', 'fubo', 'hdhomerun', 'freecast', 'vidaa', 'philo', 'directv', 'pbs', 'tubi', 'spectrum', 'espn', 'nfl', 'cbs_sports', 'free_networks', 'versant_tve', 'zeam', 'vix', 'univision_tve', 'disney_tve', 'tennis_tve', 'dazn_tve', 'cspan_tve', 'sundance_tve', 'cnn_tve', 'nesn_tve', 'monumental_tve', 'altitude_tve', 'myoutdoortv_tve', 'sportsnet_pittsburgh_tve', 'paramount', 'reelz_tve', 'b1g_plus', 'nsn', 'gray_local', 'ncaa'}
         # Custom Channels source: always seeded, always enabled, never auto-scraped
         if not Source.query.filter_by(name='custom').first():
             db.session.add(Source(

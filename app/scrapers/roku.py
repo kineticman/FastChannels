@@ -53,7 +53,10 @@ def _language_from_metadata(*values: str | None) -> str:
 
 # ── Constants ──────────────────────────────────────────────────────────────────
 
-_BASE        = "https://therokuchannel.roku.com"
+# The web app moved from therokuchannel.roku.com to app.roku.com (2026-11-10).
+# The old host still serves /api/v2/epg and csrf, but answers /api/v3/playback
+# (and any unknown path) with its HTML shell and a 200.
+_BASE        = "https://app.roku.com"
 _HOME        = f"{_BASE}/"
 _LIVE_TV     = f"{_BASE}/live-tv"
 _CSRF_URL    = f"{_BASE}/api/v1/csrf"
@@ -249,6 +252,8 @@ class RokuScraper(BaseScraper):
         cookies = self.config.get("session_cookies") or {}
         if not csrf or not isinstance(born, (int, float)) or not isinstance(cookies, dict):
             return
+        if self.config.get("session_host") != _BASE:
+            return  # minted on another host (pre-move therokuchannel.roku.com); bootstrap fresh
         age = time.time() - float(born)
         if age >= _SESSION_HARD_TTL:
             return
@@ -260,6 +265,7 @@ class RokuScraper(BaseScraper):
         self._update_config("csrf_token", self._csrf_token)
         self._update_config("session_born", self._session_born)
         self._update_config("session_cookies", self.session.cookies.get_dict())
+        self._update_config("session_host", _BASE)
 
     def _load_403_cooldown(self) -> None:
         until = self.config.get("roku_403_cooldown_until")
@@ -703,7 +709,11 @@ class RokuScraper(BaseScraper):
                 set_cooldown_on_403=False,
             )
             if r and r.status_code == 200:
-                stream_url = r.json().get("url", "")
+                try:
+                    stream_url = self._json_body(r, "playback").get("url", "")
+                except RuntimeError as exc:
+                    logger.warning("%s", exc)
+                    break
                 if stream_url:
                     self._cache_stream_url(sid, stream_url)
                     logger.info("[roku] resolve fallback seeded osm_session from cached station %s", sid)
@@ -770,7 +780,11 @@ class RokuScraper(BaseScraper):
             r = self._api_post(_PLAYBACK, json_body=body, timeout=10,
                                label=f"prewarm seed for {sid}", set_cooldown_on_403=False)
             if r and r.status_code == 200:
-                stream_url = r.json().get("url", "")
+                try:
+                    stream_url = self._json_body(r, "playback").get("url", "")
+                except RuntimeError as exc:
+                    logger.warning("%s", exc)
+                    break
                 if stream_url:
                     self._cache_stream_url(sid, stream_url)
                     logger.info("[roku] prewarm seed: seeded osm_session from %s", sid)
@@ -936,6 +950,22 @@ class RokuScraper(BaseScraper):
             response.headers.get("content-type"),
             body,
         )
+
+    @staticmethod
+    def _json_body(response, label: str) -> dict:
+        """Parse a Roku API response, naming the cause when Roku answers with HTML.
+
+        Roku's web host serves its HTML shell with a 200 for any path it doesn't
+        route, so a moved or retired endpoint shows up as a JSON decode error.
+        """
+        try:
+            data = response.json()
+        except ValueError:
+            ctype = response.headers.get("content-type", "?")
+            raise RuntimeError(
+                f"[roku] {label} returned non-JSON ({ctype}); Roku may have moved this API"
+            ) from None
+        return data if isinstance(data, dict) else {}
 
     def _api_headers(self) -> dict:
         return {
@@ -1623,7 +1653,7 @@ class RokuScraper(BaseScraper):
             }
             r2 = self._api_post(_PLAYBACK, json_body=body, timeout=10, label=f"playback for {station_id}")
             if r2.status_code == 200:
-                stream_url = r2.json().get("url", "")
+                stream_url = self._json_body(r2, "playback").get("url", "")
                 if stream_url:
                     self._persist_session()
                     self._cache_play_id(station_id, play_id)
@@ -1819,7 +1849,7 @@ class RokuScraper(BaseScraper):
             if r.status_code in (401, 403, 404, 502):
                 self._invalidate_play_id(station_id)
             raise RuntimeError(f"[roku] resolve_dash playback returned {r.status_code} for {station_id}")
-        data = r.json()
+        data = self._json_body(r, "dash playback")
         mpd_url = data.get("url", "")
         license_url = (((data.get("drm") or {}).get("widevine") or {}).get("licenseServer")) or None
         if not mpd_url:

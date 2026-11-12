@@ -130,6 +130,112 @@ def _merge_source_name(conn, old_name: str, new_name: str) -> None:
         conn.execute(text("DELETE FROM sources WHERE id = :source_id"), {"source_id": old_source_id})
 
 
+def _fold_into_free_networks(conn) -> None:
+    """Move Adult Swim, Bally Sports Live and Hallmark into Free Networks, whose
+    networks they now are (app/folded_sources.py). Runs while an old source row
+    exists, so it is a no-op on fresh installs and after it has run.
+
+    Channel rows move in place: same id, so channel numbers, locks, Gracenote
+    IDs, name/logo/category overrides, enabled state, guide and feed channel
+    lists all stay. source_channel_id becomes "<old source>.<old id>" and the
+    stream URL is wrapped as freenet://<old source>/<old URL>, which is what a
+    Free Networks scrape writes for them. Outputs keep the old tvg-ids, play
+    URLs and feed source names (app/folded_sources.py).
+
+    On/off carries over: a folded source that was on turns Free Networks on;
+    if Free Networks was off, every one of its other networks starts unticked,
+    and if it was on, a folded source that was off is unticked.
+    """
+    import json
+    from urllib.parse import quote
+    from .folded_sources import FOLDED, HOST
+
+    names = list(FOLDED)
+    marks = ", ".join(f":n{i}" for i in range(len(names)))
+    params = {f"n{i}": n for i, n in enumerate(names)}
+    old = conn.execute(
+        text(f"SELECT id, name, is_enabled FROM sources WHERE name IN ({marks}) ORDER BY id"), params,
+    ).fetchall()
+    if not old:
+        return
+
+    host = conn.execute(
+        text("SELECT id, is_enabled, config FROM sources WHERE name = :n"), {"n": HOST},
+    ).fetchone()
+    if host is None:
+        values = {"name": HOST, "display_name": "Free Networks", "scrape_interval": 360,
+                  "is_enabled": 0, "config": "{}", "epg_only": 0}
+        # Fill any NOT NULL column without a SQL default (create_all leaves some).
+        for _cid, col, _type, notnull, dflt, pk in conn.execute(text("PRAGMA table_info(sources)")):
+            if not pk and notnull and dflt is None and col not in values:
+                values[col] = 'inherit' if col == 'new_channel_policy' else 0
+        cols = ", ".join(values)
+        conn.execute(text(f"INSERT INTO sources ({cols}) VALUES ({', '.join(':' + c for c in values)})"), values)
+        host = conn.execute(
+            text("SELECT id, is_enabled, config FROM sources WHERE name = :n"), {"n": HOST},
+        ).fetchone()
+    host_id, host_on, raw_cfg = host[0], bool(host[1]), host[2]
+    try:
+        cfg = json.loads(raw_cfg) if isinstance(raw_cfg, str) else dict(raw_cfg or {})
+    except (TypeError, ValueError):
+        cfg = {}
+    if not isinstance(cfg, dict):
+        cfg = {}
+    disabled = {k.strip() for k in str(cfg.get("disabled_networks") or "").split(",") if k.strip()}
+    on = {name for _id, name, enabled in old if enabled}
+    turn_on = False
+    if host_on:
+        disabled -= on
+        disabled |= {name for _id, name, enabled in old if not enabled}
+    elif on:
+        try:
+            from .scrapers.free_networks import NETWORKS
+            disabled = {n.key for n in NETWORKS} - on
+            turn_on = True
+        except Exception:
+            logger.exception("Free Networks fold: could not read the network list; leaving Free Networks off "
+                             "(turn it on and untick the networks you don't want)")
+    cfg["disabled_networks"] = ",".join(sorted(disabled))
+    conn.execute(
+        text("UPDATE sources SET config = :cfg" + (", is_enabled = 1" if turn_on else "") + " WHERE id = :id"),
+        {"cfg": json.dumps(cfg), "id": host_id},
+    )
+
+    moved = merged = 0
+    for old_id, name, _enabled in old:
+        for ch_id, scid, stream_url in conn.execute(
+            text("SELECT id, source_channel_id, stream_url FROM channels WHERE source_id = :s"), {"s": old_id},
+        ).fetchall():
+            new_scid = f"{name}.{scid}"
+            existing = conn.execute(
+                text("SELECT id FROM channels WHERE source_id = :s AND source_channel_id = :c"),
+                {"s": host_id, "c": new_scid},
+            ).fetchone()
+            if existing:
+                # Moved before, then an older image brought the source back:
+                # keep the first-moved row (the user's numbers and settings).
+                for table in ("programs", "channel_numbers", "feed_channel_numbers"):
+                    if not conn.execute(text("SELECT 1 FROM sqlite_master WHERE type='table' AND name=:t"),
+                                        {"t": table}).fetchone():
+                        continue
+                    conn.execute(text(f"DELETE FROM {table} WHERE channel_id = :c"), {"c": ch_id})
+                conn.execute(text("DELETE FROM channels WHERE id = :c"), {"c": ch_id})
+                merged += 1
+                continue
+            conn.execute(
+                text("UPDATE channels SET source_id = :s, source_channel_id = :c, stream_url = :u WHERE id = :id"),
+                {"s": host_id, "c": new_scid, "id": ch_id,
+                 "u": f"freenet://{name}/{quote(stream_url, safe='')}" if stream_url else None},
+            )
+            moved += 1
+        conn.execute(text("DELETE FROM source_cache WHERE source_id = :s"), {"s": old_id})
+        conn.execute(text("DELETE FROM sources WHERE id = :s"), {"s": old_id})
+    logger.info("Folded %s into Free Networks: %d channels moved%s; Free Networks %s, unticked networks: %d",
+                ", ".join(name for _id, name, _e in old), moved,
+                f", {merged} duplicates dropped" if merged else "",
+                "turned on" if turn_on else ("on" if host_on else "off"), len(disabled))
+
+
 def _ensure_app_settings_row(conn) -> None:
     """Create the app_settings singleton (id=1) if it's missing.
 
@@ -205,6 +311,9 @@ def ensure_runtime_schema(*, fresh_install: bool | None = None) -> None:
             conn.execute(text(
                 "ALTER TABLE feeds ADD COLUMN guide_mode VARCHAR(16) NOT NULL DEFAULT 'split'"
             ))
+        # feeds.source_order: sources numbered first, in order (app/chnum.py).
+        if "source_order" not in feed_cols:
+            conn.execute(text("ALTER TABLE feeds ADD COLUMN source_order JSON"))
 
         # channel_numbers: the one store of channel numbers (app/chnum.py). No
         # foreign key on scope_id: 0, -1 and -2 are the master scopes, the rest
@@ -229,7 +338,8 @@ def ensure_runtime_schema(*, fresh_install: bool | None = None) -> None:
             as_cols = {row[1] for row in conn.execute(text("PRAGMA table_info(app_settings)"))}
             for col, ddl in (("master_chnum_start", "INTEGER"),
                              ("master_gracenote_chnum_start", "INTEGER"),
-                             ("chnum_seeded_at", "DATETIME")):
+                             ("chnum_seeded_at", "DATETIME"),
+                             ("chnum_unified_at", "DATETIME")):
                 if col not in as_cols:
                     conn.execute(text(f"ALTER TABLE app_settings ADD COLUMN {col} {ddl}"))
 
@@ -367,6 +477,13 @@ def ensure_runtime_schema(*, fresh_install: bool | None = None) -> None:
                 conn.execute(text(
                     "ALTER TABLE app_settings ADD COLUMN auto_allow_new_channels BOOLEAN NOT NULL DEFAULT 1"
                 ))
+            if "event_channels_skip_review" not in cols:
+                # New event channels (fc:event) skip the review queue by default so
+                # short-lived events aren't missed waiting for approval (#83).
+                # Only affects future inserts; existing pending rows stay pending.
+                conn.execute(text(
+                    "ALTER TABLE app_settings ADD COLUMN event_channels_skip_review BOOLEAN NOT NULL DEFAULT 1"
+                ))
             if "prismcast_url" not in cols:
                 conn.execute(text("ALTER TABLE app_settings ADD COLUMN prismcast_url TEXT"))
             if "prismcast_inner_url" not in cols:
@@ -416,6 +533,11 @@ def ensure_runtime_schema(*, fresh_install: bool | None = None) -> None:
                 # the HDMI device says it accepts it); the other modes are opt-in for
                 # capture cards that only handle stereo PCM.
                 conn.execute(text("ALTER TABLE app_settings ADD COLUMN fc_player_bridge_audio_mode TEXT NOT NULL DEFAULT 'auto'"))
+            if "external_player_enabled" not in cols:
+                # Default off — the external tuner API (APITuner, issue #94) is opt-in.
+                conn.execute(text("ALTER TABLE app_settings ADD COLUMN external_player_enabled BOOLEAN NOT NULL DEFAULT 0"))
+            if "external_player_token" not in cols:
+                conn.execute(text("ALTER TABLE app_settings ADD COLUMN external_player_token TEXT"))
             if "fc_player_bridge_ah4c_enabled" not in cols:
                 # Default off — ah4c (github.com/sullrich/ah4c) is an alternate HDMI-capture
                 # front end for the bridge; unrelated installs shouldn't get a new M3U/DVR-push
@@ -847,6 +969,10 @@ def ensure_runtime_schema(*, fresh_install: bool | None = None) -> None:
         # merge rows first to avoid violating the unique constraint.
         _merge_source_name(conn, "amazon-prime-free", "amazon_prime_free")
 
+        # Adult Swim, Bally Sports Live and Hallmark became Free Networks networks.
+        if "channels" in tables and "sources" in tables:
+            _fold_into_free_networks(conn)
+
         # Backfill stream_type='dash' for existing Amazon Prime Free channels
         # so the Shaka player is selected in the preview panel without a re-scrape.
         if "channels" in tables and "sources" in tables:
@@ -1126,5 +1252,8 @@ def ensure_runtime_schema(*, fresh_install: bool | None = None) -> None:
 
     # Channel numbers move to channel_numbers once, seeded from what the
     # previous numbering serves. ORM use is safe here: every column above exists.
-    from .chnum import seed_channel_numbers
-    seed_channel_numbers()
+    # Then the Default feed and the master playlists become one set of
+    # numbers, keeping the Default feed's.
+    from .chnum import seed_channel_numbers, unify_main_numbers
+    if seed_channel_numbers():
+        unify_main_numbers()

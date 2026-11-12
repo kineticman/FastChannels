@@ -51,3 +51,23 @@
     <div style="display:flex;gap:0.5rem;flex-wrap:wrap"><button class="btn btn-primary" id="ah4c-scripts-copy-btn" onclick="copyAh4cScriptsCommand()">Copy command</button><button class="btn-cancel-modal" onclick="closeAh4cScriptsModal()">Close</button></div>
   </div>
 </div>
+
+<!-- ah4c Connect modal: FastChannels sets up an existing ah4c over its settings API -->
+<div class="modal-overlay" id="ah4c-connect-modal" onclick="if(event.target===this)closeAh4cConnectModal()">
+  <div class="modal-box" style="max-width:640px">
+    <h3 style="margin:0 0 0.75rem">Set up ah4c for FastChannels</h3>
+    <p style="color:var(--text-subtle);margin:0 0 1rem;line-height:1.5">FastChannels fills in <a href="https://github.com/sullrich/ah4c" target="_blank" rel="noopener">ah4c</a>’s settings for you: the FastChannels scripts, this server’s address and your tuners. You see every change before anything is saved.</p>
+    <div class="fields-grid">
+      <div class="field"><label for="ah4c-connect-url">ah4c address</label><input type="text" id="ah4c-connect-url" placeholder="http://192.168.1.30:7654" oninput="invalidateAh4cConnectPreview()"></div>
+      <div class="field"><label for="ah4c-connect-fc-url">FastChannels address, as ah4c reaches it</label><input type="text" id="ah4c-connect-fc-url" placeholder="http://192.168.1.20:5523" data-default="{{ ah4c_scripts_default_url }}" oninput="invalidateAh4cConnectPreview()"></div>
+    </div>
+    <div class="field-actions" style="margin:0.5rem 0 1rem"><span class="save-status" id="ah4c-connect-status" style="margin-right:auto"></span><button class="btn btn-secondary" onclick="previewAh4cConnect()">Check ah4c</button></div>
+    <div id="ah4c-connect-result" hidden></div>
+    <details class="bridge-fallback-details" style="margin:0 0 1rem" id="ah4c-connect-compose-details">
+      <summary>Don’t have ah4c yet? Start it with this compose file</summary>
+      <div class="help" style="margin-bottom:0.5rem">Using Project One-Click? Its <strong>ah4c-minimal</strong> action sets up the same thing, so skip this file. Otherwise run it with <code>docker compose up -d</code> on the computer with your capture hardware, then come back and click <strong>Check ah4c</strong>. Settings stay out of this file on purpose: anything set here is locked and can only be changed here. Capture cards (Hauppauge, Magewell, DeckLink) also need a <code>devices:</code> entry. Network encoders such as LinkPi don’t.</div>
+      <textarea id="ah4c-connect-compose" rows="18" readonly onclick="this.select()" style="width:100%;resize:vertical;font-family:ui-monospace,monospace;font-size:0.8rem"></textarea>
+    </details>
+    <div style="display:flex;gap:0.5rem;flex-wrap:wrap"><button class="btn btn-primary" id="ah4c-connect-apply-btn" onclick="applyAh4cConnect()" disabled>Save to ah4c</button><button class="btn-cancel-modal" onclick="closeAh4cConnectModal()">Close</button></div>
+  </div>
+</div>

@@ -8,6 +8,7 @@ from sqlalchemy.exc import OperationalError
 from ..extensions import db
 from ..generators.m3u import get_global_chnum_overlaps, _selected_channel_stubs, feed_to_query_filters
 from ..models import AppSettings, Channel, Feed, Source
+from ..folded_sources import output_source_display
 from ..url import public_base_url
 from ..xml_cache import delete_xml_artifact, invalidate_xml_cache
 from .tasks import trigger_xml_refresh, trigger_xml_refresh_catchup
@@ -143,7 +144,7 @@ def preview_order():
       - order (optional): explicit channel-id sequence to overlay, so the UI can
         preview an unsaved drag-drop ordering merged with current membership.
     """
-    from ..chnum import plan_numbers, scope_rows
+    from ..chnum import feed_scope, plan_numbers, scope_rows
     from ..generators.m3u import (
         build_manual_order_map, apply_provider_numbers, chnum_sort_key,
     )
@@ -163,7 +164,7 @@ def preview_order():
     stubs, gn_ids = _feed_member_stubs(q_filters)
     # The feed's rows: a saved feed previews what it shows, and an edit to
     # its filters or start previews what the next settle would make of them.
-    rows = scope_rows(feed.id) if feed is not None else {}
+    rows = scope_rows(feed_scope(feed)) if feed is not None else {}
     held = {n for n, released_at in rows.values() if released_at is not None}
 
     order_ids = data.get('order') or []
@@ -176,7 +177,12 @@ def preview_order():
         # Members the overlaid order doesn't cover get appended after it.
         placed_ids = set(order_ids)
     else:
-        num_map = plan_numbers(stubs, start, rows)
+        source_order = (_clean_source_order(data['source_order']) if 'source_order' in data
+                        else (feed.source_order if feed is not None else None))
+        if feed is not None and source_order != (feed.source_order or None):
+            # An edited source order previews the renumber that saving offers.
+            rows = {}
+        num_map = plan_numbers(stubs, start, rows, source_order=source_order)
         # With saved numbers, members that have none are slotted into whatever
         # numbers are free (gaps first, then the end). No rows means everything
         # is numbered fresh, so nothing is "new".
@@ -191,7 +197,8 @@ def preview_order():
     rows = [{
         'id':          ch.id,
         'name':        ch.name,
-        'source':      ch.source.display_name or ch.source.name,
+        'source':      output_source_display(ch),
+        'category':    getattr(ch, 'category', None) or '',
         'number':      num_map.get(ch.id),
         'pinned':      bool((getattr(ch, 'number_pinned', False) and ch.number is not None)
                             or ch.id in fixed_ids),
@@ -276,75 +283,8 @@ def _displayed_feed_chnum_map(feed: Feed) -> dict[int, int]:
     if feed.slug == 'default':
         from .admin import _default_feed_chnum_map_full
         return _default_feed_chnum_map_full()
-    from ..chnum import read_scope
-    return read_scope(feed.id)
-
-
-@feeds_api_bp.route('/<int:feed_id>/chnum-lock-all', methods=['POST'])
-def chnum_lock_all(feed_id):
-    """Pin every member channel to its currently-displayed number in this feed.
-
-    Freezes this feed's numbering in place so sticky/sequential reassignment
-    never reshuffles a channel's number again. Already-pinned channels are
-    left untouched — this isn't a conflict-resolution tool. A lock is a
-    single global field on the channel (Channel.number_pinned), not scoped
-    to one feed, so it also fixes that number in every other feed the
-    channel happens to belong to.
-    """
-    feed = Feed.query.get_or_404(feed_id)
-    num_map = _displayed_feed_chnum_map(feed)
-
-    if not num_map:
-        return jsonify({'locked': 0})
-
-    unpinned = (
-        Channel.query
-        .filter(Channel.id.in_(num_map.keys()), Channel.number_pinned == False,
-                Channel.pinned_chno.is_(None))  # decimal locks are locked already
-        .all()
-    )
-    # Channels numbered by their provider (e.g. DirecTV channel numbers) already
-    # have a fixed number; locking them to their hidden app number would replace it.
-    from ..generators.m3u import _provider_number_sources
-    provider_sources = _provider_number_sources()
-    if provider_sources:
-        unpinned = [
-            ch for ch in unpinned
-            if not (ch.provider_number and ch.source and ch.source.name in provider_sources)
-        ]
-
-    # A channel-wide lock overrides its assignment in every other feed. Stop
-    # before changing anything if even one of those feeds displays a different
-    # number; their stored assignments can be overwritten on the next refresh.
-    target_ids = {ch.id for ch in unpinned}
-    conflicts: dict[str, int] = {}
-    if target_ids:
-        for other in Feed.query.filter(Feed.id != feed.id).all():
-            other_map = _displayed_feed_chnum_map(other)
-            different = sum(
-                1 for channel_id in target_ids & other_map.keys()
-                if other_map[channel_id] != num_map[channel_id]
-            )
-            if different:
-                conflicts[other.name] = different
-    if conflicts:
-        summary = ', '.join(f'{name} ({count})' for name, count in list(conflicts.items())[:3])
-        if len(conflicts) > 3:
-            summary += f', and {len(conflicts) - 3} more'
-        return jsonify({
-            'error': 'Lock All stopped: these feeds show different numbers for shared channels: '
-                     f'{summary}. No locks were changed.',
-            'conflicts': conflicts,
-        }), 409
-
-    for ch in unpinned:
-        ch.number = num_map[ch.id]
-        ch.number_pinned = True
-    err = _safe_commit()
-    if err:
-        return err
-    _invalidate_and_refresh_xml()
-    return jsonify({'locked': len(unpinned)})
+    from ..chnum import feed_scope, read_scope
+    return read_scope(feed_scope(feed))
 
 
 @feeds_api_bp.route('', methods=['GET'])
@@ -380,6 +320,7 @@ def create_feed():
         chnum_start = _parse_chnum_start(data.get('chnum_start')),
         guide_mode  = guide_mode,
         is_enabled  = data.get('is_enabled', True),
+        source_order = _clean_source_order(data.get('source_order')),
     )
     db.session.add(feed)
     err = _safe_flush()  # make new feed visible to overlap check
@@ -432,8 +373,8 @@ def update_feed(feed_id):
         return jsonify({'error': 'guide_mode must be "split" or "mixed"'}), 400
 
     if feed.slug in SYSTEM_FEED_SLUGS:
-        # System feeds only allow chnum_start and guide_mode to be changed.
-        disallowed = set(data.keys()) - {'chnum_start', 'guide_mode'}
+        # System feeds only allow the numbering and guide mode to be changed.
+        disallowed = set(data.keys()) - {'chnum_start', 'guide_mode', 'source_order'}
         if disallowed:
             return jsonify({'error': 'Built-in feeds cannot be edited.'}), 403
     else:
@@ -459,6 +400,10 @@ def update_feed(feed_id):
         feed.chnum_start = available_feed_start(feed)
     if 'guide_mode' in data:
         feed.guide_mode = data['guide_mode']
+    # Numbers are sticky: a new source order numbers new channels by it, and
+    # every channel once the feed is renumbered.
+    if 'source_order' in data:
+        feed.source_order = _clean_source_order(data['source_order'])
 
     err = _safe_flush()  # make changes visible to overlap check
     if err:
@@ -487,10 +432,10 @@ def update_feed(feed_id):
 
 
 def _reset_default_channel_numbers() -> None:
-    """Renumber the master playlists afresh for channels the master start
-    places (unlocked channels of sources without their own start, and every
-    Gracenote channel); the next settle numbers them again."""
-    from ..chnum import GRACENOTE_SCOPES, MASTER_SCOPE, clear_rows
+    """Renumber the main numbers (the Default feed and the master playlists)
+    afresh for unlocked channels in output; the next settle numbers them
+    again from the Default feed's start. Held numbers stay held."""
+    from ..chnum import MASTER_SCOPE, clear_rows
     channels = (
         db.session.query(Channel.id)
         .join(Source)
@@ -501,17 +446,10 @@ def _reset_default_channel_numbers() -> None:
             Source.is_enabled == True,
             Source.epg_only == False,
             Channel.stream_url != None,
-            (
-                (Source.chnum_start == None)
-                | ((Channel.gracenote_id != None) & (Channel.gracenote_id != ''))
-            ),
         )
         .all()
     )
     clear_rows(MASTER_SCOPE, [cid for (cid,) in channels])
-    for scope_id in GRACENOTE_SCOPES:
-        clear_rows(scope_id)
-    AppSettings.get().master_gracenote_chnum_start = None
 
 
 @feeds_api_bp.route('/<int:feed_id>/reset-channel-numbers', methods=['POST'])
@@ -521,7 +459,8 @@ def reset_feed_channel_numbers(feed_id):
 
     if feed.slug == 'default':
         _reset_default_channel_numbers()
-    clear_rows(feed.id)
+    else:
+        clear_rows(feed.id)
 
     err = _safe_flush()
     if err:
@@ -659,6 +598,14 @@ def _parse_chnum_start(val) -> int | None:
         return None
 
 
+def _clean_source_order(raw) -> list[str] | None:
+    """A feed's source order: source names, no repeats; None when empty."""
+    if not isinstance(raw, list):
+        return None
+    order = list(dict.fromkeys(str(s).strip() for s in raw if s and str(s).strip()))
+    return order or None
+
+
 def _clean_filters(raw: dict) -> dict:
     """
     Normalise and validate the filters dict.
@@ -668,6 +615,8 @@ def _clean_filters(raw: dict) -> dict:
     out = {}
     if raw.get('event') in ('0', '1'):
         out['event'] = raw['event']
+    if raw.get('channel_type') in ('bridge', 'standard'):
+        out['channel_type'] = raw['channel_type']
     if channel_ids := raw.get('channel_ids'):
         out['channel_ids'] = [int(i) for i in channel_ids if str(i).isdigit() or isinstance(i, int)]
         if max_ch := raw.get('max_channels'):

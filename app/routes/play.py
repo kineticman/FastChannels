@@ -55,6 +55,7 @@ from .fox_tve_proxy import (
     fox_tve_proxy_bp,
 )
 from .paramount_proxy import configure_paramount_proxy, paramount_proxy_bp
+from .free_networks_proxy import configure_free_networks_proxy, free_networks_proxy_bp, needs_proxy as _free_networks_needs_proxy
 from .warner_proxy import configure_warner_proxy, warner_proxy_bp
 
 
@@ -84,6 +85,18 @@ from .tasks import trigger_channel_auto_disable
 logger = logging.getLogger(__name__)
 
 play_bp = Blueprint('play', __name__)
+
+
+@play_bp.url_value_preprocessor
+def _folded_source_urls(endpoint, values):
+    """/play/<old source>/<id>... from before Adult Swim, Bally Sports Live and
+    Hallmark became Free Networks networks (cached M3Us, saved links) plays the
+    moved channel: free_networks/<old source>.<id> (app/folded_sources.py)."""
+    if values and 'source_name' in values and 'channel_id' in values:
+        from ..folded_sources import legacy_play_target
+        target = legacy_play_target(values['source_name'], values['channel_id'])
+        if target:
+            values['source_name'], values['channel_id'] = target
 
 _BROWSER_UA = (
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
@@ -361,6 +374,13 @@ configure_paramount_proxy(
     channel_is_retired=_channel_is_retired,
 )
 play_bp.register_blueprint(paramount_proxy_bp)
+configure_free_networks_proxy(
+    unavailable_response=_unavailable_response,
+    gone_response=_gone_response,
+    refresh_stream_info_async=_refresh_stream_info_async,
+    channel_is_retired=_channel_is_retired,
+)
+play_bp.register_blueprint(free_networks_proxy_bp)
 configure_warner_proxy(
     unavailable_response=_unavailable_response,
     gone_response=_gone_response,
@@ -751,8 +771,12 @@ def pluto_manifest_proxy(channel_id: str):
     effective_url = r.url
     base_url = request.host_url.rstrip('/')
 
+    # The region rides along so the variant proxy can send the same
+    # X-Forwarded-For: the stitcher decides ads on the variant fetches too (#92).
+    _region_qs = f'c={_quote(_country, safe="")}&' if _PLUTO_X_FORWARD.get(_country, {}).get('X-Forwarded-For') else ''
+
     def _proxy_url(abs_url: str) -> str:
-        return f'{base_url}/play/pluto/variant?url={_quote(abs_url, safe="")}'
+        return f'{base_url}/play/pluto/variant?{_region_qs}url={_quote(abs_url, safe="")}'
 
     def _abs(rel: str) -> str:
         return rel if rel.startswith('http') else urljoin(effective_url, rel)
@@ -801,7 +825,7 @@ def pluto_variant_proxy():
         abort(403)
     if _PRIVATE_IP_RE.match(host):
         abort(403)
-    from ..scrapers.pluto import BOOT_HEADERS as _PLUTO_BOOT_HEADERS
+    from ..scrapers.pluto import BOOT_HEADERS as _PLUTO_BOOT_HEADERS, X_FORWARD as _PLUTO_X_FORWARD
     _variant_hdrs = {
         'accept': '*/*',
         'accept-language': 'en-US,en;q=0.9',
@@ -809,6 +833,10 @@ def pluto_variant_proxy():
         'referer': 'https://pluto.tv/',
         'user-agent': _PLUTO_BOOT_HEADERS.get('user-agent', ''),
     }
+    # Only known regions; the value never comes from the request itself.
+    _xff = _PLUTO_X_FORWARD.get(request.args.get('c', ''), {}).get('X-Forwarded-For')
+    if _xff:
+        _variant_hdrs['X-Forwarded-For'] = _xff
     try:
         r = _requests.get(url, headers=_variant_hdrs, timeout=10)
         r.raise_for_status()
@@ -1988,6 +2016,53 @@ def cnn_manifest_response(manifest_url: str):
     )
 
 
+def _is_hudl_master(url: str) -> bool:
+    try:
+        return urlsplit(url).netloc.lower() == 'vcloud.hudl.com'
+    except Exception:
+        return False
+
+
+def hudl_master_response(master_url: str):
+    """Hudl's live master served from our URL, so a browser can play it.
+
+    vcloud.hudl.com answers the master with no Access-Control-Allow-Origin,
+    so after our 302 Shaka's fetch() is blocked (NETWORK.HTTP_ERROR, status 0).
+    The variants, subtitles and segments it lists are on CloudFront, which
+    sends ACAO *, so only the master needs relaying: its URIs are made
+    absolute and the player fetches everything else straight from the CDN.
+    Used by NCAA and NSN games. On a failed fetch the caller's plain 302 is
+    returned, which every non-browser client plays.
+    """
+    try:
+        r = _requests.get(master_url, timeout=10)
+        r.raise_for_status()
+    except Exception as e:
+        logger.warning('[hudl] master fetch failed, redirecting instead: %s', e)
+        return redirect(master_url, 302)
+    upstream = str(r.url)
+
+    def _abs(uri: str) -> str:
+        return uri if re.match(r'https?://', uri) else urljoin(upstream, uri)
+
+    lines = []
+    for line in r.text.splitlines():
+        stripped = line.strip()
+        if stripped and not stripped.startswith('#'):
+            line = _abs(stripped)
+        elif 'URI="' in stripped:
+            line = re.sub(r'URI="([^"]+)"', lambda m: f'URI="{_abs(m.group(1))}"', line)
+        lines.append(line)
+    return Response(
+        '\n'.join(lines) + '\n',
+        mimetype='application/vnd.apple.mpegurl',
+        headers={
+            'Cache-Control': 'no-cache',
+            'Access-Control-Allow-Origin': '*',
+        },
+    )
+
+
 def _dazn_stream(channel_id: str):
     """(source, scraper, resolved stream) for a DAZN channel; the stream's
     cache entry is persisted so the segment relay and license proxy see it."""
@@ -3130,6 +3205,16 @@ def play(source_name: str, channel_id: str):
             302,
         )
 
+    # Free Networks whose playlists need rewriting (Network.proxied, e.g.
+    # TrillerTV's CloudFront signature) go through the Free Networks proxy.
+    if source_name == 'free_networks' and _free_networks_needs_proxy(channel):
+        from urllib.parse import quote as _quote
+        encoded_id = _quote(channel.source_channel_id, safe='')
+        return redirect(
+            f"{request.host_url.rstrip('/')}/play/free_networks/{encoded_id}/proxy.m3u8",
+            302,
+        )
+
     # TBS/TNT/truTV/TCM: their Akamai tokens break in clients that normalize URL
     # escapes, so everything below the master goes through the proxy.
     if source_name == 'warner_tve':
@@ -3139,6 +3224,22 @@ def play(source_name: str, channel_id: str):
             f"{request.host_url.rstrip('/')}/play/warner_tve/{encoded_id}/proxy.m3u8",
             302,
         )
+
+    # Pluto with "Route playlists through FastChannels": the stitcher picks ads by
+    # the IP fetching the playlists, so the proxy fetches them with the channel
+    # region's X-Forwarded-For. A 302 straight to the stitcher would leave a
+    # viewer outside that region with the looping error slate in every break (#92).
+    # 'local' already uses the server's own IP, so it gains nothing from the proxy.
+    if source_name == 'pluto' and (channel.stream_url or '').startswith('pluto://') \
+            and not channel.stream_url.startswith('pluto://local/'):
+        from ..scrapers.pluto import routes_playlists as _pluto_routes_playlists
+        if _pluto_routes_playlists(channel.source.config):
+            from urllib.parse import quote as _quote
+            encoded_id = _quote(channel.source_channel_id, safe='')
+            return redirect(
+                f"{request.host_url.rstrip('/')}/play/pluto/{encoded_id}/proxy.m3u8",
+                302,
+            )
 
     # NBC and PBS's DASH manifests have no BaseURL and relative segment paths.
     # A 302 straight to them works only in clients that resolve those against
@@ -3479,6 +3580,8 @@ def play(source_name: str, channel_id: str):
         )
     if source_name == 'cnn_tve':
         return cnn_manifest_response(resolved_url)
+    if _is_hudl_master(resolved_url):
+        return hudl_master_response(resolved_url)
     return redirect(resolved_url, 302)
 
 
@@ -3528,7 +3631,6 @@ def play_fc_player_bridge(source_name: str, channel_id: str):
 
     from .. import fc_player_bridge
     from ..models import AppSettings
-    from .api_playback import _get_playback_info
 
     settings = AppSettings.get()
     encoder_url = settings.effective_fc_player_bridge_encoder_url()
@@ -3540,22 +3642,13 @@ def play_fc_player_bridge(source_name: str, channel_id: str):
         )
         return Response('Hardware capture is not enabled or configured.\n', status=503, mimetype='text/plain')
 
-    info = _get_playback_info(channel, fast_mode=False)
-    manifest_url = info.get('preview_url') or info.get('play_url') or ''
-    if source_name in AMAZON_DRM_SOURCES:
-        from urllib.parse import quote as _quote
-        encoded_id = _quote(channel.source_channel_id, safe='')
-        manifest_url = f'/play/{source_name}/{encoded_id}/dash.mpd?hd=1'
-        license_url = (f'{request.host_url.rstrip("/")}/play/{source_name}/license'
-                       f'?channel_id={encoded_id}&hd=1')
-    else:
-        license_url = info.get('license_url') or None
-    if manifest_url.startswith('/'):
-        manifest_url = urljoin(request.host_url, manifest_url.lstrip('/'))
-
-    if not manifest_url:
-        logger.error('[fc-player] no manifest URL resolved for %s/%s', source_name, channel_id)
+    try:
+        extras = fc_player_bridge.prepare_player_extras(channel, request.host_url)
+    except fc_player_bridge.PlayerPrepareError as e:
+        logger.error('[fc-player] %s for %s/%s', e, source_name, channel_id)
         return _unavailable_response()
+    manifest_url = extras['stream_url']
+    license_url = extras.get('license_url')
 
     adb_override = _fc_player_adb_override(request.args.get('adb'))
     if not adb_override and not settings.effective_fc_player_bridge_adb_address():

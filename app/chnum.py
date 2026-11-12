@@ -3,38 +3,39 @@
 channel_numbers is the only record of a channel's number. Each row belongs to
 a scope:
 
-  MASTER_SCOPE (0)             /m3u, /m3u/mixed and the master bridge playlists
-  MASTER_GRACENOTE_SCOPE (-1)  /m3u/gracenote
-  MASTER_BRIDGE_GRACENOTE_SCOPE (-2)
-                               the master Gracenote bridge playlists (PrismCast,
-                               FastChannels Player), which carry only bridge channels
-  a feed id                    that feed's standard, Gracenote and mixed playlists
+  MASTER_SCOPE (0)   the main numbers: the Default feed and every master
+                     playlist (/m3u, /m3u/gracenote, /m3u/mixed and the
+                     master bridge playlists), one number per channel
+  a feed id          that feed's standard, Gracenote and mixed playlists
+
+Until 5.10 the Default feed and the master playlists were numbered apart
+(and /m3u/gracenote and the master Gracenote bridge playlists apart again,
+in scopes -1 and -2), so one channel could show three or four numbers.
+unify_main_numbers() made them one, once, keeping the Default feed's numbers;
+the old -1/-2/Default rows are left in place, unread, for a downgrade.
 
 settle() is the one allocator. It runs before every artifact build and after
 a scrape; playlists, admin pages and APIs only read. Its rules, in order:
 
   1. Locks. A channel locked to a number (Channel.number_pinned) takes it in
-     every scope it is in, moving whoever had it there. In the master scope
+     every scope it is in, moving whoever had it there. In the main scope
      a lock also wins while its channel is off; in a feed, the lock of a
      channel that is not in the feed only keeps new channels off the number.
   2. Keep. A member with a row keeps it, unless a lock or a provider number
-     (DirecTV channel numbers) claims it, it is below its floor (the scope's
-     start changed), or it just lost its Gracenote ID and the number is one a
-     master Gracenote playlist shows for another channel, or (master Gracenote
-     playlists) a standard master playlist, or for the bridge ones
-     /m3u/gracenote, shows the number.
+     (DirecTV channel numbers) claims it, or it is below its floor (the
+     scope's start changed).
   3. Hold. A channel that went inactive keeps its row, released, for
      NUMBER_HOLD_DAYS and gets it back on return. A channel the user turned
      off and a finished event hold nothing.
   4. New. The lowest number at or above the start that no row, lock or
      provider number has.
 
-A Gracenote ID change moves no one: the master and feed scopes hold both
-kinds of channel. Provider numbers and decimal locks stay output overlays
+A Gracenote ID change moves no one: every scope holds both kinds of channel.
+Provider numbers and decimal locks stay output overlays
 (m3u.apply_provider_numbers).
 
 Channel.number is the user's lock while number_pinned is set. Otherwise
-settle() writes the master number there as a copy for pages and sorting;
+settle() writes the main number there as a copy for pages and sorting;
 nothing here reads it.
 """
 import logging
@@ -44,16 +45,17 @@ from sqlalchemy import delete, insert, update, bindparam
 
 from .channel_tags import AUTO_EVENT_REASONS, EVENT_RETIRED_REASON
 from .extensions import db
+from .folded_sources import output_source_display, output_source_name
 from .models import AppSettings, Channel, ChannelNumber, Feed, FeedChannelNumber, Source
 
 logger = logging.getLogger(__name__)
 
 MASTER_SCOPE = 0
+# Retired (see the module docstring); rows there are no longer read or written.
 MASTER_GRACENOTE_SCOPE = -1
 MASTER_BRIDGE_GRACENOTE_SCOPE = -2
-GRACENOTE_SCOPES = (MASTER_GRACENOTE_SCOPE, MASTER_BRIDGE_GRACENOTE_SCOPE)
 NUMBER_HOLD_DAYS = 7
-# New master numbers start here when neither the source nor the master has a start.
+# New main numbers start here when the Default feed has no start.
 UNCONFIGURED_START = 5000
 
 _BATCH = 500
@@ -69,6 +71,39 @@ def is_seeded() -> bool:
     except Exception:  # noqa: BLE001 -- a pre-upgrade schema has no column yet
         db.session.rollback()
         return False
+
+
+def is_unified() -> bool:
+    try:
+        return AppSettings.get().chnum_unified_at is not None
+    except Exception:  # noqa: BLE001 -- a pre-upgrade schema has no column yet
+        db.session.rollback()
+        return False
+
+
+def _default_feed():
+    return Feed.query.filter_by(slug='default').first()
+
+
+def feed_scope(feed) -> int:
+    """The scope a feed's playlists read: the main numbers for the Default
+    feed, else the feed's own. `feed` is a Feed or a feed id."""
+    feed_id = feed if isinstance(feed, int) else feed.id
+    slug = None if isinstance(feed, int) else feed.slug
+    if slug is None:
+        slug = db.session.query(Feed.slug).filter(Feed.id == feed_id).scalar()
+    if slug == 'default' and is_unified():
+        return MASTER_SCOPE
+    return feed_id
+
+
+def main_start(settings=None):
+    """Where the main numbers start: the Default feed's start, else the saved
+    master start (None: keep any number, new ones from UNCONFIGURED_START)."""
+    default = _default_feed()
+    if default is not None and default.chnum_start is not None:
+        return default.chnum_start
+    return (settings or AppSettings.get()).master_chnum_start
 
 
 # ------------------------------------------------------------------ reads
@@ -217,17 +252,39 @@ def _write(scope_id: int, existing: dict, final: dict) -> int:
 
 
 def _source_label(m) -> str:
-    return (m.source.display_name or m.source.name or '').lower()
+    return output_source_display(m).lower()
+
+
+def source_rank(source_order):
+    """Sort key for a feed's source order: listed sources first, in the
+    listed order, then every other source together (0 for all without one).
+    Sources go by their feed names: one folded into Free Networks keeps its
+    old name (app/folded_sources.py)."""
+    ranks = {name: i for i, name in enumerate(source_order or [])}
+    rest = len(ranks)
+    return lambda m: ranks.get(output_source_name(m), rest)
+
+
+def feed_order_key(source_order, main_number):
+    """Order a feed numbers new channels in. With a source order: those
+    sources first, then the rest by source name, channel name within each.
+    Without one: the main numbers' order. `main_number(m)` is m's main number."""
+    if source_order:
+        rank = source_rank(source_order)
+        return lambda m: (rank(m), _source_label(m), (m.name or '').lower(), m.id)
+    return lambda m: (main_number(m), (m.name or '').lower(), m.id)
 
 
 def settle() -> None:
     """Settle every scope's numbers. Flushes; the caller commits."""
     from .generators.m3u import (
-        _build_channel_query, _parse_gracenote_id, _reserved_provider_numbers,
-        _selected_channel_stubs, apply_provider_numbers, feed_to_query_filters,
+        _reserved_provider_numbers, _selected_channel_stubs, feed_to_query_filters,
     )
     if not is_seeded() and not seed_channel_numbers():
         logger.error('[chnum] channel numbers are not seeded; not settling')
+        return
+    if not is_unified() and not unify_main_numbers():
+        logger.error('[chnum] main channel numbers are not unified; not settling')
         return
     db.session.flush()
     # SQLite's legacy transaction mode does not begin a transaction for a
@@ -243,78 +300,25 @@ def settle() -> None:
     holdable = _holdable()
     common = dict(locks=locks, provider=provider, holdable=holdable)
 
-    # The master playlists: /m3u, /m3u/mixed and the master bridge playlists
-    # read MASTER_SCOPE; /m3u/gracenote MASTER_GRACENOTE_SCOPE; the Gracenote
-    # bridge playlists (PrismCast, FastChannels Player) carry only bridge
-    # channels and read MASTER_BRIDGE_GRACENOTE_SCOPE. A DVR takes several of
-    # them at once, so a new number in one stays clear of the others' numbers.
+    # The main numbers: the Default feed and every master playlist. One
+    # number per channel, so playlists a DVR takes together (standard,
+    # Gracenote, bridge) never repeat one.
     live = _selected_channel_stubs({}, gracenote=None)
-    gn_ids = {m.id for m in live if _parse_gracenote_id(m)}
-    bridge_ids = {cid for (cid,) in _build_channel_query({}, activity='drm_bridge')
-                  .with_entities(Channel.id).all()}
-    gn_direct = [m for m in live if m.id in gn_ids and m.id not in bridge_ids]
-    gn_bridge = [m for m in live if m.id in gn_ids and m.id in bridge_ids]
-
-    start = settings.master_chnum_start
-    master_floor = lambda m: m.source.chnum_start or start  # noqa: E731
-    master_new = lambda m: m.source.chnum_start or start or UNCONFIGURED_START  # noqa: E731
-    # A channel that just lost its Gracenote ID moves into the standard
-    # playlists; if its master number is one a Gracenote playlist shows for
-    # another channel, it takes a new one (it is the channel changing playlists).
-    gn_owners: dict[int, set[int]] = {}
-    for scope_id in GRACENOTE_SCOPES:
-        for cid, (n, _) in _existing(scope_id).items():
-            gn_owners.setdefault(n, set()).add(cid)
-    was_gn = set().union(*gn_owners.values()) if gn_owners else set()
+    start = main_start(settings)
     existing = _existing(MASTER_SCOPE)
+    default = _default_feed()
+    main_rank = source_rank(default.source_order if default is not None else None)
     master = allocate(
-        live, existing, floor=master_floor, new_floor=master_new,
-        order_key=lambda m: (master_new(m), _source_label(m), (m.name or '').lower(),
+        live, existing, floor=lambda m: start,
+        new_floor=lambda m: start or UNCONFIGURED_START,
+        order_key=lambda m: (main_rank(m), _source_label(m), (m.name or '').lower(),
                              m.source_channel_id or ''),
-        absent_locks_win=True, avoid=set(gn_owners),
-        refuse=lambda m, n: (m.id in was_gn and m.id not in gn_ids
-                             and bool(gn_owners.get(n, set()) - {m.id})),
-        **common)
+        absent_locks_win=True, **common)
     writes = _write(MASTER_SCOPE, existing, master)
     master_live = {cid: n for cid, (n, rel) in master.items() if rel is None}
-    by_master = lambda m: (master_live.get(m.id, float('inf')), (m.name or '').lower(), m.id)  # noqa: E731
+    main_number = lambda m: master_live.get(m.id, float('inf'))  # noqa: E731
 
-    gn_start = settings.master_gracenote_chnum_start
-    if gn_start is None:
-        std_numbers = [n for cid, n in master_live.items() if cid not in gn_ids]
-        gn_start = settings.master_gracenote_chnum_start = (
-            max(std_numbers) + 1 if std_numbers else (start or UNCONFIGURED_START))
-    settled = {MASTER_SCOPE: {n for n, _ in master.values()}}
-    # In split guide mode a DVR adds the standard and Gracenote playlists
-    # together, so their numbers must not repeat across them. The Gracenote
-    # side gives way: /m3u/gracenote to the standard playlists, the Gracenote
-    # bridge playlists to both. (The previous numbering started both Gracenote
-    # sets at the same number, so this moves them once on upgrade.)
-    def shown(members, rows):
-        # Whole numbers the playlists print: a provider number or decimal lock
-        # replaces the stored one (and provider numbers are reserved anyway).
-        nums = apply_provider_numbers(
-            members, {m.id: rows[m.id][0] for m in members if m.id in rows and rows[m.id][1] is None})
-        return {n for n in nums.values() if isinstance(n, int)}
-
-    standard = shown([m for m in live if m.id not in gn_ids], master)
-    gn_shown: set[int] = set()
-    for scope_id, members in ((MASTER_GRACENOTE_SCOPE, gn_direct),
-                              (MASTER_BRIDGE_GRACENOTE_SCOPE, gn_bridge)):
-        other = next(s for s in GRACENOTE_SCOPES if s != scope_id)
-        avoid = set().union(*settled.values()) | (
-            settled.get(other) or {n for n, _ in _existing(other).values()})
-        yields_to = standard | gn_shown
-        existing = _existing(scope_id)
-        rows = allocate(
-            members, existing, floor=lambda m: None, new_floor=lambda m: gn_start,
-            order_key=by_master, absent_locks_win=False, avoid=avoid,
-            refuse=lambda m, n, taken=yields_to: n in taken, **common)
-        writes += _write(scope_id, existing, rows)
-        settled[scope_id] = {n for n, _ in rows.values()}
-        gn_shown |= shown(members, rows)
-
-    feeds = Feed.query.filter(Feed.is_enabled == True).all()
+    feeds = Feed.query.filter(Feed.is_enabled == True, Feed.slug != 'default').all()
     for feed in feeds:
         if feed.chnum_start is None:
             logger.warning('[chnum] feed %s has no channel number start; not numbered', feed.slug)
@@ -325,7 +329,8 @@ def settle() -> None:
         existing = _existing(feed.id)
         rows = allocate(
             members, existing, floor=lambda m, s=feed.chnum_start: s,
-            new_floor=lambda m, s=feed.chnum_start: s, order_key=by_master,
+            new_floor=lambda m, s=feed.chnum_start: s,
+            order_key=feed_order_key(feed.source_order, main_number),
             absent_locks_win=False, **common)
         writes += _write(feed.id, existing, rows)
 
@@ -358,7 +363,8 @@ def _mirror_master_numbers(master: dict[int, int]) -> None:
         db.session.expire_all()
 
 
-def plan_numbers(members, start: int, existing: dict | None = None) -> dict[int, int]:
+def plan_numbers(members, start: int, existing: dict | None = None,
+                 source_order=None) -> dict[int, int]:
     """Numbers an unsaved feed (or a saved one with edited filters or start)
     would get, by the same rules, without storing anything. `existing` is the
     feed's rows when it has some."""
@@ -367,7 +373,7 @@ def plan_numbers(members, start: int, existing: dict | None = None) -> dict[int,
     master = read_scope(MASTER_SCOPE)
     rows = allocate(
         members, existing, floor=lambda m: start, new_floor=lambda m: start,
-        order_key=lambda m: (master.get(m.id, float('inf')), (m.name or '').lower(), m.id),
+        order_key=feed_order_key(source_order, lambda m: master.get(m.id, float('inf'))),
         locks=lock_map(), provider=_reserved_provider_numbers(),
         holdable={cid: rel for cid, (_, rel) in existing.items() if rel is not None},
         absent_locks_win=False)
@@ -559,4 +565,45 @@ def seed_channel_numbers() -> bool:
     if skipped:
         logger.warning('[chnum] seed: %d number(s) already taken in their scope, renumbered '
                        'at the next settle: %s', len(skipped), ', '.join(skipped[:20]))
+    return True
+
+
+def unify_main_numbers() -> bool:
+    """Make the Default feed and the master playlists one set of numbers,
+    once. The Default feed's numbers win: they are what /feeds/default/*
+    (the URLs the app hands out) serves, and they were already one number per
+    channel, where /m3u, /m3u/gracenote and the master Gracenote bridge
+    playlists each numbered on their own. With the Default feed off, the
+    master numbers are what is served, so they stay. The old rows are left,
+    unread, so a downgrade still finds them. Returns True once unified."""
+    if is_unified():
+        return True
+    if 'chnum_unified_at' not in AppSettings.__table__.c:
+        # A process still running a models.py from before this column (a
+        # bind-mounted dev container mid-edit) can't record that the copy
+        # ran, so it would copy on every settle. Leave it to a current one.
+        return False
+    try:
+        settings = AppSettings.get()
+        default = _default_feed()
+        rows = _existing(default.id) if default is not None else {}
+        copied = bool(default is not None and default.is_enabled and rows)
+        if copied:
+            clear_rows(MASTER_SCOPE)
+            db.session.flush()
+            _write(MASTER_SCOPE, {}, rows)
+            if default.chnum_start is not None:
+                settings.master_chnum_start = default.chnum_start
+        settings.chnum_unified_at = _now()
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        logger.exception('[chnum] could not unify the main channel numbers')
+        return False
+    if copied:
+        logger.info('[chnum] main numbers now follow the Default feed (%d channel(s)); '
+                    '/m3u, /m3u/gracenote and the master bridge playlists may show new numbers',
+                    len(rows))
+    else:
+        logger.info('[chnum] main numbers unified; kept the master numbers (Default feed off or empty)')
     return True

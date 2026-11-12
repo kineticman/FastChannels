@@ -9,6 +9,7 @@ from flask import Blueprint, jsonify, request
 from ..extensions import db
 from ..models import Source, Channel, Program
 from ..channel_tags import event_filter_clause, event_sport_clause
+from .. import folded_sources
 try:
     from croniter import croniter as _croniter
 except ImportError:
@@ -237,9 +238,9 @@ def stats():
         Source.is_enabled == True,
     )
     if sources := request.args.getlist('source'):
-        q = q.filter(Source.name.in_(sources))
+        q = q.filter(folded_sources.source_clause(sources))
     if excluded_sources := request.args.getlist('exclude_source'):
-        q = q.filter(Source.name.notin_(excluded_sources))
+        q = q.filter(folded_sources.exclude_clause(excluded_sources))
     if categories := request.args.getlist('category'):
         q = q.filter(Channel.category.in_(categories))
     if excluded_categories := request.args.getlist('exclude_category'):
@@ -258,6 +259,9 @@ def stats():
             q = q.filter((Channel.gracenote_id == None) | (Channel.gracenote_id == ''))
     if (event_clause := event_filter_clause(request.args.get('event'))) is not None:
         q = q.filter(event_clause)
+    from ..generators.m3u import channel_type_clause
+    if (type_clause := channel_type_clause(request.args.get('channel_type'))) is not None:
+        q = q.filter(type_clause)
     cat_rows = db.session.query(Channel.category, db.func.count(Channel.id))\
         .filter(Channel.is_active == True).group_by(Channel.category)\
         .order_by(db.func.count(Channel.id).desc()).all()

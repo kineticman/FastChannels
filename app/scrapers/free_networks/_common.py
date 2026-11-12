@@ -43,6 +43,42 @@ class Network:
     and the source cache."""
     key = ''
     name = ''
+    # Playlist proxy (app/routes/free_networks_proxy.py), for streams a client
+    # can't follow from a plain 302: /play sends the network's channels to
+    # /play/free_networks/<id>/proxy.m3u8, which serves the master and media
+    # playlists with child URLs rewritten by child_url(); segments and keys
+    # still load straight from the CDN. proxy_hosts are the only hosts the
+    # proxy fetches playlists from.
+    proxied = False
+    proxy_hosts: tuple[str, ...] = ()
+
+    def proxy_allows(self, url: str) -> bool:
+        """Whether the proxy may fetch this playlist URL: its host is one of
+        proxy_hosts or a subdomain of one."""
+        from urllib.parse import urlsplit
+        host = (urlsplit(url).hostname or '').lower()
+        return bool(host) and any(host == h or host.endswith('.' + h) for h in self.proxy_hosts)
+
+    def proxies(self, url: str) -> bool:
+        """Whether this resolved stream needs the proxy; when not, the proxy
+        just redirects to it. Lets a network proxy only some of its streams."""
+        return True
+
+    def proxy_headers(self) -> dict:
+        """Extra headers the proxy sends when fetching this network's playlists."""
+        return {}
+
+    def child_url(self, parent_url: str, uri: str) -> str:
+        """The absolute URL for a URI inside a playlist fetched from parent_url.
+        Default: resolved against the parent, carrying the parent's query when
+        the URI has none (signed-URL CDNs such as CloudFront sign the query and
+        list children as bare relative paths)."""
+        from urllib.parse import urljoin, urlsplit
+        url = urljoin(parent_url, uri)
+        query = urlsplit(parent_url).query
+        if query and not urlsplit(url).query and urlsplit(url).netloc == urlsplit(parent_url).netloc:
+            url = f'{url}?{query}'
+        return url
 
     def channels(self, s) -> list[NetChannel]:
         raise NotImplementedError

@@ -34,7 +34,7 @@ import time
 
 from ..base import infer_language
 from ._common import Network, NetChannel, logger
-from .og_network import _description, _get, catalog, playback_url, tenant_assets, tenant_programs, with_token
+from .og_network import SotalProxy, _description, _get, catalog, playback_url, tenant_assets, tenant_programs, with_token
 
 # The logo walk stops after this long per tenant, so a slow Sotal can't use up
 # the network's channel-fetch budget; channels missed just go without a logo.
@@ -54,7 +54,7 @@ def _usable(asset: dict) -> bool:
     return bool(asset.get('id') and _SUB_PREFIX.sub('', raw).strip() and not raw.upper().startswith('DO NOT USE'))
 
 
-class SotalPartner(Network):
+class SotalPartner(SotalProxy, Network):
     _unguided: frozenset[str] = frozenset()
 
     def __init__(self, tenant: tuple[str, str], name: str, defers_to: SotalPartner | None = None):

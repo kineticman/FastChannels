@@ -656,6 +656,17 @@ def custom_manifest_proxy(channel_id: str):
                 logger.warning('[custom-proxy] variant fetch failed for %s: %s', raw_id, e)
                 return _unavailable_response()
 
+    # The upstream URL can turn out not to be a playlist (a YouTube upload
+    # resolves to a progressive MP4).  Rewriting those bytes line by line
+    # sends binary through urljoin, which raises (a stray '[' reads as a
+    # broken IPv6 host, issue #93).
+    if not text.lstrip('﻿ \t\r\n').startswith('#EXTM3U'):
+        logger.warning(
+            '[custom-proxy] upstream for channel %d (%s) is not an HLS playlist: %s',
+            channel.id, raw_id[:40], (effective_url or stream_url)[:80],
+        )
+        return _unavailable_response('Upstream is not an HLS playlist')
+
     # _session_variants marks ViewTV-style SSAI ad-stitched manifests, whose
     # origin servers have been observed evicting segments (~35-45s) faster
     # than the window they advertise (~58s), so untrimmed clients can be

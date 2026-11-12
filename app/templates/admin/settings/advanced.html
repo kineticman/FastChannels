@@ -24,10 +24,33 @@
           <span class="save-status" id="m3u-rewrite-timestamps-status"></span>
         </div>
       </div>
+      {#
+        Debug logging: maintainer notes (Jinja comment, never rendered).
+        Gate: app/debug_flag.py. Toggle OR FC_DEBUG enables all of the below;
+        per-module env vars enable just one. Ask a user to turn it on, reproduce,
+        then send logs, when debugging:
+          - Spectrum sign-in: [debug] step logging throughout
+            (tve/browser_login/spectrum.py, also FC_SPECTRUM_DEBUG)
+          - TVE sign-in timeouts (NBC, FOX, FOX One, AMCN, Discovery, generic
+            mvpd): visible page text added to the timeout snapshot; URL and title
+            are always logged (common.py _log_signin_timeout_snapshot)
+          - Spectrum "signing in as" screen with no "another account" control:
+            dumps clickable elements, masked (common.py
+            _log_spectrum_sso_controls_snapshot)
+          - Amazon Free / Amazon Sports sign-in failures: page text and a
+            screenshot (scrapers/amazon_auth.py _dump_page_debug)
+          - FastChannels Player audio complaints on bridged channels: copies
+            FCPlayer.Audio logcat lines (track, passthrough vs PCM, underruns)
+            into our log (fc_player_bridge.py check_audio_diagnostics, also
+            FC_PLAYER_AUDIO_DEBUG)
+        Off by default because page text can show account names/emails and the
+        log is mirrored into the UI activity feed that users screenshot. Have
+        them turn it back off afterwards. Update this list when adding a consumer.
+      #}
       <div class="toggle-row">
         <div class="toggle-row-text">
           <div class="toggle-row-label">Debug logging</div>
-          <div class="toggle-row-help">Adds extra diagnostic detail to the logs for modules that support it (currently: Spectrum sign-in). Off by default — turn this on only while reproducing a specific issue, since it's more verbose than normal; equivalent to setting the <code>FC_DEBUG</code> environment variable.</div>
+          <div class="toggle-row-help">Adds extra diagnostic detail to the logs. Off by default — turn this on only while reproducing a specific issue, since it's more verbose than normal; equivalent to setting the <code>FC_DEBUG</code> environment variable.</div>
         </div>
         <div class="toggle-row-control">
           <span class="settings-autosave">Auto-saves</span>

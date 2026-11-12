@@ -14,9 +14,10 @@ from ..base import BaseScraper, ChannelData, ConfigField, ProgramData, StreamDea
 from ...gracenote_map import resolve_gracenote
 from ._common import UA, EmptyPlaylistError, NetChannel
 from . import (
-    aetn, aljazeera, arirang, beond, bloomberg, cbn, cbsnews, cineverse, cw, dw, ewtn, freetv, fstv, gameandfish, hsn,
+    adultswim, aetn, aljazeera, arirang, ballysports, beond, bloomberg, cbn, cbsnews, cineverse, cw, dw, ewtn, freetv, fstv,
+    gameandfish, hallmark, heartland, hsn,
     i24news, ksl, mansa, newsmax, newsnation, nhk, nwsl, og_network, outside, positiv, qvc, scripps, simple, sinclair,
-    sotal_partners, tastemade, tbn, trt,
+    shout, sotal_partners, tastemade, tbn, triller, trt,
 )
 
 logger = logging.getLogger(__name__)
@@ -27,7 +28,9 @@ NETWORKS = [
     newsmax.Newsmax(), newsnation.NewsNation(), fstv.FreeSpeechTV(), ewtn.EWTN(), positiv.PosiTV(), tbn.TBN(),
     hsn.HSN(), qvc.QVC(), tastemade.Tastemade(), aetn.AETN(), ksl.KSL(), cbn.CBN(),
     gameandfish.GameAndFish(), outside.OutsideTV(), cw.CW(), cineverse.Cineverse(), og_network.OGNetwork(),
-    *sotal_partners.NETWORKS, beond.BeOND(), mansa.Mansa(), freetv.FreeTV(), nwsl.NWSL(),
+    *sotal_partners.NETWORKS, beond.BeOND(), mansa.Mansa(), freetv.FreeTV(), nwsl.NWSL(), triller.Triller(), heartland.Heartland(), shout.Shout(),
+    # Once sources of their own; key = old source name (app/folded_sources.py)
+    adultswim.AdultSwim(), ballysports.BallySports(), hallmark.Hallmark(),
     *simple.NETWORKS,
 ]
 _BY_KEY = {n.key: n for n in NETWORKS}
@@ -71,6 +74,50 @@ def _outside(extra: list[ProgramData], rows: list[ProgramData]) -> list[ProgramD
     """The entries of `extra` that don't overlap any of `rows`."""
     spans = [(p.start_time, p.end_time) for p in rows]
     return [p for p in extra if not any(p.start_time < b and a < p.end_time for a, b in spans)]
+
+
+# The audit calls a stream dead only after this many unplayable tries.
+_AUDIT_TRIES = 3
+_AUDIT_RETRY_SECS = 5
+
+
+def _probe_stream(scraper, net, url: str) -> str | None:
+    """Why a resolved Free Networks stream can't play, or None. Only definite
+    answers count: the master or first variant answering 404/410/5xx, or a
+    variant listing no segments. Timeouts, connection errors and anything
+    that isn't an http(s) URL pass, for the audit's own checks (which report
+    a hostname that doesn't resolve as dead). Fetches use the network's proxy
+    headers, and a proxied network's child_url for the variant (signed
+    CloudFront variants need the master's query)."""
+    if not url or not url.startswith('http'):
+        return None
+    hdrs = {'User-Agent': UA, **(net.proxy_headers() if net is not None else {})}
+
+    def dead(r) -> bool:
+        return r.status_code in (404, 410) or r.status_code >= 500
+
+    try:
+        r = scraper.session.get(url, headers=hdrs, timeout=15)
+        if dead(r):
+            return f'stream answered HTTP {r.status_code}'
+        if not r.ok or '#EXT-X-STREAM-INF' not in r.text:
+            return None
+        variant = next((ln.strip() for ln in r.text.splitlines() if ln.strip() and not ln.startswith('#')), None)
+        if not variant:
+            return None
+        from urllib.parse import urljoin
+        # The network's child_url only for a stream that goes through the proxy:
+        # elsewhere a copied query can break the variant (noisypeak answers 500).
+        proxied = net is not None and net.proxied and net.proxies(url)
+        vurl = net.child_url(url, variant) if proxied else urljoin(r.url, variant)
+        v = scraper.session.get(vurl, headers=hdrs, timeout=15)
+        if dead(v):
+            return f'stream variant answered HTTP {v.status_code}'
+        if v.ok and '#EXTINF' not in v.text:
+            return 'stream variant lists no segments'
+        return None
+    except Exception:  # noqa: BLE001 — a probe failure is not proof of a dead stream
+        return None
 
 
 class NetworkBudgetExceeded(requests.exceptions.Timeout):
@@ -124,8 +171,12 @@ class FreeNetworksScraper(BaseScraper):
     NHK, Arirang, Bloomberg, CBS News, Scripps, Newsmax2 + World at War, NewsNation, Free Speech TV, Sky
     News, Global News, KSL), faith (EWTN, PosiTV, TBN, CBN, NRB, theDove), shopping
     (HSN, QVC), Sinclair's diginets (Comet, Charge!, TheNest), Tastemade, A+E's
-    FAST channels, The CW's FAST lineup, Cineverse's channels, OG Network, TrueTVplus, Flou TV, FreeTV, BeOND, Mansa, Outside TV, Game & Fish TV, NWSL+ 24/7 and a few
-    singles.
+    FAST channels, The CW's FAST lineup, Cineverse's channels, OG Network, TrueTVplus, Flou TV, FreeTV, BeOND, Mansa, Outside TV, Game & Fish TV, NWSL+ 24/7, Bowling TV, TrillerTV's free channels, Heartland+, Shout! TV, Adult Swim,
+    Bally Sports Live, Hallmark and a few singles.
+
+    Adult Swim, Bally Sports Live and Hallmark were sources of their own; their
+    channels keep their old tvg-ids, play URLs and feed source names (see
+    app/folded_sources.py).
 
     Each network is a small module in this package (see _common.Network) with
     its own channel list and guide fetch; one failing never takes the others
@@ -143,7 +194,7 @@ class FreeNetworksScraper(BaseScraper):
     display_name = 'Free Networks'
     scrape_interval = 360
     stream_audit_enabled = True
-    source_category = 'fast'
+    source_category = 'network'   # networks' own websites: Sources → Direct from Networks
     config_schema = [
         ConfigField(
             'disabled_networks', 'Networks', field_type='checklist',
@@ -375,6 +426,11 @@ class FreeNetworksScraper(BaseScraper):
                     time.monotonic() - run_t0)
         return programs
 
+    def network_for(self, raw_url: str):
+        """The Network a freenet:// stream URL belongs to, or None."""
+        parsed = self._split_url(raw_url)
+        return _BY_KEY.get(parsed[0]) if parsed else None
+
     def resolve(self, raw_url: str) -> str:
         parsed = self._split_url(raw_url)
         if not parsed:
@@ -384,18 +440,38 @@ class FreeNetworksScraper(BaseScraper):
         return net.resolve(self, ref) if net else ref
 
     def audit_resolve(self, raw_url: str) -> str:
-        """resolve() for the stream audit: a stream whose playlist is empty twice,
-        3s apart (some Sotal channels need a moment after the session opens), is
-        dead, so the audit turns it off; it re-activates it if it comes back.
-        Playback keeps the plain 503, so one empty fetch never disables a channel."""
-        try:
-            return self.resolve(raw_url)
-        except EmptyPlaylistError:
-            time.sleep(3)
+        """resolve() for the stream audit, plus a probe of the stream itself
+        with its network's own headers. A stream that is unplayable on all
+        _AUDIT_TRIES tries, _AUDIT_RETRY_SECS apart (empty playlist, or the
+        master/first variant answering 404/410/5xx; some origins 5xx for a few
+        seconds now and then), is dead: the audit marks it inactive and disabled.
+        A later audit re-activates it if it plays again (is_enabled stays off
+        until the user turns it back on, as for every source). The probe is needed because the audit treats a
+        5xx as the source rate-limiting (back off, skip), which is right for a
+        one-host source but not for Free Networks' ~40 origins, where it means
+        one dead channel. Playback keeps the plain 503, so one bad fetch never
+        disables a channel.
+
+        A stream that only plays through the proxy with the network's headers
+        (MediaTailor on Sotal) returns the opaque URL: the probe has confirmed
+        it, and the audit's own fetch, made without those headers, would get a
+        5xx and back off."""
+        net = self.network_for(raw_url)
+        url = raw_url
+        for attempt in range(_AUDIT_TRIES):
             try:
-                return self.resolve(raw_url)
+                url = self.resolve(raw_url)
+                problem = _probe_stream(self, net, url)
+                if problem:
+                    raise EmptyPlaylistError(problem)
+                break
             except EmptyPlaylistError as exc:
-                raise StreamDeadError(str(exc)) from exc
+                if attempt == _AUDIT_TRIES - 1:
+                    raise StreamDeadError(str(exc)) from exc
+                time.sleep(_AUDIT_RETRY_SECS)
+        if net is not None and net.proxied and net.proxy_headers() and net.proxies(url):
+            return raw_url
+        return url
 
     # ── Internals ────────────────────────────────────────────
 

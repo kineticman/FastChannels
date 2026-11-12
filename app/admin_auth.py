@@ -41,6 +41,9 @@ _PUBLIC_PREFIXES = (
     '/static/',
     '/login',
     '/logout',
+    # APITuner and other external tuners: off unless FC_EXTERNAL_PLAYER_TOKEN is
+    # set, and then gated by that bearer token (app/routes/external_player.py).
+    '/api/external-player/v1/',
 )
 _PUBLIC_PATHS = frozenset({
     '/favicon.ico',

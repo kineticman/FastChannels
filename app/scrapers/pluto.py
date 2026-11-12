@@ -205,6 +205,14 @@ class _StreamSession:
         return resp, None
 
 
+def routes_playlists(config: dict | None) -> bool:
+    """True when the source sends Pluto playlists through FastChannels' proxy
+    (route_playlists toggle). The stitcher picks ads by the IP that fetches the
+    playlists, so a viewer outside the boot region otherwise gets Pluto's looping
+    error slate for every break (#92)."""
+    return str((config or {}).get('route_playlists', '')).strip().lower() in {'1', 'true', 'yes', 'on'}
+
+
 def _pluto_img(url):
     """Reject Pluto's generic fallback placeholder images."""
     return url if url and 'assets/images/default' not in url else None
@@ -257,6 +265,14 @@ class PlutoScraper(BaseScraper):
             field_type='number', default=str(STREAM_POOL_SIZE),
             placeholder=str(STREAM_POOL_SIZE),
             help_text='Number of concurrent Pluto TV sessions for stream resolution. Default is 10. Increase if you have many concurrent viewers.',
+        ),
+        ConfigField(
+            key='route_playlists', label='Route playlists through FastChannels',
+            field_type='toggle', default='false',
+            help_text='Turn on if you watch from outside the selected region, such as the US lineup from the UK. '
+                       'Pluto picks ads by the address that fetches the playlists. Without this, ad breaks '
+                       'play a repeating error clip that can freeze players. FastChannels then handles every '
+                       'playlist refresh, so expect a little more server load.',
         ),
     ]
 

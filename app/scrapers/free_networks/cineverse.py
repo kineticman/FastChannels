@@ -54,8 +54,10 @@ _SITES = (
 # BeOND's (its EntrepreneurTV plays; Cineverse's g-mana copy doesn't).
 _ELSEWHERE = {'cmc california music channel', 'tastemade us', 'tastemade home', 'tastemade travel',
               'entrepreneurtv'}
-# Hosts that need the stream URL's query string.
-_KEEP_QUERY = {'cnvslinear.telos.indicue.com'}
+# Hosts that need the stream URL's query string: indicue answers 400
+# "missing required headers or parameters" without its ad macros, on every
+# telos.indicue.com host (cnvslinear., 3682., ...).
+_KEEP_QUERY_SUFFIX = 'telos.indicue.com'
 # Names category_utils can't place.
 _CATEGORY = {
     'midnightpulp': 'Movies',
@@ -91,7 +93,9 @@ def _slug(title: str) -> str:
 
 
 def _stream_url(url: str) -> str:
-    return url if urlsplit(url).hostname in _KEEP_QUERY else url.split('?', 1)[0]
+    host = (urlsplit(url).hostname or '').lower()
+    keep = host == _KEEP_QUERY_SUFFIX or host.endswith('.' + _KEEP_QUERY_SUFFIX)
+    return url if keep else url.split('?', 1)[0]
 
 
 class Cineverse(Network):

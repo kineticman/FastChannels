@@ -62,9 +62,32 @@ def catalog(s) -> list[dict]:
     return s.memo('ognetwork_catalog', fetch)
 
 
-class OGNetwork(Network):
+# Sotal partner channels on AWS MediaTailor answer their playlists only with
+# the site's Origin/Referer (504 otherwise; segments play without), which a
+# client following a 302 doesn't send. Those streams go through the Free
+# Networks playlist proxy with the tenant's headers; everything else still
+# gets a plain redirect (Network.proxies).
+_MEDIATAILOR_HOSTS = ('mediatailor.us-west-2.amazonaws.com', 'mediatailor.us-east-1.amazonaws.com',
+                      'mediatailor.us-east-2.amazonaws.com')
+
+
+class SotalProxy:
+    """Mixin for Sotal tenants: proxy MediaTailor streams with the tenant's headers."""
+    tenant: tuple[str, str]
+    proxied = True
+    proxy_hosts = _MEDIATAILOR_HOSTS
+
+    def proxies(self, url: str) -> bool:
+        return self.proxy_allows(url)
+
+    def proxy_headers(self) -> dict:
+        return headers(self.tenant)
+
+
+class OGNetwork(SotalProxy, Network):
     key = 'ognetwork'
     name = 'OG Network'
+    tenant = OG_TENANT
     # Channels the last programs() run had no current rows for, so they get
     # tvtv or placeholder blocks.
     _unguided: frozenset[str] = frozenset()
@@ -179,8 +202,9 @@ def _playback_url(s, tenant, asset_id: str, token: str) -> str:
     url = ((r.json() or {}).get('data') or {}).get('playback_url')
     if not url:
         raise RuntimeError(f'Sotal {tenant[0]} gave no playback URL for channel {asset_id}')
-    if not _has_segments(s, tenant, url):
-        raise EmptyPlaylistError(f'Sotal {tenant[0]} channel {asset_id} is serving an empty playlist (no segments)')
+    problem = _stream_problem(s, tenant, url)
+    if problem:
+        raise EmptyPlaylistError(f'Sotal {tenant[0]} channel {asset_id} {problem}')
     return url
 
 
@@ -189,20 +213,35 @@ def _description(text: str | None) -> str | None:
     return None if not text or text.strip() in ('Movie', 'Show', 'TBD') else text
 
 
-def _has_segments(s, tenant, url: str) -> bool:
-    """False only when the first variant definitely lists no segments; any
-    probe failure lets the URL through for the player to try."""
+def _stream_problem(s, tenant, url: str) -> str | None:
+    """Why the stream Sotal handed out can't play, or None. Only a definite
+    answer counts: the master or first variant answering 404/410/5xx (some
+    partner channels point at a dead MediaTailor or CDN origin and 504 every
+    time), or a variant that lists no segments. A timeout or connection error
+    lets the URL through for the player to try (some origins are just slow).
+    resolve() reports a problem as EmptyPlaylistError: playback gets a quick
+    503 instead of a redirect to a dead stream, and the audit (see
+    FreeNetworksScraper.audit_resolve) marks the channel dead after repeated
+    tries."""
+    def dead(r) -> bool:
+        return r.status_code in (404, 410) or r.status_code >= 500
     try:
         r = s.session.get(url, headers=headers(tenant), timeout=15)
+        if dead(r):
+            return f'stream answered HTTP {r.status_code}'
         if not r.ok:
-            return True
+            return None
         variant = next((ln.strip() for ln in r.text.splitlines() if ln.strip() and not ln.startswith('#')), None)
-        if not variant:
-            return True
+        if not variant or '#EXT-X-STREAM-INF' not in r.text:
+            return None  # not a master playlist: nothing further to probe
         v = s.session.get(urljoin(r.url, variant), headers=headers(tenant), timeout=15)
-        return not v.ok or '#EXTINF' in v.text
+        if dead(v):
+            return f'stream variant answered HTTP {v.status_code}'
+        if v.ok and '#EXTINF' not in v.text:
+            return 'is serving an empty playlist (no segments)'
+        return None
     except Exception:
-        return True
+        return None
 
 
 def auth_token(s, tenant: tuple[str, str], fresh: bool = False) -> str:

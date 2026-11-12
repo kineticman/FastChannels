@@ -134,6 +134,8 @@ def _apply_channel_filters(q, filters: dict | None = None):
             q = q.filter(Channel.scrape_pinned == True)
         elif pf == 'active':
             q = q.filter(Channel.is_active == True)
+    if filters.get('chnum') == 'locked':
+        q = q.filter(db.or_(Channel.number_pinned == True, Channel.pinned_chno.isnot(None)))
     if gf := filters.get('gracenote'):
         if gf in ('1', 'has_id'):
             q = q.filter(Channel.gracenote_id != None, Channel.gracenote_id != '')

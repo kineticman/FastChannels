@@ -10,6 +10,7 @@ from ..channel_tags import event_filter_clause, event_sport_clause
 from ..url import proxy_logo_url
 from ..scrapers import registry as _scraper_registry
 from ..drm_bridge import DRM_BRIDGE_TRUSTED_SOURCES
+from .. import folded_sources
 
 log = logging.getLogger(__name__)
 
@@ -87,6 +88,7 @@ class _MiniChannel:
     source: _MiniSource
     provider_number: str | None = None
     pinned_chno: str | None = None
+    category: str | None = None
 
 
 def _parse_gracenote_id(ch) -> str | None:
@@ -206,15 +208,43 @@ def _drm_bridge_query_filters(filters: dict) -> dict:
     return filters
 
 
+def bridge_only_clause():
+    """SQL for "plays only through a bridge": flagged by the audit
+    (requires_drm_bridge), a DASH stream from a DRM-capable source, or any
+    channel of a source whose channels are all DRM. The query must join Source."""
+    clause = db.func.coalesce(Channel.requires_drm_bridge, False) == True
+    if capable := _drm_bridge_capable_source_names():
+        clause = db.or_(clause, db.and_(
+            db.func.lower(db.func.coalesce(Channel.stream_type, '')) == 'dash',
+            Source.name.in_(capable),
+        ))
+    if all_drm := _all_channels_drm_source_names():
+        clause = db.or_(clause, Source.name.in_(all_drm))
+    return clause
+
+
+def channel_type_clause(value):
+    """Feed "Channel type" limit: 'bridge' keeps only bridge channels,
+    'standard' only channels that play directly. None for no limit."""
+    if value == 'bridge':
+        return bridge_only_clause()
+    if value == 'standard':
+        return db.not_(bridge_only_clause())
+    return None
+
+
 def _apply_event_filter(query, filters: dict):
-    """Include (events only / no events) limits the matched channels; a pin
-    joins regardless, as it does past the other filters."""
-    event_clause = event_filter_clause(filters.get('event'))
-    if event_clause is None:
-        return query
-    if pinned_ids := filters.get('pinned_channel_ids'):
-        event_clause = db.or_(event_clause, Channel.id.in_(pinned_ids))
-    return query.filter(event_clause)
+    """Include (events only / no events) and Channel type (bridge / standard)
+    limit the matched channels; a pin joins regardless, as it does past the
+    other filters."""
+    for clause in (event_filter_clause(filters.get('event')),
+                   channel_type_clause(filters.get('channel_type'))):
+        if clause is None:
+            continue
+        if pinned_ids := filters.get('pinned_channel_ids'):
+            clause = db.or_(clause, Channel.id.in_(pinned_ids))
+        query = query.filter(clause)
+    return query
 
 
 def filter_match_clauses(filters: dict) -> list:
@@ -226,10 +256,12 @@ def filter_match_clauses(filters: dict) -> list:
     not true, for an uncategorized channel, so leaving out News must not also
     drop every channel without a category."""
     match = []
+    # Source names as feeds know them: a source folded into Free Networks
+    # keeps its old name (app/folded_sources.py).
     if sources := filters.get('source'):
-        match.append(Source.name.in_(sources))
+        match.append(folded_sources.source_clause(sources))
     if excluded_sources := filters.get('exclude_source'):
-        match.append(Source.name.notin_(excluded_sources))
+        match.append(folded_sources.exclude_clause(excluded_sources))
     if categories := filters.get('category'):
         match.append(Channel.category.in_(categories))
     if excluded_categories := filters.get('exclude_category'):
@@ -352,6 +384,7 @@ def _build_channel_stub_query(filters: dict):
         Channel.slug,
         Channel.provider_number,
         Channel.pinned_chno,
+        Channel.category,
         Source.name.label('source_name'),
         Source.display_name.label('source_display_name'),
         Source.chnum_start.label('source_chnum_start'),
@@ -425,6 +458,7 @@ def _selected_channel_stubs(filters: dict | None = None, *, gracenote: bool | No
             ),
             provider_number=row.provider_number,
             pinned_chno=row.pinned_chno,
+            category=row.category,
         )
         for row in rows
     ]
@@ -493,6 +527,8 @@ def feed_to_query_filters(feed_filters: dict) -> dict:
     f = {}
     if feed_filters.get('event') in ('0', '1'):
         f['event'] = feed_filters['event']
+    if feed_filters.get('channel_type') in ('bridge', 'standard'):
+        f['channel_type'] = feed_filters['channel_type']
     if channel_ids := feed_filters.get('channel_ids'):
         # Explicit channel list overrides source/category/language filters.
         f['channel_ids'] = channel_ids
@@ -711,55 +747,18 @@ def _resolve_app_chnum_map(channels, *, feed_chnum_start: int = None,
                            namespace_start: int = None, feed_id: int = None,
                            bridge: bool = False):
     """App-assigned numbers for a playlist's channels, read from channel_numbers
-    (app.chnum): feed_id selects that feed's rows, namespace_start alone the
-    master Gracenote rows (the bridge ones for a bridge playlist), neither the
-    master rows. A channel without a row
-    (turned on since the last settle) goes unnumbered until the rebuild's
-    settle step. feed_chnum_start without feed_id numbers an unsaved feed for
-    a preview, storing nothing."""
-    from ..chnum import (
-        MASTER_BRIDGE_GRACENOTE_SCOPE, MASTER_GRACENOTE_SCOPE, MASTER_SCOPE,
-        plan_numbers, read_scope,
-    )
+    (app.chnum): feed_id selects that feed's rows (the main numbers for the
+    Default feed), otherwise the main numbers, which every master playlist
+    (standard, Gracenote, mixed, bridge) reads. namespace_start and bridge no
+    longer change anything. A channel without a row (turned on since the last
+    settle) goes unnumbered until the rebuild's settle step. feed_chnum_start
+    without feed_id numbers an unsaved feed for a preview, storing nothing."""
+    from ..chnum import MASTER_SCOPE, feed_scope, plan_numbers, read_scope
     if feed_id is None and feed_chnum_start is not None:
         return plan_numbers(channels, feed_chnum_start), []
-    if feed_id is not None:
-        scope = feed_id
-    elif namespace_start is not None:
-        scope = MASTER_BRIDGE_GRACENOTE_SCOPE if bridge else MASTER_GRACENOTE_SCOPE
-    else:
-        scope = MASTER_SCOPE
+    scope = feed_scope(feed_id) if feed_id is not None else MASTER_SCOPE
     stored = read_scope(scope)
     return {ch.id: stored[ch.id] for ch in channels if ch.id in stored}, []
-
-
-def get_chnum_overlaps() -> list[str]:
-    """
-    Warnings for sources whose channel number starts (Source.chnum_start) put
-    their blocks on top of each other. Used by the admin UI.
-    """
-    counts: dict[str, int] = {}
-    starts: dict[str, int] = {}
-    for ch in _selected_channel_stubs({}, gracenote=None):
-        src = ch.source.name
-        counts[src] = counts.get(src, 0) + 1
-        if ch.source.chnum_start:
-            starts[src] = ch.source.chnum_start
-    configured = sorted((src, start, counts[src]) for src, start in starts.items())
-    warnings: list[str] = []
-    for i in range(len(configured)):
-        for j in range(i + 1, len(configured)):
-            a_name, a_start, a_count = configured[i]
-            b_name, b_start, b_count = configured[j]
-            a_end = a_start + a_count
-            b_end = b_start + b_count
-            if a_start < b_end and b_start < a_end:
-                warnings.append(
-                    f"'{a_name}' (ch {a_start}–{a_end - 1}, {a_count} channels) overlaps "
-                    f"'{b_name}' (ch {b_start}–{b_end - 1}, {b_count} channels) "
-                    f"at ch {max(a_start, b_start)}–{min(a_end, b_end) - 1}"
-                )
-    return warnings
 
 
 def get_global_chnum_overlaps() -> list[str]:
@@ -952,10 +951,8 @@ def generate_m3u(filters: dict = None, base_url: str = None,
     Excludes channels with a valid Gracenote ID — those belong in /m3u/gracenote
     so Channels DVR doesn't mix EPG sources within a single M3U source.
 
-    Channel numbering (tvg-chno):
-      - feed_chnum_start set  → sequential from that number for all channels in this feed
-      - feed_chnum_start None → per-source Source.chnum_start values (source-level config)
-      - source without chnum_start → existing Channel.number (or omitted if null)
+    Channel numbering (tvg-chno): read from channel_numbers (app.chnum), the
+    feed's rows with feed_id, else the main numbers (see _resolve_app_chnum_map).
     """
     filters  = filters or {}
     base_url = (base_url or '').rstrip('/')
@@ -1672,7 +1669,9 @@ def generate_prismcast_m3u(filters: dict = None, base_url: str = None, *,
 
 
 def _tvg_id(ch) -> str:
-    return f'{ch.source.name}.{ch.source_channel_id}'
+    # '<source>.<id>'; a channel of a source folded into Free Networks keeps
+    # its old '<old source>.<id>' (app/folded_sources.py).
+    return folded_sources.tvg_id(ch)
 
 
 def _try_fix_mojibake(s: str) -> str:

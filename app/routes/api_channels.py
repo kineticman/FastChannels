@@ -91,6 +91,32 @@ def bulk_update_channels():
     return jsonify({'status': 'queued' if matched else 'idle', 'updated': matched})
 
 
+@channels_bp.route('/channels/unlock-numbers', methods=['POST'])
+def bulk_unlock_channel_numbers():
+    """Remove the number lock (whole or decimal) from the selected channels,
+    by ids or by the Channels page filters. Each keeps the number it shows
+    now; from here on every feed numbers it on its own again."""
+    data = request.get_json(force=True) or {}
+    ids = [int(v) for v in (data.get('ids') or []) if str(v).isdigit()]
+    filters = data.get('filters') or {}
+    q = Channel.query.join(Source) if not ids else Channel.query.filter(Channel.id.in_(ids))
+    if not ids:
+        q = _apply_channel_filters(q, filters)
+    channels = q.filter(db.or_(Channel.number_pinned == True,
+                               Channel.pinned_chno.isnot(None))).all()
+    if not channels:
+        return jsonify({'unlocked': 0})
+    for ch in channels:
+        ch.number_pinned = False
+        ch.pinned_chno = None
+    from ..worker import _refresh_auto_channel_numbers
+    db.session.flush()
+    _refresh_auto_channel_numbers()
+    db.session.commit()
+    _invalidate_and_refresh_xml()
+    return jsonify({'unlocked': len(channels)})
+
+
 @channels_bp.route('/channels/gracenote-bulk', methods=['POST'])
 def bulk_update_channel_gracenote():
     data = request.get_json(force=True) or {}
@@ -153,53 +179,6 @@ def update_channel(channel_id):
         pinned_chno = str(data['pinned_chno']).strip()
         if not _DECIMAL_CHNO_RE.fullmatch(pinned_chno):
             return jsonify({'error': 'Decimal channel number must look like 700.1'}), 422
-
-    # Locks started from a feed's number editor must not silently replace that
-    # channel's different number in another feed. The Channels page remains the
-    # place for deliberate channel-wide overrides.
-    if 'lock_from_feed_id' in data:
-        feed_id = data['lock_from_feed_id']
-        if isinstance(feed_id, bool) or not isinstance(feed_id, int):
-            return jsonify({'error': 'lock_from_feed_id must be a feed ID'}), 400
-        origin = db.session.get(Feed, feed_id)
-        if origin is None:
-            return jsonify({'error': 'Feed not found'}), 404
-        requested = pinned_chno if pinned_chno is not None else data.get('number')
-        if requested is None or data.get('number_pinned') is False:
-            return jsonify({'error': 'A channel number lock is required'}), 400
-        from .feeds_api import _displayed_feed_chnum_map
-        origin_map = _displayed_feed_chnum_map(origin)
-        origin_number = origin_map.get(ch.id)
-        if origin_number is None:
-            return jsonify({'error': 'This channel is not in the selected feed. Save the feed first.'}), 409
-        conflicts = {}
-        occupied = []
-        for feed in [origin, *Feed.query.filter(Feed.id != origin.id).all()]:
-            number_map = origin_map if feed.id == origin.id else _displayed_feed_chnum_map(feed)
-            other_number = number_map.get(ch.id)
-            if other_number is not None and str(other_number) != str(requested):
-                if feed.id != origin.id:
-                    conflicts[feed.name] = str(other_number)
-            if other_number is not None and any(
-                channel_id != ch.id and str(number) == str(requested)
-                for channel_id, number in number_map.items()
-            ):
-                occupied.append(feed.name)
-        if occupied:
-            return jsonify({
-                'error': f'Cannot lock {requested} globally: that number belongs to another channel in '
-                         f'{", ".join(occupied[:3])}. No numbers were changed.',
-            }), 409
-        if conflicts:
-            summary = ', '.join(f'{name} ({number})' for name, number in list(conflicts.items())[:3])
-            if len(conflicts) > 3:
-                summary += f', and {len(conflicts) - 3} more'
-            return jsonify({
-                'error': f'Cannot lock {requested} globally: this channel has a different number in '
-                         f'{summary}. No numbers were changed. Use the Channels page for an intentional '
-                         'global override.',
-                'conflicts': conflicts,
-            }), 409
 
     def _apply_changes():
         """Apply all field mutations to ch. Re-runnable after a rollback."""

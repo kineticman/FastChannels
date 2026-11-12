@@ -93,6 +93,14 @@
       text-transform: uppercase; color: var(--text-muted);
       border-top: 1px solid var(--border-strong);
     }
+    /* Lite mode: the Off label is a toggle, and a group's off sources start tucked away. */
+    .source-off-divider .off-toggle {
+      all: unset; cursor: pointer; display: inline-flex; align-items: center; gap: 0.35em;
+      font: inherit; letter-spacing: inherit; text-transform: inherit; color: inherit;
+    }
+    .source-off-divider .off-toggle:hover { color: var(--text-soft); }
+    .source-off-divider .off-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 3px; }
+    .off-toggle .off-chevron { display: inline-block; width: 0.9em; }
     .dashboard-table {
       width: 100%; border-collapse: collapse;
     }
@@ -160,6 +168,10 @@
       --cat-color: var(--info-soft, #7eb8f7);
       --cat-border: var(--info-border, #2a5080);
     }
+    .source-category-header.cat-network {
+      --cat-color: var(--teal-soft);
+      --cat-border: var(--teal);
+    }
     .source-category-header.cat-account {
       --cat-color: var(--success-soft);
       --cat-border: var(--success-fill);
@@ -179,6 +191,7 @@
     .cat-header-action { float: right; text-transform: none; letter-spacing: normal; margin: -0.2rem 0; }
     .cat-chevron { display: inline-block; width: 0.9em; margin-right: 0.3em; }
     .cat-count { font-weight: 600; opacity: 0.75; margin-left: 0.6em; letter-spacing: normal; text-transform: none; }
+    .cat-hint { font-weight: 500; color: var(--text-muted); margin-left: 0.6em; letter-spacing: normal; text-transform: none; }
 
     /* Quick access bar: filter + category jump chips */
     .sources-quicknav {
@@ -203,8 +216,8 @@
 
     /* Row visibility: collapsed category or filtered-out by search */
     tr.dash-row.cat-collapsed, tr.config-panel-row.cat-collapsed, tr.source-off-divider.cat-collapsed,
+    tr.dash-row.off-collapsed, tr.config-panel-row.off-collapsed,
     tr.source-off-divider.filter-hidden,
-    tr.dash-row.child-collapsed, tr.config-panel-row.child-collapsed,
     tr.dash-row.filter-hidden, tr.config-panel-row.filter-hidden,
     tr.source-category-header.filter-hidden {
       display: none !important;
@@ -229,8 +242,7 @@
     .meta-stale { color: var(--danger); font-weight: 600; }
     .meta-pending { color: var(--text-soft); font-style: italic; }
 
-    /* Anything open — a source with its Configure panel showing, or a source with
-       the sources listed under it shown — reads as one raised block: a neutral tint
+    /* A source with its Configure panel showing reads as one raised block: a neutral tint
        on its rows and a stronger line above and below it. Not blue and no left
        edge: a blue tint with a left bar is a running scrape, and the coloured left
        edge is the group header. */
@@ -238,40 +250,10 @@
     :root[data-theme="light"] .dashboard-table { --open-bg: color-mix(in srgb, var(--text) 7%, var(--surface)); }
     /* An off row fades by opacity, which would fade the block's tint with it and
        stripe the block; fade what's in the cells instead. */
-    .dashboard-table tbody tr.dash-row.disabled:is(.child-row, .config-open) { opacity: 1; }
-    .dashboard-table tbody tr.dash-row.disabled:is(.child-row, .config-open) > td > * { opacity: 0.6; }
-    .dashboard-table tbody tr.dash-row.config-open,
-    .dashboard-table tbody tr.dash-row.has-open-children,
-    .dashboard-table tbody tr.dash-row.child-row { background: var(--open-bg); }
-    .dashboard-table tbody tr.dash-row.config-open:not(.child-row),
-    .dashboard-table tbody tr.dash-row.has-open-children { border-top: 2px solid var(--border-strong); }
+    .dashboard-table tbody tr.dash-row.disabled.config-open { opacity: 1; }
+    .dashboard-table tbody tr.dash-row.disabled.config-open > td > * { opacity: 0.6; }
+    .dashboard-table tbody tr.dash-row.config-open { background: var(--open-bg); border-top: 2px solid var(--border-strong); }
     .config-panel-row td { border-bottom: 2px solid var(--border-strong); }
-    .dashboard-table tbody tr.dash-row.child-row.child-last { border-bottom: 2px solid var(--border-strong); }
-
-    /* Sources listed under another source's row (grouped_under): no dividers
-       inside the block, and each name hangs off a ↳ under the parent's name. */
-    tr.dash-row.child-row > td.col-source { padding-left: 2.6rem; }
-    tr.dash-row.child-row .source-name::before {
-      content: '↳'; display: inline-block; width: 1.2rem; margin-left: -1.2rem;
-      color: var(--text-muted); font-weight: 400;
-    }
-    tr.dash-row.child-row .source-name { font-size: 0.88rem; }
-    .dashboard-table tbody tr.dash-row.has-open-children:not(.config-open),
-    .dashboard-table tbody tr.dash-row.child-row:not(.child-last):not(.config-open) { border-bottom: none; }
-    .dashboard-table tbody tr.dash-row.has-open-children > td { padding-bottom: 0.4rem; }
-    .dashboard-table tbody tr.dash-row.child-row > td { padding-top: 0.35rem; padding-bottom: 0.35rem; }
-    .dashboard-table tbody tr.dash-row.child-row.child-last > td { padding-bottom: 0.7rem; }
-    .config-panel-row[data-parent] td { border-bottom: 1px solid var(--border); }
-    .child-toggle {
-      display: inline-flex; align-items: center; gap: 0.4rem; margin-top: 0.45rem;
-      background: var(--bg); color: var(--text-soft); border: 1px solid var(--border-strong);
-      border-radius: 999px; padding: 0.25rem 0.75rem; cursor: pointer;
-      font: inherit; font-size: 0.78rem; font-weight: 600; text-align: left;
-    }
-    .child-toggle:hover { color: var(--text); border-color: var(--text-muted); }
-    .child-toggle[aria-expanded="true"] { color: var(--accent-soft); border-color: var(--accent-soft); }
-    .child-toggle-names { font-weight: 500; color: var(--text-muted); }
-    .child-toggle-count { font-weight: 500; opacity: 0.75; white-space: nowrap; }
 
     /* ── Row health: one status line + a channel bar; quiet when all is well ── */
     .row-health {
@@ -728,6 +710,29 @@
     .espn-team-list label { display: flex; align-items: center; gap: 0.45rem; padding: 0.2rem 0.15rem; font-size: 0.8rem; color: var(--text); cursor: pointer; min-width: 0; }
     .espn-team-list label > span:first-of-type { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .espn-team-list .espn-list-note { grid-column: 1 / -1; }
+    .gray-picker .espn-picked { margin: 0.5rem 0 0.2rem; }
+    .gray-head { display: flex; align-items: baseline; gap: 0.75rem; }
+    .gray-head .config-subtitle { font-weight: 600; font-size: 0.9rem; margin: 0; }
+    .gray-head .gray-clear { margin-left: auto; }
+    .gray-chip { display: inline-flex !important; align-items: center; gap: 0.3rem; }
+    .gray-chip button { background: none; border: 0; padding: 0 0 0 0.15rem; color: var(--text-muted); font-size: 0.9rem; line-height: 1; cursor: pointer; }
+    .gray-chip button:hover { color: var(--danger); }
+    .gray-picker .espn-team-search { margin-top: 0.6rem; }
+    .gray-list {
+      margin-top: 0.5rem; max-height: 300px; overflow-y: auto; border-top: 1px solid var(--border); padding-top: 0.2rem;
+      display: grid; grid-template-columns: repeat(auto-fill, minmax(270px, 1fr)); gap: 0 1rem; align-content: start;
+    }
+    .gray-state {
+      grid-column: 1 / -1; margin-top: 0.55rem; padding-bottom: 0.15rem; border-bottom: 1px solid var(--border);
+      font-size: 0.7rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-soft);
+    }
+    .gray-state[hidden], .gray-station[hidden] { display: none; }
+    .gray-station { display: flex; align-items: baseline; gap: 0.45rem; padding: 0.22rem 0.15rem; font-size: 0.82rem; color: var(--text); cursor: pointer; min-width: 0; }
+    .gray-station input { accent-color: var(--focus-accent); align-self: center; margin: 0; flex: none; }
+    .gray-city, .gray-call { flex: none; white-space: nowrap; }
+    .gray-call { font-weight: 600; font-variant-numeric: tabular-nums; }
+    .gray-domain { flex: 1 1 auto; min-width: 0; color: var(--text-muted); font-size: 0.74rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .gray-station:hover .gray-city { color: var(--text); text-decoration: underline; text-decoration-color: var(--border); }
     .espn-picked .espn-chip-btn { background: none; border: 0; padding: 0 0 0 0.3rem; color: var(--text-muted); cursor: pointer; font-size: 0.85rem; }
     .espn-picked .espn-chip-btn:hover { color: var(--text); }
     .espn-picked .espn-chip-link { background: none; border: 0; padding: 0; color: inherit; font: inherit; cursor: pointer; text-align: left; }
@@ -1128,8 +1133,6 @@
           {% set this_cat = source_categories.get(source.name, 'fast') if not is_custom else 'custom' %}
           {% set mix = source_mix.get(source.id, {}) %}
           {% set status = source_status.get(source.id) %}
-          {% set parent_name = source_parent.get(source.name) %}
-          {% set block_on = source_block_on.get(source.name, source.is_enabled) %}
           {% if this_cat != ns.last_cat %}
             {% if ns.last_cat is not none %}
         </tbody>
@@ -1145,7 +1148,7 @@
             <tr class="source-category-header cat-{{ this_cat }}" id="cat-header-{{ this_cat }}"
                 data-cat="{{ this_cat }}" onclick="toggleCategoryCollapse('{{ this_cat }}')">
               <td colspan="4">
-                <span class="cat-chevron" id="cat-chevron-{{ this_cat }}">▾</span>{{ _CAT_LABELS.get(this_cat, this_cat | title) }}<span class="cat-count"><span class="cat-on-count" id="cat-on-count-{{ this_cat }}">{{ category_on_counts.get(this_cat, 0) }}</span> of {{ category_counts.get(this_cat, 0) }} on</span>
+                <span class="cat-chevron" id="cat-chevron-{{ this_cat }}">▾</span>{{ _CAT_LABELS.get(this_cat, this_cat | title) }}{% if source_category_hints.get(this_cat) %}<span class="cat-hint">{{ source_category_hints[this_cat] }}</span>{% endif %}<span class="cat-count"><span class="cat-on-count" id="cat-on-count-{{ this_cat }}">{{ category_on_counts.get(this_cat, 0) }}</span> of {{ category_counts.get(this_cat, 0) }} on</span>
                 {% if this_cat == 'custom' %}
                 <button type="button" class="btn btn-run btn-sm cat-header-action"
                         onclick="event.stopPropagation(); openPlaylistModal()"
@@ -1155,16 +1158,20 @@
             </tr>
           {% endif %}
 
-          {% if block_on %}{% set ns.any_on = True %}{% endif %}
-          {# Only between on and off sources: a group with none on says so in its header. #}
-          {% if ns.last_on and not block_on %}
+          {% if source.is_enabled %}{% set ns.any_on = True %}{% endif %}
+          {# Only between on and off sources: a group with none on says so in its header.
+             Lite mode tucks a group's off sources behind it, so there it's always shown. #}
+          {% if ns.last_on and not source.is_enabled %}
             {% set ns.last_on = False %}
-            {% if ns.any_on %}
+            {% if ui.lite %}
+            <tr class="source-off-divider" data-cat="{{ this_cat }}"><td colspan="4"><button type="button" class="off-toggle" aria-expanded="false"
+                onclick="toggleOffSources('{{ this_cat }}')"><span class="off-chevron">▸</span>Off · <span class="off-count"></span></button></td></tr>
+            {% elif ns.any_on %}
             <tr class="source-off-divider" data-cat="{{ this_cat }}"><td colspan="4">Off</td></tr>
             {% endif %}
           {% endif %}
-          <tr class="dash-row {% if not source.is_enabled %}disabled{% endif %}{% if parent_name %} child-row{% if source_children[parent_name][-1] is sameas source %} child-last{% endif %}{% endif %}" id="dash-row-{{ source.id }}"
-              data-cat="{{ this_cat }}"{% if parent_name %} data-parent="{{ parent_name }}"{% endif %} data-search="{{ (source.display_name ~ ' ' ~ source.name) | lower }}"
+          <tr class="dash-row {% if not source.is_enabled %}disabled{% endif %}" id="dash-row-{{ source.id }}"
+              data-cat="{{ this_cat }}" data-search="{{ (source.display_name ~ ' ' ~ source.name) | lower }}"
               data-playback="{{ mix.get('kind', 'clear') }}"
               data-fc-player="{{ 'true' if mix.get('fc_player') else 'false' }}"
               data-advanced="{{ 'true' if advanced_sources.get(source.name) else 'false' }}"
@@ -1237,16 +1244,6 @@
               </div>
               {% if ui.lite and not ui.show_drm and mix.get('restricted', 0) %}
               <div class="config-note">{{ mix.restricted }} protected channel{{ 's' if mix.restricted != 1 else '' }} excluded from standard playlists.</div>
-              {% endif %}
-              {% set children = source_children.get(source.name) %}
-              {% if children %}
-              <button type="button" class="child-toggle" id="child-toggle-{{ source.name }}" aria-expanded="false"
-                      onclick="toggleChildSources('{{ source.name }}')"
-                      title="Separate sources for networks' own websites, listed here to save space">
-                <span class="child-toggle-chevron">▸</span>
-                <span>{{ children | length }} more sources <span class="child-toggle-names">{{ children | map(attribute='display_name') | join(' · ') }}</span></span>
-                <span class="child-toggle-count"><span id="child-on-count-{{ source.name }}">{{ children | selectattr('is_enabled') | list | length }}</span> on</span>
-              </button>
               {% endif %}
               <div class="drm-heads-up" id="drm-heads-up-{{ source.id }}" hidden></div>
               {% if not is_custom %}
@@ -1322,7 +1319,7 @@
 
           <!-- Custom source: collapsible channel list panel -->
           {% if is_custom %}
-          <tr class="config-panel-row" id="config-panel-row-{{ source.id }}" data-cat="{{ this_cat }}"{% if parent_name %} data-parent="{{ parent_name }}"{% endif %} style="display:none">
+          <tr class="config-panel-row" id="config-panel-row-{{ source.id }}" data-cat="{{ this_cat }}" style="display:none">
             <td colspan="4" class="config-panel-cell">
               <div class="config-panel" id="card-{{ source.id }}">
                 <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1rem;">
@@ -1342,7 +1339,7 @@
 
           <!-- Collapsible config panel row (not shown for custom source) -->
           {% if not is_custom %}
-          <tr class="config-panel-row" id="config-panel-row-{{ source.id }}" data-cat="{{ this_cat }}"{% if parent_name %} data-parent="{{ parent_name }}"{% endif %} style="display:none">
+          <tr class="config-panel-row" id="config-panel-row-{{ source.id }}" data-cat="{{ this_cat }}" style="display:none">
             <td colspan="4" class="config-panel-cell">
               <div class="config-panel" id="card-{{ source.id }}"
                    data-source-name="{{ source.name }}"
@@ -1434,7 +1431,7 @@
                     <option value="review"  {% if _pol == 'review'  %}selected{% endif %}>Hold for review</option>
                   </select>
                   <span class="save-status" id="newchan-status-{{ source.id }}"></span>
-                  <div class="help">How channels found by a scrape enter. "Hold for review" adds them disabled — find them in Channels under the "Needs review" filter and enable the ones you want.</div>
+                  <div class="help">How channels found by a scrape enter. "Hold for review" adds them disabled — find them in Channels under the "Needs review" filter and enable the ones you want.{% if event_channels_skip_review %} New event channels skip review (<a href="/admin/settings#settings-section-feeds">Settings</a>).{% endif %}</div>
                 </div>
 
                 <div class="delete-inactive-row">
@@ -1740,10 +1737,6 @@
       const row = document.getElementById(`config-panel-row-${sourceId}`);
       if (!row) return;
       const isOpen = row.style.display !== 'none';
-      // A source with sources listed under it shows one thing beneath its row at
-      // a time: its panel or those sources, never the sources below the panel.
-      const childToggle = document.querySelector(`#dash-row-${sourceId} .child-toggle[aria-expanded="true"]`);
-      if (!isOpen && childToggle) toggleChildSources(childToggle.id.replace('child-toggle-', ''));
       row.style.display = isOpen ? 'none' : '';
       if (isOpen) {  // no-ops unless a sign-in is waiting here
         espnAbandon(sourceId);
@@ -1780,7 +1773,7 @@
         _saveCollapsedCats(collapsedCats);
         _applyCategoryCollapse(cat, false);
       }
-      if (row?.classList.contains('child-collapsed')) _applyChildCollapse(row.dataset.parent, false);
+      if (cat && row.classList.contains('off-collapsed')) toggleOffSources(cat, true);
       if (!row || row.style.display !== 'none') {
         row?.scrollIntoView({ behavior: 'smooth', block: 'start' });
         return;
@@ -2184,7 +2177,7 @@
       }
       if (dashRow) dashRow.classList.toggle('disabled', !enabled);
       if (dashRow) _refreshCategoryOnCount(dashRow.dataset.cat);
-      if (dashRow?.dataset.parent) _refreshChildOnCount(dashRow.dataset.parent);
+      if (dashRow) _refreshOffCount(dashRow.dataset.cat);
       runBtns.forEach(btn => { btn.disabled = !enabled; });
       if (auditBtn) auditBtn.disabled = !enabled;
       if (dashRow?.dataset.custom === 'true') {
@@ -3316,6 +3309,24 @@
           <div class="help">${escapeHtml(poolField.help_text || '')}</div>
         </div>` : '';
 
+      // #92: viewers outside the selected region need the stitcher to see the
+      // region's address on every playlist fetch, not only at boot.
+      const routeField = schema.find(f => f.key === 'route_playlists');
+      const routeOn = ['1', 'true', 'yes', 'on'].includes(String(values.route_playlists ?? routeField?.default ?? '').trim().toLowerCase());
+      const routeHtml = routeField ? `
+        <div class="field field-full">
+          <div class="config-toggle-field">
+            <div class="config-toggle-text">
+              <label for="cfg-${sourceId}-route_playlists">${escapeHtml(routeField.label)}</label>
+              <div class="help">${escapeHtml(routeField.help_text || '')}</div>
+            </div>
+            <label class="toggle" title="${escapeHtml(routeField.label)}">
+              <input type="checkbox" id="cfg-${sourceId}-route_playlists" data-key="route_playlists" data-secret="false"${routeOn ? ' checked' : ''}>
+              <span class="slider"></span>
+            </label>
+          </div>
+        </div>` : '';
+
       return `
         <div class="config-title">Source Settings</div>
         <div class="config-note">Choose one or more Pluto regions. The selector is limited to the live regions we verified.</div>
@@ -3329,6 +3340,7 @@
           <div class="help">${escapeHtml(regionField.help_text || '')}</div>
         </div>
         ${poolHtml ? `<div class="fields-grid">${poolHtml}</div>` : ''}
+        ${routeHtml}
         <div class="config-actions">
           <span class="config-status" id="config-status-${sourceId}"></span>
           <button class="btn btn-cancel" type="button" onclick="clearConfigFields(${sourceId})">Clear</button>
@@ -3422,7 +3434,7 @@
         }
 
         // ESPN's, Paramount+'s and Amazon Sports' visible settings are rendered separately from their hidden schemas.
-        if (!schema.length && !['espn', 'paramount', 'amazon_sports', 'b1g_plus'].includes(sourceName) && !cfg.tve_signin) {
+        if (!schema.length && !['espn', 'paramount', 'amazon_sports', 'b1g_plus', 'nsn', 'gray_local'].includes(sourceName) && !cfg.tve_signin) {
           if (badge) {
             badge.textContent = 'Auto';
             badge.className = 'config-badge auto';
@@ -5217,8 +5229,114 @@
         ${_saveRow(sourceId)}`;
     }
 
-    // B1G+ event filter: picked sports and/or picked schools; both must match.
-    function _b1gPlusFilter(sourceId, info) {
+    function renderNsnConfig(sourceId, schema, values, cfg) {
+      const info = (cfg && cfg.nsn) || {};
+      return `
+        <div class="config-title">Northeast Sports Network Settings</div>
+        <div class="config-note">Adds NSN's live New England college and high-school games as temporary channels, one per game
+          in the next two days. NSN doesn't publish end times, so each game gets a typical length for its sport, extended while
+          it's still live. Event channels retire an hour after that and are deleted a day later.</div>
+        ${_b1gPlusFilter(sourceId, info, `Pick sports, schools, or both; a game is added when it matches both. A school includes
+          its home games and any game it's named in, so "Colby" includes Colby's away games too.`)}
+        ${_saveRow(sourceId)}`;
+    }
+
+    // Gray Local News: a station picker (search, picked chips, list grouped by state).
+    const _grayStations = {};
+    function renderGrayLocalConfig(sourceId, schema, values, cfg) {
+      const info = (cfg && cfg.gray_local) || {};
+      const picked = new Set(info.station_filter || []);
+      const stations = info.stations || [];
+      _grayStations[sourceId] = stations;
+      setTimeout(() => grayLocalRefresh(sourceId), 0);  // count + chips once the card is in the page
+      const byState = new Map();
+      stations.forEach(st => {
+        const state = (st.market || '').split(', ').pop() || 'Other';
+        if (!byState.has(state)) byState.set(state, []);
+        byState.get(state).push(st);
+      });
+      const groups = [...byState.entries()].map(([state, list]) => `
+        <div class="gray-state" data-state="${escapeHtml(state)}">${escapeHtml(state === 'National' ? 'National' : state)}</div>
+        ${list.map(st => {
+          const city = (st.market || '').replace(/, [A-Z]{2}$/, '');
+          const search = `${st.market} ${st.call} ${st.domain}`.toLowerCase();
+          return `<label class="gray-station" data-search="${escapeHtml(search)}" data-state="${escapeHtml(state)}">
+              <input type="checkbox" class="gray-st-${sourceId}" value="${escapeHtml(st.site)}" ${picked.has(st.site) ? 'checked' : ''}
+                     onchange="grayLocalRefresh(${sourceId})">
+              <span class="gray-city">${escapeHtml(city)}</span>
+              <span class="gray-call">${escapeHtml(st.call)}</span>
+              <span class="gray-domain">${escapeHtml(st.domain)}</span>
+            </label>`;
+        }).join('')}`).join('');
+      return `
+        <div class="config-title">Gray Local News Settings</div>
+        <div class="config-note">Live streams from Gray Media's local TV stations: newscasts, 24/7 weather, breaking news and
+          live events, plus station sports and Telemundo channels where a station has them. InvestigateTV and Local News Live
+          are always included.</div>
+        <div class="espn-filter gray-picker">
+          <div class="gray-head">
+            <span class="config-subtitle">Stations</span>
+            <span class="espn-match" id="gray-count-${sourceId}"></span>
+            <button type="button" class="btn btn-sm gray-clear" id="gray-clear-${sourceId}" onclick="grayLocalClear(${sourceId})">Clear</button>
+          </div>
+          <div class="espn-picked" id="gray-picked-${sourceId}"></div>
+          <input type="search" class="espn-team-search" placeholder="Search by city, state or call letters"
+                 oninput="grayLocalFilter(${sourceId}, this.value)">
+          <div class="gray-list" id="gray-list-${sourceId}">
+            ${groups}
+            <div class="espn-list-note gray-empty" id="gray-empty-${sourceId}" hidden>No stations match.</div>
+          </div>
+        </div>
+        ${_saveRow(sourceId)}`;
+    }
+
+    function grayLocalRefresh(sourceId) {
+      const stations = _grayStations[sourceId] || [];
+      const bySite = Object.fromEntries(stations.map(st => [st.site, st]));
+      const checked = [...document.querySelectorAll(`.gray-st-${sourceId}:checked`)].map(el => el.value);
+      const count = document.getElementById(`gray-count-${sourceId}`);
+      if (count) count.innerHTML = `<strong>${checked.length}</strong> of ${stations.length} picked`;
+      const clear = document.getElementById(`gray-clear-${sourceId}`);
+      if (clear) clear.hidden = !checked.length;
+      const box = document.getElementById(`gray-picked-${sourceId}`);
+      if (!box) return;
+      box.classList.toggle('is-empty', !checked.length);
+      box.innerHTML = checked.length
+        ? checked.map(site => {
+            const st = bySite[site] || {call: site.toUpperCase(), market: ''};
+            return `<span class="espn-chip gray-chip">${escapeHtml(st.call)} <small>${escapeHtml(st.market)}</small>
+              <button type="button" aria-label="Remove ${escapeHtml(st.call)}" onclick="grayLocalRemove(${sourceId}, '${escapeHtml(site)}')">×</button></span>`;
+          }).join('')
+        : 'No stations picked yet: only InvestigateTV and Local News Live will be added.';
+    }
+
+    function grayLocalRemove(sourceId, site) {
+      document.querySelectorAll(`.gray-st-${sourceId}`).forEach(el => { if (el.value === site) el.checked = false; });
+      grayLocalRefresh(sourceId);
+    }
+
+    function grayLocalClear(sourceId) {
+      document.querySelectorAll(`.gray-st-${sourceId}`).forEach(el => { el.checked = false; });
+      grayLocalRefresh(sourceId);
+    }
+
+    function grayLocalFilter(sourceId, text) {
+      const q = (text || '').trim().toLowerCase();
+      const list = document.getElementById(`gray-list-${sourceId}`);
+      if (!list) return;
+      const shown = new Set();
+      list.querySelectorAll('.gray-station').forEach(el => {
+        const hit = !q || el.dataset.search.includes(q) || el.dataset.state.toLowerCase() === q;
+        el.hidden = !hit;
+        if (hit) shown.add(el.dataset.state);
+      });
+      list.querySelectorAll('.gray-state').forEach(el => { el.hidden = !shown.has(el.dataset.state); });
+      const empty = document.getElementById(`gray-empty-${sourceId}`);
+      if (empty) empty.hidden = shown.size > 0;
+    }
+
+    // Event filter (B1G+, NSN): picked sports and/or picked schools; both must match.
+    function _b1gPlusFilter(sourceId, info, note) {
       const policy = info.event_filter || {sport_mode: 'all', sports: [], school_mode: 'all', schools: []};
       const group = (kind, title, allLabel, names, mode, picked) => {
         const pickedSet = new Set(picked.map(n => n.toLocaleLowerCase()));
@@ -5240,8 +5358,8 @@
       };
       return `
         <div class="config-subtitle" style="margin-top:0.8rem">Event filter</div>
-        <div class="config-note">Pick sports, schools, or both; an event is added when it matches both. Schools are the Big Ten
-          schools the event belongs to, so "Ohio State" includes every Ohio State event, home or away.</div>
+        <div class="config-note">${note || `Pick sports, schools, or both; an event is added when it matches both. Schools are the Big Ten
+          schools the event belongs to, so "Ohio State" includes every Ohio State event, home or away.`}</div>
         ${group('sports', 'Sports', 'All, including new ones', info.sports || [], policy.sport_mode, policy.sports || [])}
         ${group('schools', 'Schools', 'All', info.schools || [], policy.school_mode, policy.schools || [])}`;
     }
@@ -6428,6 +6546,10 @@
         return renderParamountConfig(sourceId, schema, values, cfg);
       } else if (sourceName === 'b1g_plus') {
         return renderB1gPlusConfig(sourceId, schema, values, cfg);
+      } else if (sourceName === 'nsn') {
+        return renderNsnConfig(sourceId, schema, values, cfg);
+      } else if (sourceName === 'gray_local') {
+        return renderGrayLocalConfig(sourceId, schema, values, cfg);
       } else if (sourceName === 'sling') {
         return renderSlingConfig(sourceId, schema, values, cfg);
       } else if (sourceName === 'spectrum') {
@@ -6608,7 +6730,10 @@
       if (['espn', 'amazon_sports'].includes(getSourceName(sourceId)) && _espnEventPolicy[sourceId]) {
         payload.event_filter = _espnEventPolicy[sourceId];
       }
-      if (getSourceName(sourceId) === 'b1g_plus' && document.querySelector(`input[name="b1g-sports-mode-${sourceId}"]`)) {
+      if (getSourceName(sourceId) === 'gray_local' && document.getElementById(`gray-list-${sourceId}`)) {
+        payload.station_filter = [...document.querySelectorAll(`.gray-st-${sourceId}:checked`)].map(el => el.value);
+      }
+      if (['b1g_plus', 'nsn'].includes(getSourceName(sourceId)) && document.querySelector(`input[name="b1g-sports-mode-${sourceId}"]`)) {
         payload.event_filter = _b1gPlusCollectFilter(sourceId);
       }
 
@@ -6736,53 +6861,60 @@
       if (el) el.textContent = document.querySelectorAll(`tr.dash-row[data-cat="${cat}"]:not(.disabled)`).length;
     }
 
-    // Sources listed under another source's row start tucked away; which parents
-    // are open is remembered per browser. One with a problem opens by itself.
-    const SOURCES_EXPANDED_KEY = 'fc_sources_expanded_parents';
-
-    function _loadExpandedParents() {
-      try { return new Set(JSON.parse(localStorage.getItem(SOURCES_EXPANDED_KEY)) || []); }
+    // Lite mode: each group's off sources sit behind its Off toggle; which groups
+    // are open is remembered per browser. Rows don't move when switched, so a
+    // source turned on below the toggle stays shown, and one turned off stays
+    // until the group is next collapsed.
+    const SOURCES_OFF_EXPANDED_KEY = 'fc_sources_off_expanded';
+    function _loadOffExpanded() {
+      try { return new Set(JSON.parse(localStorage.getItem(SOURCES_OFF_EXPANDED_KEY)) || []); }
       catch { return new Set(); }
     }
-    function _saveExpandedParents(set) {
-      try { localStorage.setItem(SOURCES_EXPANDED_KEY, JSON.stringify([...set])); } catch {}
+    function _saveOffExpanded(set) {
+      try { localStorage.setItem(SOURCES_OFF_EXPANDED_KEY, JSON.stringify([...set])); } catch {}
     }
-    function _refreshChildOnCount(parent) {
-      const el = document.getElementById(`child-on-count-${parent}`);
-      if (el) el.textContent = document.querySelectorAll(`tr.dash-row[data-parent="${parent}"]:not(.disabled)`).length;
-    }
-    function _applyChildCollapse(parent, collapsed) {
-      document.querySelectorAll(`tr.dash-row[data-parent="${parent}"], tr.config-panel-row[data-parent="${parent}"]`)
-        .forEach(row => row.classList.toggle('child-collapsed', collapsed));
-      const btn = document.getElementById(`child-toggle-${parent}`);
-      if (btn) {
-        btn.closest('tr.dash-row')?.classList.toggle('has-open-children', !collapsed);
-        btn.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
-        btn.querySelector('.child-toggle-chevron').textContent = collapsed ? '▸' : '▾';
+    function _offRowsAfter(divider) {
+      const rows = [];
+      for (let r = divider.nextElementSibling; r; r = r.nextElementSibling) {
+        if (r.classList.contains('dash-row')) rows.push(r);
       }
+      return rows;
     }
-    function _childNeedsAttention(parent) {
-      return !!document.querySelector(`tr.dash-row[data-parent="${parent}"][data-issue="true"]:not(.disabled)`);
+    function _refreshOffCount(cat) {
+      const divider = document.querySelector(`tr.source-off-divider[data-cat="${cat}"]`);
+      const el = divider?.querySelector('.off-count');
+      if (!el) return;
+      const n = _offRowsAfter(divider).filter(r => r.classList.contains('disabled')).length;
+      el.textContent = `${n} source${n === 1 ? '' : 's'}`;
     }
-    function _restoreChildCollapse() {
-      const expanded = _loadExpandedParents();
-      document.querySelectorAll('.child-toggle').forEach(btn => {
-        const parent = btn.id.replace('child-toggle-', '');
-        _applyChildCollapse(parent, !expanded.has(parent) && !_childNeedsAttention(parent));
+    function _applyOffCollapse(cat, collapsed) {
+      const divider = document.querySelector(`tr.source-off-divider[data-cat="${cat}"]`);
+      const btn = divider?.querySelector('.off-toggle');
+      if (!btn) return;
+      _offRowsAfter(divider).forEach(row => {
+        const hide = collapsed && row.classList.contains('disabled');
+        row.classList.toggle('off-collapsed', hide);
+        document.getElementById(`config-panel-row-${row.id.replace('dash-row-', '')}`)
+          ?.classList.toggle('off-collapsed', hide);
+      });
+      btn.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+      btn.querySelector('.off-chevron').textContent = collapsed ? '▸' : '▾';
+      _refreshOffCount(cat);
+    }
+    function _restoreOffCollapse() {
+      const expanded = _loadOffExpanded();
+      document.querySelectorAll('tr.source-off-divider .off-toggle').forEach(btn => {
+        const cat = btn.closest('tr').dataset.cat;
+        _applyOffCollapse(cat, !expanded.has(cat));
       });
     }
-    function toggleChildSources(parent) {
-      const expanded = _loadExpandedParents();
-      const willExpand = document.getElementById(`child-toggle-${parent}`)?.getAttribute('aria-expanded') !== 'true';
-      if (willExpand) expanded.add(parent); else expanded.delete(parent);
-      _saveExpandedParents(expanded);
-      // Its own panel closes first, so the sources open right under its row.
-      const parentRow = document.getElementById(`child-toggle-${parent}`)?.closest('tr.dash-row');
-      const parentId = parentRow?.id.replace('dash-row-', '');
-      if (willExpand && parentId && document.getElementById(`config-panel-row-${parentId}`)?.style.display !== 'none') {
-        toggleConfigPanel(parentId);
-      }
-      _applyChildCollapse(parent, !willExpand);
+    function toggleOffSources(cat, expand) {
+      const expanded = _loadOffExpanded();
+      const btn = document.querySelector(`tr.source-off-divider[data-cat="${cat}"] .off-toggle`);
+      const willExpand = expand ?? btn?.getAttribute('aria-expanded') !== 'true';
+      if (willExpand) expanded.add(cat); else expanded.delete(cat);
+      _saveOffExpanded(expanded);
+      _applyOffCollapse(cat, !willExpand);
     }
 
     function _applyCategoryCollapse(cat, collapsed) {
@@ -6875,7 +7007,9 @@
         const rowsAfter = [], rowsBefore = [];
         for (let r = divider.nextElementSibling; r; r = r.nextElementSibling) rowsAfter.push(r);
         for (let r = divider.previousElementSibling; r && !r.classList.contains('source-category-header'); r = r.previousElementSibling) rowsBefore.push(r);
-        divider.classList.toggle('filter-hidden', !(rowsBefore.some(shown) && rowsAfter.some(shown)));
+        // The lite-mode toggle stays whenever something below it matches.
+        const isToggle = !!divider.querySelector('.off-toggle');
+        divider.classList.toggle('filter-hidden', !(rowsAfter.some(shown) && (isToggle || rowsBefore.some(shown))));
       });
 
       let anyMatch = false;
@@ -6889,10 +7023,10 @@
         _applyCategoryCollapse(cat, filtering ? false : collapsedCats.has(cat));
       });
       if (filtering) {
-        document.querySelectorAll('.child-toggle').forEach(btn =>
-          _applyChildCollapse(btn.id.replace('child-toggle-', ''), false));
+        document.querySelectorAll('tr.source-off-divider .off-toggle').forEach(btn =>
+          _applyOffCollapse(btn.closest('tr').dataset.cat, false));
       } else {
-        _restoreChildCollapse();
+        _restoreOffCollapse();
       }
 
       const noResultsRow = document.getElementById('no-sources-match-row');
@@ -6905,7 +7039,7 @@
     // ── Page load ─────────────────────────────────────────────────────────
     document.addEventListener('DOMContentLoaded', () => {
       _loadCollapsedCats().forEach(cat => _applyCategoryCollapse(cat, true));
-      _restoreChildCollapse();
+      _restoreOffCollapse();
 
       // Load persisted audit results
       document.querySelectorAll('[id^="audit-last-result-"]').forEach(el => {

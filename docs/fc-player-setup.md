@@ -40,6 +40,11 @@ do that:
   the one this guide documents. See [ah4c Capture](#ah4c-capture-multi-tuner) below —
   it's a genuine alternative to Step 1, not an add-on to it.
 
+If your devices are driven by a separate tuner that doesn't use ADB, such as
+APITuner, that tuner launches the Player and captures the picture itself, and
+FastChannels only supplies the channel list, playback details and guide. See the
+[external tuner API](external-tuner-api.md) instead of this guide.
+
 Steps 2 (ADB debugging) and 4 (installing the app) apply to both methods. Only
 Step 1 and the *HDMI Capture* part of Step 3 are specific to the
 single-encoder path.

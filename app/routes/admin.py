@@ -4,10 +4,12 @@ import math
 import re
 import unicodedata
 from urllib.parse import urlsplit
+from types import SimpleNamespace
 from flask import Blueprint, current_app, jsonify, render_template, request
 from sqlalchemy import select, case, func, or_
 from sqlalchemy.orm import load_only, defer
 from ..extensions import db
+from .. import folded_sources
 from .. import admin_auth
 from ..models import Source, Channel, Feed, AppSettings, Program, SourceCache
 from ..generators.m3u import (
@@ -150,9 +152,41 @@ def _default_feed_chnum_map_full() -> dict[int, int]:
     """The numbers the Default feed shows, by channel id (the master numbers
     when the Default feed is off). Channels the Default feed leaves out have
     no entry here and show a dash."""
-    from ..chnum import MASTER_SCOPE, read_scope
+    from ..chnum import MASTER_SCOPE, feed_scope, read_scope
     default_feed = Feed.query.filter_by(slug='default', is_enabled=True).first()
-    return read_scope(default_feed.id if default_feed else MASTER_SCOPE)
+    return read_scope(feed_scope(default_feed) if default_feed else MASTER_SCOPE)
+
+
+def _chnum_titles(page_items, main_map: dict) -> dict[int, str]:
+    """Hover text for the Channels page number: the channel's number in the
+    Default feed and /m3u, then in each feed that numbers it on its own."""
+    from ..models import ChannelNumber
+    from ..generators.m3u import apply_provider_numbers
+    if not page_items:
+        return {}
+    feeds = dict(Feed.query.filter(Feed.is_enabled == True, Feed.slug != 'default')
+                 .order_by(Feed.name).with_entities(Feed.id, Feed.name).all())
+    by_id = {ch.id: ch for ch in page_items}
+    per_feed: dict[int, dict[int, int]] = {}
+    if feeds:
+        rows = (db.session.query(ChannelNumber.scope_id, ChannelNumber.channel_id, ChannelNumber.number)
+                .filter(ChannelNumber.channel_id.in_(list(by_id)),
+                        ChannelNumber.scope_id.in_(list(feeds)),
+                        ChannelNumber.released_at.is_(None))
+                .all())
+        for scope_id, cid, n in rows:
+            per_feed.setdefault(scope_id, {})[cid] = n
+    shown = {fid: apply_provider_numbers([by_id[c] for c in nums], nums)
+             for fid, nums in per_feed.items()}
+    titles = {}
+    for cid in by_id:
+        lines = [f'Default feed and /m3u: {main_map.get(cid) or "not numbered"}']
+        lines += [f'{name}: {shown[fid][cid]}' for fid, name in feeds.items()
+                  if cid in shown.get(fid, {})]
+        if len(lines) == 1:
+            lines.append('In no other feed.')
+        titles[cid] = '\n'.join(lines)
+    return titles
 
 
 def _provider_numbered_ids(items) -> set[int]:
@@ -458,11 +492,16 @@ def _humanize_age(dt, now):
 # Grouped by what it takes to get a source's channels. Whether they play in
 # any player or only through FastChannels Player is a separate per-source
 # badge (_source_channel_mix), since every group has both kinds.
-_SOURCE_CATEGORY_ORDER = ('fast', 'account', 'premium', 'tve', 'local', 'custom', 'retired')
+_SOURCE_CATEGORY_ORDER = ('fast', 'network', 'account', 'premium', 'tve', 'local', 'custom', 'retired')
 _SOURCE_CATEGORY_LABELS = {
-    'fast': 'Free Sources', 'account': 'Free with an Account', 'premium': 'Subscription Sources',
-    'tve': 'TV Provider Sources', 'local': 'Local Antenna', 'custom': 'Custom Sources',
-    'retired': 'Retired Sources',
+    'fast': 'Free Sources', 'network': 'Direct from Networks', 'account': 'Free with an Account',
+    'premium': 'Subscription Sources', 'tve': 'TV Provider Sources', 'local': 'Local Antenna',
+    'custom': 'Custom Sources', 'retired': 'Retired Sources',
+}
+# A short line beside a group header, where the label alone doesn't say what's in it.
+_SOURCE_CATEGORY_HINTS = {
+    'fast': 'Apps that bundle many channels',
+    'network': "Streams from the networks' own websites",
 }
 
 
@@ -870,31 +909,8 @@ def sources():
     def _cat_for(s):
         return _source_category(s, all_scrapers)
 
-    # Sources listed under another source's row (grouped_under) sort right after
-    # it, when that source is listed in the same group; otherwise they stand alone.
-    _by_name = {s.name: s for s in sources_list}
-    source_parent = {}
-    for s in sources_list:
-        parent = _by_name.get(getattr(all_scrapers.get(s.name), 'grouped_under', None))
-        if parent is not None and parent is not s and _cat_for(parent) == _cat_for(s):
-            source_parent[s.name] = parent.name
-    source_children = {}
-    for s in sorted(sources_list, key=lambda s: s.display_name):
-        if s.name in source_parent:
-            source_children.setdefault(source_parent[s.name], []).append(s)
-
     # Within a group, sources that are on come first, then the ones that are off.
-    # A source with sources listed under it counts as on when any of them is.
-    def _block_on(top):
-        return top.is_enabled or any(c.is_enabled for c in source_children.get(top.name, []))
-
-    def _sort_key(s):
-        parent = _by_name.get(source_parent.get(s.name)) or s
-        return (_CAT_ORDER.get(_cat_for(s), 99), not _block_on(parent), parent.display_name,
-                parent is not s, s.display_name)
-
-    sources_list.sort(key=_sort_key)
-    source_block_on = {s.name: _block_on(_by_name.get(source_parent.get(s.name)) or s) for s in sources_list}
+    sources_list.sort(key=lambda s: (_CAT_ORDER.get(_cat_for(s), 99), not s.is_enabled, s.display_name))
 
     category_counts = {}
     category_on_counts = {}
@@ -933,20 +949,19 @@ def sources():
                            hidden_source_count=hidden_source_count,
                            advanced_sources={name: cls.is_advanced() for name, cls in all_scrapers.items()},
                            auto_allow_new_channels=_app_settings.auto_allow_new_channels if _app_settings.auto_allow_new_channels is not None else True,
+                           event_channels_skip_review=getattr(_app_settings, 'event_channels_skip_review', True) is not False,
                            chnum_warnings=[],
                            audit_enabled=audit_enabled,
                            config_required=config_required,
                            under_development=under_development,
                            beta_sources=beta_sources,
                            source_categories=source_categories,
-                           source_parent=source_parent,
-                           source_children=source_children,
-                           source_block_on=source_block_on,
                            source_mix=source_mix,
                            bridge_ready=bridge_ready,
                            source_status=source_status,
                            issue_count=sum(1 for st in source_status.values() if st['state'] in ('error', 'warn', 'setup')),
                            source_category_labels=_SOURCE_CATEGORY_LABELS,
+                           source_category_hints=_SOURCE_CATEGORY_HINTS,
                            source_category_order=_SOURCE_CATEGORY_ORDER,
                            source_interval_meta=source_interval_meta,
                            source_config_status=source_config_status,
@@ -970,6 +985,7 @@ def channels():
     enabled_filter   = request.args.get('enabled', '')
     review_filter    = request.args.get('review', '')
     presence_filter  = request.args.get('presence', '')
+    chnum_filter     = request.args.get('chnum', '')
     drm_filter       = request.args.get('drm', '')
     if not ui_context()['show_drm'] and drm_filter in ('1', 'bridge'):
         drm_filter = ''
@@ -1043,6 +1059,9 @@ def channels():
         q = q.filter(Channel.scrape_pinned == True)
     elif presence_filter == 'active':
         q = q.filter(Channel.is_active == True)
+
+    if chnum_filter == 'locked':
+        q = q.filter(db.or_(Channel.number_pinned == True, Channel.pinned_chno.isnot(None)))
 
     if gracenote_filter == '1':
         q = q.filter(Channel.gracenote_id != None, Channel.gracenote_id != '')
@@ -1167,7 +1186,7 @@ def channels():
         'category': [Channel.category, Channel.name],
         # SQL fallback only; sort=number is done below on the number the page
         # actually shows (see _sort_ids_by_shown_number).
-        'number':   [db.func.coalesce(Source.chnum_start, 999999), db.func.coalesce(Channel.number, 999999), Source.display_name, sort_name, Channel.name],
+        'number':   [db.func.coalesce(Channel.number, 999999), Source.display_name, sort_name, Channel.name],
     }
     _cols = _sort_cols.get(sort_by, [Channel.name])
     if sort_dir == 'desc':
@@ -1284,7 +1303,7 @@ def channels():
     from urllib.parse import urlencode
     filter_qs = urlencode({k: v for k, v in {
         'feed': feed_filter, 'source': source_filter, 'network': network_filter, 'search': search,
-        'enabled': enabled_filter, 'review': review_filter, 'presence': presence_filter, 'drm': drm_filter,
+        'enabled': enabled_filter, 'review': review_filter, 'presence': presence_filter, 'chnum': chnum_filter, 'drm': drm_filter,
         'language': language_filter, 'country': country_filter, 'sport': sport_filter,
         'gracenote': gracenote_filter, 'gracenote_mode': gracenote_mode_filter,
         'category': category_filter, 'duplicates': duplicates_filter,
@@ -1325,6 +1344,8 @@ def channels():
                            duplicate_group_keys=duplicate_group_keys,
                            sort_by=sort_by, sort_dir=sort_dir,
                            chnum_map=chnum_map,
+                           chnum_titles=_chnum_titles(channels.items, chnum_map),
+                           chnum_filter=chnum_filter,
                            chnum_conflicts=chnum_conflicts,
                            provider_numbered=_provider_numbered_ids(channels.items),
                            in_any_feed_ids=in_any_feed_ids,
@@ -1702,6 +1723,7 @@ def channels_chnum_map():
 
     return jsonify({
         'chnum_map':    chnum_map,
+        'titles':       _chnum_titles(page_items, chnum_map),
         'pinned':       pinned,
         'conflict_ids': list(conflict_ids),
         'provider_ids': list(_provider_numbered_ids(page_items)),
@@ -1712,6 +1734,13 @@ def channels_chnum_map():
 def feeds():
     app_settings = AppSettings.get()
     sources    = Source.query.filter_by(is_enabled=True).order_by(Source.display_name).all()
+    # Sources folded into Free Networks stay pickable under their old names,
+    # which is what saved feeds hold; "Free Networks" picks its other networks.
+    if any(s.name == folded_sources.HOST for s in sources):
+        sources = sorted(
+            [*sources, *(SimpleNamespace(name=k, display_name=v, epg_only=False)
+                         for k, v in folded_sources.FOLDED.items())],
+            key=lambda s: (s.display_name or s.name).casefold())
     feeds      = Feed.query.order_by(Feed.name).all()
     # Per-source channel tallies for the feed modal: how many channels each
     # source can actually contribute to a feed (mirrors the feed_eligible
@@ -1723,13 +1752,13 @@ def feeds():
         for s in sources
     }
     _cnt_rows = db.session.query(
-        Source.name, Channel.is_active, Channel.is_enabled, Channel.stream_url != None,
+        Source.name, Channel.source_channel_id, Channel.is_active, Channel.is_enabled, Channel.stream_url != None,
         Channel.requires_drm_bridge,
     ).select_from(Channel).join(Source, Channel.source_id == Source.id)\
      .filter(Source.is_enabled == True).all()
     show_drm = ui_context()['show_drm']
-    for name, active, enabled, has_url, bridge in _cnt_rows:
-        entry = source_counts.get(name)
+    for name, scid, active, enabled, has_url, bridge in _cnt_rows:
+        entry = source_counts.get(folded_sources.folded_key(name, scid) or name)
         if entry is None:
             continue
         entry['total'] += 1
@@ -1812,7 +1841,7 @@ def _drm_bridge_recoverable_count() -> int:
 
 
 def _bridge_methods(settings) -> list[dict]:
-    """The three bridge methods and where each stands, for the Bridge page tiles.
+    """The bridge methods and where each stands, for the Bridge page tiles.
 
     `state` walks the setup chain: 'off' (untouched) → 'setup' (started, still
     missing something) → 'ready' (usable, but global Bridge mode is off) → 'live'.
@@ -1854,6 +1883,15 @@ def _bridge_methods(settings) -> list[dict]:
                                  ('capture stream URL', encoder_url)]),
         },
         {
+            'key': 'external',
+            'label': 'External tuners',
+            # The token is generated the moment the toggle goes on, so there's no
+            # half-configured state to report.
+            'state': _state(_fc_player_bridge.external_player_configured(settings),
+                            _fc_player_bridge.external_player_configured(settings)),
+            'missing': '',
+        },
+        {
             'key': 'prismcast',
             'label': 'PrismCast Capture',
             'state': _state(bool(settings.prismcast_enabled or prismcast_url),
@@ -1888,7 +1926,7 @@ def _bridge_coverage(methods: list[dict]) -> dict:
 
     def _cells(name: str, enabled: bool) -> dict:
         cells = {}
-        for key in ('prismcast', 'hdmi', 'ah4c'):
+        for key in ('prismcast', 'hdmi', 'ah4c', 'external'):
             if key != 'prismcast' and name not in DRM_BRIDGE_TRUSTED_SOURCES:
                 cells[key] = 'na'
             elif not enabled:
@@ -1982,6 +2020,7 @@ def settings():
                            request_base_url=request_base_url,
                            detected_base_url=detected_base_url(),
                            auto_allow_new_channels=app_settings.auto_allow_new_channels if app_settings.auto_allow_new_channels is not None else True,
+                           event_channels_skip_review=getattr(app_settings, 'event_channels_skip_review', True) is not False,
                            gracenote_auto_fill=app_settings.gracenote_auto_fill if app_settings.gracenote_auto_fill is not None else True,
                            dvr_epg_auto_refresh=app_settings.dvr_epg_auto_refresh if app_settings.dvr_epg_auto_refresh is not None else True,
                            native_output_enabled=bool(app_settings.native_output_enabled),
@@ -2064,6 +2103,10 @@ def bridge():
         fc_player_audio_mode=app_settings.fc_player_bridge_audio_mode or 'auto',
         fc_player_ah4c_enabled=bool(app_settings.fc_player_bridge_ah4c_enabled),
         fc_player_ah4c_url=app_settings.fc_player_bridge_ah4c_url or '',
+        external_player_enabled=_fc_player_bridge.external_player_configured(app_settings),
+        external_player_token=_fc_player_bridge.external_player_token(app_settings),
+        external_player_token_from_env=bool(_fc_player_bridge.external_player_token_from_env()),
+        external_player_env_name=_fc_player_bridge.EXTERNAL_PLAYER_TOKEN_ENV,
         fc_player_configured=bool(
             app_settings.fc_player_bridge_enabled
             and app_settings.effective_fc_player_bridge_adb_address()

@@ -395,6 +395,7 @@ class Feed(db.Model):
     filters     = db.Column(db.JSON, default=dict)
     chnum_start = db.Column(db.Integer, nullable=True)   # starting tvg-chno for this feed's M3U output
     guide_mode  = db.Column(db.String(16), nullable=False, default='mixed', server_default='mixed')  # 'split' = separate XMLTV + Gracenote playlists; 'mixed' = one playlist (Channels DVR 2026.08.25+)
+    source_order = db.Column(db.JSON, nullable=True)   # Source.name list numbered first, in this order (app.chnum); applies to new numbers, so to all on Renumber
     is_enabled  = db.Column(db.Boolean, default=True)
     created_at  = db.Column(db.DateTime(timezone=True),
                             default=lambda: datetime.now(timezone.utc))
@@ -420,6 +421,7 @@ class Feed(db.Model):
             'filters':     self.filters or {},
             'chnum_start': self.chnum_start,
             'guide_mode':  self.guide_mode or 'split',
+            'source_order': list(self.source_order or []),
             'is_enabled':  self.is_enabled,
             'created_at':  self.created_at.isoformat() if self.created_at else None,
             'updated_at':  self.updated_at.isoformat() if self.updated_at else None,
@@ -473,14 +475,16 @@ class AppSettings(db.Model):
 
     id                   = db.Column(db.Integer, primary_key=True)
     global_chnum_start   = db.Column(db.Integer, nullable=True)  # master tvg-chno start for ungrouped sources
-    master_chnum_start   = db.Column(db.Integer, nullable=True)  # where new master numbers start (follows the Default feed's start); None = keep scraper numbers, new ones from 5000
-    master_gracenote_chnum_start = db.Column(db.Integer, nullable=True)  # where new /m3u/gracenote numbers start; None = above the master numbers
+    master_chnum_start   = db.Column(db.Integer, nullable=True)  # where the main numbers (Default feed + master playlists) start; follows the Default feed's start
+    master_gracenote_chnum_start = db.Column(db.Integer, nullable=True)  # unused since the main numbers were unified (app.chnum)
     chnum_seeded_at      = db.Column(db.DateTime, nullable=True)  # channel_numbers seeded from the previous numbering (app.chnum.seed_channel_numbers)
+    chnum_unified_at     = db.Column(db.DateTime, nullable=True)  # Default feed and master playlists made one set of numbers (app.chnum.unify_main_numbers)
     channels_dvr_url     = db.Column(db.Text, nullable=True)     # e.g. http://192.168.1.x:8089
     public_base_url      = db.Column(db.Text, nullable=True)     # e.g. http://192.168.1.x:5523
     timezone_name        = db.Column(db.String(64), nullable=True)  # IANA timezone, e.g. America/New_York
     lite_mode            = db.Column(db.Boolean, nullable=False, default=False, server_default=db.text('0'))  # UI preference only; fresh installs opt in during schema setup
     auto_allow_new_channels = db.Column(db.Boolean, nullable=False, default=True, server_default=db.text('1'))  # newly-scraped channels enter feeds enabled (vs. held for review)
+    event_channels_skip_review = db.Column(db.Boolean, nullable=False, default=True, server_default=db.text('1'))  # new fc:event channels enter enabled even when the source policy is review (#83)
     gracenote_auto_fill  = db.Column(db.Boolean, nullable=False, default=True, server_default=db.text('1'))  # scrapers auto-assign Gracenote IDs
     dvr_epg_auto_refresh = db.Column(db.Boolean, nullable=False, default=True, server_default=db.text('1'))  # hourly PUT to Channels DVR lineups
     native_output_enabled = db.Column(db.Boolean, nullable=False, default=True, server_default=db.text('1'))  # publish native scraped-only feed M3U and XML outputs
@@ -509,6 +513,8 @@ class AppSettings(db.Model):
     fc_player_bridge_audio_mode   = db.Column(db.Text, nullable=False, default='auto', server_default=db.text("'auto'"))  # 'auto' | 'pcm' (decode Dolby on the device) | 'stereo' (prefer a stereo AAC track, else pcm)
     fc_player_bridge_ah4c_enabled = db.Column(db.Boolean, nullable=False, default=False, server_default=db.text('0'))  # ah4c (github.com/sullrich/ah4c) as the HDMI-capture front end instead of the single fixed encoder_url
     fc_player_bridge_ah4c_url     = db.Column(db.Text, nullable=True)  # ah4c's own base URL, e.g. http://192.168.1.30:7654 — where its /play/tuner/<channel> lives
+    external_player_enabled       = db.Column(db.Boolean, nullable=False, default=False, server_default=db.text('0'))  # Bridge → External tuners: /api/external-player/v1 for tuners like APITuner (app/routes/external_player.py)
+    external_player_token         = db.Column(db.Text, nullable=True)  # bearer token for that API, generated when it's turned on; FC_EXTERNAL_PLAYER_TOKEN overrides it
     # JSON snapshot of the Fire TV's display settings immediately before FastChannels
     # first applies its headless preset. Lets the Device Controls modal restore the
     # user's own values instead of guessing what “normal” means for their device.
