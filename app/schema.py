@@ -346,7 +346,8 @@ def ensure_runtime_schema(*, fresh_install: bool | None = None) -> None:
             for col, ddl in (("master_chnum_start", "INTEGER"),
                              ("master_gracenote_chnum_start", "INTEGER"),
                              ("chnum_seeded_at", "DATETIME"),
-                             ("chnum_unified_at", "DATETIME")):
+                             ("chnum_unified_at", "DATETIME"),
+                             ("chnum_locks_scoped_at", "DATETIME")):
                 if col not in as_cols:
                     conn.execute(text(f"ALTER TABLE app_settings ADD COLUMN {col} {ddl}"))
 

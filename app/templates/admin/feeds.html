@@ -1213,7 +1213,7 @@
         <ul class="ord-legend">
           <li><strong>Reorder:</strong> drag, ⤒ / ⤓, or Sort, then Save Feed. Numbers follow from the starting number.</li>
           <li><span class="ord-flock">FEED LOCK</span> Your number for this feed. Renumbering, reordering and a new start don't move it. ✕ unlocks.</li>
-          <li><strong>🔒 without the badge:</strong> fixed outside this feed (a Channels-page lock or a provider number such as DirecTV).</li>
+          <li><strong>🔒 without the badge:</strong> fixed outside this feed (a provider number such as DirecTV, or a decimal number like 305.1 set on the Channels page).</li>
           <li><span class="ord-fpin">PIN</span> Hand-picked into this feed. Channels that match later are added at the end.</li>
         </ul>
       </div>
@@ -2723,7 +2723,7 @@ function renderOrderList() {
       `<span class="ord-num${editable ? ' editable' : ''}" title="${
             r.absent ? 'Locked in this feed. The channel is out of the feed right now (off, gone upstream, or no longer matched); the number is kept for it. ✕ unlocks it.'
           : r.feed_locked ? 'Locked in this feed only: nothing else moves this number. Click to change it, ✕ to unlock.'
-          : r.locked ? 'Locked on the Channels page: this number is used in every feed and playlist. ✕ unlocks it.'
+          : r.locked ? 'Locked on the Channels page. ✕ unlocks it there.'
           : r.number_source === 'provider' ? 'Set by provider channel numbers.'
           : 'This feed\'s number for the channel. Click to set your own; it is then locked in this feed.'}"></span>` +
       `<span class="ord-name"></span>` +

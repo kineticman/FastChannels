@@ -5,7 +5,7 @@ from the client's side, like nothing happened: same channel number in every
 feed, same feeds, same guide mapping. A channel's place is spread across
 several stores, all keyed by channel id:
 
-  * Channel.pinned_chno / number + number_pinned  -- user locks (channel-wide)
+  * Channel.pinned_chno / number + number_pinned  -- Channels-page locks (whole: main numbers; decimal: everywhere)
   * channel_numbers                               -- numbers in the master playlists and each feed
   * Feed.filters id lists                         -- channel_ids / pinned / excluded
   * gracenote_id (manual), category/language overrides

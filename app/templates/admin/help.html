@@ -136,9 +136,22 @@
           <li>The built-in <code>Default</code> feed includes all enabled channels.</li>
           <li>Create custom feeds to filter by source, category, language, country, or Gracenote, pick events by sport, or pin hand-picked channels.</li>
           <li>Each feed has its own stable <code>/feeds/&lt;slug&gt;/m3u</code> and <code>/epg.xml</code> — cached for fast delivery.</li>
-          <li>Channel numbers: the <code>Default</code> feed and the main <code>/m3u</code> playlists share one set of numbers (the ones on the Channels page), starting at the Default feed's starting number (5000 on fresh installs). Every other feed numbers its channels on its own from its own starting number. A number locked on the Channels page (🔒) is used in every feed and playlist. To give a channel its own number in one feed, click its number in that feed's channel order and type one: it's locked in that feed only (FEED LOCK), wins there over a Channels-page lock, and stays through renumbering, reordering and a new starting number, even while the channel is out of the feed. A feed's <strong>Source order</strong> numbers the sources you list first, then the rest by source name; it applies to every channel when you renumber the feed.</li>
           <li><code>/m3u/gracenote</code> feed variants are for Channels DVR guide matching via Gracenote.</li>
           <li><code>Add to Channels DVR</code> registers the feed directly in your DVR. Configure the DVR URL in <code>Settings</code> first.</li>
+        </ul>
+      </section>
+
+      <section class="card">
+        <h2>Channel Numbers</h2>
+        <ul>
+          <li><strong>Main numbers</strong>: the <code>Default</code> feed and the main <code>/m3u</code> playlists share one set of numbers, the <code>Default #</code> column on the Channels page. They start at the Default feed's starting number (5000 on a fresh install).</li>
+          <li><strong>Other feeds</strong> number their channels on their own, from their own starting number, in the order you set in the feed's channel order (drag, Sort or Source order). Hover a number on the Channels page to see a channel's number in each feed.</li>
+          <li><strong>🔒 Channels-page lock</strong>: click a channel's number on the Channels page and type one. It fixes the number in the Default feed and the <code>/m3u</code> playlists only. Other feeds number the channel on their own: to fix its number in a feed, use a feed lock there.</li>
+          <li><strong>FEED LOCK</strong>: in a feed's channel order, click a channel's number (or ✎) and type one. It applies in that feed only. Renumbering, reordering and a new starting number don't move it, and if the channel leaves the feed the number is kept for it until you unlock it (✕). The Default feed has no feed locks: use a Channels-page lock instead.</li>
+          <li><strong>Decimal numbers</strong> (like <code>305.1</code>) set on the Channels page are the exception: they're used in every feed and playlist.</li>
+          {% if not ui.lite %}<li><strong>Provider numbers</strong>: with DirecTV channel numbers turned on, those channels use DirecTV's numbers in every feed and playlist.</li>{% endif %}
+          <li><strong>Renumber</strong> numbers a feed again from its starting number, replacing any order you set. Locked channels keep their numbers. Channels DVR will see the new numbers.</li>
+          <li><strong>Source order</strong> numbers the sources you list first, then the rest by source name. It applies to every channel the next time you renumber the feed.</li>
         </ul>
       </section>
 

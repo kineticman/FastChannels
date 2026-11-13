@@ -711,19 +711,21 @@ def chnum_sort_key(value):
 
 def build_manual_order_map(channels, order_ids: list[int], start: int,
                            reserved: set[int] = frozenset(),
-                           fixed: dict[int, int] | None = None) -> dict[int, int]:
+                           fixed: dict[int, int] | None = None,
+                           main: bool = False) -> dict[int, int]:
     """
     Number `channels` sequentially from `start` following an explicit
     user-chosen `order_ids` sequence (drag-drop ordering from the feed modal).
 
-    Master-pinned channels always keep their Channel.number; those numbers are
-    reserved so the sequential cursor skips over them.  Channels in the feed but
+    With `main` (numbering the main numbers), Channels-page locks keep their
+    Channel.number and the cursor skips those numbers; a feed ignores them,
+    as app.chnum does (rule 1).  Channels in the feed but
     absent from `order_ids` (e.g. newly matched by the filters since the order
     was captured) are appended after the ordered block in master-number order.
     Ids in `order_ids` that are no longer feed members are ignored.
     `reserved` numbers are skipped too (numbers held for channels out of the
     feed, see app.chnum). `fixed` are the feed's locks, {channel_id: number}:
-    those channels keep them, ahead of any master pin.
+    those channels keep them.
     """
     by_id = {ch.id: ch for ch in channels}
     ordered = [by_id[cid] for cid in order_ids if cid in by_id]
@@ -742,7 +744,7 @@ def build_manual_order_map(channels, order_ids: list[int], start: int,
     for ch in ordered:
         if ch.id in result:
             continue
-        if getattr(ch, 'number_pinned', False) and ch.number is not None and ch.number not in used:
+        if main and getattr(ch, 'number_pinned', False) and ch.number is not None and ch.number not in used:
             result[ch.id] = ch.number
             used.add(ch.number)
     used |= _reserved_provider_numbers() | set(reserved)

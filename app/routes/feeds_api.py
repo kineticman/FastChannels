@@ -170,6 +170,8 @@ def preview_order():
     # The feed's own locks (numbers typed in this editor); the Default feed
     # has none, its lock is the Channels-page one.
     locks = scope_locks(scope) if scope not in (None, MASTER_SCOPE) else {}
+    # Channels-page locks apply to the main numbers (the Default feed) only.
+    main = scope == MASTER_SCOPE
 
     order_ids = data.get('order') or []
     if order_ids:
@@ -177,7 +179,8 @@ def preview_order():
             order_ids = [int(i) for i in order_ids]
         except (TypeError, ValueError):
             return jsonify({'error': 'order must contain integer channel ids'}), 400
-        num_map = build_manual_order_map(stubs, order_ids, start, reserved=held, fixed=locks)
+        num_map = build_manual_order_map(stubs, order_ids, start, reserved=held, fixed=locks,
+                                         main=main)
         # Members the overlaid order doesn't cover get appended after it.
         placed_ids = set(order_ids)
     else:
@@ -186,7 +189,8 @@ def preview_order():
         if feed is not None and source_order != (feed.source_order or None):
             # An edited source order previews the renumber that saving offers.
             rows = {}
-        num_map = plan_numbers(stubs, start, rows, source_order=source_order, scope_locks=locks)
+        num_map = plan_numbers(stubs, start, rows, source_order=source_order, scope_locks=locks,
+                               main=main)
         # With saved numbers, members that have none are slotted into whatever
         # numbers are free (gaps first, then the end). No rows means everything
         # is numbered fresh, so nothing is "new".
@@ -202,7 +206,7 @@ def preview_order():
     feed_pinned_ids = set(filters.get('pinned_channel_ids') or [])
 
     def whole_lock(ch):
-        return bool(getattr(ch, 'number_pinned', False) and ch.number is not None)
+        return bool(main and getattr(ch, 'number_pinned', False) and ch.number is not None)
 
     rows = [{
         'id':          ch.id,
@@ -216,8 +220,9 @@ def preview_order():
                           if ch.id in fixed_ids else None),
         # Locked in this feed (a number typed here); the dialog can unlock it.
         'feed_locked': ch.id in locks,
-        # Channel-wide lock (whole or decimal number) the dialog can unlock;
-        # a feed lock outranks it here.
+        # A Channels-page lock that applies here (a whole number in the Default
+        # feed, a decimal one anywhere) the dialog can unlock; a feed lock
+        # outranks it.
         'locked':      bool(ch.id not in locks
                             and (whole_lock(ch) or getattr(ch, 'pinned_chno', None))),
         'feed_pinned': ch.id in feed_pinned_ids,
@@ -544,11 +549,6 @@ def lock_feed_channel_number(feed_id, channel_id):
         other = Channel.query.get(holder)
         return jsonify({'error': f'{number} is already locked to "{other.name if other else holder}" '
                                  'in this feed. Unlock it first or choose a different number.'}), 409
-    other = next((s for s in stubs if s.id != ch.id and s.id not in locks
-                  and getattr(s, 'number_pinned', False) and s.number == number), None)
-    if other is not None:
-        return jsonify({'error': f'{number} is locked to "{other.name}" on the Channels page. '
-                                 'Unlock it there first or choose a different number.'}), 409
     if (str(number) != (ch.provider_number or '').strip()
             and number in _reserved_provider_numbers()):
         return jsonify({'error': f'{number} is used by a channel numbered by its provider '

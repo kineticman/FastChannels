@@ -1855,7 +1855,7 @@
                 data-channel-id="{{ ch.id }}"
                 data-pinned="{{ 'true' if (ch.number_pinned or ch.pinned_chno) else 'false' }}">
               <span class="chnum-display" title="{% if ch.id in chnum_conflicts %}Locked to the same number as another channel. This channel's shown number was reassigned to avoid a clash — unlock one of the two (🔒) or give it a different number.{% else %}{{ chnum_titles.get(ch.id, '') }}{% endif %}">{{ chnum_map.get(ch.id) or '—' }}</span>
-              {% if ch.number_pinned or ch.pinned_chno %}<button class="chnum-pin-btn" onclick="chnumUnpin(event,{{ ch.id }})" title="Locked: this number is used in every feed and playlist. Click to unlock.">🔒</button>{% elif ch.id in provider_numbered %}<span class="chnum-provider-icon" title="Set by DirecTV channel numbers. Click the number to lock a different one.">🔒</span>{% endif %}
+              {% if ch.number_pinned or ch.pinned_chno %}<button class="chnum-pin-btn" onclick="chnumUnpin(event,{{ ch.id }})" title="{% if ch.pinned_chno %}Locked: this decimal number is used in every feed and playlist.{% else %}Locked: this channel keeps this number in the Default feed and the /m3u playlists. Other feeds number it on their own.{% endif %} Click to unlock.">🔒</button>{% elif ch.id in provider_numbered %}<span class="chnum-provider-icon" title="Set by DirecTV channel numbers. Click the number to lock a different one.">🔒</span>{% endif %}
             </td>
 
             {# ── Gracenote ID cell ── #}
