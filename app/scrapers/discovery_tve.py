@@ -242,6 +242,7 @@ def _raise_if_spectrum_routed(mso_id: str, mso_login_url: str, response: request
 
 class DiscoveryTVEScraper(MvpdCooldownMixin, BaseScraper):
     source_name = 'discovery_tve'
+    added_in = '5.0.0'
     display_name = 'Discovery TVE'
     source_category = 'tve'
     is_premium = True

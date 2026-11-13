@@ -128,6 +128,7 @@ class CSpanTVEScraper(MvpdCooldownMixin, BaseScraper):
     """C-SPAN, C-SPAN2 and C-SPAN3 (24/7) with a TV-provider sign-in."""
 
     source_name = 'cspan_tve'
+    added_in = '5.7.0'
     display_name = 'C-SPAN TVE'
     source_category = 'tve'
     is_premium = True

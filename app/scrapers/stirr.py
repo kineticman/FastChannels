@@ -54,6 +54,7 @@ def _write_desc_cache(payload: dict) -> None:
 
 class StirrScraper(BaseScraper):
     source_name = "stirr"
+    added_in = '1.9.0'
     display_name = "STIRR"
     scrape_interval = 360
 

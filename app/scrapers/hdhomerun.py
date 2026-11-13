@@ -111,6 +111,7 @@ _device_id_lock = threading.Lock()
 
 class HDHomeRunScraper(BaseScraper):
     source_name = "hdhomerun"
+    added_in = '4.4.0'
     display_name = "HDHomeRun"
     source_category = 'local'
     scrape_interval = 360

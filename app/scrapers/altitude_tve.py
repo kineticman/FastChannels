@@ -23,6 +23,7 @@ class AltitudeTVEScraper(ViewLiftTVEScraper, BaseScraper):
     """Altitude Sports via ViewLift + Adobe Pass v2 (Rocky Mountain providers only)."""
 
     source_name = 'altitude_tve'
+    added_in = '5.9.0'
     display_name = 'Altitude TVE'
     license_url = f'{API_BASE}/v1/license/widevine/acquire'
 

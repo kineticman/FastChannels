@@ -123,6 +123,7 @@ def _chunk(seq: list, size: int):
 
 class VidaaScraper(BaseScraper):
     source_name           = "vidaa"
+    added_in = '3.3.0'
     display_name          = "Vidaa Free TV"
     scrape_interval        = 720   # 12 hours
     stream_audit_enabled   = True

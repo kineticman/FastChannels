@@ -82,6 +82,7 @@ def _parse_onscreen_episode_num(prog: ET.Element) -> tuple[int | None, int | Non
 
 class SamsungScraper(BaseScraper):
     source_name           = 'samsung'
+    added_in = '1.9.0'
     display_name          = 'Samsung TV Plus'
     scrape_interval       = 360   # 6 hours — upstream data refreshes ~hourly
     stream_audit_enabled  = True

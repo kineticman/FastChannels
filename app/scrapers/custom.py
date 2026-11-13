@@ -17,6 +17,7 @@ class CustomScraper(BaseScraper):
     """
 
     source_name = 'custom'
+    added_in = '3.5.0'
     display_name = 'Custom Channels'
     scrape_interval = 0          # never auto-scraped (scheduler skips interval=0)
     # Audit button only: not part of Audit All Sources, and nothing schedules it.

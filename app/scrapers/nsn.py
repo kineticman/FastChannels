@@ -235,6 +235,7 @@ def parse_event_url(raw_url: str) -> tuple[str, int | None]:
 
 class NSNScraper(BaseScraper):
     source_name = 'nsn'
+    added_in = '5.9.5'
     display_name = 'Northeast Sports Network'
     source_category = 'network'   # a network's own website: Sources → Direct from Networks
     scrape_interval = 120

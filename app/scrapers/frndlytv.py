@@ -84,6 +84,7 @@ class FrndlyTVScraper(BaseScraper):
     """
 
     source_name = 'frndlytv'
+    added_in = '4.0.0'
     display_name = 'Frndly TV'
     scrape_interval = 360
     stream_audit_enabled = True

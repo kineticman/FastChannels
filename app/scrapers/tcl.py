@@ -107,6 +107,7 @@ logger = logging.getLogger(__name__)
 
 class TCLScraper(BaseScraper):
     source_name = "tcl"
+    added_in = '3.3.0'
     display_name = "TCL TV+"
     scrape_interval = 720
     stream_audit_enabled = True

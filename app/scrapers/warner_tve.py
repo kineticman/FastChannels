@@ -286,6 +286,7 @@ class WarnerTVEScraper(MvpdCooldownMixin, BaseScraper):
     """TBS, TNT, truTV and TCM via Adobe Pass + NGTV AES-128."""
 
     source_name = 'warner_tve'
+    added_in = '5.0.0'
     display_name = 'Warner Bros Discovery TVE'
     source_category = 'tve'
     is_premium = True

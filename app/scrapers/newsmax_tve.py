@@ -109,6 +109,7 @@ class NewsmaxTVEScraper(MvpdCooldownMixin, BaseScraper):
     """Newsmax (the main channel) with a TV-provider sign-in."""
 
     source_name = 'newsmax_tve'
+    added_in = None  # unreleased: set to the version it ships in
     display_name = 'Newsmax TVE'
     source_category = 'tve'
     is_premium = True

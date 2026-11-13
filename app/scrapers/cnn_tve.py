@@ -127,6 +127,7 @@ class CNNTVEScraper(MvpdCooldownMixin, BaseScraper):
     """CNN, CNN International and HLN with a TV-provider sign-in."""
 
     source_name = 'cnn_tve'
+    added_in = '5.7.0'
     display_name = 'CNN TVE'
     source_category = 'tve'
     is_premium = True

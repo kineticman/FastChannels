@@ -58,6 +58,7 @@ class SlingScraper(BaseScraper):
     """
 
     source_name = "sling"
+    added_in = '1.9.0'
     advanced = True
     display_name = "Sling Freestream"
     scrape_interval = 360

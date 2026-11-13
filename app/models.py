@@ -49,6 +49,7 @@ class Source(db.Model):
     gracenote_resync_done = db.Column(db.Boolean, default=False, nullable=False)  # one-time stale-native-GNID backfill done
     new_channel_policy = db.Column(db.String(16), default='inherit', nullable=False)  # inherit | enabled | review — how newly-scraped channels enter
     scraper_missing_since = db.Column(db.DateTime(timezone=True), nullable=True)  # set when no scraper class is registered for this source; cleared if it reappears
+    created_at      = db.Column(db.DateTime(timezone=True), nullable=True)  # set by seed_sources() when the row is first inserted (a new scraper reached this install); NULL = predates tracking
 
     channels = db.relationship('Channel', backref='source', lazy='dynamic',
                                 cascade='all, delete-orphan')
@@ -486,6 +487,7 @@ class AppSettings(db.Model):
     public_base_url      = db.Column(db.Text, nullable=True)     # e.g. http://192.168.1.x:5523
     timezone_name        = db.Column(db.String(64), nullable=True)  # IANA timezone, e.g. America/New_York
     lite_mode            = db.Column(db.Boolean, nullable=False, default=False, server_default=db.text('0'))  # UI preference only; fresh installs opt in during schema setup
+    whats_new_seen_at    = db.Column(db.DateTime, nullable=True)  # "Since you last looked" baseline: sources/channels newer than this are new to the user
     auto_allow_new_channels = db.Column(db.Boolean, nullable=False, default=True, server_default=db.text('1'))  # newly-scraped channels enter feeds enabled (vs. held for review)
     event_channels_skip_review = db.Column(db.Boolean, nullable=False, default=True, server_default=db.text('1'))  # new fc:event channels enter enabled even when the source policy is review (#83)
     gracenote_auto_fill  = db.Column(db.Boolean, nullable=False, default=True, server_default=db.text('1'))  # scrapers auto-assign Gracenote IDs

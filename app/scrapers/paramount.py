@@ -226,6 +226,7 @@ def parse_event_url(raw_url: str) -> tuple[str, str, int | None]:
 
 class ParamountScraper(BaseScraper):
     source_name = 'paramount'
+    added_in = '5.7.0'
     display_name = 'Paramount+'
     source_category = 'premium'
     is_premium = True

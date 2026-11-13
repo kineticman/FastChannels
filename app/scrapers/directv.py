@@ -823,6 +823,7 @@ class DirectvScraper(BaseScraper):
     """DirecTV Stream — subscription live TV, resolved natively via DirecTV's own API."""
 
     source_name      = 'directv'
+    added_in = '4.9.5'
     display_name     = 'DirecTV Stream'
     # EPG/channel metadata doesn't need to refresh often; auth-token freshness
     # is checked independently every run via pre_run_setup(), decoupled from

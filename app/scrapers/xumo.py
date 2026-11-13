@@ -33,6 +33,7 @@ class XumoScraper(BaseScraper):
     """
 
     source_name = "xumo"
+    added_in = '1.9.0'
     display_name = "Xumo Play"
     scrape_interval = 720
     stream_audit_enabled  = True

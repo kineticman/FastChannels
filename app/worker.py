@@ -3774,6 +3774,9 @@ def seed_sources():
             logger.warning('DRM sources not on DRM_BRIDGE_TRUSTED_SOURCES (PrismCast only until tested with '
                            'FastChannels Player): %s', ', '.join(untested))
         default_disabled_sources = {'amazon_prime_free', 'amazon_sports', 'aenetworks_tve', 'fox_tve', 'discovery_tve', 'amcn_tve', 'fox_one', 'nbc_tve', 'warner_tve', 'cspan', 'sling', 'localnow', 'pluto', 'frndlytv', 'fubo', 'hdhomerun', 'freecast', 'vidaa', 'philo', 'directv', 'pbs', 'tubi', 'spectrum', 'espn', 'nfl', 'cbs_sports', 'free_networks', 'versant_tve', 'zeam', 'vix', 'univision_tve', 'disney_tve', 'tennis_tve', 'dazn_tve', 'cspan_tve', 'sundance_tve', 'cnn_tve', 'nesn_tve', 'monumental_tve', 'altitude_tve', 'myoutdoortv_tve', 'sportsnet_pittsburgh_tve', 'paramount', 'reelz_tve', 'b1g_plus', 'nsn', 'gray_local', 'ncaa', 'newsmax_tve'}
+        no_release = sorted({cls.source_name for cls in scrapers.values() if not getattr(cls, 'added_in', None)})
+        if no_release:
+            logger.warning('Sources without added_in (set it to the release they ship in): %s', ', '.join(no_release))
         # Custom Channels source: always seeded, always enabled, never auto-scraped
         if not Source.query.filter_by(name='custom').first():
             db.session.add(Source(
@@ -3785,6 +3788,10 @@ def seed_sources():
                 is_enabled=True,
             ))
             db.session.flush()
+        # A fresh install has no scraper sources yet: everything seeded now is
+        # the starting lineup, not "new", so the What's New baseline moves past it.
+        fresh_install = not Source.query.filter(Source.name != 'custom').first()
+        now = datetime.now(timezone.utc)
         seeded_names = set()
         for name, cls in scrapers.items():
             canonical_name = getattr(cls, 'source_name', None) or name
@@ -3799,10 +3806,15 @@ def seed_sources():
                     config          = {},
                     epg_only        = False,
                     is_enabled      = canonical_name not in default_disabled_sources,
+                    created_at      = now,
                 ))
         # Reset legacy flags so upgrading users do not get stuck with sources
         # silently excluded from M3U output after the UI toggle is removed.
         Source.query.filter_by(epg_only=True).update({'epg_only': False}, synchronize_session=False)
+        if fresh_install:
+            AppSettings.query.filter_by(id=1).update(
+                {'whats_new_seen_at': datetime.now(timezone.utc).replace(tzinfo=None)},
+                synchronize_session=False)
         db.session.commit()
         logger.info(f'Seeded {len(seeded_names)} sources')
 

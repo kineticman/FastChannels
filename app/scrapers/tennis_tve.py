@@ -105,6 +105,7 @@ class TennisTVEScraper(MvpdCooldownMixin, BaseScraper):
     """Tennis Channel (24/7 TV feed) with a TV-provider sign-in."""
 
     source_name = 'tennis_tve'
+    added_in = '5.7.0'
     display_name = 'Tennis Channel TVE'
     source_category = 'tve'
     is_premium = True

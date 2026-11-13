@@ -149,6 +149,7 @@ class VersantTVEScraper(MvpdCooldownMixin, BaseScraper):
     """USA, E!, Syfy, Oxygen, CNBC, MS NOW and Golf via ViewLift + Adobe Pass v2."""
 
     source_name = 'versant_tve'
+    added_in = '5.7.0'
     display_name = 'Versant TVE'
     source_category = 'tve'
     is_premium = True

@@ -357,6 +357,7 @@ def game_end_timestamp(raw_url: str | None) -> int | None:
 
 class NFLScraper(BaseScraper):
     source_name = 'nfl'
+    added_in = '5.7.0'
     display_name = 'NFL'
     source_category = 'premium'
     is_premium = True

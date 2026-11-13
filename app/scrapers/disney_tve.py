@@ -136,6 +136,7 @@ class DisneyTVEScraper(MvpdCooldownMixin, BaseScraper):
     (+ free ABC News Live and ABC local news)."""
 
     source_name = 'disney_tve'
+    added_in = '5.7.0'
     display_name = 'Disney TVE'
     source_category = 'tve'
     is_premium = True

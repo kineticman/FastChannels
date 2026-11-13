@@ -411,6 +411,7 @@ def _extract_user_token(response: requests.Response) -> str:
 
 class AMCNetworksTVEScraper(MvpdCooldownMixin, BaseScraper):
     source_name = 'amcn_tve'
+    added_in = '5.0.0'
     source_aliases = ('amc_tve', 'amcnetworks_tve')
     display_name = 'AMC Networks TVE'
     source_category = 'tve'

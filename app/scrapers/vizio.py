@@ -71,6 +71,7 @@ def _expand_macros(url: str, macros: dict[str, str]) -> str:
 
 class VizioScraper(BaseScraper):
     source_name          = 'vizio'
+    added_in = '3.2.0'
     display_name         = 'Vizio WatchFree+'
     scrape_interval      = 360
     stream_audit_enabled = True

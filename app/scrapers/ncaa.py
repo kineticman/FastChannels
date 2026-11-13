@@ -189,6 +189,7 @@ def parse_stream_url(raw_url: str) -> tuple[str, str, int | None]:
 
 class NCAAScraper(BaseScraper):
     source_name = 'ncaa'
+    added_in = '5.9.5'
     display_name = 'NCAA'
     source_category = 'network'   # a network's own website: Sources → Direct from Networks
     scrape_interval = 120

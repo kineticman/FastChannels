@@ -626,6 +626,7 @@ class BaseScraper(ABC):
             return cls.advanced
         return cls.source_category in {'premium', 'tve', 'local'}
 
+    added_in: str | None = None      # FastChannels release that first shipped this source ('5.9.0'); None = unreleased. Set it on every new scraper at release.
     under_development: bool = False  # shown in the admin UI; source remains opt-in
     is_beta: bool = False            # "Beta" badge: built, but not yet confirmed by real users
     channel_refresh_hours: int = 0   # 0 = refresh channels every run; >0 = only refresh channels after N hours

@@ -181,6 +181,7 @@ class FuboScraper(BaseScraper):
     """
 
     source_name      = 'fubo'
+    added_in = '4.0.0'
     display_name     = 'Fubo TV'
     scrape_interval  = 360
     config_required  = True

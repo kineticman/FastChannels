@@ -199,6 +199,7 @@ class FreeNetworksScraper(BaseScraper):
     """
 
     source_name = 'free_networks'
+    added_in = '5.7.0'
     display_name = 'Free Networks'
     scrape_interval = 360
     stream_audit_enabled = True

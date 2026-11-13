@@ -22,6 +22,7 @@ class NesnTVEScraper(ViewLiftTVEScraper, BaseScraper):
     """NESN and NESN Plus via ViewLift + Adobe Pass v2 (New England providers only)."""
 
     source_name = 'nesn_tve'
+    added_in = '5.7.0'
     display_name = 'NESN TVE'
     license_url = f'{API_BASE}/v1/license/widevine/acquire'
 

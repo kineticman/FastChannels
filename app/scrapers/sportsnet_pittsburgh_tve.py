@@ -185,6 +185,7 @@ class SportsNetPittsburghTVEScraper(BaseScraper):
     """SportsNet Pittsburgh and SNP+ with an SNP account and a TV-provider sign-in."""
 
     source_name = 'sportsnet_pittsburgh_tve'
+    added_in = '5.9.0'
     display_name = 'SportsNet Pittsburgh TVE'
     source_category = 'tve'
     is_premium = True

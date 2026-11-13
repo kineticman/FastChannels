@@ -98,6 +98,7 @@ class FreecastScraper(BaseScraper):
     """
 
     source_name = 'freecast'
+    added_in = '4.5.0'
     display_name = 'FreeCast'
     scrape_interval = 360
     stream_audit_enabled = True

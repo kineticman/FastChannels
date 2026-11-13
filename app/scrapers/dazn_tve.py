@@ -227,6 +227,7 @@ class DaznTVEScraper(BaseScraper):
     """DAZN Live TV: the free channels plus YES/MSG through a TV provider."""
 
     source_name = 'dazn_tve'
+    added_in = '5.7.0'
     display_name = 'DAZN'
     source_category = 'tve'
     is_premium = True

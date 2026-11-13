@@ -371,6 +371,7 @@ def event_matches_filter(event: dict, config: dict) -> bool:
 
 class B1GPlusScraper(BaseScraper):
     source_name = 'b1g_plus'
+    added_in = '5.9.0'
     display_name = 'B1G+'
     source_category = 'premium'
     is_premium = True

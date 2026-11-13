@@ -42,6 +42,7 @@ class AmazonPrimeFreeScraper(BaseScraper):
     """
 
     source_name = "amazon_prime_free"
+    added_in = '1.9.0'
     advanced = True
     source_aliases = ("amazon-prime-free",)
     display_name = "Amazon Prime Free Channels"

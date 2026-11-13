@@ -25,6 +25,7 @@ class MonumentalTVEScraper(ViewLiftTVEScraper, BaseScraper):
     """Monumental Sports Network 1 and 2 via ViewLift + Adobe Pass v2 (DMV providers only)."""
 
     source_name = 'monumental_tve'
+    added_in = '5.9.0'
     display_name = 'Monumental Sports TVE'
     license_url = f'{API_BASE}/v1/license/widevine/acquire'
 

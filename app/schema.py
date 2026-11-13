@@ -579,6 +579,16 @@ def ensure_runtime_schema(*, fresh_install: bool | None = None) -> None:
             _ensure_app_settings_row(conn)
             if fresh_install:
                 conn.execute(text("UPDATE app_settings SET lite_mode = 1 WHERE id = 1"))
+            if "whats_new_seen_at" not in cols:
+                conn.execute(text("ALTER TABLE app_settings ADD COLUMN whats_new_seen_at DATETIME"))
+            # Baseline for "Since you last looked": the first boot that has the
+            # column starts the clock, so an upgrade doesn't report every
+            # existing source/channel as new. Fresh installs are re-baselined in
+            # seed_sources(), after their sources are first inserted.
+            conn.execute(text(
+                "UPDATE app_settings SET whats_new_seen_at = CURRENT_TIMESTAMP "
+                "WHERE id = 1 AND whats_new_seen_at IS NULL"
+            ))
 
         if "sources" in tables:
             src_cols = {
@@ -631,6 +641,13 @@ def ensure_runtime_schema(*, fresh_install: bool | None = None) -> None:
                 # import failure (bad deploy, missing dep) doesn't nuke real data.
                 conn.execute(text(
                     "ALTER TABLE sources ADD COLUMN scraper_missing_since DATETIME"
+                ))
+            if "created_at" not in src_cols:
+                # Stamped by seed_sources() when a new scraper's row is first
+                # inserted — i.e. when the source reached this install. Existing
+                # rows stay NULL ("predates tracking"), never reported as new.
+                conn.execute(text(
+                    "ALTER TABLE sources ADD COLUMN created_at DATETIME"
                 ))
 
         if "channels" in tables:

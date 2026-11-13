@@ -102,6 +102,7 @@ class PBSScraper(BaseScraper):
     """
 
     source_name = "pbs"
+    added_in = '5.0.0'
     display_name = "PBS"
     scrape_interval = 360
     stream_audit_enabled = True

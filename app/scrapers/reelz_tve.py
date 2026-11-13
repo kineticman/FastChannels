@@ -117,6 +117,7 @@ class ReelzTVEScraper(BaseScraper):
     """REELZ (24/7) via reelzplus.com with a TV provider linked to a REELZ+ account."""
 
     source_name = 'reelz_tve'
+    added_in = '5.8.0'
     display_name = 'REELZ'
     source_category = 'tve'
     is_premium = True

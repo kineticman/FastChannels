@@ -389,6 +389,7 @@ def _placeholder_epg(network: AENetwork) -> list[ProgramData]:
 
 class AENetworksTVEScraper(MvpdCooldownMixin, BaseScraper):
     source_name = 'aenetworks_tve'
+    added_in = '5.0.0'
     display_name = 'A+E Networks TVE'
     source_category = 'tve'
     is_premium = True

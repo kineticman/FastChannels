@@ -911,6 +911,7 @@ def build_live_window(media_text: str, variant_url: str, rewrite_segment,
 
 class CSpanScraper(BaseScraper):
     source_name  = "cspan"
+    added_in = '4.9.0'
     display_name = "C-SPAN"
     source_category = 'network'   # a network's own website: Sources → Direct from Networks
     # Live-only event feeds (dark between sessions), so DO NOT let the audit

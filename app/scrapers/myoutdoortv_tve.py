@@ -30,6 +30,7 @@ class MyOutdoorTVTVEScraper(ViewLiftTVEScraper, BaseScraper):
     """MyOutdoorTV's live channels via ViewLift + Adobe Pass v2."""
 
     source_name = 'myoutdoortv_tve'
+    added_in = '5.9.0'
     display_name = 'MyOutdoorTV TVE'
     # Clear HLS: the entitlement returns only an hls asset (Amagi playouts,
     # checked 2026-11-13), so no license and no bridge.

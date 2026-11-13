@@ -66,6 +66,7 @@ class ViXScraper(BaseScraper):
     """
 
     source_name = 'vix'
+    added_in = '5.7.0'
     advanced = True
     display_name = 'ViX'
     source_category = 'fast'
