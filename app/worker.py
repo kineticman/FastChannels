@@ -3811,6 +3811,11 @@ def seed_sources():
         # Reset legacy flags so upgrading users do not get stuck with sources
         # silently excluded from M3U output after the UI toggle is removed.
         Source.query.filter_by(epg_only=True).update({'epg_only': False}, synchronize_session=False)
+        if not fresh_install:
+            from app.whats_new import stamp_recent_untracked
+            caught_up = stamp_recent_untracked(scrapers, now)
+            if caught_up:
+                logger.info('Marked %d recently released source(s) as new for the dashboard', caught_up)
         if fresh_install:
             AppSettings.query.filter_by(id=1).update(
                 {'whats_new_seen_at': datetime.now(timezone.utc).replace(tzinfo=None)},

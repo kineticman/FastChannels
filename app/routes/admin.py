@@ -782,6 +782,13 @@ def dashboard():
     server_country = get_server_country()
     # TV-provider sign-ins that lapsed and need a person to redo them (see
     # app/tve/signin_notice.py). Never let this break the dashboard.
+    # "Since you last looked" card (app/whats_new.py). Never let it break the dashboard.
+    try:
+        from app.whats_new import build_whats_new
+        whats_new = build_whats_new(all_scrapers, lite=bool(ui_context()['lite']))
+    except Exception:  # noqa: BLE001
+        current_app.logger.exception('[dashboard] could not build the whats-new card')
+        whats_new = None
     try:
         from app.tve.signin_notice import pending_signins
         signins_needed = pending_signins()
@@ -789,6 +796,7 @@ def dashboard():
         current_app.logger.exception('[dashboard] could not read pending sign-ins')
         signins_needed = []
     return render_template('admin/dashboard.html', sources=sources,
+                           whats_new=whats_new,
                            enabled_sources=enabled_sources, disabled_sources=disabled_sources,
                            enabled_source_groups=enabled_source_groups,
                            disabled_source_groups=disabled_source_groups,
@@ -2140,6 +2148,12 @@ def logs():
     return render_template('admin/logs.html')
 
 
+@admin_bp.route('/whats-new/seen', methods=['POST'])
+def whats_new_seen():
+    from app.whats_new import mark_seen
+    return jsonify({'seen_at': mark_seen().isoformat() + 'Z'})
+
+
 @admin_bp.route('/reports/channel-changes')
 def channel_changes_report():
     from ..timezone_utils import current_zoneinfo
@@ -2153,11 +2167,35 @@ def channel_changes_report():
         '30d': 30,
     }
     selected_window = (request.args.get('window') or '1d').strip().lower()
-    if selected_window not in window_options:
+    seen_at = settings.whats_new_seen_at  # naive UTC, the dashboard card's marker
+    if selected_window == 'since' and seen_at is None:
         selected_window = '1d'
-    window_days = window_options[selected_window]
+    if selected_window not in window_options and selected_window != 'since':
+        selected_window = '1d'
+    # Channel kind: event channels (games, one-off events) churn daily and bury
+    # the lineup changes, so the report defaults to regular linear channels.
+    from ..channel_tags import event_channel_clause
+    selected_kind = (request.args.get('kind') or 'linear').strip().lower()
+    if selected_kind not in ('linear', 'events', 'all'):
+        selected_kind = 'linear'
+    kind_filters = {
+        'linear': [~event_channel_clause()],
+        'events': [event_channel_clause()],
+        'all': [],
+    }[selected_kind]
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-    window_start = today_start - timedelta(days=window_days - 1)
+    if selected_window == 'since':
+        window_days = None
+        window_start = seen_at.replace(tzinfo=timezone.utc).astimezone(local_tz)
+        filter_start = seen_at  # stored timestamps are UTC wall time
+        window_heading = ' Since You Last Looked'
+        window_stat = ' Since Last Looked'
+    else:
+        window_days = window_options[selected_window]
+        window_start = today_start - timedelta(days=window_days - 1)
+        filter_start = window_start
+        window_heading = ' Today' if window_days == 1 else f' in Last {window_days} Days'
+        window_stat = ' Today' if window_days == 1 else ' in Window'
 
     # NOTE: defer(Source.config) is load-bearing. Source.config is JSON and the
     # Roku source's is ~1.2MB; without deferring it, this (Channel, Source) join
@@ -2168,7 +2206,8 @@ def channel_changes_report():
         db.session.query(Channel, Source)
         .join(Source, Source.id == Channel.source_id)
         .options(defer(Source.config))
-        .filter(Channel.created_at >= window_start)
+        .filter(*kind_filters)
+        .filter(Channel.created_at >= filter_start)
         .order_by(Channel.created_at.desc(), Source.display_name.asc(), Channel.name.asc())
         .all()
     )
@@ -2177,9 +2216,10 @@ def channel_changes_report():
         db.session.query(Channel, Source)
         .join(Source, Source.id == Channel.source_id)
         .options(defer(Source.config))
+        .filter(*kind_filters)
         .filter(
             Channel.is_active == False,
-            Channel.went_inactive_at >= window_start,
+            Channel.went_inactive_at >= filter_start,
         )
         .order_by(Channel.went_inactive_at.desc(), Source.display_name.asc(), Channel.name.asc())
         .all()
@@ -2189,6 +2229,7 @@ def channel_changes_report():
         db.session.query(Channel, Source)
         .join(Source, Source.id == Channel.source_id)
         .options(defer(Source.config))
+        .filter(*kind_filters)
         .filter(
             Channel.is_active == True,
             Channel.missed_scrapes > 0,
@@ -2201,9 +2242,10 @@ def channel_changes_report():
         db.session.query(Channel, Source)
         .join(Source, Source.id == Channel.source_id)
         .options(defer(Source.config))
+        .filter(*kind_filters)
         .filter(
             Channel.is_active == True,
-            Channel.returned_at >= window_start,
+            Channel.returned_at >= filter_start,
         )
         .order_by(Channel.returned_at.desc(), Source.display_name.asc(), Channel.name.asc())
         .all()
@@ -2218,7 +2260,8 @@ def channel_changes_report():
         db.session.query(Channel, Source)
         .join(Source, Source.id == Channel.source_id)
         .options(defer(Source.config))
-        .filter(Channel.identity_changed_at >= window_start)
+        .filter(*kind_filters)
+        .filter(Channel.identity_changed_at >= filter_start)
         .order_by(Channel.identity_changed_at.desc(), Source.display_name.asc(), Channel.name.asc())
         .all()
     )
@@ -2251,6 +2294,7 @@ def channel_changes_report():
     # Per-source health summary
     now_utc = datetime.now(timezone.utc)
     all_sources = Source.query.filter(Source.is_enabled == True).order_by(Source.display_name).all()
+    report_scrapers = _scraper_registry.get_all()  # built-in scrapers only, not user playlists
     source_health = []
     for src in all_sources:
         active = Channel.query.filter_by(source_id=src.id, is_active=True).count()
@@ -2259,6 +2303,11 @@ def channel_changes_report():
         at_risk = Channel.query.filter_by(source_id=src.id, is_active=True).filter(Channel.missed_scrapes > 0).count()
         source_health.append({
             'display_name': src.display_name,
+            # FastChannels release that first shipped it; '' for user playlists
+            # and custom channels, None for a registered but unreleased scraper.
+            'added_in': (getattr(report_scrapers.get(src.name), 'added_in', None)
+                         if src.name in report_scrapers else ''),
+            'arrived_at': src.created_at,  # when it reached this install (None = predates tracking)
             'active': active,
             'at_risk': at_risk,
             'last_scraped_at': src.last_scraped_at,
@@ -2277,6 +2326,10 @@ def channel_changes_report():
         selected_window=selected_window,
         window_days=window_days,
         window_options=window_options,
+        window_heading=window_heading,
+        selected_kind=selected_kind,
+        window_stat=window_stat,
+        has_seen_marker=seen_at is not None,
         new_rows=new_rows,
         new_counts=_group_counts(new_rows),
         new_daily_counts=_daily_counts(new_rows, 'created_at'),

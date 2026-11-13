@@ -89,6 +89,7 @@ _SUCCESS_SUPPRESS_PATTERNS = (
     'GET /api/feeds/channel-membership',   # which channels other feeds already include
     'GET /api/channels?feed_eligible=1',   # channel picker list
     'GET /api/stats?source=',              # per-source counts shown in the editor
+    'POST /admin/whats-new/seen',          # dashboard "Since you last looked" card's Got it
 )
 # DAZN's segments are relayed (the CDN token is bound to our user agent): one
 # audio and one video segment every ~2s per viewer. ViX's browser preview relays

@@ -7041,6 +7041,11 @@
       _loadCollapsedCats().forEach(cat => _applyCategoryCollapse(cat, true));
       _restoreOffCollapse();
 
+      // ?open=<source id> (dashboard "Since you last looked" card): expand that
+      // source's group and open its panel, even when lite mode tucks it away.
+      const openId = parseInt(new URLSearchParams(location.search).get('open'), 10);
+      if (openId && document.getElementById(`config-panel-row-${openId}`)) scrollToConfig(openId);
+
       // Load persisted audit results
       document.querySelectorAll('[id^="audit-last-result-"]').forEach(el => {
         const sourceId = el.id.replace('audit-last-result-', '');
