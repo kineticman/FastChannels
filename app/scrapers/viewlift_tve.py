@@ -612,6 +612,16 @@ class ViewLiftTVEScraper(MvpdCooldownMixin, BaseScraper):
         if status == 403 and body.get('errorCode') == 'TVE_SUBSCRIPTION_NOT_FOUND':
             raise TVENotAuthorizedError(
                 f'{self.display_name}: not entitled to {ch["title"]} ({body.get("errorMessage")}).')
+        if status == 403 and body.get('errorCode') == 'SVOD_SUBSCRIPTION_NOT_FOUND':
+            # ViewLift took the sign-in but found no package on it, even after a
+            # re-mint. Not a geo block, and not proof the account lacks the
+            # channel (the same login can play on the web), so it's reported as
+            # an error rather than switching the channel off. The message keeps
+            # out "HTTP 403" so the audit doesn't read it as a geo block.
+            raise RuntimeError(
+                f'{self.display_name}: the network found no subscription on this sign-in for '
+                f'{ch["title"]} (SVOD_SUBSCRIPTION_NOT_FOUND'
+                f'{": " + body["errorMessage"] if body.get("errorMessage") else ""}).')
         if status != 200 or not body.get('playable', True):
             raise RuntimeError(f'{self.display_name}: entitlement for {cid} failed: '
                                f'HTTP {status} {body.get("errorCode") or ""}')
