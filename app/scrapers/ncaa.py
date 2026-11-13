@@ -192,8 +192,8 @@ class NCAAScraper(BaseScraper):
     display_name = 'NCAA'
     source_category = 'network'   # a network's own website: Sources → Direct from Networks
     scrape_interval = 120
-    # Games are events (an upcoming one has nothing to audit); audit_resolve
-    # skips them and checks the 24/7 channels.
+    # Games are events (an upcoming one has nothing to audit); audit_candidates
+    # leaves them out and the audit checks the 24/7 channels.
     stream_audit_enabled = True
     config_schema = [
         ConfigField('disabled_game_sports', 'Game sports', field_type='checklist',
@@ -484,9 +484,16 @@ class NCAAScraper(BaseScraper):
 
     # ── playback ──
 
+    audit_skip_reason = 'Game channel: checked when it plays, not by the audit'
+
+    def audit_candidates(self, query):
+        """The 24/7 channels only. A game between now and its start has no
+        stream, and passing it through as healthy would re-activate an ended
+        game the scrape had hidden."""
+        from ..models import Channel
+        return query.filter(Channel.stream_url.notlike(f'{GAME_SCHEME}%'))
+
     def audit_resolve(self, raw_url: str) -> str:
-        if raw_url.startswith(GAME_SCHEME):
-            return raw_url   # an upcoming game has no stream yet
         return self.resolve(raw_url)
 
     def _ngtv(self, media_id: str, page_path: str) -> str:
