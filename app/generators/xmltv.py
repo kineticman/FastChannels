@@ -212,7 +212,8 @@ def generate_xmltv_stream(filters: dict = None, base_url: str = None, feed_name:
             combined_cats = [c.strip() for c in f'{program_cat};{channel_cat}'.split(';') if c.strip()]
             cats = [c.casefold() for c in combined_cats]
             prog_type = getattr(prog, 'program_type', None)
-            is_movie = prog_type == 'movie' or 'movie' in cats or 'movies' in cats
+            # A scraper-typed episode stays an episode on a "Movies" channel.
+            is_movie = prog_type == 'movie' or (prog_type != 'episode' and ('movie' in cats or 'movies' in cats))
             episode_nums: list[tuple[str, str]] = []
             if prog.season and prog.episode and not is_movie:
                 episode_nums.append(('xmltv_ns', f'{prog.season - 1}.{prog.episode - 1}.'))
@@ -250,6 +251,10 @@ def generate_xmltv_stream(filters: dict = None, base_url: str = None, feed_name:
             # Split semicolon-joined strings into multiple <category> tags —
             # XMLTV allows multiple per programme and clients filter by them.
             for cat in combined_cats:
+                # An episode on a "Movies" channel must not inherit a Movie
+                # tag, or DVR clients file the recording as a film.
+                if prog_type == 'episode' and cat.casefold() in ('movie', 'movies'):
+                    continue
                 _append_category(el, cat, seen_categories, lang=lang)
             # Always add source name as a category so clients can filter by provider
             src_name = ch_src_map.get(prog.channel_id)

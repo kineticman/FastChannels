@@ -448,7 +448,7 @@ class ProgramData:
 
 def _is_movie(p: 'ProgramData') -> bool:
     cats = [c.strip().casefold() for c in (p.category or '').split(';') if c.strip()]
-    return p.program_type == 'movie' or 'movie' in cats or 'movies' in cats
+    return p.program_type == 'movie' or (p.program_type != 'episode' and ('movie' in cats or 'movies' in cats))
 
 
 def _group_by_channel_excluding_movies(programs: list['ProgramData']) -> dict[str, list['ProgramData']]:

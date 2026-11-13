@@ -1644,7 +1644,7 @@ def guide_programs():
 
     def _movie_year(p):
         cats = f'{p.category or ""};{ch_cat.get(p.channel_id, "")}'.casefold().split(';')
-        is_movie = p.program_type == 'movie' or any(c.strip() in ('movie', 'movies') for c in cats)
+        is_movie = p.program_type == 'movie' or (p.program_type != 'episode' and any(c.strip() in ('movie', 'movies') for c in cats))
         if is_movie and p.original_air_date:
             return p.original_air_date.year
         # A Gracenote MV match is a movie even when the scraper didn't tag it.

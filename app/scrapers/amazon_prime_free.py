@@ -18,6 +18,11 @@ from ..gracenote_map import resolve_gracenote
 
 logger = logging.getLogger(__name__)
 
+
+def _title_key(text: str) -> str:
+    """Case/punctuation-insensitive form, so "Who Did it?" matches "Who Did It"."""
+    return re.sub(r"[\W_]+", "", text).casefold()
+
 # Sources played through the Amazon DASH manifest proxy and Widevine license
 # proxy (/play/<source>/<id>/dash.mpd, /play/<source>/license).
 AMAZON_DRM_SOURCES = frozenset({'amazon_prime_free', 'amazon_sports'})
@@ -1050,18 +1055,31 @@ class AmazonPrimeFreeScraper(BaseScraper):
             return None
 
         metadata = airing.get("metadata") or {}
-        title = (metadata.get("title") or "").strip() or "Unknown"
+        # Episodic airings carry the show in seriesTitle and the episode name in
+        # title. Guide title = show (so search finds it), sub-title = episode.
+        # hideSeriesTitle is only Amazon's UI hint on single-show channels.
+        airing_title = (metadata.get("title") or "").strip()
+        series_title = (metadata.get("seriesTitle") or "").strip()
+        title = series_title or airing_title or "Unknown"
+        episode_title = None
+        if series_title and airing_title and _title_key(airing_title) != _title_key(series_title):
+            episode_title = airing_title
+        season = self._positive_int(metadata.get("seasonNumber")) if series_title else None
+        episode = self._positive_int(metadata.get("episodeNumber")) if series_title else None
+        # Date-numbered uploads arrive as S2025 E20250621; keep the year-season,
+        # drop the date "episode" so the guide doesn't show S2025E20250621.
+        if episode and episode > 9999:
+            episode = None
         synopsis = metadata.get("synopsis")
         poster = self._pick_image_url(metadata)
         rating = self._pick_rating(metadata)
-        episode_title = metadata.get("episodeTitle") or None
         release_year = metadata.get("releaseYear")
 
         description = synopsis
         if release_year:
             description = f"{synopsis} ({release_year})" if synopsis else str(release_year)
         original_air_date = None
-        if movie_channel and str(release_year or "").isdigit() and 1900 <= int(release_year) <= datetime.now(timezone.utc).year + 1:
+        if movie_channel and not series_title and str(release_year or "").isdigit() and 1900 <= int(release_year) <= datetime.now(timezone.utc).year + 1:
             original_air_date = date(int(release_year), 1, 1)
 
         return ProgramData(
@@ -1074,8 +1092,21 @@ class AmazonPrimeFreeScraper(BaseScraper):
             category=self._guess_program_category(metadata),
             rating=rating,
             episode_title=episode_title,
+            season=season,
+            episode=episode,
             original_air_date=original_air_date,
+            # Series airings on movie channels (Lionsgate's Hell on Wheels) are
+            # still episodes; this keeps their sub-title/episode-num in XMLTV.
+            program_type="episode" if series_title else None,
         )
+
+    @staticmethod
+    def _positive_int(value: Any) -> int | None:
+        try:
+            n = int(value)
+        except (TypeError, ValueError):
+            return None
+        return n if n > 0 else None
 
     @staticmethod
     def _pick_image_url(metadata: dict[str, Any]) -> str | None:
@@ -1095,8 +1126,8 @@ class AmazonPrimeFreeScraper(BaseScraper):
     @staticmethod
     def _guess_program_category(metadata: dict[str, Any]) -> str | None:
         badge = (metadata.get("linearBadge") or {}).get("label")
+        # "ON NOW" is a UI badge on whatever is airing at scrape time, not a
+        # genre; it used to land in XMLTV as a "Current" category.
         if badge == "LIVE":
             return "Live"
-        if badge == "ON NOW":
-            return "Current"
         return None
