@@ -31,7 +31,11 @@ class MyOutdoorTVTVEScraper(ViewLiftTVEScraper, BaseScraper):
 
     source_name = 'myoutdoortv_tve'
     display_name = 'MyOutdoorTV TVE'
-    license_url = f'{API_BASE}/v1/license/widevine/acquire'
+    # Clear HLS: the entitlement returns only an hls asset (Amagi playouts,
+    # checked 2026-11-13), so no license and no bridge.
+    license_url = None
+    all_channels_require_drm_bridge = False
+    channel_stream_type = 'hls'
 
     key = 'motv'
     brand = 'MyOutdoorTV'

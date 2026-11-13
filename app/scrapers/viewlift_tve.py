@@ -135,6 +135,10 @@ class ViewLiftTVEScraper(MvpdCooldownMixin, BaseScraper):
     is_beta = True
 
     # ── per site ──
+    # What the channels are listed as, and which clear rendition resolve()
+    # prefers when the entitlement has no Widevine asset. MyOutdoorTV's
+    # entitlement answers clear HLS only.
+    channel_stream_type = 'dash'
     # Prefix for config/cache/Redis keys, the link-login family and the
     # sign-in status key (app/tve/status.py, signin_notice).
     key = ''
@@ -225,7 +229,7 @@ class ViewLiftTVEScraper(MvpdCooldownMixin, BaseScraper):
                 slug=f'{self.scheme.removesuffix("://")}-{cid}',
                 logo_url=ch.get('logo'),
                 stream_url=f'{self.scheme}{cid}',
-                stream_type='dash',
+                stream_type=self.channel_stream_type,
                 category=self.channel_category,
                 language='en',
                 country='US',
@@ -643,10 +647,10 @@ class ViewLiftTVEScraper(MvpdCooldownMixin, BaseScraper):
             license_url = widevine.get('licenseUrl')
             license_exp = _jwt_payload(token.split('|', 1)[-1]).get('exp') or time.time() + 6 * 3600
         else:
-            # Unconfirmed: no DRM asset, so try a clear rendition (DASH first,
-            # since the channels are registered as DASH).
+            # No DRM asset: a clear rendition, the kind the channels are
+            # listed as first.
             url = None
-            for kind in ('dash', 'hls'):
+            for kind in dict.fromkeys((self.channel_stream_type, 'dash', 'hls')):
                 asset = assets.get(kind)
                 url = asset.get('url') if isinstance(asset, dict) else asset
                 if url:
