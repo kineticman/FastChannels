@@ -199,10 +199,10 @@ def _host_in_cdn_suffix(host: str, suffix: str = CDN_HOST_SUFFIX) -> bool:
     suffix = suffix.lower()
     return host == suffix or host.endswith('.' + suffix)
 
-BROWSER_UA = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
-)
+# Firefox, not Chrome: since 2026-11-13 the segment CDN's WAF answers any Chrome
+# UA from a plain HTTP client with "Request blocked" (403), while a Firefox UA
+# gets the segment. Pages are challenged either way (solve_waf_challenge).
+BROWSER_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:156.0) Gecko/20100101 Firefox/156.0"
 
 # Headers a real document navigation sends — the AWS WAF in front of
 # www.c-span.org is more tolerant of a request that looks like one.
