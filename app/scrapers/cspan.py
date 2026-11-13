@@ -251,6 +251,20 @@ _WAF_BACKOFF = 120       # seconds to pause ALL discovery fetches after a 202
 _MIN_FETCH_GAP = 2.5     # seconds between discovery page fetches, fleet-wide
 _PREWARM_COOLDOWN = 300  # seconds between background pre-warms, fleet-wide
 
+# The WAF's challenge is a JS check a real browser passes silently. Once an IP is
+# flagged it stays challenged for hours, so backing off alone left the floor
+# channels dark all day (#72). On a 202 we solve it once in Camoufox on the
+# maintenance worker; the aws-waf-token cookie it earns then opens the pages for
+# plain requests too (verified 2026-11-13), so it's shared fleet-wide in Redis.
+# The WAF honours a token for under 5 minutes (measured 2026-11-13: OK at +1 min,
+# challenged at +5), so the solve job fills every discovery cache straight away;
+# those then last _DISCOVERY_TTL.
+#   cspan:waf_cookie         JSON {"token", "ua", "at"}            (ex=_WAF_COOKIE_TTL)
+#   cspan:waf_solve_cooldown presence = a solve ran recently       (ex=_WAF_SOLVE_COOLDOWN)
+_WAF_COOKIE_TTL = 240
+_WAF_SOLVE_COOLDOWN = 600  # at most one browser solve per 10 min, so a CAPTCHA can't loop it
+_WAF_SOLVE_URL = "https://www.c-span.org/congress/?chamber=house"
+
 # In-process only: a cheap first-line single-flight within one worker, plus the
 # force-cooldown map (force is rare and already rate-limited, so per-worker is fine).
 _discovery_lock = threading.Lock()
@@ -413,23 +427,114 @@ def _arm_waf_backoff() -> None:
         pass
 
 
+def _waf_cookie() -> Optional[dict]:
+    """The shared {"token", "ua"} a browser solve earned, or None."""
+    r = _redis()
+    if r is None:
+        return None
+    try:
+        raw = r.get(_REDIS_PREFIX + "waf_cookie")
+        val = json.loads(raw) if raw else None
+        return val if isinstance(val, dict) and val.get("token") else None
+    except Exception:
+        return None
+
+
+def _drop_waf_cookie() -> None:
+    r = _redis()
+    if r is not None:
+        try:
+            r.delete(_REDIS_PREFIX + "waf_cookie")
+        except Exception:
+            pass
+
+
+def _request_waf_solve() -> None:
+    """Queue one browser solve on the maintenance worker, at most once per
+    _WAF_SOLVE_COOLDOWN fleet-wide. Best-effort: never raises."""
+    r = _redis()
+    if r is None:
+        return
+    try:
+        if not r.set(_REDIS_PREFIX + "waf_solve_cooldown", "1", nx=True, ex=_WAF_SOLVE_COOLDOWN):
+            return
+        import redis
+        from rq import Queue
+        conn = redis.from_url(os.environ.get("REDIS_URL", "redis://localhost:6379/0"))
+        Queue("maintenance", connection=conn).enqueue(
+            "app.scrapers.cspan.solve_waf_challenge", job_timeout=180)
+        logger.info("[cspan] queued a browser solve for the WAF challenge")
+    except Exception as e:
+        logger.warning("[cspan] could not queue a WAF solve: %s", e)
+
+
+def solve_waf_challenge() -> bool:
+    """RQ job (maintenance queue): load a c-span.org page in Camoufox, which runs
+    the WAF's JS challenge, and share the aws-waf-token it earns. Clears the
+    backoff on success so discovery resumes at once. True if a token was earned."""
+    started = time.time()
+    try:
+        from camoufox.sync_api import Camoufox
+        with Camoufox(headless="virtual", os="windows", window=(1280, 800)) as browser:
+            page = browser.new_page()
+            page.goto(_WAF_SOLVE_URL, wait_until="domcontentloaded", timeout=60000)
+            for _ in range(45):
+                if "Congressional Chronicle" in page.title() or "data-videofile" in page.content():
+                    break
+                time.sleep(1)
+            ua = page.evaluate("navigator.userAgent")
+            token = next((c["value"] for c in browser.contexts[0].cookies()
+                          if c["name"] == "aws-waf-token"), None)
+    except Exception as e:
+        logger.warning("[cspan] WAF browser solve failed: %s", e)
+        return False
+    if not token:
+        logger.warning("[cspan] WAF browser solve earned no token after %.0fs "
+                       "(a CAPTCHA, or the page changed)", time.time() - started)
+        return False
+    r = _redis()
+    if r is not None:
+        try:
+            r.set(_REDIS_PREFIX + "waf_cookie", json.dumps({"token": token, "ua": ua, "at": time.time()}),
+                  ex=_WAF_COOKIE_TTL)
+            r.delete(_REDIS_PREFIX + "waf_backoff")
+        except Exception as e:
+            logger.warning("[cspan] could not store the WAF token: %s", e)
+            return False
+    logger.info("[cspan] WAF challenge solved in Camoufox (%.0fs); refreshing discovery",
+                time.time() - started)
+    try:
+        _warm_all(CSpanScraper(config={}))   # while the token still works
+    except Exception as e:
+        logger.warning("[cspan] discovery refresh after the WAF solve failed: %s", e)
+    return True
+
+
 def _fetch_page(scraper: "CSpanScraper", url: str) -> Optional[str]:
     """GET a discovery page -> HTML or None. Honors the shared WAF backoff (skips
     the request entirely while active, so we stop agitating the WAF) and arms it
-    fleet-wide on a fresh 202. Spacing + caching are handled by the _discover flow."""
+    fleet-wide on a fresh 202, queuing a browser solve. Sends the shared
+    aws-waf-token when one is held. Spacing + caching are handled by the
+    _discover flow."""
     left = _waf_backoff_left()
     if left is not None:
         logger.info("[cspan] WAF backoff active (%.0fs left) — skipping %s", left, url)
         return None
+    waf = _waf_cookie()
+    headers = {**PAGE_HEADERS, "User-Agent": waf["ua"]} if waf and waf.get("ua") else PAGE_HEADERS
+    cookies = {"aws-waf-token": waf["token"]} if waf else None
     try:
-        r = scraper.session.get(url, headers=PAGE_HEADERS, timeout=15)
+        r = scraper.session.get(url, headers=headers, cookies=cookies, timeout=15)
     except Exception as e:
         logger.warning("[cspan] page fetch failed for %s: %s", url, e)
         return None
     if r.status_code == 202:
+        if waf:
+            _drop_waf_cookie()  # the WAF stopped honouring it
         _arm_waf_backoff()
-        logger.warning("[cspan] WAF challenge (202) for %s — backing off %ds",
-                       url, _WAF_BACKOFF)
+        logger.warning("[cspan] WAF challenge (202) for %s%s — backing off %ds",
+                       url, " despite the solved token" if waf else "", _WAF_BACKOFF)
+        _request_waf_solve()
         return None
     if r.status_code != 200:
         logger.warning("[cspan] page HTTP %s for %s", r.status_code, url)
@@ -483,6 +588,14 @@ def _await_fetch_slot() -> None:
         time.sleep(ttl_ms / 1000.0 if ttl_ms and ttl_ms > 0 else 0.1)
 
 
+def _warm_all(scraper: "CSpanScraper") -> None:
+    """Fill every discovery view that's cold (each fetch spaced fleet-wide)."""
+    discover_floor(scraper, "house")
+    discover_floor(scraper, "senate")
+    discover_schedule(scraper, None)
+    discover_schedule(scraper, CSPAN3_NETWORK)
+
+
 def _maybe_prewarm(scraper: "CSpanScraper") -> None:
     """Warm every discovery view in the background so the rest of a viewing session
     hits (shared) cache. Fires only from a play (never on a timer), and at most once
@@ -501,10 +614,7 @@ def _maybe_prewarm(scraper: "CSpanScraper") -> None:
 
     def _run() -> None:
         try:
-            discover_floor(scraper, "house")
-            discover_floor(scraper, "senate")
-            discover_schedule(scraper, None)
-            discover_schedule(scraper, CSPAN3_NETWORK)
+            _warm_all(scraper)
         except Exception as e:  # background best-effort; never surface
             logger.debug("[cspan] prewarm error: %s", e)
 
