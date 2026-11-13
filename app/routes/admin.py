@@ -1774,6 +1774,18 @@ def feeds():
                 entry['eligible'] += 1
             else:
                 entry['disabled'] += 1
+    # A folded network with no channels here (its scraper broke upstream, or
+    # it's switched off on the Free Networks card) is nothing to pick; keep it
+    # only while a saved feed still names it, so that selection stays visible.
+    saved_names = {str(n) for f in feeds
+                   for key in ('sources', 'exclude_sources')
+                   for n in ((f.filters or {}).get(key) or [])}
+    dead_folded = {k for k in folded_sources.FOLDED
+                   if k in source_counts and not source_counts[k]['total'] and k not in saved_names}
+    if dead_folded:
+        sources = [s for s in sources if s.name not in dead_folded]
+        for k in dead_folded:
+            source_counts.pop(k, None)
     cats = db.session.query(Channel.category)\
         .filter(Channel.is_active == True, Channel.category != None)\
         .distinct().order_by(Channel.category).all()
