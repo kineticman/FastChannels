@@ -57,6 +57,8 @@ class MyOutdoorTVTVEScraper(ViewLiftTVEScraper, BaseScraper):
     account_signup = 'email'
     otp_enabled = False
     market_note = 'MyOutdoorTV is not available to your TV provider account in your area'
+    # Its TVE plan is per channel (tve-charter-oc), matched from channelIds.
+    send_channel_ids = True
 
     config_schema = [
         ConfigField('email', 'MyOutdoorTV account email', placeholder='you@example.com',

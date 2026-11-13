@@ -160,6 +160,12 @@ class ViewLiftTVEScraper(MvpdCooldownMixin, BaseScraper):
     otp_enabled = True
     # Said when the entitlement answers contentGeoRestricted.
     market_note = ''
+    # Send the Adobe-authorized resources as identitySignInTve's channelIds.
+    # A site whose TVE plans are per channel (MyOutdoorTV: "TVE Charter
+    # Spectrum OC") attaches the plan only from that list; without it the link
+    # returns 200 but the entitlement answers SVOD_SUBSCRIPTION_NOT_FOUND.
+    # Off where the site's own web client leaves it out (Altitude).
+    send_channel_ids = False
 
     # ── page config / channel discovery ──────────────────────────────────────
 
@@ -554,6 +560,8 @@ class ViewLiftTVEScraper(MvpdCooldownMixin, BaseScraper):
                 'adbDeviceId': client.session.headers['ap-device-identifier'],
                 'adobeMetadata': {'zip': None, 'encryptedZip': attr('zip')},
             }}
+            if self.send_channel_ids:
+                variables['input']['channelIds'] = [res for res, ok in decisions.items() if ok]
             query = ('mutation ($site: String!, $input: SignInTveInput!) { identitySignInTve(site: $site, '
                      'input: $input) { userId tveUserId provider authorizationToken refreshToken } }')
             r = requests.post(f'{api}/graphql', json={'query': query, 'variables': variables},
