@@ -27,8 +27,12 @@ Key facts established by probing:
   EXT-X-KEY), 1024x576 H.264/AAC with CC1. Variant paths carry their own
   hdntl and segments need no Referer, so playback is a plain 302.
 - www.c-span.org 202-challenges (AWS WAF) after a handful of quick fetches,
-  so the page is fetched through cspan.py's coordinated _fetch_page and
-  cached until shortly before its token expires.
+  and once an IP is flagged it stays challenged for hours; a browser solves
+  the JS challenge, a plain client can't. So the token comes from the C-SPAN
+  app's API instead (api.c-spanarchives.org/3.0/external?requestKey=
+  akamaiToken_v8, no WAF): the same st/exp/acl=/*/hmac token, verified
+  2026-11-13 to open all three manifests. The page, through cspan.py's
+  coordinated _fetch_page, is only the fallback when that API fails.
 """
 from __future__ import annotations
 
@@ -41,8 +45,8 @@ from urllib.parse import quote
 
 from .base import BaseScraper, ChannelData, ProgramData
 from .cspan import (
-    CSpanScraper, _LOGO_CSPAN, _LOGO_CSPAN2, _LOGO_CSPAN3, _await_fetch_slot, _cache_get, _cache_set,
-    _fetch_page,
+    API_BASE, API_HEADERS, CSpanScraper, _LOGO_CSPAN, _LOGO_CSPAN2, _LOGO_CSPAN3, _await_fetch_slot, _cache_get,
+    _cache_set, _fetch_page,
 )
 from ..gracenote_map import resolve_gracenote
 from ..tve.accounts import tve_account_for
@@ -212,11 +216,19 @@ class CSpanTVEScraper(MvpdCooldownMixin, BaseScraper):
         return m.group(1)
 
     def _page(self) -> dict:
-        """{token, exp, software_statement} from the C-SPAN networks page,
-        shared across workers; {} when the page can't be read right now."""
+        """{token, exp, software_statement}, shared across workers: the token
+        from the app API, else from the C-SPAN networks page; {} when neither
+        answers right now. software_statement is only ever from the page."""
         cached = _cache_get(_PAGE_CACHE_KEY)
         page = cached[1] if cached else {}
         if page.get('token') and float(page.get('exp') or 0) - time.time() > _TOKEN_MARGIN:
+            return page
+        token = self._app_token()
+        if token:
+            exp = _EXP_RE.search(token)
+            page = {'token': token, 'exp': int(exp.group(1)) if exp else time.time() + 3600,
+                    'software_statement': page.get('software_statement')}
+            _cache_set(_PAGE_CACHE_KEY, time.time(), page)
             return page
         _await_fetch_slot()
         html = _fetch_page(self, PAGE_URL)
@@ -231,6 +243,20 @@ class CSpanTVEScraper(MvpdCooldownMixin, BaseScraper):
                 'software_statement': softstat.group(1) if softstat else page.get('software_statement')}
         _cache_set(_PAGE_CACHE_KEY, time.time(), page)
         return page
+
+    def _app_token(self) -> str | None:
+        """The Akamai hdnts token from the C-SPAN app's API, or None."""
+        try:
+            r = self.session.get(f'{API_BASE}/external', params={'requestKey': 'akamaiToken_v8'},
+                                 headers=API_HEADERS, timeout=15)
+            data = (r.json() or {}).get('data') if r.ok else None
+        except Exception as exc:
+            logger.warning('[cspan_tve] app token fetch failed: %s', exc)
+            return None
+        if isinstance(data, str) and 'hmac=' in data:
+            return data
+        logger.warning('[cspan_tve] app token: HTTP %s, no token; falling back to the networks page', r.status_code)
+        return None
 
     def software_statement(self) -> str:
         return self._page().get('software_statement') or _SOFTWARE_STATEMENT
