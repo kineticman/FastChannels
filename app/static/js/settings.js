@@ -1220,6 +1220,7 @@ const MVPD_LOGIN_FAMILIES = {
   altitude:  { base: '/api/settings/tve/link-login', needsRequestor: false },
   motv:      { base: '/api/settings/tve/link-login', needsRequestor: false },
   snp:       { base: '/api/settings/tve/link-login', needsRequestor: false },
+  newsmax:   { base: '/api/settings/tve/link-login', needsRequestor: false },
   google:    { base: '/api/settings/tve/google/browser-login', needsRequestor: false },
 };
 // Phone-link sign-in (app/tve/link_login.py): the families whose provider
@@ -1227,9 +1228,9 @@ const MVPD_LOGIN_FAMILIES = {
 // Discovery uses a typed code on its own page (the status carries it); the
 // Google step isn't a network sign-in, so it stays browser-only.
 MVPD_LOGIN_FAMILIES.link = { base: '/api/settings/tve/link-login', needsRequestor: false };
-const TVE_LINK_FAMILIES = new Set(['legacy', 'nbc', 'tcm', 'fox', 'amcn', 'discovery', 'versant', 'univision', 'disney', 'tennis', 'dazn', 'cspan', 'sundance', 'cnn', 'nesn', 'monumental', 'altitude', 'motv', 'snp']);
+const TVE_LINK_FAMILIES = new Set(['legacy', 'nbc', 'tcm', 'fox', 'amcn', 'discovery', 'versant', 'univision', 'disney', 'tennis', 'dazn', 'cspan', 'sundance', 'cnn', 'nesn', 'monumental', 'altitude', 'motv', 'snp', 'newsmax']);
 // Families with no browser sign-in at all: always the phone link.
-const TVE_LINK_ONLY_FAMILIES = new Set(['tcm', 'versant', 'univision', 'disney', 'tennis', 'dazn', 'cspan', 'sundance', 'cnn', 'nesn', 'monumental', 'altitude', 'motv', 'snp']);
+const TVE_LINK_ONLY_FAMILIES = new Set(['tcm', 'versant', 'univision', 'disney', 'tennis', 'dazn', 'cspan', 'sundance', 'cnn', 'nesn', 'monumental', 'altitude', 'motv', 'snp', 'newsmax']);
 let _mvpdLoginActive = false;
 let _mvpdLoginDone = false;
 let _mvpdLoginPollTimer = null;

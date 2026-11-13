@@ -33,7 +33,7 @@ from .adobe_pass import TVEAuthError, TVENotAuthorizedError, TVEPendingAuthError
 logger = logging.getLogger(__name__)
 
 STATUS_KEY = 'tve:link-login:status'
-LINK_FAMILIES = ('legacy', 'nbc', 'tcm', 'fox', 'amcn', 'discovery', 'versant', 'univision', 'disney', 'tennis', 'dazn', 'cspan', 'sundance', 'cnn', 'nesn', 'monumental', 'altitude', 'motv', 'snp')
+LINK_FAMILIES = ('legacy', 'nbc', 'tcm', 'fox', 'amcn', 'discovery', 'versant', 'univision', 'disney', 'tennis', 'dazn', 'cspan', 'sundance', 'cnn', 'nesn', 'monumental', 'altitude', 'motv', 'snp', 'newsmax')
 _PER_TARGET_TIMEOUT = 10 * 60
 _POLL_SECONDS = 3.0
 _POLL_MAX_SECONDS = 15.0
@@ -735,6 +735,78 @@ class _Tennis:
         return 'authorized'
 
 
+class _Newsmax:
+    """Newsmax — one Adobe v2 sign-in under newsmaxtv.com's `NEWSMAX`
+    requestor. The site hands out a fresh Adobe client per registration and
+    the sign-in is bound to it, so the client's id and secret are saved with
+    the sign-in and reused for playback."""
+    error_key = 'newsmax'
+    adobe_requestor, brand_label = 'NEWSMAX', 'Newsmax'
+
+    def __init__(self, account, mso_id: str, requestor_id: str | None):
+        from ..models import Source
+        from ..scrapers.newsmax_tve import NewsmaxTVEScraper
+        self.account, self.mso_id = account, mso_id
+        self.source = Source.query.filter_by(name='newsmax_tve').first()
+        if not self.source or not self.source.is_enabled:
+            raise TVEAuthError('Enable the Newsmax TVE source before signing in to it.')
+        self.scraper = NewsmaxTVEScraper(config=dict(self.source.config or {}))
+
+    def targets(self):
+        return ['Newsmax']
+
+    def start(self, label):
+        from .adobe_pass import refresh_adobe_client_token
+        from ..scrapers.newsmax_tve import (ADOBE_BASE, DOMAIN_NAME, REDIRECT_URL, REQUESTOR_ID,
+                                            adobe_headers, register_client)
+        saved = (self.account.config or {}).get('newsmax_mvpd_auth') or {}
+        if saved.get('mso_id') == self.mso_id and saved.get('client_id') and saved.get('client_secret'):
+            client = {'client_id': saved['client_id'], 'client_secret': saved['client_secret']}
+        else:
+            client = register_client()
+        token = refresh_adobe_client_token(client['client_id'], client['client_secret'])
+        headers = adobe_headers(token, client['client_id'])
+        r = requests.post(f'{ADOBE_BASE}/api/v2/{REQUESTOR_ID}/sessions', timeout=30, headers=headers,
+                          data={'mvpd': self.mso_id, 'domainName': DOMAIN_NAME, 'redirectUrl': REDIRECT_URL})
+        data = r.json() if r.ok else {}
+        ctx = {'client': client, 'headers': headers,
+               'profile_url': f'{ADOBE_BASE}/api/v2/{REQUESTOR_ID}/profiles/{self.mso_id}'}
+        if data.get('reasonType') == 'authenticated':
+            return None, ctx
+        if not data.get('url'):
+            raise TVEAuthError(f'Newsmax: Adobe did not return a sign-in URL (HTTP {r.status_code}).')
+        return ADOBE_BASE + data['url'], ctx
+
+    def poll(self, ctx):
+        r = requests.get(ctx['profile_url'], headers=ctx['headers'], timeout=20)
+        if not r.ok:
+            return None
+        return ((r.json() or {}).get('profiles') or {}).get(self.mso_id) or None
+
+    def save(self, ctx, profile):
+        from ..config_store import persist_source_cache_updates
+        from ..extensions import db
+        from ..scrapers.newsmax_tve import ADOBE_BASE, REQUESTOR_ID, RESOURCE
+
+        r = requests.post(f'{ADOBE_BASE}/api/v2/{REQUESTOR_ID}/decisions/preauthorize/{self.mso_id}', timeout=20,
+                          json={'resources': [RESOURCE]},
+                          headers={**ctx['headers'], 'Content-Type': 'application/json'})
+        decisions = (r.json() or {}).get('decisions') or [] if r.ok else []
+        cfg = dict(self.account.config or {})
+        cfg['newsmax_mvpd_auth'] = {'mso_id': self.mso_id, 'client_id': ctx['client']['client_id'],
+                                    'client_secret': ctx['client']['client_secret'],
+                                    'captured_at': int(time.time())}
+        self.account.config = cfg
+        db.session.commit()
+        self.scraper._update_cache('newsmax_client', {})
+        self.scraper._update_cache('newsmax_authz', {})
+        persist_source_cache_updates(self.source.id, self.scraper._pending_cache_updates)
+        self.scraper._pending_cache_updates = {}
+        if decisions and not any(d.get('authorized') for d in decisions):
+            raise TVENotAuthorizedError('your package doesn\'t include Newsmax')
+        return 'authorized'
+
+
 class _Cspan:
     """C-SPAN — Adobe's v1 regcode sign-in under the `C-SPAN` requestor (v2
     isn't enabled for it), one sign-in for all three networks. The sign-in is
@@ -1363,7 +1435,7 @@ _ADAPTERS = {'legacy': _Legacy, 'nbc': _Nbc, 'tcm': _Tcm, 'fox': _Fox, 'amcn': _
              'disney': _Disney, 'tennis': _Tennis, 'dazn': _Dazn, 'cspan': _Cspan,
              'sundance': _Sundance, 'cnn': _Cnn, 'nesn': _Nesn,
              'monumental': _Monumental, 'altitude': _Altitude, 'motv': _MyOutdoorTV,
-             'snp': _Snp}
+             'snp': _Snp, 'newsmax': _Newsmax}
 
 
 # ── job ──────────────────────────────────────────────────────────────────────

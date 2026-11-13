@@ -194,6 +194,20 @@ def tve_network_status(account) -> list[dict]:
         'needs_signin': _needs_signin('tennis', tennis_last_signed_in_at, _errors('tennis_tve')),
     })
 
+    newsmax_last_signed_in_at = (_cfg('newsmax_tve').get('newsmax_mvpd_auth') or {}).get('captured_at')
+    newsmax_error_message, newsmax_error_at = _last_error('newsmax', newsmax_last_signed_in_at, _errors('newsmax_tve'))
+    entries.append({
+        'source': 'newsmax_tve',
+        'label': 'Newsmax TVE',
+        'last_signed_in_at': newsmax_last_signed_in_at,
+        'note': 'Sign in with a link on your phone or computer.',
+        'family': 'newsmax',
+        'requestor_id': None,
+        'last_error_message': newsmax_error_message,
+        'last_error_at': newsmax_error_at,
+        'needs_signin': _needs_signin('newsmax', newsmax_last_signed_in_at, _errors('newsmax_tve')),
+    })
+
     dazn_last_signed_in_at = (_cfg('dazn_tve').get('dazn_auth') or {}).get('captured_at')
     dazn_error_message, dazn_error_at = _last_error('dazn', dazn_last_signed_in_at, _errors('dazn_tve'))
     entries.append({
