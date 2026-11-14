@@ -429,13 +429,16 @@ def prewarm_logo_cache(urls: list[str], progress_cb=None) -> tuple[int, int]:
     return cached, failed
 
 
-def _cleanup_dir(directory: str, ttl: int) -> int:
-    """Delete files in *directory* older than *ttl* seconds. Returns count removed."""
+def _cleanup_dir(directory: str, ttl: int, keep_suffix: str | None = None) -> int:
+    """Delete files in *directory* older than *ttl* seconds, except names ending
+    in *keep_suffix*. Returns count removed."""
     if not os.path.exists(directory):
         return 0
     cutoff = time.time() - ttl
     removed = 0
     for fname in os.listdir(directory):
+        if keep_suffix and fname.endswith(keep_suffix):
+            continue
         fpath = os.path.join(directory, fname)
         try:
             if os.path.getmtime(fpath) < cutoff:
@@ -469,5 +472,8 @@ def cleanup_poster_cache(expired_urls: list[str]) -> int:
                 removed += 1
             except OSError:
                 pass
-    removed += _cleanup_dir(_POSTER_DIR, _POSTER_TTL)
+    # Keep the .url sidecars: Channels DVR recordings made while posters were
+    # proxied keep requesting /images/proxy/poster/<hash>, and the sidecar is
+    # the only way back to the upstream URL once the program row is gone.
+    removed += _cleanup_dir(_POSTER_DIR, _POSTER_TTL, keep_suffix='.url')
     return removed

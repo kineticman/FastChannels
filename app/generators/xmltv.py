@@ -268,13 +268,12 @@ def generate_xmltv_stream(filters: dict = None, base_url: str = None, feed_name:
             if prog_type == 'movie' and 'movie' not in cats and 'movies' not in cats:
                 _append_category(el, 'Movie', seen_categories, lang=lang)
             if prog.poster_url:
-                # Only proxy/cache Roku posters (CDN returns 403 to clients).
-                # All other sources serve artwork directly — no caching overhead.
-                if ch_src_name_map.get(prog.channel_id) == 'roku':
-                    poster_src = proxy_logo_url(prog.poster_url, base_url, 'poster', image_proxy_enabled=_image_proxy) or prog.poster_url
-                else:
-                    poster_src = prog.poster_url
-                SubElement(el, 'icon', src=poster_src)
+                # Always the upstream URL, never our poster proxy: Channels DVR
+                # saves this URL with each recording and loads it for as long as
+                # the recording exists, long after our poster cache has dropped it.
+                # (Roku used to go through the proxy because its CDN 403'd clients;
+                # it no longer does.)
+                SubElement(el, 'icon', src=prog.poster_url)
             # <series-id> isn't part of the XMLTV DTD, but Channels DVR's own
             # docs document it as the way to give a recording pass a stable
             # series identity (getchannels.com/docs/.../custom-channels) — an
