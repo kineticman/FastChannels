@@ -1974,7 +1974,21 @@ def cnn_tve_dash(channel_id: str):
     return play('cnn_tve', _unquote(channel_id))
 
 
-def cnn_manifest_response(manifest_url: str):
+def _renew_cnn_stream(scraper, channel) -> str:
+    """A new CNN stream session after the CDN refused the cached URL."""
+    scraper.forget_stream(channel.stream_url)
+    url = scraper.resolve(channel.stream_url)
+    if getattr(scraper, '_pending_cache_updates', None):
+        try:
+            persist_source_cache_updates(channel.source_id, scraper._pending_cache_updates, wait=False)
+        except Exception as e:
+            from ..extensions import db
+            db.session.rollback()
+            logger.warning('[cnn-tve] failed to persist the new stream session: %s', e)
+    return url
+
+
+def cnn_manifest_response(manifest_url: str, renew=None):
     """CNN's manifest served from our URL with absolute segment URLs.
 
     Bolt's manifest has no BaseURL; its SegmentTemplate paths are relative to
@@ -1985,18 +1999,29 @@ def cnn_manifest_response(manifest_url: str):
     media/initialization templates are made absolute. Not an injected
     <BaseURL>: the token path has '&'s, and ffmpeg re-parses BaseURL text as
     XML and drops it. Refreshes come back here and reuse the tune's URL
-    (resolve()).
+    (resolve()) for as long as the CDN serves it; when it refuses it (4xx),
+    renew() starts one new session and that manifest is served instead.
     """
     from urllib.parse import urljoin as _urljoin
     from xml.sax.saxutils import escape as _xml_escape, unescape as _xml_unescape
     try:
         r = _requests.get(manifest_url, timeout=10)
+        if renew is not None and 400 <= r.status_code < 500:
+            logger.info('[cnn-tve] CDN refused the stream session (HTTP %s), starting a new one', r.status_code)
+            r = _requests.get(renew(), timeout=10)
         r.raise_for_status()
     except Exception as e:
         logger.warning('[cnn-tve] manifest fetch failed: %s', e)
         return _unavailable_response()
     manifest_text = r.text
-    if not re.search(r'<BaseURL\b', manifest_text):
+    head, _, _ = manifest_text.partition('<Period')
+    # Server-inserted ad periods carry their own <BaseURL> (another CDN), and
+    # their relative paths resolve against it, so they're left alone. Only
+    # periods without one are made absolute. Skipping the whole manifest when
+    # any BaseURL appeared broke every content period from the first ad break
+    # on, for the hour the ads stayed in the window: segment 404s from us and
+    # FC Player giving up (2026-11-13).
+    if not re.search(r'<BaseURL\b', head):
         upstream = str(r.url)
 
         def _abs(m):
@@ -2005,7 +2030,12 @@ def cnn_manifest_response(manifest_url: str):
                 return m.group(0)
             return f'{m.group(1)}="{_xml_escape(_urljoin(upstream, path), {chr(34): "&quot;"})}"'
 
-        manifest_text = re.sub(r'\b(media|initialization)="([^"]*)"', _abs, manifest_text)
+        def _period(m):
+            if re.search(r'<BaseURL\b', m.group(0)):
+                return m.group(0)
+            return re.sub(r'\b(media|initialization)="([^"]*)"', _abs, m.group(0))
+
+        manifest_text = re.sub(r'<Period\b.*?</Period>', _period, manifest_text, flags=re.S)
     return Response(
         manifest_text,
         mimetype='application/dash+xml',
@@ -3161,8 +3191,12 @@ def play(source_name: str, channel_id: str):
     if _channel_is_retired(channel):
         return _gone_response()
 
-    # Custom channels log full detail (incl. cache/resolver) via _log_custom_play_path
-    _log_play_req = logger.debug if source_name == 'custom' else logger.info
+    # Custom channels log full detail (incl. cache/resolver) via _log_custom_play_path.
+    # CNN's dash.mpd is refetched through here every 4s for as long as it plays
+    # (cnn_manifest_response); the tune itself is logged by the bridge trigger or the
+    # watch page, and a new CNN stream session by cnn_tve.resolve().
+    _quiet = source_name == 'custom' or (source_name == 'cnn_tve' and request.path.endswith('/dash.mpd'))
+    _log_play_req = logger.debug if _quiet else logger.info
     _log_play_req(
         '[play] request_id=%s ip=%s source=%s channel_id=%s channel_name=%s',
         getattr(g, 'request_id', '-'), client_ip, source_name, channel_id, channel.name,
@@ -3579,7 +3613,7 @@ def play(source_name: str, channel_id: str):
             redirect_kind='direct',
         )
     if source_name == 'cnn_tve':
-        return cnn_manifest_response(resolved_url)
+        return cnn_manifest_response(resolved_url, renew=lambda: _renew_cnn_stream(scraper, channel))
     if _is_hudl_master(resolved_url):
         return hudl_master_response(resolved_url)
     return redirect(resolved_url, 302)

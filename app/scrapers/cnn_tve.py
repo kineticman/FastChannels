@@ -28,9 +28,15 @@ Key facts established by probing:
   them against the URL they asked for rather than the 302's target (ffmpeg's
   dash demuxer, some IPTV players) send them to us, so the play route serves
   the manifest itself with those paths made absolute (cnn_manifest_response
-  in routes/play.py). A tune's URL is reused for a few minutes so the manifest
-  refreshes that come back to us don't each run a token exchange. Manifest
-  and segments send ACAO *. The license needs no headers beyond the challenge.
+  in routes/play.py). Because of that, every 4-second refresh comes back to
+  us, and a tune's URL is reused until its CDN token nears expiry (~24h). Each
+  Bolt session's manifest has its own window and period layout, so swapping
+  a playing client onto a new session mid-stream can drop a period it still
+  holds: Media3 calls it "out of sync" and fails with DashManifestStaleException
+  (FC Player, 2026-11-13; it used to happen every 10 minutes, at ad-break
+  periods). A new session only starts when the URL is near expiry or the CDN
+  refuses it (forget_stream). Manifest and segments send ACAO *. The license
+  needs no headers beyond the challenge.
 - Guide: HLN from the same wme-digital schedule widget warner_tve uses
   (it has no CNN or CNN International); CNN and CNN International from
   the tvtv cache under their Gracenote IDs.
@@ -65,10 +71,10 @@ BOLT = 'https://default.any-any.prd.api.bolt.cnn.com'
 # playbackInfo and is what get_license_url() hands the license proxy.
 LICENSE_BASE = 'https://busy.any-any.prd.api.discomax.com/drm-proxy/any/drm-proxy/drm/license/widevine'
 _CLIENT_VERSION = '4.70.0'
-# How long a tune's manifest URL is reused, and how close to its CDN token's
-# Expires= it stops being reused.
-_STREAM_REUSE_SECONDS = 600
+# A tune's manifest URL is reused until this close to its CDN token's Expires=
+# (~24h after playbackInfo); a URL without one is reused for _STREAM_REUSE_SECONDS.
 _STREAM_EXPIRY_MARGIN = 300
+_STREAM_REUSE_SECONDS = 6 * 3600
 _EXPIRES_RE = re.compile(r'Expires=(\d+)')
 
 # source_channel_id -> channel. media_id and edit_id are the tve-asset ids
@@ -196,9 +202,12 @@ class CNNTVEScraper(MvpdCooldownMixin, BaseScraper):
         if cid not in CHANNELS:
             raise ValueError(f'Unsupported CNN TVE stream URL: {raw_url}')
         cached = (self.cache.get('cnn_streams') or {}).get(cid) or {}
-        if cached.get('url') and time.time() - float(cached.get('at') or 0) < _STREAM_REUSE_SECONDS:
+        if cached.get('url'):
             expires = _EXPIRES_RE.search(cached['url'])
-            if not expires or int(expires.group(1)) - time.time() > _STREAM_EXPIRY_MARGIN:
+            if expires:
+                if int(expires.group(1)) - time.time() > _STREAM_EXPIRY_MARGIN:
+                    return cached['url']
+            elif time.time() - float(cached.get('at') or 0) < _STREAM_REUSE_SECONDS:
                 return cached['url']
         media_token = self._media_token(cid)
         for attempt in (0, 1):
@@ -231,7 +240,16 @@ class CNNTVEScraper(MvpdCooldownMixin, BaseScraper):
         streams = dict(self.cache.get('cnn_streams') or {})
         streams[cid] = {'license': license_url, 'url': url, 'at': time.time()}
         self._update_cache('cnn_streams', streams)
+        logger.info('[cnn_tve] new stream session for %s (%s)', CHANNELS[cid]['name'], url.split('/')[2])
         return url
+
+    def forget_stream(self, raw_url: str) -> None:
+        """Drop a tune's cached manifest URL (the CDN refused it), so the next
+        resolve() starts a new session."""
+        cid = raw_url[len(SCHEME):] if raw_url.startswith(SCHEME) else ''
+        streams = dict(self.cache.get('cnn_streams') or {})
+        if streams.pop(cid, None) is not None:
+            self._update_cache('cnn_streams', streams)
 
     def _playback_body(self, bolt: dict, cid: str) -> dict:
         return {
