@@ -1605,6 +1605,19 @@ def stirr_segment_proxy():
 
 
 
+def _mpd_head_has_base(mpd: str) -> bool:
+    """True when the MPD declares a <BaseURL> before its first Period.
+
+    Proxies that serve a manifest from our origin add a top-level BaseURL when
+    it lacks one, so relative segment paths resolve against the CDN, not us.
+    Only the header counts: server-inserted ad periods carry their own BaseURL,
+    and checking the whole document switched the fix off for every content
+    period from the first ad break on (CNN TVE in FC Player, 2026-11-13). A
+    period's absolute BaseURL overrides the top-level one, so adding it is safe.
+    """
+    return bool(re.search(r'<BaseURL\b', mpd.partition('<Period')[0]))
+
+
 @play_bp.route('/play/amazon_prime_free/<channel_id>/dash.mpd')
 @play_bp.route('/play/amazon_sports/<channel_id>/dash.mpd')
 def amazon_dash_proxy(channel_id: str):
@@ -1701,7 +1714,7 @@ def amazon_dash_proxy(channel_id: str):
     # player resolves those paths against our proxy URL and requests segments from
     # us (→ 404).  Inject a global <BaseURL> pointing to the CDN directory so
     # segment requests go directly to the CDN.
-    if not re.search(r'<BaseURL\b', mpd):
+    if not _mpd_head_has_base(mpd):
         cdn_base = _urljoin(dash_url, '.')  # CDN directory containing the .mpd
         mpd = mpd.replace('<Period ', f'<BaseURL>{cdn_base}</BaseURL>\n  <Period ', 1)
 
@@ -2150,12 +2163,14 @@ def dazn_tve_dash(channel_id: str):
     # whose manifest has absolute BaseURLs on segment hosts that aren't
     # user-agent bound and send CORS, so it's served untouched. Only DAZN's
     # own CDN needs the relay.
-    if not re.search(r'<BaseURL[^>]*>\s*https?://', mpd):
+    # Only the MPD header decides: an ad period's own absolute BaseURL must not
+    # switch the relay off for the content periods (see _mpd_head_has_base).
+    if not re.search(r'<BaseURL[^>]*>\s*https?://', mpd.partition('<Period')[0]):
         if urlsplit(r.url).netloc != urlsplit(stream['manifest']).netloc:
             base = r.url.split('?', 1)[0].rsplit('/', 1)[0] + '/'
         else:
             base = request.host_url.rstrip('/') + f'/play/dazn_tve/{_quote(raw_id, safe="")}/seg/'
-        mpd = re.sub(r'<BaseURL>[^<]*</BaseURL>\s*', '', mpd)
+        mpd = re.sub(r'<BaseURL>(?!\s*https?://)[^<]*</BaseURL>\s*', '', mpd)
         mpd = mpd.replace('<Period', f'<BaseURL>{base}</BaseURL>\n  <Period', 1)
     return Response(mpd, mimetype='application/dash+xml',
                     headers={'Cache-Control': 'no-cache', 'Access-Control-Allow-Origin': '*'})
@@ -2722,7 +2737,7 @@ def pbs_dash_proxy(channel_id: str):
     # URL after redirects) so relative paths resolve correctly. Other profiles
     # (e.g. kids-main via MediaTailor) already ship an absolute BaseURL — leave
     # those alone.
-    if '<BaseURL>' not in manifest_text:
+    if not _mpd_head_has_base(manifest_text):
         upstream_dir = _urljoin(str(r.url), '.')
         manifest_text = re.sub(
             r'(<MPD\b[^>]*>)',
@@ -2831,7 +2846,7 @@ def nbc_tve_dash_proxy(channel_id: str):
         _drop_audio, manifest_text, flags=re.DOTALL,
     )
 
-    if '<BaseURL>' not in manifest_text:
+    if not _mpd_head_has_base(manifest_text):
         upstream_dir = _urljoin(str(r.url), '.')
         manifest_text = re.sub(
             r'(<MPD\b[^>]*>)',
