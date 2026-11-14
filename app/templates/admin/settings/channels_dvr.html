@@ -19,7 +19,7 @@
           <div class="help">Your Channels DVR server address, usually on port <code>8089</code>. Save the address before testing the connection.</div>
           <details class="settings-disclosure">
             <summary>Find your DVR address or troubleshoot a connection</summary>
-            <div class="help">Open <a href="https://my.channelsdvr.net" target="_blank" rel="noopener noreferrer">my.channelsdvr.net</a> → Settings → General to find your server address. If both apps are on the same machine and the LAN IP fails, try the Docker host gateway: <code>http://172.17.0.1:8089</code>.</div>
+            <div class="help">Open <a href="https://my.channelsdvr.net" target="_blank" rel="noopener noreferrer">my.channelsdvr.net</a> → Settings → General to find your server address. If both apps are on the same machine and the LAN IP fails: on Linux Docker, try <code>http://172.17.0.1:8089</code>; on Windows WSL Containers (<code>wslc</code>), use <code>http://host.wslc.internal:8089</code>.</div>
           </details>
           {% if channels_dvr_url_from_env %}
           <div class="help">Currently coming from environment variable <code>CHANNELS_DVR_SERVER_URL</code>. Saving here will override it in the database.</div>

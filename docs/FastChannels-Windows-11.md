@@ -2,6 +2,8 @@
 
 Run FastChannels with WSL Containers. Docker Desktop and a Linux distribution are not required.
 
+WSL Containers needs WSL 2.9.3 or newer (`wsl --version`). Microsoft says it also runs on Windows 10, but this guide has only been tested on Windows 11. WSL Containers has no Docker Compose (Microsoft is working on it) or Docker API, so tools like Portainer and Watchtower can't manage it and upgrades are manual (below). If you run several containers, Docker Desktop or a Linux VM is the better fit.
+
 ## Install
 
 1. Open **PowerShell as Administrator** and run:
@@ -33,7 +35,7 @@ Run FastChannels with WSL Containers. Docker Desktop and a Linux distribution ar
 
 4. Open **http://localhost:5523/admin/**. Allow a few minutes for channels to populate.
 
-From another device (such as your Channels DVR server), use `http://YOUR-PC-IP:5523/admin/`. Run `ipconfig` to find your PC's IPv4 address.
+From another device (such as your Channels DVR server), use `http://YOUR-PC-IP:5523/admin/`. Run `ipconfig` to find your PC's IPv4 address. If Channels DVR runs on this same PC, see [Channels DVR is on the same PC](#advanced) under Advanced.
 
 ## Upgrade
 
@@ -107,14 +109,23 @@ Windows has to be signed in for FastChannels to run. Set the PC to sign in autom
 - `wslc ps` shows `0.0.0.0:5523->5523/tcp`. If it shows `127.0.0.1`, the container was started with `-p 5523:5523`. Unlike Docker, `wslc` publishes that form to localhost only. Remove the container and start it again with `-p 0.0.0.0:5523:5523`.
 - The firewall rule from step 2 exists: `Get-NetFirewallRule -DisplayName FastChannels` (Administrator PowerShell).
 
+**Channels DVR is on the same PC.** In FastChannels Settings, set the Channels DVR Server URL to:
+
+```
+http://host.wslc.internal:8089
+```
+
+`host.wslc.internal` is the name WSL Containers provides for reaching Windows from inside a container. The PC's own LAN IP doesn't work from inside the container (the connection is refused, and a firewall rule doesn't change that), and neither does `172.17.0.1`. To test, run this in a normal PowerShell. It should print `200`:
+
+```powershell
+wslc exec fastchannels python3 -c "import urllib.request;print(urllib.request.urlopen('http://host.wslc.internal:8089/status',timeout=5).status)"
+```
+
+If the name doesn't resolve right after Windows starts, run `wslc restart fastchannels` and try again.
+
 **`wslc ps` shows nothing.** Containers are per session. One started from a normal PowerShell doesn't appear in an Administrator PowerShell, and the reverse. Use a normal PowerShell.
 
-**HDHomeRun or Android/HDMI bridges can't find devices.** These features need to reach other devices on your network. WSL's mirrored networking may help: create `%UserProfile%\.wslconfig` with the lines below, then run `wsl --shutdown` and `wslc start fastchannels`.
-
-```ini
-[wsl2]
-networkingMode=mirrored
-```
+**HDHomeRun or Android/HDMI bridges can't find devices.** WSL Containers has no host networking, and `.wslconfig` settings (such as mirrored networking) don't apply to it. Connecting to a device by its IP address should work, but automatic discovery on your network may not. Enter device IP addresses manually where FastChannels asks for them.
 
 **Running low on disk space.** Each upgrade leaves the previous image behind (about 3 GB). List images with `wslc image list`. Old FastChannels images usually show `<none>` as the tag; remove them with `wslc image remove <IMAGE ID>`.
 
