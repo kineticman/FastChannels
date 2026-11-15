@@ -2613,7 +2613,30 @@
       document.getElementById(`dash-row-${sourceId}`)?.classList.add('scraping');
     }
 
+    // The health line under a source ("⚠ <last_error>", "Updated 2h ago", …) is
+    // rendered server-side at page load, so a scrape that finishes while the
+    // page is open would leave it stale (#95: a fixed Roku kept showing the
+    // old "Expecting value" error). Re-render it from the server and swap it
+    // in, carrying over the live "· audited …" span so it isn't blanked.
+    async function _refreshHealthLine(sourceId) {
+      const audit = document.getElementById(`audit-last-result-${sourceId}`);
+      const oldLine = audit?.closest('.health-line');
+      if (!oldLine) return;
+      try {
+        const r = await fetch(location.pathname + location.search, {credentials: 'same-origin'});
+        if (!r.ok) return;
+        const doc = new DOMParser().parseFromString(await r.text(), 'text/html');
+        const parsed = doc.getElementById(`audit-last-result-${sourceId}`)?.closest('.health-line');
+        if (!parsed || !oldLine.isConnected) return;
+        const newLine = document.importNode(parsed, true);
+        newLine.querySelector(`#audit-last-result-${sourceId}`)?.replaceWith(audit);
+        oldLine.replaceWith(newLine);
+        if (typeof _refreshRelTimes === 'function') _refreshRelTimes();
+      } catch (e) { /* keep the old line */ }
+    }
+
     function _showResult(sourceId, lastError) {
+      _refreshHealthLine(sourceId);
       delete _scrapeStart[sourceId];
       document.getElementById(`dash-row-${sourceId}`)?.classList.remove('scraping');
       const btn = _scrapeBtn[sourceId];
