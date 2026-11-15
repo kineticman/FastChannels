@@ -267,20 +267,27 @@ def tve_network_status(account) -> list[dict]:
         'needs_signin': _needs_signin('cnn', cnn_last_signed_in_at, _errors('cnn_tve')),
     })
 
+    # A direct SNP subscriber signs in from the source settings alone, so the
+    # row (and its Sign in button) would only mislead.
+    from ..models import Source
+    _snp_source = Source.query.filter_by(name='sportsnet_pittsburgh_tve').first()
+    snp_subscriber = ((_snp_source.config or {}) if _snp_source else {}).get('sign_in_method') == 'subscription'
     snp_last_signed_in_at = (_cfg('sportsnet_pittsburgh_tve').get('snp_auth') or {}).get('captured_at')
     snp_error_message, snp_error_at = _last_error('snp', snp_last_signed_in_at, _errors('sportsnet_pittsburgh_tve'))
-    entries.append({
-        'source': 'sportsnet_pittsburgh_tve',
-        'label': 'SportsNet Pittsburgh TVE (SNP, SNP+)',
-        'last_signed_in_at': snp_last_signed_in_at,
-        'note': 'Enter your SNP email and password in the SportsNet Pittsburgh TVE source settings, then sign in '
-                'to your TV provider with a link on your phone or computer.',
-        'family': 'snp',
-        'requestor_id': None,
-        'last_error_message': snp_error_message,
-        'last_error_at': snp_error_at,
-        'needs_signin': _needs_signin('snp', snp_last_signed_in_at, _errors('sportsnet_pittsburgh_tve')),
-    })
+    if not snp_subscriber:
+        entries.append({
+            'source': 'sportsnet_pittsburgh_tve',
+            'label': 'SportsNet Pittsburgh TVE (SNP, SNP+)',
+            'last_signed_in_at': snp_last_signed_in_at,
+            'note': 'Needs a free SNP account: enter its email and password in the SportsNet Pittsburgh TVE source '
+                    'settings, then sign in to your TV provider here with a link on your phone or computer. Pay SNP '
+                    'directly? Choose "Direct subscription" on its source card; no sign-in is needed here.',
+            'family': 'snp',
+            'requestor_id': None,
+            'last_error_message': snp_error_message,
+            'last_error_at': snp_error_at,
+            'needs_signin': _needs_signin('snp', snp_last_signed_in_at, _errors('sportsnet_pittsburgh_tve')),
+        })
 
     # ViewLift sites (viewlift_tve.py): an account on the site, then a phone link.
     for source, family, label, market in (

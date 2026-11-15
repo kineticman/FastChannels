@@ -207,16 +207,15 @@ class SportsNetPittsburghTVEScraper(BaseScraper):
     is_beta = True
 
     config_schema = [
-        ConfigField('sign_in_method', 'Sign-in method', field_type='select', default='tve',
-                    options=[{'value': 'tve', 'label': 'TV provider'},
-                             {'value': _SUBSCRIPTION, 'label': 'SNP subscription'}],
-                    help_text='TV provider: link your cable/streaming provider under Settings → TV Everywhere. '
-                              'SNP subscription: you pay SNP directly; the email and password below are all '
-                              'that\'s needed.'),
         ConfigField('email', 'SNP email', placeholder='you@example.com',
-                    help_text='Your account from watch.sportsnetpittsburgh.com (a free one is fine with a TV '
-                              'provider).'),
+                    help_text='Your watch.sportsnetpittsburgh.com account. With a TV provider a free account '
+                              'works; with a direct subscription, use the account that pays.'),
         ConfigField('password', 'SNP password', field_type='password', secret=True),
+        ConfigField('sign_in_method', 'How do you get SNP?', field_type='select', default='tve',
+                    options=[{'value': 'tve', 'label': 'Through my TV provider (cable / streaming package)'},
+                             {'value': _SUBSCRIPTION, 'label': 'Direct subscription (I pay SNP)'}],
+                    help_text='TV provider: also sign in to your provider below. Direct subscription: the email '
+                              'and password above are all that\'s needed.'),
     ]
 
     def __init__(self, config: dict | None = None):

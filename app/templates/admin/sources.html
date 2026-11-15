@@ -6504,6 +6504,11 @@
       } catch (e) { /* the status lines just stay as they were */ }
     }
 
+    function toggleTveSigninForMethod(sourceId, method) {
+      const wrap = document.getElementById(`tve-signin-wrap-${sourceId}`);
+      if (wrap) wrap.style.display = method === 'subscription' ? 'none' : '';
+    }
+
     function renderConfigFields(sourceId, sourceName, schema, values, cfg) {
       // TVE sources: the sign-in choice is the whole section, or follows the
       // source's own settings when it has any (NBC).
@@ -6573,7 +6578,11 @@
           ).join('');
           const multiple = f.multiple ? ' multiple' : '';
           const size = f.multiple ? ` size="${Math.min(Math.max(f.options.length, 4), 8)}"` : '';
-          control = `<select id="cfg-${sourceId}-${f.key}" data-key="${f.key}"${multiple}${size}>${opts}</select>`;
+          // sign_in_method (SportsNet Pittsburgh): a direct subscription has no
+          // TV provider, so the provider sign-in section follows the choice.
+          const toggle = f.key === 'sign_in_method' && tveSignin
+            ? ` onchange="toggleTveSigninForMethod(${sourceId}, this.value)"` : '';
+          control = `<select id="cfg-${sourceId}-${f.key}" data-key="${f.key}"${multiple}${size}${toggle}>${opts}</select>`;
         } else if (f.field_type === 'checklist' && Array.isArray(f.options) && f.options.length) {
           // Checked = on. The saved value lists the unchecked options.
           const off = new Set(String(val).split(',').map(v => v.trim()).filter(Boolean));
@@ -6664,7 +6673,7 @@
           <button class="btn btn-cancel" type="button" onclick="clearConfigFields(${sourceId})">Clear</button>
           <button class="btn btn-run" type="button" onclick="saveSourceConfig(${sourceId})">Save Settings</button>
         </div>
-        ${tveSignin ? `<div style="margin-top:1.25rem">${tveSignin}</div>` : ''}`;
+        ${tveSignin ? `<div id="tve-signin-wrap-${sourceId}" style="margin-top:1.25rem${values.sign_in_method === 'subscription' ? ';display:none' : ''}">${tveSignin}</div>` : ''}`;
     }
 
     async function deleteInactiveChannels(sourceId, days = 7) {
