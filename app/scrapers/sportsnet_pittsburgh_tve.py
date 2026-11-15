@@ -34,6 +34,13 @@ Key facts established by probing:
   URL's hdnea token lasts ~40 seconds; Akamai then moves it into the path
   (HLS child playlists carry hdntl, the DASH manifest 301s to an hdntl/ path),
   good for ~24 hours, so relative segment URLs keep working.
+- SNP direct subscribers (Monthly Plan 3939 / Season Pass 4931, $21.99/mo)
+  need no TV provider: the plain /v2/login token already plays both channels
+  (tested 2026-11-14 from an Ohio IP: GRANTED, same DRM streams). Their
+  token's ent.iai held 3490 and ent.gei 3939, not 3932, so subscription mode
+  doesn't check licence ids at all; the manifest's accessLevel decides.
+  Chosen per source with the 'sign_in_method' setting; it signs in from the
+  source settings alone, with no TVE account or Settings → TV Everywhere row.
 - License: POST shield-drm.onvesper.com/api/v2/license with
   Authorization: Bearer <drm.jwtToken> and X-DRM-INFO: base64
   {"system": "com.widevine.alpha"} — answered 200 in the HAR.
@@ -68,6 +75,7 @@ REQUESTOR_ID = 'ATTSPORTSNET'
 REDIRECT_URL = f'{SITE}/providers/success?provider=ADOBE_DCR'
 _LICENSE_URL = 'https://shield-drm.onvesper.com/api/v2/license'
 _ADOBE_LICENCE = 3932  # "Access Via TV Provider"
+_SUBSCRIPTION = 'subscription'
 
 # Our id -> (name, live-list title, guide channel, event id when the live list
 # can't be read, stream type the event serves, logo).
@@ -182,7 +190,8 @@ def _redis():
 
 
 class SportsNetPittsburghTVEScraper(BaseScraper):
-    """SportsNet Pittsburgh and SNP+ with an SNP account and a TV-provider sign-in."""
+    """SportsNet Pittsburgh and SNP+ with an SNP account plus either a
+    TV-provider sign-in or the account's own SNP subscription."""
 
     source_name = 'sportsnet_pittsburgh_tve'
     added_in = '5.9.0'
@@ -198,9 +207,15 @@ class SportsNetPittsburghTVEScraper(BaseScraper):
     is_beta = True
 
     config_schema = [
+        ConfigField('sign_in_method', 'Sign-in method', field_type='select', default='tve',
+                    options=[{'value': 'tve', 'label': 'TV provider'},
+                             {'value': _SUBSCRIPTION, 'label': 'SNP subscription'}],
+                    help_text='TV provider: link your cable/streaming provider under Settings → TV Everywhere. '
+                              'SNP subscription: you pay SNP directly; the email and password below are all '
+                              'that\'s needed.'),
         ConfigField('email', 'SNP email', placeholder='you@example.com',
-                    help_text='A free account from watch.sportsnetpittsburgh.com. Your TV provider is linked to '
-                              'it when you sign in.'),
+                    help_text='Your account from watch.sportsnetpittsburgh.com (a free one is fine with a TV '
+                              'provider).'),
         ConfigField('password', 'SNP password', field_type='password', secret=True),
     ]
 
@@ -272,7 +287,17 @@ class SportsNetPittsburghTVEScraper(BaseScraper):
 
     # ── session ──────────────────────────────────────────────────────────────
 
+    def _subscriber(self) -> bool:
+        return (self.config.get('sign_in_method') or 'tve') == _SUBSCRIPTION
+
     def _auth(self) -> tuple:
+        if self._subscriber():
+            email = (self.config.get('email') or '').strip().lower()
+            if not email or not self.config.get('password'):
+                raise self._sign_in_needed(
+                    'SportsNet Pittsburgh: enter your SNP email and password in the source settings.')
+            # Sessions are tagged with the account, so changing it starts over.
+            return None, {'who': f'sub:{email}'}
         account = tve_account_for(self.source_name)
         auth = ((account.config or {}).get('snp_auth') or {}) if account else {}
         if not auth.get('refresh_token'):
@@ -285,6 +310,7 @@ class SportsNetPittsburghTVEScraper(BaseScraper):
         """The newest session: Redis, then the DB copy, then the sign-in's own
         refresh token. A session from before the latest sign-in is ignored."""
         signed_in_at = float(auth.get('captured_at') or 0)
+        who = auth.get('who') or ''
         candidates = []
         r = _redis()
         if r is not None:
@@ -294,9 +320,12 @@ class SportsNetPittsburghTVEScraper(BaseScraper):
                 pass
         candidates.append(self.cache.get('snp_session') or {})
         for sess in candidates:
-            if sess.get('refresh') and float(sess.get('signed_in_at') or 0) >= signed_in_at:
+            if (sess.get('refresh') and (sess.get('who') or '') == who
+                    and float(sess.get('signed_in_at') or 0) >= signed_in_at):
                 return sess
-        return {'refresh': auth['refresh_token'], 'signed_in_at': signed_in_at}
+        if auth.get('refresh_token'):
+            return {'refresh': auth['refresh_token'], 'signed_in_at': signed_in_at}
+        return {'who': who}
 
     def _save_session(self, sess: dict) -> None:
         r = _redis()
@@ -339,9 +368,11 @@ class SportsNetPittsburghTVEScraper(BaseScraper):
             sess = self._stored_session(auth)
             if sess.get('auth') and float(claims(sess['auth']).get('exp') or 0) - time.time() > _TOKEN_MARGIN:
                 return sess['auth']
-            fresh = self._refresh(sess) or self._relink(auth)
+            fresh = (self._refresh(sess) if sess.get('refresh') else None) or self._relink(auth)
             sess = {'auth': fresh['authorisationToken'], 'refresh': fresh['refreshToken'],
                     'signed_in_at': float(auth.get('captured_at') or 0)}
+            if auth.get('who'):
+                sess['who'] = auth['who']
             self._save_session(sess)
             return sess['auth']
         finally:
@@ -359,7 +390,7 @@ class SportsNetPittsburghTVEScraper(BaseScraper):
             raise RuntimeError('SportsNet Pittsburgh: SNP is rate-limiting sign-in renewals; try again in a few '
                                'minutes.')
         data = _json(resp)
-        if data.get('authorisationToken') and has_tv_provider(data['authorisationToken']):
+        if data.get('authorisationToken') and (self._subscriber() or has_tv_provider(data['authorisationToken'])):
             data.setdefault('refreshToken', sess['refresh'])
             return data
         logger.info('[snp_tve] session renewal refused (HTTP %s %s); signing in again', resp.status_code,
@@ -372,6 +403,13 @@ class SportsNetPittsburghTVEScraper(BaseScraper):
         Adobe client and the account's profile id, so no new link is needed
         while it lasts."""
         email, password = self.config.get('email') or '', self.config.get('password') or ''
+        if self._subscriber():
+            try:
+                data = login(email, password)
+            except TVEAuthError as exc:
+                raise self._sign_in_needed(f'{exc} Check the email and password in the source settings.') from exc
+            logger.info('[snp_tve] signed in with the SNP subscription account')
+            return data
         if not email or not password or not auth.get('client_id'):
             raise self._sign_in_needed(
                 'SportsNet Pittsburgh: the sign-in has expired — sign in again under Settings → TV Everywhere.')
@@ -414,8 +452,9 @@ class SportsNetPittsburghTVEScraper(BaseScraper):
         stream = next((s for s in body.get('streams') or [] if s.get('url')), None)
         if not stream:
             if r.status_code == 403 or body.get('accessLevel') == 'DENIED':
+                hint = ' Is the SNP subscription still active?' if self._subscriber() else ''
                 raise TVENotAuthorizedError(
-                    f'SportsNet Pittsburgh: SNP refused the stream ({_reason(r) or body.get("accessLevel") or "no access"}).')
+                    f'SportsNet Pittsburgh: SNP refused the stream ({_reason(r) or body.get("accessLevel") or "no access"}).{hint}')
             raise RuntimeError(f'SportsNet Pittsburgh: no stream: HTTP {r.status_code} {_reason(r)}')
         drm = stream.get('drm') or {}
         if (stream.get('protocol') or '').lower() != _CHANNELS[cid][4]:
@@ -446,10 +485,12 @@ class SportsNetPittsburghTVEScraper(BaseScraper):
             headers_['Authorization'] = f'Bearer {token}'
         return challenge, headers_
 
-    @staticmethod
-    def _sign_in_needed(message: str) -> TVEAuthError:
-        from ..tve.signin_notice import mark_signin_needed
-        mark_signin_needed(NETWORK_KEY, message)
+    def _sign_in_needed(self, message: str) -> TVEAuthError:
+        # Subscribers fix it in the source settings, not on the TV Everywhere
+        # page, so don't raise that page's "sign in again" notice.
+        if not self._subscriber():
+            from ..tve.signin_notice import mark_signin_needed
+            mark_signin_needed(NETWORK_KEY, message)
         return TVEAuthError(message)
 
 
