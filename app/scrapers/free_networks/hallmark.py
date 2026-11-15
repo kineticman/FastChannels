@@ -10,10 +10,18 @@ guide comes from Hallmark's schedule API, keyed by a content-item id Hallmark
 has renamed before (e.g. "Linear-1543-Hallmark" -> "...-Non-Stop-Hallmark-
 Hits-DRM", which 404s the schedule); it is re-read from the catalog each run
 by the stable channelIdentifier, with the ids below as a fallback.
+
+Program art: a schedule entry's own images hang off its per-airing item
+(program-Linear-...-<epoch>), which Hallmark deletes after it airs, so a
+recording's art 404s days later. Each airing carries programHouseNumber, the
+id of the permanent Hallmark+ catalog item for the movie (e.g. MOVINA035982);
+that item's poster is used instead, falling back to the airing's image.
 """
 from __future__ import annotations
 
 import logging
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from typing import Any
 from urllib.parse import urlencode
@@ -26,6 +34,7 @@ logger = logging.getLogger('app.scrapers.free_networks')
 _BASE = 'https://www.hallmarkplus.com'
 _CATALOG = _BASE + '/api/core/catalog/channels'
 _SCHEDULE = _BASE + '/api/core/catalog/channels/{linear_id}/schedule'
+_ITEM = _BASE + '/api/core/catalog/item/{item_id}?locale=en'
 _HEADERS = {'Accept': 'application/json, text/plain, */*', 'Origin': _BASE, 'Referer': _BASE + '/'}
 _GUIDE_HOURS = 48
 _ALLOWED_MINUTES = (0, 30, 45)   # the schedule API only takes these boundaries
@@ -47,6 +56,13 @@ _STREAMS = {c[0]: c[4] for c in _CHANNELS}
 _FALLBACK_LINEAR = {c[0]: c[2] for c in _CHANNELS}
 _BY_IDENTIFIER = {c[3]: c[0] for c in _CHANNELS}
 
+# House number -> permanent catalog poster URL (hits only). A
+# movie's art doesn't change, so this lives for the process; ~80 airings per
+# 48h guide, mostly repeats, so it stays small.
+_ART: dict[str, str | None] = {}
+_ART_LOCK = threading.Lock()
+_ART_MAX = 5000
+
 
 class Hallmark(Network):
     key = 'hallmark'
@@ -61,15 +77,18 @@ class Hallmark(Network):
         start = _align(now)
         end = _align(now + timedelta(hours=_GUIDE_HOURS))
         linear = {**_FALLBACK_LINEAR, **self._linear_ids(s)}
-        out: list[ProgramData] = []
+        airings: list[tuple[str, dict]] = []
         for ch in channels:
             lid = linear.get(ch.id)
             if not lid:
                 continue
-            for item in self._schedule(s, lid, start, end):
-                p = _program(ch.id, item)
-                if p:
-                    out.append(p)
+            airings.extend((ch.id, item) for item in self._schedule(s, lid, start, end))
+        art = self._catalog_art(s, {_house_number(item) for _cid, item in airings} - {None})
+        out: list[ProgramData] = []
+        for cid, item in airings:
+            p = _program(cid, item, art.get(_house_number(item)))
+            if p:
+                out.append(p)
         return out
 
     def resolve(self, s, ref: str) -> str:
@@ -101,6 +120,38 @@ class Hallmark(Network):
         return found
 
     @staticmethod
+    def _catalog_art(s, house_numbers: set[str]) -> dict[str, str | None]:
+        """Permanent poster URL per house number, from the movie's catalog item."""
+        with _ART_LOCK:
+            todo = [h for h in house_numbers if h not in _ART]
+
+        def fetch(h: str) -> str | None:
+            r = s.get(_ITEM.format(item_id=h), headers=_HEADERS)
+            if not r:
+                return None
+            try:
+                data = r.json()
+            except Exception:  # noqa: BLE001
+                return None
+            data = data.get('data', data) if isinstance(data, dict) else {}
+            return _first_image(data.get('images')) if isinstance(data, dict) else None
+
+        if todo:
+            with ThreadPoolExecutor(max_workers=8) as pool:
+                found = dict(zip(todo, pool.map(fetch, todo)))
+            with _ART_LOCK:
+                if len(_ART) + len(found) > _ART_MAX:
+                    _ART.clear()
+                # A failed lookup isn't cached, so the next run retries it.
+                _ART.update({h: u for h, u in found.items() if u})
+            missing = [h for h, u in found.items() if not u]
+            if missing:
+                logger.info('[free_networks] Hallmark: no catalog art for %d of %d titles (using airing art): %s',
+                            len(missing), len(todo), ', '.join(sorted(missing)[:10]))
+        with _ART_LOCK:
+            return {h: _ART.get(h) for h in house_numbers}
+
+    @staticmethod
     def _schedule(s, linear_id: str, start: datetime, end: datetime) -> list[dict]:
         params = urlencode({'from': start.strftime('%Y-%m-%dT%H:%M:%S.000Z'),
                             'until': end.strftime('%Y-%m-%dT%H:%M:%S.000Z'), 'locale': 'en'})
@@ -122,7 +173,12 @@ def _align(dt: datetime) -> datetime:
     return dt.replace(minute=minute)
 
 
-def _program(channel_id: str, item: dict) -> ProgramData | None:
+def _house_number(item: dict) -> str | None:
+    h = (item.get('extras') or {}).get('programHouseNumber')
+    return str(h).strip() or None if h else None
+
+
+def _program(channel_id: str, item: dict, catalog_poster: str | None = None) -> ProgramData | None:
     sched = item.get('schedule') or {}
     epg = (item.get('display') or {}).get('epg') or {}
     start, stop = parse_iso(sched.get('startsAt')), parse_iso(sched.get('endsAt'))
@@ -136,7 +192,7 @@ def _program(channel_id: str, item: dict) -> ProgramData | None:
         end_time=stop,
         description=epg.get('description') or epg.get('summary') or item.get('description') or None,
         episode_title=epg.get('subtitle') or epg.get('episodeTitle') or None,
-        poster_url=_first_image(item.get('images')),
+        poster_url=catalog_poster or _first_image(item.get('images')),
         category='Movies',
         rating=ratings[0].get('value') if ratings and isinstance(ratings[0], dict) else None,
     )
