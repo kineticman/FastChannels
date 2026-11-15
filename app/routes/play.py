@@ -1863,6 +1863,16 @@ def sportsnet_pittsburgh_tve_dash(channel_id: str):
     return play('sportsnet_pittsburgh_tve', _unquote(channel_id))
 
 
+@play_bp.route('/play/paramount/<channel_id>/dash.mpd')
+def paramount_dash(channel_id: str):
+    """Paramount+ Channels under a .mpd name for FastChannels Player, like
+    versant_tve_dash: on the .m3u8 URL the Player parsed the DASH manifest as
+    HLS (ERROR_CODE_PARSING_MANIFEST_MALFORMED, Fire TV 2026-11-14). The
+    ordinary resolve + 302."""
+    from urllib.parse import unquote as _unquote
+    return play('paramount', _unquote(channel_id))
+
+
 @play_bp.route('/play/vix/<channel_id>/dash.mpd')
 def vix_dash(channel_id: str):
     """ViX under a .mpd name for FastChannels Player, like versant_tve_dash.
@@ -3246,7 +3256,9 @@ def play(source_name: str, channel_id: str):
 
     # Paramount+ matches: the AES-128 key needs the account's token, so the
     # playlists go through the proxy that routes key requests through us.
-    if source_name == 'paramount':
+    # Paramount+ Channels (channel:<slug>) are Widevine DASH and take the
+    # normal resolve + 302 path below.
+    if source_name == 'paramount' and channel.source_channel_id.startswith('event:'):
         from urllib.parse import quote as _quote
         encoded_id = _quote(channel.source_channel_id, safe='')
         return redirect(

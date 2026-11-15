@@ -5215,11 +5215,15 @@
     function renderParamountConfig(sourceId, schema, values, cfg) {
       const info = (cfg && cfg.paramount) || {};
       const detail = info.signed_in ? 'Signed in' : (info.signin_error || '');
+      const showtime = info.showtime_available === true
+        ? 'Your plan includes Showtime, so Showtime East and West are added too.'
+        : (info.showtime_available === false
+            ? 'Your plan doesn\'t include Showtime. Showtime East and West are added if you upgrade.'
+            : 'Showtime East and West are added too if your plan includes Showtime.');
       return `
         <div class="config-title">Paramount+ Settings</div>
         <div class="config-subtitle" style="font-weight:600">Sign in</div>
-        <div class="config-note">Adds Paramount+ live sports — UEFA, Serie A, EFL, UFC, rugby and more — as temporary
-          channels, one per match in the next two days. Needs a Paramount+ subscription, or a TV provider that includes Paramount+.
+        <div class="config-note">Needs a Paramount+ subscription, or a TV provider that includes Paramount+.
           If you get Paramount+ through your TV provider, first connect the provider to your Paramount+ account
           at paramountplus.com → Account → TV Provider.</div>
         <div class="espn-auth-options">
@@ -5227,7 +5231,18 @@
                    info.signed_in, detail,
                    'Get a code, enter it at paramountplus.com/activate/androidtv on your phone or computer, then sign in with your Paramount+ email and password.')}
         </div>
-        <div class="config-note" style="margin-top:0.8rem">Match channels retire an hour after the stream window ends and are deleted a day later.</div>`;
+        <div class="config-subtitle" style="margin-top:0.8rem">Match channels</div>
+        <div class="config-note">Live sports — UEFA, Serie A, EFL, UFC, rugby and more — as temporary event channels,
+          one per match in the next two days. They play in any player. Match channels retire an hour after the
+          stream window ends and are deleted a day later.</div>
+        ${_eventToggle('include_events', 'Include match channels', values)}
+        <div class="config-subtitle" style="margin-top:0.8rem">Paramount+ Channels</div>
+        <div class="config-note">Paramount+'s regular 24/7 channels with a full guide: South Park, SpongeBob, Paw Patrol,
+          CSI, Star Trek, RuPaul's Drag Race, sitcom, reality and movie channels. ${showtime}
+          These channels use DRM, so they play only through a DRM bridge (FastChannels Player or PrismCast)
+          and appear in the bridge playlists, not the standard one.</div>
+        ${_eventToggle('include_channels', 'Include Paramount+ Channels', values)}
+        ${_saveRow(sourceId)}`;
     }
     function renderB1gPlusConfig(sourceId, schema, values, cfg) {
       const info = (cfg && cfg.b1g_plus) || {};

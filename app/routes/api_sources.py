@@ -543,6 +543,7 @@ def get_source_config(source_id):
     if source.name == 'paramount':
         extra['paramount'] = {'signed_in': bool((saved.get('cookies') or {}).get('CBS_COM')),
                               'account_status': saved.get('account_status'),
+                              'showtime_available': saved.get('showtime_available'),
                               'signin_error': saved.get('signin_error')}
     from ..scrapers.viewlift_tve import VIEWLIFT_SOURCES
     if source.name in VIEWLIFT_SOURCES and scraper_cls:
