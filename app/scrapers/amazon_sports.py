@@ -34,10 +34,28 @@ from ..matchups import (MATCHUP_CACHE_KEY, MatchupResolver, event_label, matchup
                         matchup_description, matchup_title)
 from ..sports import infer_sport, normalize_sport, sport_for_league
 from .base import BaseScraper, ChannelData, ProgramData, ScrapeRetrySoonError, EVENT_CHANNEL_TAG
+from ..debug_flag import debug_logging_enabled
 
 logger = logging.getLogger(__name__)
 
 ACCOUNT_SOURCE = 'amazon_prime_free'
+# Each carousel's event list from the last scrape, for explaining listing gaps
+# in the debug log: {'gap': [carousel titles], 'carousels': {title: {asin: summary}}}.
+LISTING_CACHE_KEY = 'sports_listing'
+
+
+def _listing_summary(entity: dict) -> dict:
+    live = entity.get('liveInfo') or {}
+    return {'title': (entity.get('title') or '')[:80], 'status': live.get('status'),
+            'badge': live.get('timeBadge'),
+            'entitlement': (entity.get('entitlementCues') or {}).get('entitlementType')}
+
+
+def _listing_line(asin: str, item: dict) -> str:
+    return (f"{asin} {item.get('title')!r} {item.get('status') or '-'} "
+            f"{item.get('badge') or '-'} {item.get('entitlement') or '-'}")
+
+
 # What this source borrows from the Amazon Free source's config.
 _ACCOUNT_KEYS = ('cookie_header', 'amazon_email', 'prs_device_id')
 
@@ -379,6 +397,9 @@ class AmazonSportsScraper(AmazonPrimeFreeScraper, BaseScraper):
                                      'LinearFavoritesSupported', 'RecordingCardSupported']
         headers = {**self.PAGINATE_HEADERS, 'Referer': self.SPORTS_URL}
         events = {}
+        debug = debug_logging_enabled('FC_AMAZON_SPORTS_DEBUG')
+        listing: dict[str, dict] = {}
+        gap_titles: list[str] = []
 
         def add_entities(entities):
             for entity in entities:
@@ -398,6 +419,14 @@ class AmazonSportsScraper(AmazonPrimeFreeScraper, BaseScraper):
             if not any(entity.get('entityType') == 'EVENT' for entity in entities):
                 continue
             add_entities(entities)
+            title = container.get('title') or container.get('paginationTargetId') or '(untitled)'
+            listed = listing.setdefault(title, {})
+
+            def note(page_entities):
+                for entity in page_entities:
+                    if entity.get('entityType') == 'EVENT' and entity.get('titleID'):
+                        listed[entity['titleID']] = _listing_summary(entity)
+            note(entities)
             token = container.get('paginationServiceToken')
             target = container.get('paginationTargetId')
             index = container.get('paginationStartIndex')
@@ -406,6 +435,7 @@ class AmazonSportsScraper(AmazonPrimeFreeScraper, BaseScraper):
                     raise RuntimeError('Amazon sports pagination seed missing')
                 continue
             short_page = False
+            steps = [f'seed:{len(entities)}']
             for _ in range(12):
                 query = {**params, 'paginationTargetId': target, 'serviceToken': token,
                          'startIndex': index,
@@ -431,6 +461,8 @@ class AmazonSportsScraper(AmazonPrimeFreeScraper, BaseScraper):
                     if entities or not data.get('hasMoreItems'):
                         break
                 add_entities(entities)
+                note(entities)
+                steps.append(f"@{index}:{len(entities)}{'+' if data.get('hasMoreItems') else '.'}")
                 if not data.get('hasMoreItems'):
                     break
                 if not entities:
@@ -438,10 +470,27 @@ class AmazonSportsScraper(AmazonPrimeFreeScraper, BaseScraper):
                     # over, but Amazon left out events it still counted (compared
                     # with the next good scrape, some were from mid-list).
                     if short_page:
-                        logger.warning('[amazon-sports] %s ended at index %d with events left out; '
-                                       'preserving missing channels and requesting another scrape',
-                                       container.get('title') or target, index)
+                        # Asked with the carousel's first token, the same index
+                        # answers with the true end of the list, so its length
+                        # less what we got is how many Amazon left out. Probed
+                        # 2026-11-15: they were events ~2h into a stale LIVE.
+                        left_out = None
+                        try:
+                            tail = self.get(self.PAGINATE_URL, headers=headers,
+                                            params={**query, 'serviceToken': container.get('paginationServiceToken')})
+                            tail_data = tail.json() if tail is not None and tail.status_code == 200 else {}
+                            if not tail_data.get('hasMoreItems') and isinstance(tail_data.get('entities'), list):
+                                left_out = len(tail_data['entities'])
+                                # Already listed when probed, but keep any that weren't.
+                                add_entities(tail_data['entities'])
+                                note(tail_data['entities'])
+                        except Exception:  # noqa: BLE001
+                            pass
+                        logger.info('[amazon-sports] Amazon left %s event(s) out of %s (listed %d); '
+                                    'keeping missing channels and scraping again soon',
+                                    left_out if left_out is not None else 'some', title, index)
                         self._listing_gap = True
+                        gap_titles.append(title)
                         break
                     # Seen to last a few minutes: the scheduler tries again soon.
                     raise ScrapeRetrySoonError(
@@ -455,9 +504,39 @@ class AmazonSportsScraper(AmazonPrimeFreeScraper, BaseScraper):
                 token = (data.get('pagination') or {}).get('serviceToken') or token
             else:
                 raise RuntimeError('Amazon sports pagination exceeded page limit')
+            if debug:
+                logger.info('[amazon-sports debug] %s pages %s, %d events', title, ' '.join(steps), len(listed))
         if not events:
             raise RuntimeError('Amazon sports event catalog empty; refusing a destructive scrape')
+        if debug:
+            self._log_listing_changes(listing, gap_titles)
+        self._update_cache(LISTING_CACHE_KEY, {'at': int(time.time()), 'gap': gap_titles, 'carousels': listing})
         return events
+
+    def _log_listing_changes(self, listing: dict[str, dict], gap_titles: list[str]) -> None:
+        """For a carousel with a gap now, the events gone since the last
+        scrape (what Amazon may have left out, mixed with ones that ended). For
+        a carousel that had a gap last scrape, the events new since then: with
+        the rescrape minutes later, that is close to exactly what was left out."""
+        previous = self.cache.get(LISTING_CACHE_KEY) or {}
+        before = previous.get('carousels') or {}
+        age = int(time.time()) - int(previous.get('at') or 0)
+        for title, listed in listing.items():
+            old = before.get(title)
+            if old is None:
+                continue
+            if title in gap_titles:
+                gone = sorted(set(old) - set(listed))
+                logger.info('[amazon-sports debug] %s gap: %d event(s) gone since the scrape %dm ago',
+                            title, len(gone), age // 60)
+                for asin in gone:
+                    logger.info('[amazon-sports debug]   gone: %s', _listing_line(asin, old[asin]))
+            if title in (previous.get('gap') or []):
+                new = sorted(set(listed) - set(old))
+                logger.info('[amazon-sports debug] %s after last scrape\'s gap: %d event(s) back or new since %dm ago',
+                            title, len(new), age // 60)
+                for asin in new:
+                    logger.info('[amazon-sports debug]   back/new: %s', _listing_line(asin, listed[asin]))
 
     def _fetch_detail(self, asin: str) -> tuple[dict, list[dict]] | None:
         for attempt in range(3):
