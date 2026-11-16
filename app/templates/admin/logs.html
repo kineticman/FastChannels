@@ -156,16 +156,19 @@
     let _lines = [];
     let _level = 'ALL';
 
-    const LEVEL_RE = /\s+(INFO|WARNING|ERROR|CRITICAL|DEBUG)\s+/;
+    // The level field right after the timestamp (app/logfile.py's format),
+    // so a traceback line that mentions ERROR isn't read as one.
+    const LEVEL_RE = /^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d,\d{3}\s+(INFO|WARNING|ERROR|CRITICAL|DEBUG)\s/;
+
+    // The root logger is capped at INFO (app/logfile.py), so opt-in debug
+    // logging (app/debug_flag.py) is written at INFO under a tag such as
+    // [amazon-sports debug] or [audit-debug]; count those as Debug.
+    const DEBUG_TAG_RE = /\[[^\]]*\bdebug\]/i;
 
     function lineLevel(line) {
       const m = line.match(LEVEL_RE);
+      if (m && m[1] === 'INFO' && DEBUG_TAG_RE.test(line)) return 'DEBUG';
       return m ? m[1] : null;
-    }
-
-    function levelClass(line) {
-      const lvl = lineLevel(line);
-      return lvl ? 'line-' + lvl : 'line-other';
     }
 
     function setLevel(level) {
@@ -197,12 +200,18 @@
 
       container.innerHTML = '';
       const frag = document.createDocumentFragment();
+      // A line with no level of its own (a traceback, a multi-line message)
+      // belongs to the record above it, so the Error filter keeps its traceback.
+      let current = null;
       for (const line of _lines) {
+        const own = lineLevel(line);
+        if (own) current = own;
+        const lvl = own || current;
         const div = document.createElement('div');
-        div.className = 'line ' + levelClass(line);
+        div.className = 'line ' + (own ? 'line-' + own : 'line-other');
         div.textContent = line.trimEnd();
         if (query && !line.toLowerCase().includes(query)) div.classList.add('hidden');
-        if (_level !== 'ALL' && lineLevel(line) !== _level) div.classList.add('hidden');
+        if (_level !== 'ALL' && lvl !== _level) div.classList.add('hidden');
         frag.appendChild(div);
       }
       container.appendChild(frag);
