@@ -89,6 +89,7 @@ class TubiScraper(BaseScraper):
     display_name    = 'Tubi TV'
     stream_audit_enabled  = True
     scrape_before_audit   = True   # fetch_channels() warms _url_cache + session cookies before audit
+    browser_master_proxy  = True   # Shaka rejects the null-origin redirect to Tubi's CDN
     scrape_interval = 360
     config_required = True   # anon channel discovery is broken (Sep 2026) — a real account is required
     source_category = 'account'

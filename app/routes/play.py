@@ -23,7 +23,7 @@ from werkzeug.exceptions import HTTPException
 
 from flask import Blueprint, redirect, abort, request, Response, render_template, g, stream_with_context, current_app, jsonify
 from app.config_store import persist_source_config_updates, persist_source_cache_updates, load_source_cache
-from ..hls import inspect_hls_drm, parse_stream_info
+from ..hls import inspect_hls_drm, parse_stream_info, rewrite_playlist
 from ..models import Channel, Source
 from ..url import public_base_url
 from ..scrapers import registry
@@ -854,39 +854,54 @@ def pluto_variant_proxy():
     )
 
 
-@play_bp.route('/play/tubi/<channel_id>/proxy.m3u8')
-def tubi_manifest_proxy(channel_id: str):
+@play_bp.route('/play/<source_name>/<channel_id>/proxy.m3u8')
+def browser_master_proxy(source_name: str, channel_id: str):
     """
-    Tubi master manifest proxy.
+    Same-origin master playlist for sources with browser_master_proxy (Tubi, MLB).
 
-    Shaka follows the 302 redirect from our play route to Tubi's CDN with
-    Origin: null (cross-origin redirect). Even though Tubi returns ACAO: *,
-    some Shaka/Chrome combinations reject null-origin + wildcard ACAO.  Fetching
-    the master server-side and returning it as a same-origin response eliminates
-    the redirect entirely.  Variant playlists and segments are left direct —
-    both use ACAO: * or echo-origin CORS which works fine for Shaka's real origin.
+    Shaka follows the 302 from our play route to the CDN with Origin: null (a
+    cross-origin redirect). Some CDNs send no CORS header for that origin, or
+    Chrome rejects null-origin + wildcard ACAO. Fetching the master server-side
+    and returning it from our origin removes the redirect. Every URL in it is
+    made absolute, so variants and segments load straight from the CDN with the
+    page's real Origin — except on the source's browser_relay_hosts (CDNs that
+    refuse that Origin too), whose URLs go through browser_relay below.
+
+    Sources with their own /play/<source>/<id>/proxy.m3u8 route match that
+    route first (a static segment outranks <source_name>).
     """
     from urllib.parse import unquote as _unquote
 
+    scraper_cls = registry.get(source_name)
+    if not scraper_cls or not getattr(scraper_cls, 'browser_master_proxy', False):
+        abort(404)
     raw_id = _unquote(channel_id)
     channel = (
         Channel.query
         .join(Source)
-        .filter(Source.name == 'tubi', Channel.source_channel_id == raw_id)
+        .filter(Source.name == source_name, Channel.source_channel_id == raw_id)
         .first()
     )
     if not channel:
         abort(404)
 
-    scraper_cls = registry.get('tubi')
-    if not scraper_cls:
-        return _unavailable_response()
     scraper = scraper_cls(config=channel.source.config or {})
     try:
         master_url = scraper.resolve(channel.stream_url)
     except Exception as e:
-        logger.warning('[tubi-proxy] resolve failed for %s: %s', raw_id[:40], e)
-        return _unavailable_response()
+        logger.warning('[browser-proxy] %s resolve failed for %s: %s', source_name, raw_id[:40], e)
+        return _unavailable_response(str(e))
+    finally:
+        if scraper._pending_config_updates:
+            try:
+                persist_source_config_updates(channel.source_id, scraper._pending_config_updates, wait=False)
+            except Exception:
+                pass
+        if getattr(scraper, '_pending_cache_updates', None):
+            try:
+                persist_source_cache_updates(channel.source_id, scraper._pending_cache_updates, wait=False)
+            except Exception:
+                pass
 
     if not master_url or not master_url.startswith('http'):
         return _unavailable_response()
@@ -895,26 +910,70 @@ def tubi_manifest_proxy(channel_id: str):
         r = _requests.get(master_url, timeout=10)
         r.raise_for_status()
     except Exception as e:
-        logger.warning('[tubi-proxy] master fetch failed for %s: %s', raw_id[:40], e)
+        # Requests exceptions can carry the signed URL; log only its type.
+        logger.warning('[browser-proxy] %s master fetch failed for %s: %s', source_name, raw_id[:40],
+                       type(e).__name__)
         return _unavailable_response()
 
-    effective_url = r.url
+    return _browser_playlist_response(rewrite_playlist(r.text, r.url, _browser_relay_mapper(source_name, channel_id,
+                                                                                           scraper_cls)))
 
-    lines = []
-    for line in r.text.splitlines():
-        stripped = line.strip()
-        if stripped and not stripped.startswith('#'):
-            line = stripped if stripped.startswith('http') else urljoin(effective_url, stripped)
-        lines.append(line)
 
-    return Response(
-        '\n'.join(lines),
-        mimetype='application/vnd.apple.mpegurl',
-        headers={
-            'Cache-Control': 'no-cache',
-            'Access-Control-Allow-Origin': '*',
-        },
-    )
+def _browser_playlist_response(body: str) -> Response:
+    return Response(body, mimetype='application/vnd.apple.mpegurl',
+                    headers={'Cache-Control': 'no-cache', 'Access-Control-Allow-Origin': '*'})
+
+
+def _browser_relay_mapper(source_name: str, channel_id: str, scraper_cls):
+    """map_url for rewrite_playlist: URLs on the source's relay hosts go through
+    /play/<source>/<id>/relay; the rest load straight from the CDN."""
+    hosts = getattr(scraper_cls, 'browser_relay_hosts', frozenset())
+    if not hosts:
+        return None
+    base = f'/play/{_url_quote(source_name, safe="")}/{_url_quote(channel_id, safe="")}/relay?url='
+
+    def mapper(url: str, kind: str) -> str:
+        return base + _url_quote(url, safe='') if urlsplit(url).hostname in hosts else url
+    return mapper
+
+
+@play_bp.route('/play/<source_name>/<channel_id>/relay')
+def browser_relay(source_name: str, channel_id: str):
+    """A playlist or segment on one of the source's browser_relay_hosts, fetched
+    server-side for the admin player (those CDNs reject the page's Origin)."""
+    scraper_cls = registry.get(source_name)
+    url = request.args.get('url', '')
+    parts = urlsplit(url)
+    if (not scraper_cls or not getattr(scraper_cls, 'browser_master_proxy', False) or parts.scheme != 'https'
+            or parts.hostname not in getattr(scraper_cls, 'browser_relay_hosts', frozenset())):
+        abort(403)
+    try:
+        r = _requests.get(url, timeout=(5, 20), stream=True)
+    except Exception as e:
+        logger.warning('[browser-relay] %s fetch failed (%s): %s', source_name, parts.hostname, type(e).__name__)
+        abort(502)
+    if r.status_code != 200:
+        r.close()
+        logger.warning('[browser-relay] %s %s answered HTTP %s', source_name, parts.hostname, r.status_code)
+        abort(502)
+    if parts.path.endswith('.m3u8') or 'mpegurl' in (r.headers.get('Content-Type') or '').lower():
+        text = r.text
+        return _browser_playlist_response(
+            rewrite_playlist(text, r.url, _browser_relay_mapper(source_name, channel_id, scraper_cls)))
+
+    def generate():
+        try:
+            for chunk in r.iter_content(64 * 1024):
+                if chunk:
+                    yield chunk
+        finally:
+            r.close()
+
+    headers = {'Cache-Control': 'no-cache', 'Access-Control-Allow-Origin': '*'}
+    if r.headers.get('Content-Length'):
+        headers['Content-Length'] = r.headers['Content-Length']
+    return Response(generate(), content_type=r.headers.get('Content-Type') or 'video/mp2t', headers=headers,
+                    direct_passthrough=True)
 
 
 @play_bp.route('/play/fubo/<channel_id>/proxy.m3u8')

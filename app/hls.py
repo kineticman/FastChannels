@@ -333,3 +333,43 @@ def inspect_hls_drm(manifest_text: str) -> dict | None:
                 return entry
 
     return found[0]
+
+
+# ── playlist rewriting (browser proxies) ─────────────────────────────────────
+
+_URI_ATTR_RE = re.compile(r'URI="([^"]+)"')
+# Tags whose URI attribute names a playlist, a key, or an init segment.
+_URI_ATTR_KINDS = (('#EXT-X-MEDIA', 'playlist'), ('#EXT-X-I-FRAME-STREAM-INF', 'playlist'),
+                   ('#EXT-X-SESSION-KEY', 'key'), ('#EXT-X-KEY', 'key'), ('#EXT-X-MAP', 'map'))
+
+
+def rewrite_playlist(text: str, base_url: str, map_url=None) -> str:
+    """Make every URL in an HLS playlist absolute against base_url — the plain
+    URL lines and the URI="…" attributes alike — then pass each through
+    map_url(absolute_url, kind) when given (kind: 'playlist', 'segment', 'key'
+    or 'map'). Without map_url the result is the same playlist with absolute
+    URLs, which a browser can load from our origin while fetching everything it
+    names straight from the CDN.
+
+    A master playlist's URL lines are 'playlist'; a media playlist's are 'segment'.
+    """
+    from urllib.parse import urljoin
+
+    is_master = '#EXT-X-STREAM-INF' in text
+    line_kind = 'playlist' if is_master else 'segment'
+
+    def resolve(url: str, kind: str) -> str:
+        absolute = urljoin(base_url, url.strip())
+        return map_url(absolute, kind) if map_url else absolute
+
+    out = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped and not stripped.startswith('#'):
+            line = resolve(stripped, line_kind)
+        elif stripped.startswith('#') and 'URI="' in stripped:
+            kind = next((k for tag, k in _URI_ATTR_KINDS if stripped.startswith(tag)), None)
+            if kind:
+                line = _URI_ATTR_RE.sub(lambda m, k=kind: f'URI="{resolve(m.group(1), k)}"', line)
+        out.append(line)
+    return '\n'.join(out) + ('\n' if text.endswith('\n') else '')

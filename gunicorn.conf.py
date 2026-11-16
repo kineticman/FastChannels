@@ -103,13 +103,16 @@ _SUCCESS_SUPPRESS_PATTERNS = (
 # viewer; the tune still shows as the app's [play] request line.
 # Pluto's "Route playlists through FastChannels" refreshes a video and an audio
 # variant every ~5s per viewer; the tune still shows as the app's [play] request line.
+# The admin player's generic relay (browser_relay_hosts, e.g. MLB) fetches a
+# variant and a segment every few seconds per viewer; the tune still logs.
 _SUCCESS_SUPPRESS_RE = re.compile(
     r'(?:GET|HEAD) /play/directv/browser-asset\?url=|(?:GET|HEAD) /play/dazn_tve/[^/]+/seg/'
     r'|(?:GET|HEAD) /play/vix/[^/]+/(?:seg\?|browser\.mpd\?s=)'
     r'|(?:GET|HEAD) /play/paramount/[^/]+/(?:variant\.m3u8|key)\?url='
     r'|(?:GET|HEAD) /play/warner_tve/[^/]+/(?:variant\.m3u8|key|segment\.ts)\?url='
     r'|(?:GET|HEAD) /play/free_networks/[^/]+/variant\.m3u8\?url='
-    r'|(?:GET|HEAD) /play/pluto/variant\?')
+    r'|(?:GET|HEAD) /play/pluto/variant\?'
+    r'|(?:GET|HEAD) /play/[^/ ]+/[^/ ]+/relay\?')
 _DASH_RE = re.compile(r'(?:GET|HEAD) /play/(amazon_prime_free|amazon_sports|cox|philo|sling|pbs|vidaa|fubo|dazn_tve|cnn_tve)/[^/]+/dash\.mpd')
 # DirecTV/cox use path-form license URLs (/license/<id>), while vidaa/fubo/sling use
 # query-form URLs (/license?channel_id=<id>) — matched via the separator below. Sling's
@@ -120,6 +123,8 @@ _PLUTO_VARIANT_QUERY_RE = re.compile(r'("(?:GET|HEAD) /play/pluto/variant)\?[^ ]
 _WARNER_PROXY_QUERY_RE = re.compile(r'("(?:GET|HEAD) /play/warner_tve/[^/]+/(?:variant\.m3u8|key|segment\.ts))\?[^ ]+')
 # Free Networks proxy variants carry signed CDN URLs too.
 _FREE_NETWORKS_PROXY_QUERY_RE = re.compile(r'("(?:GET|HEAD) /play/free_networks/[^/]+/variant\.m3u8)\?[^ ]+')
+# The generic relay's ?url= carries the CDN's signed token (MLB: 24-48h).
+_RELAY_QUERY_RE = re.compile(r'("(?:GET|HEAD) /play/[^/ ]+/[^/ ]+/relay)\?[^ ]+')
 
 
 class _AccessFilter(logging.Filter):
@@ -152,6 +157,9 @@ class _AccessFilter(logging.Filter):
             record.args = ()
         elif _FREE_NETWORKS_PROXY_QUERY_RE.search(msg):
             record.msg = _FREE_NETWORKS_PROXY_QUERY_RE.sub(r'\1?[redacted]', msg)
+            record.args = ()
+        elif _RELAY_QUERY_RE.search(msg):
+            record.msg = _RELAY_QUERY_RE.sub(r'\1?[redacted]', msg)
             record.args = ()
         return True
 

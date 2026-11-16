@@ -629,6 +629,17 @@ class BaseScraper(ABC):
     added_in: str | None = None      # FastChannels release that first shipped this source ('5.9.0'); None = unreleased. Set it on every new scraper at release.
     under_development: bool = False  # shown in the admin UI; source remains opt-in
     is_beta: bool = False            # "Beta" badge: built, but not yet confirmed by real users
+    # The browser player can't follow our 302 to this source's CDN: a same-origin
+    # redirect to another origin sends Origin: null, which some CDNs don't allow.
+    # True sends the admin preview to /play/<source>/<id>/proxy.m3u8, which fetches
+    # the master server-side and serves it from our origin with absolute URLs
+    # (app.hls.rewrite_playlist); variants and segments still load from the CDN.
+    # M3U clients keep the plain redirect.
+    browser_master_proxy: bool = False
+    # CDN hosts that also refuse the page's own Origin. With browser_master_proxy,
+    # playlists and segments on these hosts are relayed through
+    # /play/<source>/<id>/relay too (and only these hosts — it isn't an open proxy).
+    browser_relay_hosts: frozenset = frozenset()
     channel_refresh_hours: int = 0   # 0 = refresh channels every run; >0 = only refresh channels after N hours
     channel_miss_threshold: int = 3  # missed scrapes before is_active=False; override per scraper
     # Reset/populate per fetch_channels() with upstream IDs intentionally
