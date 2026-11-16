@@ -101,6 +101,10 @@ def is_source_config_complete(source_name: str, scraper_cls, values: dict | None
     if source_name == 'b1g_plus':
         return bool(saved.get('token'))
 
+    # MLB — "configured" means the TV-code sign-in saved a refresh token.
+    if source_name == 'mlb':
+        return bool(saved.get('refresh_token'))
+
     # Paramount+ — "configured" means the activation-code sign-in saved a session.
     if source_name == 'paramount':
         return bool((saved.get('cookies') or {}).get('CBS_COM'))

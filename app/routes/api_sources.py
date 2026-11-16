@@ -538,6 +538,14 @@ def get_source_config(source_id):
                              'signin_error': saved.get('signin_error')}
     if source.name == 'nsn':
         extra['nsn'] = _nsn_filter_info(source, saved)
+    if source.name == 'mlb':
+        from ..scrapers.mlb import RELINK_URL
+        extra['mlb'] = {'signed_in': bool(saved.get('refresh_token')),
+                        'email': saved.get('email'),
+                        'entitlements': saved.get('entitlements') or [],
+                        'entitlements_at': saved.get('entitlements_at'),
+                        'relink_url': RELINK_URL,
+                        'signin_error': saved.get('signin_error')}
     if source.name == 'gray_local':
         extra['gray_local'] = _gray_local_info(saved)
     if source.name == 'paramount':
@@ -928,8 +936,9 @@ def save_source_config(source_id):
             delete_channel_rows([ch.id])
             db.session.delete(ch)
             event_deleted += 1
-    # NFL and CBS Sports game channels: turning them off removes them now.
+    # NFL, MLB and CBS Sports game channels: turning them off removes them now.
     game_toggle, game_prefix = {'nfl': ('include_games', 'game:'),
+                                'mlb': ('include_games', 'game:'),
                                 'cbs_sports': ('include_events', 'event:')}.get(source.name, (None, None))
     games_changed = bool(game_toggle) and (
         _toggle_enabled(old, game_toggle) != _toggle_enabled(current, game_toggle))
@@ -2260,6 +2269,85 @@ def clear_b1g_plus_auth(source_id, kind):
     db.session.commit()
     if source.is_enabled:
         trigger_scrape('b1g_plus', force_full=True)
+    return jsonify({'status': 'cleared'})
+
+
+# ── MLB account sign-in (Okta device code) ──────────────────────────────────
+# MLB's TV code: the user enters it at ids.mlb.com/activate; a sign-in queue
+# job polls Okta for the tokens — see app.scrapers.mlb.
+
+def _mlb_source_or_400(source_id):
+    source = Source.query.get_or_404(source_id)
+    if source.name != 'mlb':
+        return None, (jsonify({'error': 'not an mlb source'}), 400)
+    return source, None
+
+
+@sources_bp.route('/sources/<int:source_id>/mlb-link/start', methods=['POST'])
+def mlb_link_start(source_id):
+    import redis as _redis
+    import requests as _requests
+    from ..scrapers.mlb import LINK_STATUS_KEY, MLBAuthError, link_status, start_link
+    from .tasks import get_signin_queue
+
+    _, err = _mlb_source_or_400(source_id)
+    if err:
+        return err
+    try:
+        ctx = start_link()
+    except (MLBAuthError, _requests.RequestException) as e:
+        return jsonify({'error': str(e)}), 502
+    status = link_status(ctx, 'waiting')
+    _redis.from_url(current_app.config['REDIS_URL']).setex(LINK_STATUS_KEY, 720, json.dumps(status))
+    get_signin_queue().enqueue('app.scrapers.mlb.run_link', ctx, job_timeout=660)
+    return jsonify(status)
+
+
+@sources_bp.route('/sources/<int:source_id>/mlb-link/state')
+def mlb_link_state(source_id):
+    import redis as _redis
+    from ..scrapers.mlb import LINK_STATUS_KEY
+
+    _, err = _mlb_source_or_400(source_id)
+    if err:
+        return err
+    raw = _redis.from_url(current_app.config['REDIS_URL']).get(LINK_STATUS_KEY)
+    return jsonify(_with_code_queue_notice(json.loads(raw) if raw else {'state': 'idle'},
+                                           'app.scrapers.mlb.run_link'))
+
+
+@sources_bp.route('/sources/<int:source_id>/mlb-link/stop', methods=['POST'])
+def mlb_link_stop(source_id):
+    import redis as _redis
+    from ..scrapers.mlb import LINK_STATUS_KEY
+
+    _, err = _mlb_source_or_400(source_id)
+    if err:
+        return err
+    _redis.from_url(current_app.config['REDIS_URL']).delete(LINK_STATUS_KEY)
+    return jsonify({'status': 'stopped'})
+
+
+@sources_bp.route('/sources/<int:source_id>/mlb-auth/<kind>', methods=['DELETE'])
+def clear_mlb_auth(source_id, kind):
+    from ..scrapers.mlb import SIGNIN_CONFIG_KEYS, clear_session, revoke
+
+    source, err = _mlb_source_or_400(source_id)
+    if err:
+        return err
+    cfg = dict(source.config or {})
+    if cfg.get('refresh_token'):
+        try:
+            revoke(cfg['refresh_token'])
+        except Exception:  # noqa: BLE001 — signing out locally still counts
+            logger.warning('[mlb] token revoke failed', exc_info=True)
+    for key in SIGNIN_CONFIG_KEYS + ('signin_error',):
+        cfg.pop(key, None)
+    source.config = cfg
+    db.session.commit()
+    clear_session(source.id)
+    if source.is_enabled:
+        trigger_scrape('mlb', force_full=True)
     return jsonify({'status': 'cleared'})
 
 

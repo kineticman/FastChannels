@@ -5267,6 +5267,41 @@
         ${_saveRow(sourceId)}`;
     }
 
+    function renderMlbConfig(sourceId, schema, values, cfg) {
+      const info = (cfg && cfg.mlb) || {};
+      const ents = info.entitlements || [];
+      let detail = info.signin_error || '';
+      if (info.signed_in) {
+        detail = `Signed in${info.email ? ' as ' + escapeHtml(info.email) : ''}`;
+      }
+      let access = '';
+      if (info.signed_in && info.entitlements_at) {
+        const relink = escapeHtml(info.relink_url || 'https://www.mlb.com/commerce/mvpd/mlb-network');
+        access = ents.includes('MLBN')
+          ? `<div class="config-note" style="margin-top:0.6rem">&#10003; MLB Network is on this account.</div>`
+          : `<div class="config-note" style="margin-top:0.6rem;color:var(--danger-soft)">MLB Network isn't on this account.
+              To get it through your TV provider, <a href="${relink}" target="_blank" rel="noopener">link your provider at mlb.com</a>
+              (do this again if the link expires), then rescrape.</div>`;
+      }
+      return `
+        <div class="config-title">MLB Settings</div>
+        <div class="config-subtitle" style="font-weight:600">Sign in</div>
+        <div class="config-note">Adds MLB Network and live games from MLB.TV, depending on what your MLB account includes.
+          MLB Network comes with MLB.TV, MLB+, or a TV provider linked to your MLB account at mlb.com.</div>
+        <div class="espn-auth-options">
+          ${codeLinkOption(sourceId, 'mlb', 'mlb', 'account', 'MLB', 'MLB account',
+                   info.signed_in, detail,
+                   'Get a code, then go to ids.mlb.com/activate on your phone or computer, sign in to your MLB account and enter it. Codes last 10 minutes.')}
+        </div>
+        ${access}
+        <div class="config-subtitle" style="margin-top:0.8rem">Game channels</div>
+        <div class="config-note">Adds each live game the account can play as a temporary channel, up to two days ahead.
+          A game's stream starts about 30 minutes before first pitch. Game channels retire an hour after the game
+          and are deleted a day later.</div>
+        ${_eventToggle('include_games', 'Include live game channels', values)}
+        ${_saveRow(sourceId)}`;
+    }
+
     function renderNsnConfig(sourceId, schema, values, cfg) {
       const info = (cfg && cfg.nsn) || {};
       return `
@@ -6589,6 +6624,8 @@
         return renderParamountConfig(sourceId, schema, values, cfg);
       } else if (sourceName === 'b1g_plus') {
         return renderB1gPlusConfig(sourceId, schema, values, cfg);
+      } else if (sourceName === 'mlb') {
+        return renderMlbConfig(sourceId, schema, values, cfg);
       } else if (sourceName === 'nsn') {
         return renderNsnConfig(sourceId, schema, values, cfg);
       } else if (sourceName === 'gray_local') {
