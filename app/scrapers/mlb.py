@@ -80,6 +80,8 @@ _SCHEDULE_LEAGUES = {132: 'LMP'}  # Liga Mexicana del Pacifico (sportId 17)
 _SCHEDULE_SPORT_IDS = '17'
 _LEAGUE_NAMES = {'mexican-pacific-league': 'LMP', 'dominican-winter-league': 'LIDOM',
                  'arizona-fall-league': 'AFL'}
+# Title labels for statsapi's winter leagues (sportId 17), by league id.
+_WINTER_LEAGUE_LABELS = {131: 'LIDOM', 132: 'LMP', 133: 'LBPRC', 135: 'LVBP'}
 _LOOKAHEAD_HOURS = 48
 _GAME_HOURS = 3.5
 _LIVE_EXTENSION = timedelta(minutes=45)
@@ -510,13 +512,19 @@ def _games_by_pk(pks: list[int]) -> dict[int, dict]:
 
 
 def _league_label(game: dict | None, item: dict | None) -> str:
-    league = ((((game or {}).get('teams') or {}).get('home') or {}).get('team') or {}).get('league') or {}
-    if league.get('id') in _SCHEDULE_LEAGUES:
-        return _SCHEDULE_LEAGUES[league['id']]
+    """The title's league label. Major League teams say "MLB", not their
+    league (statsapi's league for them is the AL or NL)."""
+    team = (((game or {}).get('teams') or {}).get('home') or {}).get('team') or {}
+    if (team.get('sport') or {}).get('id') == 1:
+        return 'MLB'
+    league = team.get('league') or {}
+    if league.get('id') in _WINTER_LEAGUE_LABELS:
+        return _WINTER_LEAGUE_LABELS[league['id']]
     for slug in _tag_slugs(item or {}):
         if slug in _LEAGUE_NAMES:
             return _LEAGUE_NAMES[slug]
-    return league.get('abbreviation') or 'MLB'
+    # An unknown league keeps its own name rather than passing for MLB.
+    return league.get('abbreviation') or league.get('name') or 'MLB.TV'
 
 
 def _matchup(game: dict | None) -> dict | None:
