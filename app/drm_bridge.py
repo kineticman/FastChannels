@@ -36,7 +36,7 @@ DRM_BRIDGE_TRUSTED_SOURCES = frozenset({
     'sling', 'nbc_tve', 'pbs', 'amazon_prime_free', 'amazon_sports', 'directv', 'vidaa', 'philo', 'roku',
     'fubo', 'spectrum', 'espn', 'versant_tve', 'vix', 'disney_tve', 'tennis_tve', 'dazn_tve', 'cnn_tve', 'nesn_tve',
     'monumental_tve', 'altitude_tve', 'myoutdoortv_tve', 'sportsnet_pittsburgh_tve',
-    'paramount',
+    'paramount', 'hbomax',
 })
 
 

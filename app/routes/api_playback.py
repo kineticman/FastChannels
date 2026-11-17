@@ -739,6 +739,9 @@ def _get_playback_info(ch, fast_mode=True, browser=False):
     if ch.source and ch.source.name == 'cnn_tve' and ch.source_channel_id:
         from urllib.parse import quote as _quote
         preview_url = f'/play/cnn_tve/{_quote(ch.source_channel_id, safe="")}/dash.mpd'
+    if ch.source and ch.source.name == 'hbomax' and ch.source_channel_id:
+        from urllib.parse import quote as _quote
+        preview_url = f'/play/hbomax/{_quote(ch.source_channel_id, safe="")}/dash.mpd'
     if ch.source and ch.source.name == 'dazn_tve' and ch.source_channel_id:
         from urllib.parse import quote as _quote
         preview_url = f'/play/dazn_tve/{_quote(ch.source_channel_id, safe="")}/dash.mpd'
