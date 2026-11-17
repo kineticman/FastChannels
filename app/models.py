@@ -175,10 +175,17 @@ class TVEAccount(db.Model):
         by phone link — it has no username/password."""
         return (self.provider_id or '').startswith('mvpd:')
 
+    def has_hulu_link(self) -> bool:
+        """A Hulu device linked by code (app/tve/mvpd/hulu.py), which signs in
+        in place of a username/password."""
+        link = (self.config or {}).get('hulu_device') or {}
+        return bool(isinstance(link, dict) and link.get('device_token'))
+
     def is_usable(self) -> bool:
         """Turned on and set up enough for its sources to play: the shared
-        account needs its username/password, a separate login doesn't."""
-        return bool(self.is_enabled and (self.has_credentials() or self.is_separate()))
+        account needs its username/password (or a linked Hulu device), a
+        separate login doesn't."""
+        return bool(self.is_enabled and (self.has_credentials() or self.is_separate() or self.has_hulu_link()))
 
     def to_safe_dict(self):
         cfg = self.config or {}

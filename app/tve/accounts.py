@@ -179,7 +179,7 @@ def separate_signin_info(source_name: str) -> dict | None:
     own = separate_tve_account(source_name)
     own_cfg = (own.config or {}) if own else {}
     shared = shared_tve_account()
-    shared_ready = bool(shared and shared.is_enabled and shared.has_credentials())
+    shared_ready = bool(shared and shared.is_usable())
     return {
         'mode': 'separate' if own and own.is_enabled else 'shared',
         'provider_id': tve_account_mso_id(own) if own_cfg.get('selected_mso_id') else '',

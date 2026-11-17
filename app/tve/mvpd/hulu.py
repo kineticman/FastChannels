@@ -29,10 +29,12 @@ verified live 2026-11-17 against Discovery TVE (dev/hulu/FINDINGS.md):
 """
 from __future__ import annotations
 
+import html
 import logging
+import re
 import secrets
 import time
-from urllib.parse import parse_qs, urlencode, urlsplit
+from urllib.parse import parse_qs, urlencode, urljoin, urlsplit
 
 import requests
 
@@ -228,13 +230,71 @@ def hulu_oauth_login(page_url: str, account) -> str:
         raise TVEAuthError(f'Hulu sign-in returned HTTP {r.status_code}: {r.text[:200]}')
     reply = r.json()
     callback = f"{params['redirect_uri']}?{urlencode({'code': reply['code'], 'state': reply.get('state') or params['state']})}"
-    try:
-        landed = requests.get(callback, headers={'User-Agent': _headers('0')['User-Agent']},
-                              allow_redirects=True, timeout=30)
-    except requests.RequestException as exc:
-        raise TVEAuthError(f'Could not finish the Hulu sign-in with Adobe: {exc}') from exc
+    landed = _follow_callback(callback)
     logger.info('[hulu] signed in through Hulu for %s', params.get('requestor_id') or params['client_id'])
-    return str(landed.url)
+    return landed
+
+
+def _follow_callback(url: str) -> str:
+    """Hands Hulu's code to Adobe and follows the redirects to wherever the
+    network's callback lands. The sign-in is recorded once Adobe has taken
+    the code (the first hop), so a network landing page that errors or times
+    out afterwards isn't a failure: the URL it was sent to (which carries any
+    code the network needs, e.g. Discovery's gauth-sync?code=) is returned."""
+    session = requests.Session()
+    headers = {'User-Agent': _headers('0')['User-Agent'], 'Accept': 'text/html,*/*'}
+    for hop in range(10):
+        try:
+            r = session.get(url, headers=headers, allow_redirects=False, timeout=30)
+        except requests.RequestException as exc:
+            if hop == 0:
+                raise TVEAuthError(f'Could not finish the Hulu sign-in with Adobe: {exc}') from exc
+            return url
+        location = r.headers.get('location')
+        if r.status_code not in (301, 302, 303, 307, 308) or not location:
+            if hop == 0 and r.status_code >= 400:
+                raise TVEAuthError(f'Adobe refused the Hulu sign-in (HTTP {r.status_code}): {r.text[:200]}')
+            return url
+        url = urljoin(url, location)
+    return url
+
+
+def _find_hulu_login(url: str) -> str | None:
+    """Follows a network's sign-in link (the one the phone sign-in would show
+    the user) to Hulu's login page, or None if it never gets there, e.g. a
+    page that wants a code typed in."""
+    session = requests.Session()
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
+                             '(KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36',
+               'Accept': 'text/html,*/*'}
+    for _ in range(10):
+        parts = urlsplit(url)
+        if parts.netloc == 'auth.hulu.com' and parts.path.startswith('/oauth2/login'):
+            return url
+        try:
+            r = session.get(url, headers=headers, allow_redirects=False, timeout=30)
+        except requests.RequestException:
+            return None
+        location = r.headers.get('location')
+        if r.status_code in (301, 302, 303, 307, 308) and location:
+            url = urljoin(url, location)
+            continue
+        # A page that sends the browser on with a meta refresh or script.
+        m = re.search(r'https://auth\.hulu\.com/oauth2/login\?[^"\'<>\s]+', html.unescape(r.text or ''))
+        return m.group(0) if m else None
+    return None
+
+
+def complete_signin_url(url: str, account) -> bool:
+    """Finishes a network's sign-in link through the linked Hulu device
+    instead of the user opening it. False when the link doesn't lead to
+    Hulu's login page (the caller shows it to the user as before). Raises
+    TVENotAuthorizedError when Hulu says the plan doesn't cover it."""
+    login_url = _find_hulu_login(url)
+    if not login_url:
+        return False
+    hulu_oauth_login(login_url, account)
+    return True
 
 
 def new_link_serial(account) -> str:

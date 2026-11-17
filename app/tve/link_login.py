@@ -69,9 +69,55 @@ def _provider_not_accepted(adapter, mso_id: str) -> str | None:
             f"It only accepts: {', '.join(names)}.")
 
 
-def job_timeout(family: str) -> int:
+def job_timeout(family: str, mso_id: str | None = None) -> int:
     targets = {'amcn': 4, 'disney': 2, 'dazn': 2}.get(family, 1)
+    if mso_id == 'Hulu':
+        targets += 1  # the Hulu code step (_hulu_link_step) may come first
     return targets * _PER_TARGET_TIMEOUT + 300
+
+
+def _hulu_link_step(account, set_status, quit_if_superseded) -> bool | None:
+    """For a Hulu account: make sure a Hulu device is linked (app/tve/mvpd/
+    hulu.py), showing the user ONE Hulu code if it isn't, so every network
+    after it signs in through the link instead of the user opening its link.
+    True when linked, False to fall back to plain links (Hulu unreachable,
+    code not entered in time), None when the run was superseded."""
+    from .mvpd import hulu
+    if hulu.hulu_link(account):
+        try:
+            hulu.user_token(account, force_refresh=True)  # is the link still good?
+            return True
+        except hulu.HuluNotLinked:
+            logger.info('[link-login] saved Hulu link was refused; linking again')
+        except Exception as exc:  # noqa: BLE001
+            logger.info('[link-login] could not check the Hulu link, using plain links: %s', exc)
+            return False
+    serial = hulu.new_link_serial(account)
+    try:
+        code = hulu.register_device_code(serial)
+    except Exception as exc:  # noqa: BLE001
+        logger.info('[link-login] could not get a Hulu code, using plain links: %s', exc)
+        return False
+    set_status('waiting', 'Link your Hulu account', label='Hulu', url=hulu.ACTIVATE_URL, code=code)
+    logger.info('[link-login] waiting for the Hulu code to be entered')
+    deadline = time.monotonic() + _PER_TARGET_TIMEOUT
+    delay = _POLL_SECONDS
+    while time.monotonic() < deadline:
+        if quit_if_superseded('Hulu'):
+            return None
+        try:
+            link = hulu.poll_device_code(code, serial)
+        except Exception as exc:  # noqa: BLE001
+            logger.info('[link-login] Hulu code check failed, retrying: %s', exc)
+            link = None
+        if link:
+            hulu.save_hulu_link(account, link)
+            logger.info('[link-login] Hulu linked')
+            return True
+        time.sleep(delay)
+        delay = min(delay * 1.3, _POLL_MAX_SECONDS)
+    logger.info('[link-login] Hulu code was not entered in time; using plain links')
+    return False
 
 
 # ── adapters ─────────────────────────────────────────────────────────────────
@@ -1565,6 +1611,14 @@ def run_link_login(family: str, requestor_id: str | None, mso_id: str, run_id: s
             set_status('error', not_accepted)
             return
 
+        # Hulu: link a Hulu device once, then every network signs in through it.
+        # Discovery isn't an Adobe link; its adapter uses the same link itself.
+        hulu_ready = False
+        if mso_id == 'Hulu' and account is not None and family != 'discovery':
+            hulu_ready = _hulu_link_step(account, set_status, quit_if_superseded)
+            if hulu_ready is None:
+                return
+
         for i, label in enumerate(targets):
             if quit_if_superseded(label):
                 return
@@ -1590,6 +1644,18 @@ def run_link_login(family: str, requestor_id: str | None, mso_id: str, run_id: s
                     steps[i].update(state='failed', message=str(exc)[:160])
                     continue
             code = ctx.get('code') if isinstance(ctx, dict) else None
+            if hulu_ready and url:
+                from .mvpd.hulu import complete_signin_url
+                try:
+                    if complete_signin_url(url, account):
+                        logger.info('[link-login] %s: signed in through the linked Hulu device', label)
+                        url, code = '', None  # nothing for the user to open
+                except TVENotAuthorizedError as exc:
+                    steps[i].update(state='failed', message=str(exc)[:160])
+                    logger.info('[link-login] %s: Hulu said no: %s', label, exc)
+                    continue
+                except Exception as exc:  # noqa: BLE001
+                    logger.info('[link-login] %s: Hulu sign-in failed, showing the link instead: %s', label, exc)
             set_status('waiting', f'Sign in for {label}', label=label, url=url or '', code=code or '')
             logger.info('[link-login] %s: waiting for the %s sign-in', label, getattr(adapter, 'mso_id', mso_id))
 
