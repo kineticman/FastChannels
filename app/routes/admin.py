@@ -1749,23 +1749,29 @@ def channels_chnum_map():
 def feeds():
     app_settings = AppSettings.get()
     sources    = Source.query.filter_by(is_enabled=True).order_by(Source.display_name).all()
-    # Sources folded into Free Networks stay pickable under their old names,
-    # which is what saved feeds hold; "Free Networks" picks its other networks.
+    # Free Networks' networks are picked in their own panel (fn_networks), by
+    # feed name "free_networks:<key>"; a folded source's old name still means
+    # its network (app/folded_sources.py). The source order keeps the folded
+    # names it always offered.
+    order_sources = sources
     if any(s.name == folded_sources.HOST for s in sources):
-        sources = sorted(
-            [*sources, *(SimpleNamespace(name=k, display_name=v, epg_only=False)
+        order_sources = sorted(
+            [*sources, *(SimpleNamespace(name=k, display_name=v)
                          for k, v in folded_sources.FOLDED.items())],
             key=lambda s: (s.display_name or s.name).casefold())
     feeds      = Feed.query.order_by(Feed.name).all()
     # Per-source channel tallies for the feed modal: how many channels each
     # source can actually contribute to a feed (mirrors the feed_eligible
     # predicate), plus why the rest can't, so checking a dead source in the
-    # modal explains itself instead of silently adding nothing.
-    source_counts = {
-        s.name: {'display': s.display_name or s.name, 'epg_only': bool(s.epg_only),
-                 'eligible': 0, 'disabled': 0, 'total': 0}
-        for s in sources
-    }
+    # modal explains itself instead of silently adding nothing. Networks get
+    # one too, and Free Networks counts all of them: ticking it in the editor
+    # ticks every network.
+    def _tally(display, epg_only=False):
+        return {'display': display, 'epg_only': bool(epg_only), 'eligible': 0, 'disabled': 0, 'total': 0}
+    source_counts = {s.name: _tally(s.display_name or s.name, s.epg_only) for s in sources}
+    net_names = {}
+    if folded_sources.HOST in source_counts:
+        net_names = folded_sources.network_display_names()
     _cnt_rows = db.session.query(
         Source.name, Channel.source_channel_id, Channel.is_active, Channel.is_enabled, Channel.stream_url != None,
         Channel.requires_drm_bridge,
@@ -1773,27 +1779,45 @@ def feeds():
      .filter(Source.is_enabled == True).all()
     show_drm = ui_context()['show_drm']
     for name, scid, active, enabled, has_url, bridge in _cnt_rows:
-        entry = source_counts.get(folded_sources.folded_key(name, scid) or name)
-        if entry is None:
-            continue
-        entry['total'] += 1
-        if active and has_url and not entry['epg_only'] and (show_drm or not bridge):
-            if enabled:
-                entry['eligible'] += 1
-            else:
-                entry['disabled'] += 1
-    # A folded network with no channels here (its scraper broke upstream, or
-    # it's switched off on the Free Networks card) is nothing to pick; keep it
-    # only while a saved feed still names it, so that selection stays visible.
-    saved_names = {str(n) for f in feeds
-                   for key in ('sources', 'exclude_sources')
-                   for n in ((f.filters or {}).get(key) or [])}
-    dead_folded = {k for k in folded_sources.FOLDED
-                   if k in source_counts and not source_counts[k]['total'] and k not in saved_names}
-    if dead_folded:
-        sources = [s for s in sources if s.name not in dead_folded]
-        for k in dead_folded:
-            source_counts.pop(k, None)
+        entries = []
+        net = folded_sources.network_of(name, scid) if net_names else None
+        if net:
+            key = folded_sources.network_feed_name(net)
+            if key not in source_counts:
+                source_counts[key] = _tally(net_names.get(net, net))
+            entries.append(source_counts[key])
+        if name in source_counts:
+            entries.append(source_counts[name])
+        for entry in entries:
+            entry['total'] += 1
+            if active and has_url and not entry['epg_only'] and (show_drm or not bridge):
+                if enabled:
+                    entry['eligible'] += 1
+                else:
+                    entry['disabled'] += 1
+    # The networks panel lists networks with channels here, plus any a saved
+    # feed names (under either spelling), so that selection stays visible.
+    # The folded networks are always listed: "free_networks" doesn't cover
+    # them, so a feed holds each by name, and one with no channels today
+    # must still be saved as ticked or left out for when its channels return.
+    fn_networks = []
+    if net_names:
+        saved = {folded_sources.feed_network(n) for f in feeds
+                 for key in ('sources', 'exclude_sources')
+                 for n in ((f.filters or {}).get(key) or [])} - {None}
+        keys = {folded_sources.feed_network(k) for k, v in source_counts.items()
+                if folded_sources.feed_network(k) and v['total']} | saved | set(folded_sources.FOLDED)
+        for net in keys:
+            key = folded_sources.network_feed_name(net)
+            source_counts.setdefault(key, _tally(net_names.get(net, net)))
+            fn_networks.append({'key': key, 'net': net, 'display': source_counts[key]['display'],
+                                'eligible': source_counts[key]['eligible']})
+        fn_networks.sort(key=lambda n: n['display'].casefold())
+    # Feed cards show a network pick by its name, under either spelling.
+    source_labels = {k: f"FN · {v['display']}" for k, v in source_counts.items()
+                     if folded_sources.feed_network(k)}
+    source_labels.update({k: source_labels.get(folded_sources.network_feed_name(k), k)
+                          for k in folded_sources.FOLDED})
     cats = db.session.query(Channel.category)\
         .filter(Channel.is_active == True, Channel.category != None)\
         .distinct().order_by(Channel.category).all()
@@ -1838,7 +1862,9 @@ def feeds():
         'sources':       len(sources),
     }
     return render_template('admin/feeds.html',
-                           feeds=feeds, sources=sources,
+                           feeds=feeds, sources=sources, order_sources=order_sources,
+                           fn_networks=fn_networks, source_labels=source_labels,
+                           folded_networks=sorted(folded_sources.FOLDED),
                            categories=categories, languages=languages, countries=countries,
                            sports=sports,
                            base_url=base_url,

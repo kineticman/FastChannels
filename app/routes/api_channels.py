@@ -58,7 +58,11 @@ def list_channels():
         bridge_ids = {cid for (cid,) in _build_channel_query(
             {'channel_ids': page_ids}, activity='drm_bridge',
         ).with_entities(Channel.id).all()} if page_ids else set()
+        from ..folded_sources import network_of
+        # network: the Free Networks network a channel is from, which the feed
+        # editor matches network picks against (app/folded_sources.py).
         items = [{'id': ch.id, 'name': ch.name, 'source_name': ch.source.name,
+                  'network': network_of(ch.source.name, ch.source_channel_id),
                   'category': ch.category, 'language': ch.language,
                   'country': ch.country, 'gracenote_id': ch.gracenote_id,
                   'sport': ch.sport, 'is_event': is_event_channel(ch),

@@ -259,6 +259,20 @@
     .check-item .src-count { color: var(--text-dim); font-size: 0.7rem; font-variant-numeric: tabular-nums; }
     .check-item .src-count.zero { color: var(--warning-soft); }
     .check-item .src-count.idle { opacity: 0.5; }
+    .check-item.is-disabled { opacity: 0.55; cursor: default; }
+    /* Free Networks' networks: a collapsed panel under the source chips. */
+    .net-toggle {
+      background: none; border: 1px dashed var(--surface-5); border-radius: 6px;
+      padding: 0.3rem 0.55rem; font-size: 0.74rem; color: var(--text-dim); cursor: pointer; white-space: nowrap;
+    }
+    .net-toggle:hover, .net-toggle[aria-expanded="true"] { color: var(--text); border-color: var(--text-dim); }
+    .net-panel { margin-top: 0.4rem; padding: 0.45rem 0.5rem 0.5rem; border: 1px solid var(--surface-5); border-radius: 8px; background: var(--bg); }
+    .net-panel[hidden] { display: none; }
+    .net-panel-head { display: flex; flex-wrap: wrap; align-items: center; gap: 0.3rem 0.6rem; font-size: 0.74rem; color: var(--text-dim); }
+    .field .net-panel-head input { flex: 0 1 200px; min-width: 0; padding: 0.2rem 0.45rem; font-size: 0.78rem; }
+    .net-panel .check-group { margin-top: 0.4rem; max-height: 132px; padding: 0; border: 0; background: none; }
+    .field .net-panel .check-item { padding: 0.2rem 0.5rem; font-size: 0.76rem; }
+    .field .net-panel .check-item[hidden] { display: none; }
     .field-box {
       border: 1px solid var(--border); border-radius: 10px;
       background: color-mix(in srgb, var(--bg) 35%, transparent);
@@ -604,13 +618,13 @@
             {% else %}
               {% if f.get('sources') %}
                 {% for s in f['sources'] %}
-                  <span class="badge-pill pill-blue">{{ s }}</span>
+                  <span class="badge-pill pill-blue">{{ source_labels.get(s, s) }}</span>
                 {% endfor %}
               {% else %}
                 <span class="badge-pill pill-gray">all sources</span>
               {% endif %}
               {% for s in f.get('exclude_sources') or [] %}
-                <span class="badge-pill pill-red">no {{ s }}</span>
+                <span class="badge-pill pill-red">no {{ source_labels.get(s, s) }}</span>
               {% endfor %}
               {% if f.get('categories') %}
                 {% for c in f['categories'] %}
@@ -1063,8 +1077,28 @@
             <input type="checkbox" value="{{ s.name }}" class="src-cb"> {{ s.display_name }}
             <span class="src-count {% if not sc.get('eligible') %}zero{% endif %}">{{ sc.get('eligible', 0) }}</span>
           </label>
+          {% if s.name == 'free_networks' and fn_networks %}
+          <button type="button" class="net-toggle" id="net-toggle" aria-expanded="false" aria-controls="net-panel"
+                  onclick="showNetworks(this.getAttribute('aria-expanded') !== 'true')">{{ fn_networks|length }} networks ▸</button>
+          {% endif %}
           {% endfor %}
         </div>
+        {% if fn_networks %}
+        <div class="net-panel" id="net-panel" hidden>
+          <div class="net-panel-head">
+            <span>Free Networks' networks. Ticking Free Networks ticks them all; pick or leave out any one here.</span>
+            <input type="text" id="net-search" placeholder="Find a network" aria-label="Find a network" oninput="filterNetworks(this.value)">
+          </div>
+          <div class="check-group" id="networks-group">
+            {% for n in fn_networks %}
+            <label class="check-item" data-name="{{ n.display|lower }}" {% if not n.eligible %}title="No channels from this network are currently eligible for feeds"{% endif %}>
+              <input type="checkbox" value="{{ n.key }}" data-net="{{ n.net }}" class="net-cb"> {{ n.display }}
+              <span class="src-count {% if not n.eligible %}zero{% endif %}">{{ n.eligible }}</span>
+            </label>
+            {% endfor %}
+          </div>
+        </div>
+        {% endif %}
       </div>
       <div class="field">
         <label>Categories</label>
@@ -1158,7 +1192,7 @@
         <div class="src-order-list" id="src-order-list"></div>
         <select id="src-order-add" onchange="addSourceOrder(this)">
           <option value="">+ Add a source to number first…</option>
-          {% for s in sources %}<option value="{{ s.name }}">{{ s.display_name }}</option>{% endfor %}
+          {% for s in order_sources %}<option value="{{ s.name }}">{{ s.display_name }}</option>{% endfor %}
         </select>
         <div class="help">Listed sources get the lowest numbers, in this order; every other source follows, in name order. Numbers stay put once given, so a change applies to new channels, and to all of them when you renumber the feed (saving offers to).</div>
       </div>
@@ -1322,13 +1356,14 @@ function renderChannelList() {
   }
 
   const visibleChannels = getVisibleChannels();
-  const activeSources = new Set([...document.querySelectorAll('.src-cb:checked')].map(c => c.value));
+  const srcLists      = sourceFilterLists();
+  const activeSources = new Set(srcLists.include);
   const activeCats    = new Set([...document.querySelectorAll('.cat-cb:checked')].map(c => c.value));
   const activeLangs   = new Set([...document.querySelectorAll('.lang-cb:checked')].map(c => c.value));
   const activeSports  = new Set([...document.querySelectorAll('.sport-cb:checked:not(:disabled)')].map(c => c.value));
 
   const hasFilters   = activeSources.size > 0 || activeCats.size > 0 || activeLangs.size > 0 || activeSports.size > 0
-                     || leftOutValues('.src-cb, .cat-cb').length > 0;
+                     || srcLists.exclude.length > 0 || leftOutValues('.cat-cb').length > 0;
   const explicitMode = _selectedChannelIds.size > 0;
   const excludeMode  = !explicitMode && hasFilters;
 
@@ -1337,10 +1372,9 @@ function renderChannelList() {
   // Checked sources that can't contribute a single channel would otherwise
   // change nothing visibly — explain why instead of staying silent.
   if (_allChannels.length > 0) {
-    const cacheCounts = {};
-    for (const ch of _allChannels) cacheCounts[ch.source_name] = (cacheCounts[ch.source_name] || 0) + 1;
     for (const src of activeSources) {
-      if (cacheCounts[src]) continue;
+      if (_allChannels.some(ch => matchesSource(ch, src))) continue;
+      if (src === FN && [...activeSources].some(netKey)) continue;  // its networks supply the channels
       const meta  = SRC_COUNTS[src] || {};
       const label = meta.display || src;
       const hint  = document.createElement('div');
@@ -1437,12 +1471,11 @@ function setChView(view) {
 // box and the Show toggle; the count preview passes {matchOnly: true} to skip them.
 function getVisibleChannels({matchOnly = false} = {}) {
   const search = matchOnly ? '' : document.getElementById('ch-search').value.toLowerCase();
-  const activeSources   = new Set([...document.querySelectorAll('.src-cb:checked')].map(c => c.value));
+  const {include: activeSources, exclude: leftOutSources} = sourceFilterLists();
   const activeCats      = new Set([...document.querySelectorAll('.cat-cb:checked')].map(c => c.value));
   const activeLangs     = new Set([...document.querySelectorAll('.lang-cb:checked')].map(c => c.value));
   const activeCountries = new Set([...document.querySelectorAll('.country-cb:checked')].map(c => c.value));
   const activeSports    = new Set([...document.querySelectorAll('.sport-cb:checked:not(:disabled)')].map(c => c.value));
-  const leftOutSources  = new Set(leftOutValues('.src-cb'));
   const leftOutCats     = new Set(leftOutValues('.cat-cb'));
   const gracenoteMode   = document.getElementById('f-gracenote').value;
   const eventMode       = document.getElementById('f-event').value;
@@ -1452,8 +1485,8 @@ function getVisibleChannels({matchOnly = false} = {}) {
     if (search && !ch.name.toLowerCase().includes(search)) return false;
     if (!matchOnly && _chView === 'bridge' && !ch.bridge_only) return false;
     if (!matchOnly && _chView === 'standard' && ch.bridge_only) return false;
-    if (activeSources.size && !activeSources.has(ch.source_name)) return false;
-    if (leftOutSources.has(ch.source_name)) return false;
+    if (activeSources.length && !activeSources.some(k => matchesSource(ch, k))) return false;
+    if (leftOutSources.some(k => matchesSource(ch, k))) return false;
     if (activeCats.size && !activeCats.has(ch.category)) return false;
     if (ch.category && leftOutCats.has(ch.category)) return false;
     if (activeLangs.size && !activeLangs.has(ch.language)) return false;
@@ -1505,12 +1538,12 @@ function deselectAllChannels() {
     // No explicit selection: only excluding the visible set makes sense when
     // filters are actually narrowing it down. With no filters active, "visible"
     // is every channel, and excluding all of them would silently empty the feed.
-    const activeSources = new Set([...document.querySelectorAll('.src-cb:checked')].map(c => c.value));
+    const srcLists      = sourceFilterLists();
     const activeCats    = new Set([...document.querySelectorAll('.cat-cb:checked')].map(c => c.value));
     const activeLangs   = new Set([...document.querySelectorAll('.lang-cb:checked')].map(c => c.value));
     const activeSports  = new Set([...document.querySelectorAll('.sport-cb:checked:not(:disabled)')].map(c => c.value));
-    const hasFilters    = activeSources.size > 0 || activeCats.size > 0 || activeLangs.size > 0 || activeSports.size > 0
-                       || leftOutValues('.src-cb, .cat-cb').length > 0;
+    const hasFilters    = srcLists.include.length > 0 || activeCats.size > 0 || activeLangs.size > 0 || activeSports.size > 0
+                       || srcLists.exclude.length > 0 || leftOutValues('.cat-cb').length > 0;
     if (hasFilters) {
       visible.forEach(ch => _excludedChannelIds.add(ch.id));
     }
@@ -1568,6 +1601,7 @@ async function openModal(feed = null) {
                      : (f[excludeKey] || []).includes(cb.value) ? 'exclude' : '');
   };
   document.querySelectorAll('.src-cb').forEach(cb => restoreState(cb, 'sources', 'exclude_sources'));
+  restoreNetworks(feed?.filters || {});
   document.querySelectorAll('.cat-cb').forEach(cb => restoreState(cb, 'categories', 'exclude_categories'));
   document.querySelectorAll('.lang-cb').forEach(cb => {
     cb.checked = feed ? (feed.filters.languages || []).includes(cb.value) : false;
@@ -1796,11 +1830,106 @@ document.querySelectorAll('.src-cb, .cat-cb').forEach(cb => {
   cb.addEventListener('change', () => {
     const prev = cb.dataset.state || '';
     setFilterState(cb, prev === '' ? 'include' : prev === 'include' ? 'exclude' : '');
+    if (cb.value === FN && cb.classList.contains('src-cb')) networksFollowParent();
     renderChannelList();
     schedulePreview();
     markOrderStale();
   });
 });
+
+// ── Free Networks' networks ───────────────────────────────────────────────
+// A network is picked by "free_networks:<key>"; a folded source's old name
+// ("adultswim") means the same network. "free_networks" alone picks its own
+// networks, not the folded ones (app/folded_sources.py), so the chips below
+// turn the visible state into those names: ticking Free Networks ticks every
+// network, and the saved filter picks exactly what the chips show.
+const FN = 'free_networks';
+const FOLDED_NETS = new Set({{ folded_networks|tojson }});
+const netCbs = () => [...document.querySelectorAll('.net-cb')];
+const fnState = () => document.querySelector(`.src-cb[value="${FN}"]`)?.dataset.state || '';
+
+function netKey(name) {  // mirrors folded_sources.feed_network
+  if (name.startsWith(FN + ':')) return name.slice(FN.length + 1) || null;
+  return FOLDED_NETS.has(name) ? name : null;
+}
+function matchesSource(ch, name) {  // mirrors folded_sources.source_clause
+  const net = netKey(name);
+  if (net) return ch.source_name === FN && ch.network === net;
+  if (name === FN) return ch.source_name === FN && !FOLDED_NETS.has(ch.network);
+  return ch.source_name === name;
+}
+// Under a ticked Free Networks a network is in or left out; under a left-out
+// one it's out (a feed can't add one back without listing every other source).
+function setNetState(cb, state) {
+  setFilterState(cb, state);
+  cb.disabled = fnState() === 'exclude';
+  cb.closest('.check-item').classList.toggle('is-disabled', cb.disabled);
+}
+function networksFollowParent() {
+  const p = fnState();
+  netCbs().forEach(cb => setNetState(cb, p));
+}
+netCbs().forEach(cb => cb.addEventListener('change', () => {
+  const prev = cb.dataset.state || '';
+  setNetState(cb, fnState() === 'include' ? (prev === 'include' ? 'exclude' : 'include')
+                 : prev === '' ? 'include' : prev === 'include' ? 'exclude' : '');
+  renderChannelList();
+  schedulePreview();
+  markOrderStale();
+}));
+function restoreNetworks(f) {
+  const inc = new Set((f.sources || []).map(netKey).filter(Boolean));
+  const exc = new Set((f.exclude_sources || []).map(netKey).filter(Boolean));
+  const p = fnState();
+  let differs = false;
+  for (const cb of netCbs()) {
+    const net = cb.dataset.net, folded = FOLDED_NETS.has(net);
+    const st = p === 'include' ? (folded ? (inc.has(net) ? 'include' : 'exclude')
+                                         : (exc.has(net) ? 'exclude' : 'include'))
+             : p === 'exclude' ? 'exclude'
+             : inc.has(net) ? 'include' : exc.has(net) ? 'exclude' : '';
+    setNetState(cb, st);
+    if (st !== p) differs = true;
+  }
+  // Open only when a network differs from Free Networks, so nothing saved is hidden.
+  const search = document.getElementById('net-search');
+  if (search) { search.value = ''; filterNetworks(''); }
+  showNetworks(differs);
+}
+// The include / leave-out source names the chips stand for (saved as
+// sources / exclude_sources).
+function sourceFilterLists() {
+  const include = [], exclude = [];
+  document.querySelectorAll('.src-cb').forEach(cb => {
+    if (cb.dataset.state === 'include') include.push(cb.value);
+    else if (cb.dataset.state === 'exclude') exclude.push(cb.value);
+  });
+  const p = fnState();
+  for (const cb of netCbs()) {
+    const st = cb.dataset.state || '', folded = FOLDED_NETS.has(cb.dataset.net);
+    if (p === 'include') {
+      if (folded && st === 'include') include.push(cb.value);
+      if (!folded && st === 'exclude') exclude.push(cb.value);
+    } else if (p === 'exclude') {
+      if (folded) exclude.push(cb.value);
+    } else if (st === 'include') include.push(cb.value);
+    else if (st === 'exclude') exclude.push(cb.value);
+  }
+  return {include, exclude};
+}
+function showNetworks(open) {
+  const panel = document.getElementById('net-panel'), btn = document.getElementById('net-toggle');
+  if (!panel || !btn) return;
+  panel.hidden = !open;
+  btn.setAttribute('aria-expanded', String(open));
+  btn.textContent = btn.textContent.replace(/[▸▾]$/, open ? '▾' : '▸');
+}
+function filterNetworks(q) {
+  q = q.trim().toLowerCase();
+  document.querySelectorAll('#networks-group .check-item').forEach(el => {
+    el.hidden = !!q && !el.dataset.name.includes(q);
+  });
+}
 
 document.getElementById('f-chtype').addEventListener('change', () => {
   renderChannelList();
@@ -1913,11 +2042,10 @@ function buildFilters() {
   if (_selectedChannelIds.size > 0) {
     f.channel_ids = [..._selectedChannelIds];
   } else {
-    const sources = [...document.querySelectorAll('.src-cb:checked')].map(c => c.value);
+    const {include: sources, exclude: leftOutSources} = sourceFilterLists();
     if (sources.length) f.sources = sources;
     const cats = [...document.querySelectorAll('.cat-cb:checked')].map(c => c.value);
     if (cats.length) f.categories = cats;
-    const leftOutSources = leftOutValues('.src-cb');
     if (leftOutSources.length) f.exclude_sources = leftOutSources;
     const leftOutCats = leftOutValues('.cat-cb');
     if (leftOutCats.length) f.exclude_categories = leftOutCats;
