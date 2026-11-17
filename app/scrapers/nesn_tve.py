@@ -12,7 +12,7 @@ watch.nesn.com is a ViewLift site; the flow is viewlift_tve.py's. Scoped
 from __future__ import annotations
 
 from .base import BaseScraper, ConfigField
-from .viewlift_tve import ViewLiftTVEScraper
+from .viewlift_tve import ViewLiftTVEScraper, sign_in_method_field
 
 SCHEME = 'nesn-tve://'
 API_BASE = 'https://nesn.api.viewlift.com'
@@ -52,4 +52,5 @@ class NesnTVEScraper(ViewLiftTVEScraper, BaseScraper):
         ConfigField('email', 'NESN account email', placeholder='you@example.com',
                     help_text='The free NESN account the TV provider sign-in is linked to '
                               '(passwordless — NESN emails you a code).'),
+        sign_in_method_field('NESN'),
     ]

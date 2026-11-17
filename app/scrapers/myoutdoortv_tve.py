@@ -61,6 +61,8 @@ class MyOutdoorTVTVEScraper(ViewLiftTVEScraper, BaseScraper):
     }
     account_signup = 'email'
     otp_enabled = False
+    # No emailed code, so a subscriber's existing account can't be signed in.
+    direct_subscription = False
     market_note = 'MyOutdoorTV is not available to your TV provider account in your area'
     # Its TVE plan is per channel (tve-charter-oc), matched from channelIds.
     send_channel_ids = True

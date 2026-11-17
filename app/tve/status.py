@@ -297,6 +297,10 @@ def tve_network_status(account) -> list[dict]:
         ('altitude_tve', 'altitude', 'Altitude TVE (Altitude Sports)', "Altitude's Rocky Mountain market"),
         ('myoutdoortv_tve', 'motv', 'MyOutdoorTV TVE', None),
     ):
+        # A direct subscriber (viewlift_tve.py, beta) has no TV provider to sign in.
+        _vl_source = Source.query.filter_by(name=source).first()
+        if ((_vl_source.config or {}) if _vl_source else {}).get('sign_in_method') == 'subscription':
+            continue
         last_signed_in_at = (_cfg(source).get(f'{family}_mvpd_auth') or {}).get('captured_at')
         error_message, error_at = _last_error(family, last_signed_in_at, _errors(source))
         note = 'Sign in with a link on your phone or computer.'
@@ -304,6 +308,9 @@ def tve_network_status(account) -> list[dict]:
             note += f' Plays only for TV provider accounts in {market}.'
         else:
             note += ' Your TV package needs Outdoor Channel, Sportsman Channel or World Fishing Network.'
+        if source != 'myoutdoortv_tve':
+            note += (' Pay the network directly? Choose "Direct subscription" on its source card; '
+                     'no sign-in is needed here.')
         entries.append({
             'source': source,
             'label': label,

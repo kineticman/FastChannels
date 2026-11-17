@@ -3996,7 +3996,23 @@
       const email = String(info.email || values.email || '');
       const byCode = info.signup === 'otp';
       const tveSignin = cfg && cfg.tve_signin ? renderTveSigninSection(sourceId, cfg.tve_signin) : '';
-      const intro = byCode
+      // Direct subscribers (beta) sign in to the account that has the
+      // subscription and skip the TV provider step.
+      const methodField = (schema || []).find(f => f.key === 'sign_in_method');
+      const subscriber = !!methodField && values.sign_in_method === 'subscription';
+      const methodSelect = methodField ? `
+        <div class="field field-full" style="margin:.75rem 0">
+          <label for="cfg-${sourceId}-sign_in_method">${escapeHtml(methodField.label)}</label>
+          <select id="cfg-${sourceId}-sign_in_method" data-key="sign_in_method"
+                  onchange="viewliftSetMethod(${sourceId}, this.value)">
+            ${methodField.options.map(o => `<option value="${escapeHtml(String(o.value))}"${(values.sign_in_method || 'tve') === o.value ? ' selected' : ''}>${escapeHtml(o.label)}</option>`).join('')}
+          </select>
+          <div class="help">${escapeHtml(methodField.help_text || '')}</div>
+          <span class="config-status" id="config-status-${sourceId}"></span>
+        </div>` : '';
+      const intro = subscriber
+        ? `Sign in to the ${brand} account your subscription is under. ${brand} emails you a code. There is no password.`
+        : byCode
         ? `${brand} links your TV provider to a free ${brand} account. Enter its email (or a new one at ${escapeHtml(info.domain || '')}) and ${brand} emails you a code. There is no password.`
         : `${brand} links your TV provider to a free ${brand} account. Enter any email address and the account is created right away, with no code or password. ${brand} doesn't check the address.`;
       return `
@@ -4025,9 +4041,17 @@
             <button class="btn btn-cancel btn-sm" type="button" onclick="viewliftSendCode(${sourceId}, '${sourceName}')">Resend</button>
           </div>
         </div>
-        <div class="config-subtitle" style="font-weight:600">2. TV provider</div>
-        ${info.market_note ? `<div class="config-note">${escapeHtml(info.market_note)}.</div>` : ''}
-        ${tveSignin}`;
+        ${methodSelect}
+        <div id="tve-signin-wrap-${sourceId}"${subscriber ? ' style="display:none"' : ''}>
+          <div class="config-subtitle" style="font-weight:600">2. TV provider</div>
+          ${info.market_note ? `<div class="config-note">${escapeHtml(info.market_note)}.</div>` : ''}
+          ${tveSignin}
+        </div>`;
+    }
+
+    function viewliftSetMethod(sourceId, method) {
+      toggleTveSigninForMethod(sourceId, method);
+      saveSourceConfig(sourceId);
     }
 
     async function viewliftSendCode(sourceId, sourceName) {
