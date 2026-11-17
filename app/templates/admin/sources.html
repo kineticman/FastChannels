@@ -5434,6 +5434,66 @@
         ${_saveRow(sourceId)}`;
     }
 
+    function renderHuluLiveConfig(sourceId, schema, values, cfg) {
+      const info = (cfg && cfg.hulu_live) || {};
+      let detail = info.signin_error || '';
+      if (info.signed_in) {
+        detail = info.live_tv === false
+          ? 'Signed in, but this Hulu account doesn\'t include Live TV.'
+          : 'Signed in' + (info.max_streams ? ` — up to ${info.max_streams} streams at once on this plan` : '');
+      }
+      const copy = (!info.signed_in && info.tve_link_available) ? `
+        <div class="config-note" style="margin-top:0.6rem">Your TV Everywhere sign-in already has Hulu linked.
+          <button class="btn btn-run btn-sm" type="button" id="hulu-live-copy-btn-${sourceId}"
+                  onclick="huluLiveCopyTve(${sourceId})">Use that Hulu sign-in</button>
+          <span class="amazon-status-text" id="hulu-live-copy-status-${sourceId}"></span></div>` : '';
+      const loc = info.home_latlon ? ` (${escapeHtml(String(info.home_latlon.lat))}, ${escapeHtml(String(info.home_latlon.long))})` : '';
+      return `
+        <div class="config-title">Hulu + Live TV Settings</div>
+        <div class="config-subtitle" style="font-weight:600">Sign in</div>
+        <div class="config-note">Adds your Hulu + Live TV channels and guide, including your local stations.
+          Needs a Hulu plan with Live TV. Every channel is DRM (Widevine), so they play only through a DRM bridge
+          (FastChannels Player or PrismCast). Each stream counts toward your Hulu plan's stream limit.</div>
+        <div class="espn-auth-options">
+          ${codeLinkOption(sourceId, 'hulu-live', 'hulu_live', 'account', 'Hulu', 'Hulu account',
+                   info.signed_in, detail,
+                   'Get a code, then go to hulu.com/activate on your phone or computer, sign in to Hulu and enter it.')}
+        </div>
+        ${copy}
+        <div class="config-subtitle" style="margin-top:0.8rem">Home location</div>
+        <div class="fields-grid">
+          <div class="field">
+            <label for="cfg-${sourceId}-home_location">ZIP code, or latitude, longitude${loc}</label>
+            <input type="text" id="cfg-${sourceId}-home_location" data-key="home_location" data-secret="false"
+                   value="${escapeHtml(String(values.home_location || ''))}" placeholder="43215  or  39.96, -83.00" autocomplete="off">
+            <div class="help">Hulu picks your local channels from this and plays locals only inside their market.
+              Leave it blank to use this server's IP location.</div>
+          </div>
+        </div>
+        ${_saveRow(sourceId)}`;
+    }
+
+    async function huluLiveCopyTve(sourceId) {
+      const btn = document.getElementById(`hulu-live-copy-btn-${sourceId}`);
+      const statusEl = document.getElementById(`hulu-live-copy-status-${sourceId}`);
+      btn.disabled = true;
+      statusEl.innerHTML = '<span style="color:var(--text-muted)">Signing in…</span>';
+      try {
+        const r = await fetch(`/api/sources/${sourceId}/hulu-live-link/copy-tve`, { method: 'POST' });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok) {
+          statusEl.innerHTML = `<span style="color:var(--danger-soft)">${escapeHtml(d.error || 'Sign-in failed.')}</span>`;
+          return;
+        }
+        statusEl.innerHTML = '<span style="color:var(--success-soft)">&#10003; Signed in — updating channels…</span>';
+        setTimeout(() => loadSourceConfig(sourceId, 'hulu_live'), 1500);
+      } catch (e) {
+        statusEl.innerHTML = '<span style="color:var(--danger-soft)">Network error.</span>';
+      } finally {
+        btn.disabled = false;
+      }
+    }
+
     function renderNsnConfig(sourceId, schema, values, cfg) {
       const info = (cfg && cfg.nsn) || {};
       return `
@@ -6762,6 +6822,8 @@
         return renderMlbConfig(sourceId, schema, values, cfg);
       } else if (sourceName === 'nsn') {
         return renderNsnConfig(sourceId, schema, values, cfg);
+      } else if (sourceName === 'hulu_live') {
+        return renderHuluLiveConfig(sourceId, schema, values, cfg);
       } else if (sourceName === 'gray_local') {
         return renderGrayLocalConfig(sourceId, schema, values, cfg);
       } else if (sourceName === 'sling') {

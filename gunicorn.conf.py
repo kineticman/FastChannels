@@ -113,11 +113,11 @@ _SUCCESS_SUPPRESS_RE = re.compile(
     r'|(?:GET|HEAD) /play/free_networks/[^/]+/variant\.m3u8\?url='
     r'|(?:GET|HEAD) /play/pluto/variant\?'
     r'|(?:GET|HEAD) /play/[^/ ]+/[^/ ]+/relay\?')
-_DASH_RE = re.compile(r'(?:GET|HEAD) /play/(amazon_prime_free|amazon_sports|cox|philo|sling|pbs|vidaa|fubo|dazn_tve|cnn_tve)/[^/]+/dash\.mpd')
+_DASH_RE = re.compile(r'(?:GET|HEAD) /play/(amazon_prime_free|amazon_sports|cox|philo|sling|pbs|vidaa|fubo|dazn_tve|cnn_tve|hulu_live)/[^/]+/dash\.mpd')
 # DirecTV/cox use path-form license URLs (/license/<id>), while vidaa/fubo/sling use
 # query-form URLs (/license?channel_id=<id>) — matched via the separator below. Sling's
 # fire on every tune, block-boundary swap, and FC Player ad-gap rejoin.
-_LICENSE_RE = re.compile(r'POST /play/(directv|cox|vidaa|fubo|sling|espn|dazn_tve|vix|cnn_tve)/license(?:/|\?channel_id=)')
+_LICENSE_RE = re.compile(r'POST /play/(directv|cox|vidaa|fubo|sling|espn|dazn_tve|vix|cnn_tve|hulu_live)/license(?:/|\?channel_id=)')
 _PLUTO_VARIANT_QUERY_RE = re.compile(r'("(?:GET|HEAD) /play/pluto/variant)\?[^ ]+')
 # Warner's ?url= carries the CDN token; ~8h valid, so keep it out of the log.
 _WARNER_PROXY_QUERY_RE = re.compile(r'("(?:GET|HEAD) /play/warner_tve/[^/]+/(?:variant\.m3u8|key|segment\.ts))\?[^ ]+')

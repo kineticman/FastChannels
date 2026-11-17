@@ -1987,6 +1987,9 @@ def prepare_player_extras(channel, base_url: str) -> dict:
         info = _get_playback_info(channel, fast_mode=False)
         manifest_url = info.get('preview_url') or info.get('play_url') or ''
         license_url = info.get('license_url') or None
+        if source_name == 'hulu_live' and manifest_url:
+            # The Player's hardware CDM gets Hulu's 1080p (L1) manifest.
+            manifest_url += '?hd=1'
     if not manifest_url:
         raise PlayerPrepareError('no manifest URL resolved')
     manifest_url = urljoin(base, manifest_url.lstrip('/')) if manifest_url.startswith('/') else manifest_url

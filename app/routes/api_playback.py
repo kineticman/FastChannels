@@ -745,6 +745,12 @@ def _get_playback_info(ch, fast_mode=True, browser=False):
     if ch.source and ch.source.name == 'dazn_tve' and ch.source_channel_id:
         from urllib.parse import quote as _quote
         preview_url = f'/play/dazn_tve/{_quote(ch.source_channel_id, safe="")}/dash.mpd'
+    if ch.source and ch.source.name == 'hulu_live' and ch.source_channel_id:
+        from urllib.parse import quote as _quote
+        # A served manifest for every player (see hulu_live_dash in play.py).
+        preview_url = f'/play/hulu_live/{_quote(ch.source_channel_id, safe="")}/dash.mpd'
+        playback_mode = 'dash'
+        stream_type = 'dash'
 
     # Philo → DASH+Widevine. Philo's MPD CDN locks CORS to philo.com, so the
     # route proxies the manifest body with permissive CORS (segments are CORS-*

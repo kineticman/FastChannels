@@ -150,27 +150,59 @@ def save_hulu_link(account, link: dict | None) -> None:
     db.session.commit()
 
 
-def _refresh(account, link: dict) -> dict:
+def refresh_link(link: dict, *, relink_hint: str = 'Use "Sign in on my phone" to link Hulu again.',
+                 timeout=20) -> dict:
+    """Renews a link: a new user token and (usually) a rotated device token.
+    Saves nothing; the caller must store the returned link right away, since
+    the old device token is superseded. Raises HuluNotLinked when Hulu refuses
+    the device token, TVEAuthError for anything worth retrying."""
     serial = link['serial']
     try:
-        r = requests.post(f'{AUTH_BASE}/v2/device/device_token/authenticate', headers=_headers(serial), timeout=20,
-                          data={'device_token': link['device_token'], 'action': 'token_refresh',
-                                **_device_fields(serial)})
+        r = requests.post(f'{AUTH_BASE}/v2/device/device_token/authenticate', headers=_headers(serial),
+                          timeout=timeout, data={'device_token': link['device_token'], 'action': 'token_refresh',
+                                                 **_device_fields(serial)})
     except requests.RequestException as exc:
         raise TVEAuthError(f'Could not reach Hulu to renew the sign-in; will retry: {exc}') from exc
     if r.status_code in (400, 401, 403):
         logger.info('[hulu] device token refused (HTTP %s): %s', r.status_code, r.text[:200])
-        raise HuluNotLinked('Hulu no longer accepts this FastChannels sign-in. Use "Sign in on my phone" '
-                            'to link Hulu again.')
+        raise HuluNotLinked(f'Hulu no longer accepts this FastChannels sign-in. {relink_hint}')
     if r.status_code != 200:
         raise TVEAuthError(f'Hulu returned HTTP {r.status_code} renewing the sign-in; will retry.')
     data = _auth_data(r.json() or {})
     if not data.get('user_token'):
         raise TVEAuthError('Hulu renewed the sign-in without a user token; will retry.')
     new_link = _link_from_auth(serial, data, previous=link)
-    save_hulu_link(account, new_link)
     logger.info('[hulu] renewed the Hulu sign-in (device token rotated: %s)',
                 new_link['device_token'] != link['device_token'])
+    return new_link
+
+
+def user_token_fresh(link: dict | None) -> bool:
+    return bool(link and link.get('user_token')
+                and int(link.get('user_token_expires_at') or 0) - time.time() > _USER_TOKEN_MARGIN)
+
+
+def api_headers(link: dict) -> dict[str, str]:
+    """Headers for Hulu's app APIs (guide, playlist, users/self) as the
+    linked Android device, with its current user token."""
+    return {**_headers(link['serial']), 'Authorization': f"Bearer {link['user_token']}",
+            'Accept': 'application/json'}
+
+
+LIVE_TV_PACKAGES = {'16', '38'}  # Live TV; 38 is the Spanish Live TV bundle
+
+
+def user_info(link: dict, timeout=20) -> dict:
+    """The signed-in Hulu user with its subscription (package_ids, features)."""
+    r = requests.get('https://home.hulu.com/v3/users/self', headers=api_headers(link), timeout=timeout,
+                     params={'action': 'login', 'expand': 'subscriptions'})
+    r.raise_for_status()
+    return (r.json() or {}).get('data') or {}
+
+
+def _refresh(account, link: dict) -> dict:
+    new_link = refresh_link(link)
+    save_hulu_link(account, new_link)
     return new_link
 
 
@@ -180,8 +212,7 @@ def user_token(account, *, force_refresh: bool = False) -> str:
     link = hulu_link(account)
     if not link:
         raise HuluNotLinked('Hulu isn\'t linked to FastChannels yet. Use "Sign in on my phone" to link it.')
-    fresh = link.get('user_token') and int(link.get('user_token_expires_at') or 0) - time.time() > _USER_TOKEN_MARGIN
-    if fresh and not force_refresh:
+    if user_token_fresh(link) and not force_refresh:
         return link['user_token']
     return _refresh(account, link)['user_token']
 

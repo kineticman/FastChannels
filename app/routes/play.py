@@ -1952,6 +1952,51 @@ def vix_dash(channel_id: str):
     return play('vix', _unquote(channel_id))
 
 
+@play_bp.route('/play/hulu_live/<channel_id>/dash.mpd')
+def hulu_live_dash(channel_id: str):
+    """Hulu + Live TV's manifest, served (not redirected) for FastChannels
+    Player, PrismCast and the admin/watch players alike. Hulu's own MPD
+    refreshes are a proprietary patch format no standard player applies, so
+    HuluLiveScraper.live_manifest() hands out a full MPD on every poll, with
+    the <Location> removed so players keep polling here. This also covers
+    CORS: Hulu's manifest host allows only www.hulu.com, its segment hosts '*'
+    (the MPD's BaseURLs are absolute). ?hd=1 is the 1080p L1 manifest, which
+    only FastChannels Player gets (prepare_player_extras)."""
+    from urllib.parse import unquote as _unquote
+
+    raw_id = _unquote(channel_id)
+    channel = (Channel.query.join(Source)
+               .filter(Source.name == 'hulu_live', Channel.source_channel_id == raw_id).first())
+    if not channel:
+        abort(404)
+    if _channel_is_retired(channel):
+        return _gone_response()
+    scraper_cls = registry.get('hulu_live')
+    if not scraper_cls:
+        return _unavailable_response()
+    scraper = scraper_cls(config=channel.source.config or {})
+    try:
+        mpd = scraper.live_manifest(channel.stream_url, hd=request.args.get('hd') == '1')
+    except Exception as e:
+        logger.warning('[hulu_live-dash] manifest failed for %s (%s): %s', channel.name, raw_id[:40], e)
+        return _unavailable_response()
+    finally:
+        # The per-tune license URL (dash_cache) must be saved before the
+        # player's license request, a separate request, reads it back.
+        if getattr(scraper, '_pending_cache_updates', None):
+            try:
+                persist_source_cache_updates(channel.source_id, scraper._pending_cache_updates, wait=False)
+            except Exception:
+                pass
+        if scraper._pending_config_updates:
+            try:
+                persist_source_config_updates(channel.source_id, scraper._pending_config_updates, wait=False)
+            except Exception:
+                pass
+    return Response(mpd, mimetype='application/dash+xml',
+                    headers={'Cache-Control': 'no-cache', 'Access-Control-Allow-Origin': '*'})
+
+
 # Lura's segment hosts (live-N.vix.com) send CORS to https://vix.com only, so a
 # browser on any other origin gets the manifest and keys but no segments.
 # FastChannels Player doesn't enforce CORS and keeps vix_dash's plain 302; the

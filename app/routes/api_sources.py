@@ -552,6 +552,8 @@ def get_source_config(source_id):
                         'entitlements_at': saved.get('entitlements_at'),
                         'relink_url': RELINK_URL,
                         'signin_error': saved.get('signin_error')}
+    if source.name == 'hulu_live':
+        extra['hulu_live'] = _hulu_live_info(saved)
     if source.name == 'gray_local':
         extra['gray_local'] = _gray_local_info(saved)
     if source.name == 'paramount':
@@ -2403,6 +2405,116 @@ def mlb_link_stop(source_id):
         return err
     _redis.from_url(current_app.config['REDIS_URL']).delete(LINK_STATUS_KEY)
     return jsonify({'status': 'stopped'})
+
+
+# ── Hulu + Live TV sign-in (Hulu device code) ────────────────────────────────
+# The user enters the code at hulu.com/activate; a sign-in queue job polls for
+# the device token — see app.scrapers.hulu_live. A TV Everywhere account's Hulu
+# link can be copied instead (no code).
+
+def _hulu_live_info(saved: dict) -> dict:
+    from ..scrapers.hulu_live import LINK_KEY, tve_link_account
+    link = saved.get(LINK_KEY) or {}
+    try:
+        tve = tve_link_account()
+    except Exception:  # noqa: BLE001
+        tve = None
+    latlon = saved.get('home_latlon') or {}
+    return {'signed_in': bool(link.get('device_token')),
+            'linked_at': link.get('linked_at'),
+            'copied_from': link.get('copied_from'),
+            'live_tv': saved.get('live_tv'),
+            'max_streams': saved.get('max_streams'),
+            'tve_link_available': bool(tve),
+            'home_latlon': latlon if latlon.get('input') == str(saved.get('home_location') or '').strip()[:5] else None,
+            'signin_error': saved.get('signin_error')}
+
+
+def _hulu_live_source_or_400(source_id):
+    source = Source.query.get_or_404(source_id)
+    if source.name != 'hulu_live':
+        return None, (jsonify({'error': 'not the hulu_live source'}), 400)
+    return source, None
+
+
+@sources_bp.route('/sources/<int:source_id>/hulu-live-link/start', methods=['POST'])
+def hulu_live_link_start(source_id):
+    import redis as _redis
+    import requests as _requests
+    from ..scrapers.hulu_live import LINK_STATUS_KEY, _LINK_TIMEOUT, link_status, start_link
+    from ..tve.adobe_pass import TVEAuthError
+    from .tasks import get_signin_queue
+
+    source, err = _hulu_live_source_or_400(source_id)
+    if err:
+        return err
+    try:
+        ctx = start_link(source)
+    except (TVEAuthError, _requests.RequestException) as e:
+        return jsonify({'error': str(e)}), 502
+    status = link_status(ctx, 'waiting')
+    _redis.from_url(current_app.config['REDIS_URL']).setex(LINK_STATUS_KEY, _LINK_TIMEOUT + 120, json.dumps(status))
+    get_signin_queue().enqueue('app.scrapers.hulu_live.run_link', ctx, job_timeout=_LINK_TIMEOUT + 60)
+    return jsonify(status)
+
+
+@sources_bp.route('/sources/<int:source_id>/hulu-live-link/state')
+def hulu_live_link_state(source_id):
+    import redis as _redis
+    from ..scrapers.hulu_live import LINK_STATUS_KEY
+
+    _, err = _hulu_live_source_or_400(source_id)
+    if err:
+        return err
+    raw = _redis.from_url(current_app.config['REDIS_URL']).get(LINK_STATUS_KEY)
+    return jsonify(_with_code_queue_notice(json.loads(raw) if raw else {'state': 'idle'},
+                                           'app.scrapers.hulu_live.run_link'))
+
+
+@sources_bp.route('/sources/<int:source_id>/hulu-live-link/stop', methods=['POST'])
+def hulu_live_link_stop(source_id):
+    import redis as _redis
+    from ..scrapers.hulu_live import LINK_STATUS_KEY
+
+    _, err = _hulu_live_source_or_400(source_id)
+    if err:
+        return err
+    _redis.from_url(current_app.config['REDIS_URL']).delete(LINK_STATUS_KEY)
+    return jsonify({'status': 'stopped'})
+
+
+@sources_bp.route('/sources/<int:source_id>/hulu-live-link/copy-tve', methods=['POST'])
+def hulu_live_link_copy_tve(source_id):
+    from ..scrapers.hulu_live import copy_tve_link
+    from ..tve.adobe_pass import TVEAuthError
+
+    source, err = _hulu_live_source_or_400(source_id)
+    if err:
+        return err
+    try:
+        ok, message = copy_tve_link(source)
+    except TVEAuthError as e:
+        return jsonify({'error': str(e)}), 502
+    if not ok:
+        return jsonify({'error': message}), 409
+    return jsonify({'status': 'signed_in'})
+
+
+@sources_bp.route('/sources/<int:source_id>/hulu-live-auth/<kind>', methods=['DELETE'])
+def clear_hulu_live_auth(source_id, kind):
+    """Forgets the link here only. No Hulu logout call: a link copied from TV
+    Everywhere may share its device with that account."""
+    from ..scrapers.hulu_live import SIGNIN_CONFIG_KEYS
+
+    source, err = _hulu_live_source_or_400(source_id)
+    if err:
+        return err
+    cfg = dict(source.config or {})
+    for key in SIGNIN_CONFIG_KEYS:
+        cfg.pop(key, None)
+    source.config = cfg
+    db.session.commit()
+    return jsonify({'status': 'cleared'})
 
 
 @sources_bp.route('/sources/<int:source_id>/mlb-auth/<kind>', methods=['DELETE'])
