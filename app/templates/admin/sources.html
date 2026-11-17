@@ -5244,6 +5244,138 @@
         ${_eventToggle('include_channels', 'Include Paramount+ Channels', values)}
         ${_saveRow(sourceId)}`;
     }
+    function renderHBOMaxConfig(sourceId, schema, values, cfg) {
+      const info = (cfg && cfg.hbomax) || {};
+      const signedIn = !!info.signed_in;
+      const when = info.signed_in_at ? ` ${_epochAgo(info.signed_in_at)}` : '';
+      const statusLine = signedIn
+        ? `<span style="color:var(--success-soft)">&#10003; Signed in${info.email ? ' as ' + escapeHtml(info.email) : ''}${when}</span>`
+        : (info.signin_error ? `<span style="color:var(--danger-soft)">${escapeHtml(info.signin_error)}</span>` : '');
+      return `
+        <div class="config-title">HBO Max Settings</div>
+        <div class="config-note">Adds HBO Max live sports events (TNT, TBS, truTV) as temporary channels, one per event
+          airing now or in the next two days. Needs an HBO Max subscription. These are DRM (Widevine) streams, so they play
+          only through a DRM bridge. HBO's own channels aren't carried — Max streams events, not linear channels.</div>
+        <div class="fields-grid">
+          <div class="field">
+            <label for="cfg-${sourceId}-email">HBO Max email</label>
+            <input type="text" id="cfg-${sourceId}-email" data-key="email" data-secret="false"
+                   value="${escapeHtml(String(values.email || ''))}" placeholder="you@example.com" autocomplete="off">
+          </div>
+          <div class="field">
+            <label for="cfg-${sourceId}-password">HBO Max password</label>
+            <input type="password" id="cfg-${sourceId}-password" data-key="password" data-secret="true"
+                   value="${escapeHtml(String(values.password || ''))}" autocomplete="off">
+          </div>
+        </div>
+        <div class="config-actions" style="justify-content:flex-start;gap:0.6rem;flex-wrap:wrap">
+          <button class="btn btn-run" type="button" onclick="saveSourceConfig(${sourceId})">Save settings</button>
+          <button class="btn btn-run" type="button" id="hbomax-signin-btn-${sourceId}"
+                  onclick="hbomaxSignIn(${sourceId})">${signedIn ? 'Sign in again' : 'Sign in to HBO Max'}</button>
+          ${signedIn ? `<button class="btn btn-cancel btn-sm" type="button" onclick="hbomaxClear(${sourceId})">Sign out</button>` : ''}
+          <span class="config-status" id="config-status-${sourceId}"></span>
+        </div>
+        <div style="margin-top:0.5rem" id="hbomax-status-${sourceId}">${statusLine}</div>
+        <div class="config-note" style="margin-top:0.4rem">Sign-in runs a real browser in the background to get past bot
+          protection, so it can take up to a minute. The session lasts a long time, so you rarely need to sign in again.</div>
+        <div class="advanced-box" style="margin-top:0.8rem">
+          <button type="button" class="advanced-toggle" onclick="toggleAdvanced(this)">
+            <span>Trouble signing in? Paste a session instead</span>
+            <span class="advanced-chevron">▼</span>
+          </button>
+          <div class="advanced-body">
+            <div class="config-note">If the automatic sign-in won't work, sign in at play.hbomax.com in your own browser,
+              open DevTools → Application → Cookies, copy the value of the <code>st</code> cookie, and paste it here.</div>
+            <div class="field field-full">
+              <label for="hbomax-st-${sourceId}">st cookie value</label>
+              <textarea id="hbomax-st-${sourceId}" rows="3" style="width:100%;font-family:monospace;font-size:0.8rem"
+                        placeholder="eyJhbGciOi…"></textarea>
+            </div>
+            <button class="btn btn-run btn-sm" type="button" onclick="hbomaxSaveManual(${sourceId})">Save session</button>
+          </div>
+        </div>`;
+    }
+
+    async function hbomaxSignIn(sourceId) {
+      const btn = document.getElementById(`hbomax-signin-btn-${sourceId}`);
+      const statusEl = document.getElementById(`hbomax-status-${sourceId}`);
+      // Save the email/password first so the background job has them.
+      await saveSourceConfig(sourceId);
+      btn.disabled = true;
+      statusEl.innerHTML = '<span style="color:var(--text-muted)">Starting sign-in…</span>';
+      try {
+        const r = await fetch(`/api/sources/${sourceId}/hbomax-login/start`, {method: 'POST'});
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok) {
+          statusEl.innerHTML = `<span style="color:var(--danger-soft)">${escapeHtml(d.error || 'Could not start sign-in.')}</span>`;
+          btn.disabled = false;
+          return;
+        }
+        hbomaxPollState(sourceId, Date.now() + 150000);
+      } catch (e) {
+        statusEl.innerHTML = '<span style="color:var(--danger-soft)">Network error starting sign-in.</span>';
+        btn.disabled = false;
+      }
+    }
+
+    async function hbomaxPollState(sourceId, deadline) {
+      const statusEl = document.getElementById(`hbomax-status-${sourceId}`);
+      const btn = document.getElementById(`hbomax-signin-btn-${sourceId}`);
+      try {
+        const r = await fetch(`/api/sources/${sourceId}/hbomax-login/state`);
+        const d = await r.json().catch(() => ({}));
+        if (d.state === 'success') {
+          statusEl.innerHTML = '<span style="color:var(--success-soft)">&#10003; Signed in</span>';
+          setTimeout(() => loadSourceConfig(sourceId, 'hbomax'), 700);
+          return;
+        }
+        if (d.state === 'error') {
+          statusEl.innerHTML = `<span style="color:var(--danger-soft)">${escapeHtml(d.message || 'Sign-in failed.')}</span>`;
+          if (btn) btn.disabled = false;
+          return;
+        }
+        statusEl.innerHTML = `<span style="color:var(--text-muted)">${escapeHtml(d.message || 'Signing in…')}</span>`;
+        if (Date.now() < deadline) {
+          setTimeout(() => hbomaxPollState(sourceId, deadline), 3000);
+        } else {
+          statusEl.innerHTML = '<span style="color:var(--warning-soft)">Sign-in is taking longer than expected — check back shortly.</span>';
+          if (btn) btn.disabled = false;
+        }
+      } catch (e) {
+        if (Date.now() < deadline) setTimeout(() => hbomaxPollState(sourceId, deadline), 3000);
+      }
+    }
+
+    async function hbomaxClear(sourceId) {
+      if (!confirm('Sign out of HBO Max? The saved session will be removed.')) return;
+      try {
+        await fetch(`/api/sources/${sourceId}/hbomax-auth`, {method: 'DELETE'});
+      } catch (e) { /* local sign-out still proceeds */ }
+      loadSourceConfig(sourceId, 'hbomax');
+    }
+
+    async function hbomaxSaveManual(sourceId) {
+      const el = document.getElementById(`hbomax-st-${sourceId}`);
+      const statusEl = document.getElementById(`hbomax-status-${sourceId}`);
+      const st = (el?.value || '').trim();
+      if (!st) return;
+      try {
+        const r = await fetch(`/api/sources/${sourceId}/hbomax-login/manual`, {
+          method: 'POST', headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({st}),
+        });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok) {
+          statusEl.innerHTML = `<span style="color:var(--danger-soft)">${escapeHtml(d.error || 'Could not save the session.')}</span>`;
+          return;
+        }
+        statusEl.innerHTML = '<span style="color:var(--success-soft)">&#10003; Session saved</span>';
+        setTimeout(() => loadSourceConfig(sourceId, 'hbomax'), 700);
+      } catch (e) {
+        statusEl.innerHTML = '<span style="color:var(--danger-soft)">Network error saving the session.</span>';
+      }
+    }
+
     function renderB1gPlusConfig(sourceId, schema, values, cfg) {
       const info = (cfg && cfg.b1g_plus) || {};
       let detail = info.signin_error || '';
@@ -6622,6 +6754,8 @@
         return renderCbsSportsConfig(sourceId, schema, values, cfg);
       } else if (sourceName === 'paramount') {
         return renderParamountConfig(sourceId, schema, values, cfg);
+      } else if (sourceName === 'hbomax') {
+        return renderHBOMaxConfig(sourceId, schema, values, cfg);
       } else if (sourceName === 'b1g_plus') {
         return renderB1gPlusConfig(sourceId, schema, values, cfg);
       } else if (sourceName === 'mlb') {

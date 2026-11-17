@@ -536,6 +536,12 @@ def get_source_config(source_id):
                              'subscription': saved.get('subscription'),
                              'subscription_active': saved.get('subscription_active'),
                              'signin_error': saved.get('signin_error')}
+    if source.name == 'hbomax':
+        jar = saved.get('cookie_jar') or {}
+        extra['hbomax'] = {'signed_in': bool(jar.get('cookies')),
+                           'email': saved.get('email'),
+                           'signed_in_at': saved.get('cookie_jar_captured_at'),
+                           'signin_error': saved.get('signin_error')}
     if source.name == 'nsn':
         extra['nsn'] = _nsn_filter_info(source, saved)
     if source.name == 'mlb':
@@ -2269,6 +2275,77 @@ def clear_b1g_plus_auth(source_id, kind):
     db.session.commit()
     if source.is_enabled:
         trigger_scrape('b1g_plus', force_full=True)
+    return jsonify({'status': 'cleared'})
+
+
+# ── HBO Max sign-in (headless Camoufox web login + st-cookie fallback) ───────
+# The web /login is Arkose-gated but a real Camoufox browser clears it; a sign-in
+# queue job runs the login and stores the cookie jar — see app.scrapers.hbomax_login.
+
+def _hbomax_source_or_400(source_id):
+    source = Source.query.get_or_404(source_id)
+    if source.name != 'hbomax':
+        return None, (jsonify({'error': 'not an hbomax source'}), 400)
+    return source, None
+
+
+@sources_bp.route('/sources/<int:source_id>/hbomax-login/start', methods=['POST'])
+def hbomax_login_start(source_id):
+    import redis as _redis
+    from ..scrapers.hbomax_login import HBOMAX_LOGIN_STATUS_KEY, _login_status
+    from .tasks import get_signin_queue
+
+    source, err = _hbomax_source_or_400(source_id)
+    if err:
+        return err
+    cfg = source.config or {}
+    if not (cfg.get('email') or '').strip() or not cfg.get('password'):
+        return jsonify({'error': 'Add your HBO Max email and password first.'}), 400
+    status = _login_status('signing-in', 'Starting the HBO Max sign-in…')
+    _redis.from_url(current_app.config['REDIS_URL']).setex(
+        HBOMAX_LOGIN_STATUS_KEY, 420, json.dumps(status))
+    get_signin_queue().enqueue('app.scrapers.hbomax_login.run_hbomax_login', source.id, job_timeout=300)
+    return jsonify(status)
+
+
+@sources_bp.route('/sources/<int:source_id>/hbomax-login/state')
+def hbomax_login_state(source_id):
+    import redis as _redis
+    from ..scrapers.hbomax_login import HBOMAX_LOGIN_STATUS_KEY
+
+    _, err = _hbomax_source_or_400(source_id)
+    if err:
+        return err
+    raw = _redis.from_url(current_app.config['REDIS_URL']).get(HBOMAX_LOGIN_STATUS_KEY)
+    return jsonify(json.loads(raw) if raw else {'state': 'idle'})
+
+
+@sources_bp.route('/sources/<int:source_id>/hbomax-login/manual', methods=['POST'])
+def hbomax_login_manual(source_id):
+    """Fallback: accept a user-pasted `st` cookie value (for when Camoufox is
+    blocked)."""
+    from ..scrapers.hbomax_login import save_manual_st
+
+    source, err = _hbomax_source_or_400(source_id)
+    if err:
+        return err
+    data = request.get_json(silent=True) or {}
+    result = save_manual_st(source.id, data.get('st') or '', data.get('device_id'))
+    if not result.get('ok'):
+        return jsonify({'error': result.get('error') or 'Could not save the session.'}), 400
+    return jsonify({'status': 'saved'})
+
+
+@sources_bp.route('/sources/<int:source_id>/hbomax-auth', methods=['DELETE'])
+def clear_hbomax_auth(source_id):
+    source, err = _hbomax_source_or_400(source_id)
+    if err:
+        return err
+    cfg = dict(source.config or {})
+    for key in ('cookie_jar', 'cookie_jar_captured_at', 'signin_error'):
+        cfg.pop(key, None)
+    source.config = cfg
+    db.session.commit()
     return jsonify({'status': 'cleared'})
 
 
