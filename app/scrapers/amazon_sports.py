@@ -463,12 +463,12 @@ class AmazonSportsScraper(AmazonPrimeFreeScraper, BaseScraper):
                 add_entities(entities)
                 note(entities)
                 steps.append(f"@{index}:{len(entities)}{'+' if data.get('hasMoreItems') else '.'}")
-                if not data.get('hasMoreItems'):
-                    break
-                if not entities:
+                if not entities and (data.get('hasMoreItems') or short_page):
                     # A short page that promised more, then nothing: the list is
                     # over, but Amazon left out events it still counted (compared
-                    # with the next good scrape, some were from mid-list).
+                    # with the next good scrape, some were from mid-list). The
+                    # empty page may itself say there's no more (test 2026-11-17
+                    # 03:42, after 3 empty retries); that's the same gap.
                     if short_page:
                         # Asked with the carousel's first token, the same index
                         # answers with the true end of the list, so its length
@@ -496,6 +496,8 @@ class AmazonSportsScraper(AmazonPrimeFreeScraper, BaseScraper):
                     raise ScrapeRetrySoonError(
                         f"Amazon's sports listing stopped partway ({container.get('title') or target!r} "
                         f"after {index} events), so this scrape was skipped.")
+                if not data.get('hasMoreItems'):
+                    break
                 short_page = len(entities) < query['pageSize']
                 next_index = data.get('startIndex')
                 if not isinstance(next_index, int) or next_index <= index:
