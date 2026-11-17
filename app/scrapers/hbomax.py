@@ -174,6 +174,22 @@ class HBOMaxScraper(BaseScraper):
                 retire_at=end + timedelta(seconds=EVENT_END_GRACE_SECONDS),
                 delete_at=end + timedelta(seconds=EVENT_END_GRACE_SECONDS + 24 * 3600),
             ))
+        # Optional VOD smoke-test channel (config `test_vod_edit`): a playable,
+        # always-on asset for exercising the DRM bridge when nothing is live.
+        test_edit = (self.config.get('test_vod_edit') or '').strip()
+        if test_edit:
+            out.append(ChannelData(
+                source_channel_id=f'{_EVENT_PREFIX}{test_edit}',
+                name='HBO Max VOD Test',
+                slug=f'hbomax-test-{test_edit}',
+                stream_url=f'{SCHEME}{test_edit}',
+                stream_type='dash',
+                category='Movies',
+                language='en',
+                country='US',
+                gracenote_mode='off',
+            ))
+            logger.info('[hbomax] + VOD test channel (%s)', test_edit)
         logger.info('[hbomax] %d live event channels', len(out))
         return out
 
