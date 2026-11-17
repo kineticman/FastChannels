@@ -490,36 +490,44 @@ def _selected_channels(filters: dict | None = None, *, gracenote: bool | None = 
 
 def available_feed_start(feed: Feed) -> int:
     """Find an unused number block for a new feed: the first 20000-wide
-    block from 200000 where this feed's channels would not take a number
-    another feed shows."""
+    block from 200000 that no other feed owns.
+
+    Every other feed owns the block its chnum_start begins, whether it is
+    enabled or not, has channels yet or not, or shows the same channels as
+    this one. A disabled feed is enabled later, an empty one fills up, and
+    two feeds sharing a block drift apart as each numbers its new channels
+    in its own scope, so any of those sharing a block ends in an overlap
+    refusal later. Numbers a feed already holds (its rows, feed locks
+    included) are owned too, wherever they sit.
+    """
+    from ..chnum import feed_scope
+    from ..models import ChannelNumber
+
+    block = _CHNUM_NAMESPACE_BLOCK * 2
     filters = feed_to_query_filters(feed.filters or {})
-    channels = (_selected_channel_stubs(filters, gracenote=False)
-                + _selected_channel_stubs(filters, gracenote=True))
-    provider_sources = _provider_number_sources()
-    fixed_ids = {
-        ch.id for ch in channels
-        if ch.number_pinned or (ch.provider_number and ch.source.name in provider_sources)
-    }
-    occupied: dict[str, set[int]] = {}
-    for other in Feed.query.filter(Feed.is_enabled == True, Feed.id != feed.id).all():
-        other_filters = feed_to_query_filters(other.filters or {})
-        for gracenote in (False, True):
-            selected = _selected_channel_stubs(other_filters, gracenote=gracenote)
-            numbers, _ = _resolve_chnum_map(selected, **feed_number_kwargs(other))
-            for channel in selected:
-                number = numbers.get(channel.id)
-                if number is not None:
-                    occupied.setdefault(str(number), set()).add(channel.id)
+    span = max(1, len({ch.id for gracenote in (False, True)
+                       for ch in _selected_channel_stubs(filters, gracenote=gracenote)}))
+
+    owned_blocks: list[tuple[int, int]] = []
+    other_scopes: set[int] = set()
+    for other in Feed.query.filter(Feed.id != feed.id).all():
+        if other.chnum_start:
+            owned_blocks.append((other.chnum_start, other.chnum_start + block))
+        other_scopes.add(feed_scope(other))
+    own_scope = feed_scope(feed) if feed.id is not None else None
+    other_scopes.discard(own_scope)
+    held = sorted(n for (n,) in db.session.query(ChannelNumber.number)
+                  .filter(ChannelNumber.scope_id.in_(other_scopes),
+                          ChannelNumber.number >= _FEED_NAMESPACE_BASE).all()) if other_scopes else []
 
     candidate = _FEED_NAMESPACE_BASE
     while True:
-        numbers, _ = _resolve_chnum_map(channels, feed_chnum_start=candidate)
-        # A pin or provider number cannot be moved by changing the start.
-        # Let the normal overlap validation report those conflicts.
-        if all(channel_id in fixed_ids or not (occupied.get(str(number), set()) - {channel_id})
-               for channel_id, number in numbers.items()):
+        lo, hi = candidate, candidate + max(block, span)
+        clash = (any(start < hi and lo < end for start, end in owned_blocks)
+                 or any(lo <= n < candidate + span for n in held))
+        if not clash:
             return candidate
-        candidate += _CHNUM_NAMESPACE_BLOCK * 2
+        candidate += block
 
 
 def feed_to_query_filters(feed_filters: dict) -> dict:
