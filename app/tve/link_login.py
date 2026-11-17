@@ -1437,11 +1437,19 @@ class _Discovery:
     def _hulu_save(self, link):
         from ..config_store import persist_source_cache_updates, persist_source_config_updates
         from ..scrapers.discovery_tve import API_BASE, _browser_headers
-        from .mvpd.hulu import save_hulu_link
+        from .mvpd.hulu import hulu_link, save_hulu_link
+        previous = hulu_link(self.account)
         if link:
             save_hulu_link(self.account, link)
         # The scraper's own sign-in, which now goes through the Hulu link.
-        session = self.scraper._authenticate()
+        try:
+            session = self.scraper._authenticate()
+        except Exception:
+            # e.g. the code was entered in a Hulu account without Live TV:
+            # don't let it replace a link that worked.
+            if link and previous:
+                save_hulu_link(self.account, previous)
+            raise
         persist_source_cache_updates(self.source.id, self.scraper._pending_cache_updates)
         self.scraper._pending_cache_updates = {}
         if self.scraper._pending_config_updates:
