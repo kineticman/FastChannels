@@ -434,6 +434,23 @@ class AmazonSportsScraper(AmazonPrimeFreeScraper, BaseScraper):
                 if container in main:
                     raise RuntimeError('Amazon sports pagination seed missing')
                 continue
+            def tail_count(query, at):
+                """Ask for index `at` with the carousel's first token, which
+                answers from the true end of the list: how many events lie past
+                `at` (kept, in case any are unseen), or None if it fails."""
+                try:
+                    tail = self.get(self.PAGINATE_URL, headers=headers,
+                                    params={**query, 'startIndex': at,
+                                            'serviceToken': container.get('paginationServiceToken')})
+                    tail_data = tail.json() if tail is not None and tail.status_code == 200 else {}
+                except Exception:  # noqa: BLE001
+                    return None
+                if tail_data.get('hasMoreItems') or not isinstance(tail_data.get('entities'), list):
+                    return None
+                add_entities(tail_data['entities'])
+                note(tail_data['entities'])
+                return len(tail_data['entities'])
+
             short_page = False
             steps = [f'seed:{len(entities)}']
             for _ in range(12):
@@ -474,18 +491,7 @@ class AmazonSportsScraper(AmazonPrimeFreeScraper, BaseScraper):
                         # answers with the true end of the list, so its length
                         # less what we got is how many Amazon left out. Probed
                         # 2026-11-15: they were events ~2h into a stale LIVE.
-                        left_out = None
-                        try:
-                            tail = self.get(self.PAGINATE_URL, headers=headers,
-                                            params={**query, 'serviceToken': container.get('paginationServiceToken')})
-                            tail_data = tail.json() if tail is not None and tail.status_code == 200 else {}
-                            if not tail_data.get('hasMoreItems') and isinstance(tail_data.get('entities'), list):
-                                left_out = len(tail_data['entities'])
-                                # Already listed when probed, but keep any that weren't.
-                                add_entities(tail_data['entities'])
-                                note(tail_data['entities'])
-                        except Exception:  # noqa: BLE001
-                            pass
+                        left_out = tail_count(query, index)
                         logger.info('[amazon-sports] Amazon left %s event(s) out of %s (listed %d); '
                                     'keeping missing channels and scraping again soon',
                                     left_out if left_out is not None else 'some', title, index)
@@ -497,6 +503,19 @@ class AmazonSportsScraper(AmazonPrimeFreeScraper, BaseScraper):
                         f"Amazon's sports listing stopped partway ({container.get('title') or target!r} "
                         f"after {index} events), so this scrape was skipped.")
                 if not data.get('hasMoreItems'):
+                    # A list can also end looking complete with events left out
+                    # (a capped 'Sports for you' of 99 instead of 100, test
+                    # 2026-11-16). Asked at the end with the first token, a
+                    # whole list answers nothing (probed 2026-11-17); events
+                    # there mean Amazon left that many out.
+                    end = index + len(entities)
+                    left_out = tail_count(query, end)
+                    steps.append(f'end@{end}:{left_out if left_out is not None else "?"}')
+                    if left_out:
+                        logger.info('[amazon-sports] Amazon left %d event(s) out of %s (listed %d, looked complete); '
+                                    'keeping missing channels and scraping again soon', left_out, title, end)
+                        self._listing_gap = True
+                        gap_titles.append(title)
                     break
                 short_page = len(entities) < query['pageSize']
                 next_index = data.get('startIndex')
