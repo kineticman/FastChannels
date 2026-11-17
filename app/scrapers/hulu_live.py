@@ -535,11 +535,34 @@ class HuluLiveScraper(BaseScraper):
                     if ch.get('id') and p.get('eab') and key not in seen:
                         seen.add(key)
                         airings.append((ch['id'], p))
-        details = self._details(list(dict.fromkeys(p['eab'] for _, p in airings)))
+        details = self._details(list(dict.fromkeys(p['eab'] for _, p in airings if _real_eab(p))))
         out = [prog for cid, p in airings if (prog := self._program(cid, p, details.get(p['eab']) or {}))]
+        out += self._off_air(airings, now, {c.source_channel_id: c.name for c in channels})
         soon = now + timedelta(hours=_ART_WARM_HOURS)
         self._warm_images('warm_art', [p.poster_url for p in out if p.poster_url and p.start_time < soon], 'program')
         logger.info('[hulu_live] %d EPG entries (%d with details)', len(out), len(details))
+        return out
+
+    @staticmethod
+    def _off_air(airings: list[tuple[str, dict]], window_start: datetime, names: dict[str, str]) -> list[ProgramData]:
+        """Part-time channels (Adult Swim East/West) list the hours they're off
+        the air as an "unscheduled" entry with no program and only an end time
+        (Hulu won't play the channel then). Shown as Off Air from the previous
+        airing's end, or the window start, so the guide isn't just empty. An
+        unscheduled entry with no end is only the edge of Hulu's published
+        schedule, not a known off-air block, and is left out."""
+        out = []
+        last_end: dict[str, datetime] = {}
+        for cid, p in sorted(airings, key=lambda a: (a[0], _parse(a[1].get('airingEnd')) or window_start)):
+            end = _parse(p.get('airingEnd'))
+            if p.get('availabilityState') == 'unscheduled' and end and not p.get('airingStart'):
+                start = last_end.get(cid, window_start)
+                if end > start:
+                    out.append(ProgramData(
+                        source_channel_id=cid, title='Off Air', start_time=start, end_time=end,
+                        description=f"{names.get(cid) or 'This channel'} isn't on the air on Hulu during these hours."))
+            if end:
+                last_end[cid] = max(end, last_end.get(cid, end))
         return out
 
     @staticmethod
@@ -587,10 +610,20 @@ class HuluLiveScraper(BaseScraper):
         programs = next((c.get('programs') or [] for c in rows if c.get('id') == channel_id), [])
         for p in programs:
             start, end = _parse(p.get('airingStart')), _parse(p.get('airingEnd'))
-            if p.get('eab') and start and end and start <= now < end:
+            if _real_eab(p) and start and end and start <= now < end:
                 return p['eab']
-        if programs and programs[0].get('eab'):
-            return programs[0]['eab']
+        first = programs[0] if programs else {}
+        if first.get('availabilityState') == 'unscheduled':
+            # A part-time channel (Adult Swim) between dayparts: Hulu has no
+            # airing to play and refuses the channel (404 "Could not get live airings").
+            back = _parse(first.get('airingEnd'))
+            if back:
+                from ..timezone_utils import current_zoneinfo
+                back = back.astimezone(current_zoneinfo())
+            raise RuntimeError('Hulu + Live TV: this channel is off the air right now'
+                               + (f" (back at {back.strftime('%-I:%M %p %Z')})" if back else ''))
+        if _real_eab(first):
+            return first['eab']
         raise RuntimeError(f'Hulu + Live TV: nothing is airing on {channel_id} right now')
 
     def resolve(self, raw_url: str, hd: bool = False) -> str:
@@ -763,6 +796,12 @@ def art_url(url: str | None, size: str, fmt: str) -> str | None:
         return None
     ops = json.dumps([{'resize': f'{size}|max'}, {'format': fmt}], separators=(',', ':'))
     return f"{url}{'&' if '?' in url else '?'}operations={quote(ops, safe='')}"
+
+
+def _real_eab(airing: dict) -> bool:
+    """Off-air blocks carry a placeholder eab, EAB::null::null::null."""
+    eab = airing.get('eab') or ''
+    return bool(eab) and 'null' not in eab.split('::')[1:2]
 
 
 def _iso(dt: datetime) -> str:
