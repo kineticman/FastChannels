@@ -1355,7 +1355,14 @@ class _Discovery:
     the signed-in token. That token only comes back in the body — the
     session's `st` cookie is still the expired short-lived anonymous one — so
     it has to be set as `st`, after which the scraper's normal path works.
-    Worked through Spectrum, which the browser sign-in struggles with."""
+    Worked through Spectrum, which the browser sign-in struggles with.
+
+    Hulu is different: a Discovery pairing made through Hulu can't be renewed
+    without the user, and Discovery drops it within hours (#97). So for Hulu
+    the code shown is Hulu's own device code (hulu.com/activate), which links
+    a Hulu device to the account (app/tve/mvpd/hulu.py). Discovery is then
+    signed in through that link, and so is every later renewal, unattended.
+    An account that's already linked signs in straight away, no code."""
     error_key = 'discovery'
 
     def __init__(self, account, mso_id: str, requestor_id: str | None):
@@ -1371,7 +1378,21 @@ class _Discovery:
     def targets(self):
         return ['Discovery']
 
+    def _hulu_start(self):
+        from .mvpd import hulu
+        link = hulu.hulu_link(self.account)
+        if link:
+            try:
+                hulu.user_token(self.account, force_refresh=True)  # is the link still good?
+                return '', {'hulu_linked': True}
+            except hulu.HuluNotLinked:
+                logger.info('[link-login] Discovery: saved Hulu link was refused; linking again')
+        serial = hulu.new_link_serial(self.account)
+        return hulu.ACTIVATE_URL, {'hulu_serial': serial, 'code': hulu.register_device_code(serial)}
+
     def start(self, label):
+        if self.mso_id == 'Hulu':
+            return self._hulu_start()
         from ..config_store import persist_source_config_updates
         from ..scrapers.discovery_tve import API_BASE, BRAND_ID, PARTNER_ID, _auth_widget_headers
         session = self.scraper._session()
@@ -1400,6 +1421,12 @@ class _Discovery:
             'session': session, 'headers': {**headers, 'Content-Type': 'application/json'}, 'code': code}
 
     def poll(self, ctx):
+        if ctx.get('hulu_linked'):
+            return {'hulu': None}
+        if ctx.get('hulu_serial'):
+            from .mvpd.hulu import poll_device_code
+            link = poll_device_code(ctx['code'], ctx['hulu_serial'])
+            return {'hulu': link} if link else None
         from ..scrapers.discovery_tve import API_BASE
         r = ctx['session'].post(f'{API_BASE}/authentication/linkDevice/login', json={},
                                 headers=ctx['headers'], timeout=20)
@@ -1407,7 +1434,28 @@ class _Discovery:
             return None  # 204 until the code is entered and the sign-in lands
         return ((r.json().get('data') or {}).get('attributes') or {}).get('token') or None
 
+    def _hulu_save(self, link):
+        from ..config_store import persist_source_cache_updates, persist_source_config_updates
+        from ..scrapers.discovery_tve import API_BASE, _browser_headers
+        from .mvpd.hulu import save_hulu_link
+        if link:
+            save_hulu_link(self.account, link)
+        # The scraper's own sign-in, which now goes through the Hulu link.
+        session = self.scraper._authenticate()
+        persist_source_cache_updates(self.source.id, self.scraper._pending_cache_updates)
+        self.scraper._pending_cache_updates = {}
+        if self.scraper._pending_config_updates:
+            persist_source_config_updates(self.source.id, self.scraper._pending_config_updates)
+            self.scraper._pending_config_updates = {}
+        me = session.get(f'{API_BASE}/users/me', headers=_browser_headers(), timeout=15)
+        attrs = ((me.json().get('data') or {}).get('attributes') or {}) if me.ok else {}
+        if not me.ok or attrs.get('anonymous', True):
+            raise TVEAuthError(f'Discovery didn\'t accept the Hulu sign-in (HTTP {me.status_code}).')
+        return 'authorized'
+
     def save(self, ctx, token):
+        if isinstance(token, dict) and 'hulu' in token:
+            return self._hulu_save(token['hulu'])
         from ..config_store import persist_source_cache_updates
         from ..scrapers.discovery_tve import (API_BASE, SESSION_CACHE_KEY, _browser_headers, _cookie_dict,
                                               _jwt_exp, _restore_cookies)
