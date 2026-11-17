@@ -29,6 +29,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 
 from .base import BaseScraper, ChannelData, ConfigField, ProgramData, EVENT_CHANNEL_TAG, infer_language
+from ..tve.adobe_pass import TVEAuthError
 
 logger = logging.getLogger(__name__)
 
@@ -47,7 +48,12 @@ LICENSE_BASE = 'https://busy.any-any.prd.api.discomax.com/drm-proxy/any/drm-prox
 CLIENT_VERSION = '22.0.1'
 PUBLIC_CLIENT_ID = 'da0cdd94-5a39-42ef-aa68-54cbc1b852c3'
 
+# Live events are discovered from these routes and merged (deduped by editId):
+# `home` is the richest surface (reaches ~2 weeks out) and `sport-schedule` is the
+# dedicated schedule page — each occasionally carries an event the other omits.
+# (`live-sports-schedule` is a dead route; the `sport/<id>` hub id is session-bound.)
 SCHEDULE_ROUTE = '/cms/routes/sport-schedule'
+_EVENT_ROUTES = ('/cms/routes/home', SCHEDULE_ROUTE)
 _ROUTE_PARAMS = {'include': 'default',
                  'decorators': 'viewingHistory,isFavorite,contentAction,badges'}
 
@@ -197,8 +203,28 @@ class HBOMaxScraper(BaseScraper):
         return programs
 
     def _live_events(self) -> list[dict]:
-        """Parse /cms/routes/sport-schedule for LIVE video events."""
-        r = self.session.get(f'{HOME}{SCHEDULE_ROUTE}', headers=self._headers(),
+        """LIVE video events, merged from the discovery routes and deduped by
+        editId (first route wins)."""
+        merged: dict[str, dict] = {}
+        errors = 0
+        for route in _EVENT_ROUTES:
+            try:
+                for ev in self._events_from_route(route):
+                    merged.setdefault(ev['edit_id'], ev)
+            except TVEAuthError:
+                raise
+            except Exception as exc:  # noqa: BLE001
+                errors += 1
+                logger.warning('[hbomax] event route %s failed: %s', route, exc)
+        if errors == len(_EVENT_ROUTES):
+            raise RuntimeError('HBO Max: could not load the live schedule from any route')
+        events = list(merged.values())
+        self._events_cache = events
+        return events
+
+    def _events_from_route(self, route: str) -> list[dict]:
+        """Parse one CMS route (JSON:API) for LIVE video events."""
+        r = self.session.get(f'{HOME}{route}', headers=self._headers(),
                              params=_ROUTE_PARAMS, timeout=30)
         if r.status_code in (401, 403):
             raise self._sign_in_needed()
@@ -257,7 +283,6 @@ class HBOMaxScraper(BaseScraper):
                 'sport': sport,
                 'league': league,
             })
-        self._events_cache = events
         return events
 
     # ── playback ─────────────────────────────────────────────────────────────
