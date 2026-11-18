@@ -40,6 +40,8 @@ _ROW_RE = re.compile(r'<li[^>]*>\s*<time data-ts="(\d+)">.*?<b>([^<]+)</b>'
 class Shift(Network):
     key = 'shift'
     name = 'SHIFT TV'
+    # hls.beatmag.tv answers CORS for ott.shift.tv only; hls.shift.tv sends *.
+    browser_relay_hosts = ('hls.beatmag.tv',)
 
     def channels(self, s):
         return list(_CHANNELS)

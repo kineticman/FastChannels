@@ -51,6 +51,10 @@ class Network:
     # proxy fetches playlists from.
     proxied = False
     proxy_hosts: tuple[str, ...] = ()
+    # CDN hosts whose CORS admits only their own site, playlists and segments
+    # alike. The admin player's preview relays them through
+    # /play/free_networks/<id>/browser.m3u8; other clients play them directly.
+    browser_relay_hosts: tuple[str, ...] = ()
 
     def proxy_allows(self, url: str) -> bool:
         """Whether the proxy may fetch this playlist URL: its host is one of

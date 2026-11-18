@@ -664,6 +664,12 @@ def _get_playback_info(ch, fast_mode=True, browser=False):
         _enc = _quote(ch.source_channel_id, safe='')
         preview_url = f'/play/{ch.source.name}/{_enc}/proxy.m3u8'
 
+    # Free Networks channels on CDNs whose CORS admits only their own site
+    # (Network.browser_relay_hosts): relay the preview's playlists and segments.
+    if ch.source and ch.source.name == 'free_networks' and ch.source_channel_id:
+        from .free_networks_proxy import browser_relay_url
+        preview_url = browser_relay_url(ch) or preview_url
+
     # Custom YouTube channels: googlevideo's HLS CDN sends no
     # Access-Control-Allow-Origin for a third-party page, and the playback URL is
     # locked to the IP that resolved it (our server).  A direct browser fetch
