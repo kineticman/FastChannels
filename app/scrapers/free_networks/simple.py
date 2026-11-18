@@ -10,8 +10,9 @@ from ._common import Network, NetChannel
 
 
 class StaticNetwork(Network):
-    def __init__(self, key, name, channels):
+    def __init__(self, key, name, channels, browser_relay_hosts=()):
         self.key, self.name, self._channels = key, name, channels
+        self.browser_relay_hosts = tuple(browser_relay_hosts)
 
     def channels(self, s):
         return list(self._channels)
@@ -110,7 +111,10 @@ NETWORKS = [
         NetChannel('usa', 'CMC-USA Country Music Channel',
                    'https://hwlive.streamingmediahosting.com/14215-live/0_obd393sh/chunklist.m3u8', logo=_CMC_LOGO,
                    category='Music', gracenote_id='106796'),
-    ]),
+    ],
+        # Amagi's beacon segments redirect to S3/CloudFront .ts files sent with
+        # no CORS header, which the admin player can't load from our page.
+        browser_relay_hosts=('cmc-ono.amagi.tv',)),
     StaticNetwork('globalnews', 'Global News (Canada)', [
         NetChannel(cid, name, _DAI.format(dai), logo=_GLOBAL_LOGO.format(path, logo),
                    category='News' if cid == 'national' else 'Local News', country='CA', gracenote_id=gn)
