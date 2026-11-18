@@ -29,7 +29,7 @@ NETWORKS = [
     hsn.HSN(), qvc.QVC(), tastemade.Tastemade(), aetn.AETN(), ksl.KSL(), cbn.CBN(),
     gameandfish.GameAndFish(), outside.OutsideTV(), cw.CW(), cineverse.Cineverse(), og_network.OGNetwork(),
     *sotal_partners.NETWORKS, beond.BeOND(), mansa.Mansa(), freetv.FreeTV(), nwsl.NWSL(), triller.Triller(), heartland.Heartland(), shout.Shout(),
-    yahoo.Yahoo(), cgtn.CGTN(), shift.Shift(), jtv.JTV(), vsin.VSiN(), redbull.RedBull(), olympics.Olympics(), cowboyplus.CowboyPlus(), redbull.RedBull(), olympics.Olympics(), redbull.RedBull(),
+    yahoo.Yahoo(), cgtn.CGTN(), shift.Shift(), jtv.JTV(), vsin.VSiN(), redbull.RedBull(), olympics.Olympics(), cowboyplus.CowboyPlus(), sportstv.SportsTV(), redbull.RedBull(), olympics.Olympics(), cowboyplus.CowboyPlus(), redbull.RedBull(), olympics.Olympics(), redbull.RedBull(),
     # Once sources of their own; key = old source name (app/folded_sources.py)
     adultswim.AdultSwim(), ballysports.BallySports(), hallmark.Hallmark(),
     *simple.NETWORKS,
