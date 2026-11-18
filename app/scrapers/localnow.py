@@ -93,6 +93,7 @@ class LocalNowScraper(BaseScraper):
     """
 
     source_name = "localnow"
+    added_in = '1.9.0'
     display_name = "Local Now"
     scrape_interval = 60  # API returns exactly 5 programs per channel; worst channels cover ~1h, so scrape hourly for continuous EPG
     stream_audit_enabled = True

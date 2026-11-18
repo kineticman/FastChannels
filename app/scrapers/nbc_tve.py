@@ -523,6 +523,7 @@ class NbcTveScraper(MvpdCooldownMixin, BaseScraper):
     own lemonade/drm-proxy playback stack. See module docstring."""
 
     source_name = 'nbc_tve'
+    added_in = '5.0.0'
     display_name = 'NBCUniversal TVE'
     source_category = 'tve'
     is_premium = True

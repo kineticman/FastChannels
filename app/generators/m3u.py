@@ -490,36 +490,44 @@ def _selected_channels(filters: dict | None = None, *, gracenote: bool | None = 
 
 def available_feed_start(feed: Feed) -> int:
     """Find an unused number block for a new feed: the first 20000-wide
-    block from 200000 where this feed's channels would not take a number
-    another feed shows."""
+    block from 200000 that no other feed owns.
+
+    Every other feed owns the block its chnum_start begins, whether it is
+    enabled or not, has channels yet or not, or shows the same channels as
+    this one. A disabled feed is enabled later, an empty one fills up, and
+    two feeds sharing a block drift apart as each numbers its new channels
+    in its own scope, so any of those sharing a block ends in an overlap
+    refusal later. Numbers a feed already holds (its rows, feed locks
+    included) are owned too, wherever they sit.
+    """
+    from ..chnum import feed_scope
+    from ..models import ChannelNumber
+
+    block = _CHNUM_NAMESPACE_BLOCK * 2
     filters = feed_to_query_filters(feed.filters or {})
-    channels = (_selected_channel_stubs(filters, gracenote=False)
-                + _selected_channel_stubs(filters, gracenote=True))
-    provider_sources = _provider_number_sources()
-    fixed_ids = {
-        ch.id for ch in channels
-        if ch.number_pinned or (ch.provider_number and ch.source.name in provider_sources)
-    }
-    occupied: dict[str, set[int]] = {}
-    for other in Feed.query.filter(Feed.is_enabled == True, Feed.id != feed.id).all():
-        other_filters = feed_to_query_filters(other.filters or {})
-        for gracenote in (False, True):
-            selected = _selected_channel_stubs(other_filters, gracenote=gracenote)
-            numbers, _ = _resolve_chnum_map(selected, **feed_number_kwargs(other))
-            for channel in selected:
-                number = numbers.get(channel.id)
-                if number is not None:
-                    occupied.setdefault(str(number), set()).add(channel.id)
+    span = max(1, len({ch.id for gracenote in (False, True)
+                       for ch in _selected_channel_stubs(filters, gracenote=gracenote)}))
+
+    owned_blocks: list[tuple[int, int]] = []
+    other_scopes: set[int] = set()
+    for other in Feed.query.filter(Feed.id != feed.id).all():
+        if other.chnum_start:
+            owned_blocks.append((other.chnum_start, other.chnum_start + block))
+        other_scopes.add(feed_scope(other))
+    own_scope = feed_scope(feed) if feed.id is not None else None
+    other_scopes.discard(own_scope)
+    held = sorted(n for (n,) in db.session.query(ChannelNumber.number)
+                  .filter(ChannelNumber.scope_id.in_(other_scopes),
+                          ChannelNumber.number >= _FEED_NAMESPACE_BASE).all()) if other_scopes else []
 
     candidate = _FEED_NAMESPACE_BASE
     while True:
-        numbers, _ = _resolve_chnum_map(channels, feed_chnum_start=candidate)
-        # A pin or provider number cannot be moved by changing the start.
-        # Let the normal overlap validation report those conflicts.
-        if all(channel_id in fixed_ids or not (occupied.get(str(number), set()) - {channel_id})
-               for channel_id, number in numbers.items()):
+        lo, hi = candidate, candidate + max(block, span)
+        clash = (any(start < hi and lo < end for start, end in owned_blocks)
+                 or any(lo <= n < candidate + span for n in held))
+        if not clash:
             return candidate
-        candidate += _CHNUM_NAMESPACE_BLOCK * 2
+        candidate += block
 
 
 def feed_to_query_filters(feed_filters: dict) -> dict:
@@ -600,52 +608,92 @@ def _provider_number_sources() -> set[str]:
     return names
 
 
-def _reserved_provider_numbers() -> set[int]:
-    """Integer provider numbers of every active, enabled, unpinned channel in an
-    opted-in source. Allocators treat these as taken. Sub-channels ("305.1")
-    can't collide with an integer tvg-chno, so only whole numbers are reserved."""
+def _reserved_provider_numbers(main: bool = True) -> set[int]:
+    """Integer provider numbers of every active, enabled channel in an opted-in
+    source that prints its provider number in this kind of scope. Allocators
+    treat these as taken. Sub-channels ("305.1") can't collide with an integer
+    tvg-chno, so only whole numbers are reserved. `main`: the main numbers,
+    where a Channels-page lock replaces the provider number; in a feed that
+    lock doesn't apply (chnum rule 1), so the channel shows its provider
+    number there and the number stays reserved."""
     sources = _provider_number_sources()
     if not sources:
         return set()
+    filters = [
+        Source.name.in_(sources),
+        Channel.is_active == True,
+        Channel.is_enabled == True,
+        Channel.provider_number.isnot(None),
+        Channel.pinned_chno.is_(None),
+    ]
+    if main:
+        filters.append(db.or_(Channel.number_pinned == False, Channel.number_pinned == None))
     rows = (
         db.session.query(Channel.provider_number)
         .join(Source)
-        .filter(
-            Source.name.in_(sources),
-            Channel.is_active == True,
-            Channel.is_enabled == True,
-            Channel.provider_number.isnot(None),
-            db.or_(Channel.number_pinned == False, Channel.number_pinned == None),
-            Channel.pinned_chno.is_(None),
-        )
+        .filter(*filters)
         .all()
     )
     return {int(pn) for (pn,) in rows if pn and pn.strip().isdigit()}
 
 
-def apply_provider_numbers(channels, chnum_map: dict, sources: set[str] | None = None) -> dict:
-    """Overlay text channel numbers onto a resolved chnum map (output only):
+def shown_numbers(channels, chnum_map: dict, scope: int | None = None) -> dict:
+    """The tvg-chno a playlist in `scope` prints for these channels, from
+    their app numbers in that scope: the scope's feed locks, then the output
+    overlays (apply_provider_numbers). `scope` is a feed's scope
+    (chnum.feed_scope), MASTER_SCOPE, or None for an unsaved feed.
 
-    * a decimal lock (Channel.pinned_chno, e.g. "700.1") always wins;
+    The one place feed locks meet the overlays: playlists, the feed editor
+    preview, the Channels page and the transfer report all come through
+    here, so what a page shows can't drift from what a playlist prints."""
+    from ..chnum import MASTER_SCOPE, scope_locks
+    fixed = frozenset()
+    if scope is not None and scope != MASTER_SCOPE:
+        fixed = frozenset(scope_locks(scope))
+    return apply_provider_numbers(channels, chnum_map, fixed=fixed,
+                                  main=(scope == MASTER_SCOPE))
+
+
+def apply_provider_numbers(channels, chnum_map: dict, sources: set[str] | None = None,
+                           fixed=frozenset(), main: bool = True) -> dict:
+    """Overlay text channel numbers onto a resolved chnum map (output only).
+    Call shown_numbers() instead when rendering a scope; it supplies `fixed`.
+
+    * a feed lock (`fixed`: channel ids locked in the feed being rendered)
+      keeps its number, and no overlay may take that number;
+    * then a decimal lock (Channel.pinned_chno, e.g. "700.1");
     * then, for opted-in sources, the stored provider_number ("305.1"),
-      unless the channel has a whole-number lock;
+      unless the channel has a whole-number lock and `main` is set (a
+      Channels-page lock is the main numbers' only, chnum rule 1);
     * everything else keeps its app-assigned number.
     """
-    pinned = {ch.id: (getattr(ch, 'pinned_chno', None) or '').strip() for ch in channels}
+    fixed = {cid for cid in fixed if chnum_map.get(cid) is not None}
+    pinned = {ch.id: (getattr(ch, 'pinned_chno', None) or '').strip() for ch in channels
+              if ch.id not in fixed}
     pinned = {cid: pc for cid, pc in pinned.items() if pc}
     if sources is None:
         sources = _provider_number_sources()
     if not sources and not pinned:
         return chnum_map
-    overrides: dict[int, str] = dict(pinned)
-    claimed: dict[str, int] = {pc: cid for cid, pc in pinned.items()}
+    claimed: dict[str, int] = {str(chnum_map[cid]): cid for cid in fixed}
+    overrides: dict[int, str] = {}
+    for cid, pc in pinned.items():
+        # A decimal lock repeating a feed lock's number loses it in that feed
+        # (two decimal locks on one number stay as they are: the Channels page
+        # flags those).
+        if pc in claimed:
+            log.warning('channel number %s claimed by channels %d and %d; keeping %d',
+                        pc, claimed[pc], cid, claimed[pc])
+            continue
+        overrides[cid] = pc
+    claimed.update({pc: cid for cid, pc in overrides.items()})
     for ch in channels:
-        if ch.id in overrides:
+        if ch.id in overrides or ch.id in fixed:
             continue
         src = getattr(ch, 'source', None)
         if src is None or getattr(src, 'name', None) not in sources:
             continue
-        if getattr(ch, 'number_pinned', False) and getattr(ch, 'number', None) is not None:
+        if main and getattr(ch, 'number_pinned', False) and getattr(ch, 'number', None) is not None:
             continue
         pn = (getattr(ch, 'provider_number', None) or '').strip()
         if not pn:
@@ -677,18 +725,22 @@ def chnum_sort_key(value):
 
 
 def build_manual_order_map(channels, order_ids: list[int], start: int,
-                           reserved: set[int] = frozenset()) -> dict[int, int]:
+                           reserved: set[int] = frozenset(),
+                           fixed: dict[int, int] | None = None,
+                           main: bool = False) -> dict[int, int]:
     """
     Number `channels` sequentially from `start` following an explicit
     user-chosen `order_ids` sequence (drag-drop ordering from the feed modal).
 
-    Master-pinned channels always keep their Channel.number; those numbers are
-    reserved so the sequential cursor skips over them.  Channels in the feed but
+    With `main` (numbering the main numbers), Channels-page locks keep their
+    Channel.number and the cursor skips those numbers; a feed ignores them,
+    as app.chnum does (rule 1).  Channels in the feed but
     absent from `order_ids` (e.g. newly matched by the filters since the order
     was captured) are appended after the ordered block in master-number order.
     Ids in `order_ids` that are no longer feed members are ignored.
     `reserved` numbers are skipped too (numbers held for channels out of the
-    feed, see app.chnum).
+    feed, see app.chnum). `fixed` are the feed's locks, {channel_id: number}:
+    those channels keep them.
     """
     by_id = {ch.id: ch for ch in channels}
     ordered = [by_id[cid] for cid in order_ids if cid in by_id]
@@ -700,11 +752,17 @@ def build_manual_order_map(channels, order_ids: list[int], start: int,
 
     result: dict[int, int] = {}
     used: set[int] = set()
+    for cid, n in (fixed or {}).items():
+        if cid in by_id:
+            result[cid] = n
+        used.add(n)
     for ch in ordered:
-        if getattr(ch, 'number_pinned', False) and ch.number is not None:
+        if ch.id in result:
+            continue
+        if main and getattr(ch, 'number_pinned', False) and ch.number is not None and ch.number not in used:
             result[ch.id] = ch.number
             used.add(ch.number)
-    used |= _reserved_provider_numbers() | set(reserved)
+    used |= _reserved_provider_numbers(main=main) | set(reserved)
     cursor = start
     for ch in ordered:
         if ch.id in result:
@@ -735,7 +793,10 @@ def _resolve_chnum_map(channels, *, feed_chnum_start: int = None,
         channels, feed_chnum_start=feed_chnum_start,
         namespace_start=namespace_start, feed_id=feed_id, bridge=bridge,
     )
-    return apply_provider_numbers(channels, chnum_map), warnings
+    from ..chnum import MASTER_SCOPE, feed_scope
+    scope = feed_scope(feed_id) if feed_id is not None else (
+        None if feed_chnum_start is not None else MASTER_SCOPE)
+    return shown_numbers(channels, chnum_map, scope), warnings
 
 
 def feed_number_kwargs(feed: Feed) -> dict:

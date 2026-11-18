@@ -14,7 +14,7 @@ altitudeplus.com is a ViewLift site; the flow is viewlift_tve.py's. Scoped
 from __future__ import annotations
 
 from .base import BaseScraper, ConfigField
-from .viewlift_tve import ViewLiftTVEScraper
+from .viewlift_tve import ViewLiftTVEScraper, sign_in_method_field
 
 API_BASE = 'https://altitude.api.viewlift.com'
 
@@ -23,6 +23,7 @@ class AltitudeTVEScraper(ViewLiftTVEScraper, BaseScraper):
     """Altitude Sports via ViewLift + Adobe Pass v2 (Rocky Mountain providers only)."""
 
     source_name = 'altitude_tve'
+    added_in = '5.9.0'
     display_name = 'Altitude TVE'
     license_url = f'{API_BASE}/v1/license/widevine/acquire'
 
@@ -49,4 +50,5 @@ class AltitudeTVEScraper(ViewLiftTVEScraper, BaseScraper):
         ConfigField('email', 'Altitude account email', placeholder='you@example.com',
                     help_text='The free Altitude account the TV provider sign-in is linked to. '
                               'Any address works: Altitude doesn\'t check it.'),
+        sign_in_method_field('Altitude'),
     ]

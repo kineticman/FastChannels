@@ -37,6 +37,21 @@
     .welcome-panel ul { margin: 0.75rem 0 0; padding-left: 1.25rem; font-size: 0.84rem; line-height: 1.7; color: var(--text-soft); }
     .welcome-panel a { color: var(--warning-soft); font-weight: 600; text-decoration: none; }
     .welcome-panel a:hover { text-decoration: underline; }
+    .whats-new { background: color-mix(in srgb, var(--accent-bg) 45%, var(--surface)); border: 1px solid var(--accent-border); border-radius: 10px; padding: 1rem 1.25rem; margin-bottom: 1.25rem; }
+    .whats-new-head { display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; flex-wrap: wrap; }
+    .whats-new h2 { font-size: 1rem; font-weight: 700; color: var(--accent-soft); }
+    .whats-new .since { color: var(--text-muted); font-size: 0.78rem; font-weight: 400; margin-left: 0.4rem; }
+    .whats-new h3 { font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.03em; color: var(--text-muted); margin: 0.85rem 0 0.35rem; }
+    .whats-new ul { list-style: none; display: flex; flex-direction: column; gap: 0.35rem; }
+    .whats-new li { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; font-size: 0.86rem; color: var(--text-soft); }
+    .whats-new li strong { color: var(--text); }
+    .whats-new .wn-tag { font-size: 0.7rem; padding: 0.1rem 0.45rem; border-radius: 9999px; background: var(--bg); border: 1px solid var(--border); color: var(--text-muted); }
+    .whats-new .wn-on { color: var(--success); border-color: color-mix(in srgb, var(--success) 40%, var(--border)); }
+    .whats-new p { font-size: 0.86rem; color: var(--text-soft); line-height: 1.5; }
+    .whats-new a { color: var(--accent-soft); font-weight: 600; text-decoration: none; }
+    .whats-new a:hover { text-decoration: underline; }
+    .whats-new .btn-link { background: none; border: none; padding: 0; color: var(--accent-soft); font: inherit; font-weight: 600; cursor: pointer; }
+    .whats-new .btn-link:hover { text-decoration: underline; }
     .section-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 1rem; }
     .section-header h2 { font-size: 1rem; font-weight: 600; color: var(--text-subtle); }
     .table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
@@ -214,6 +229,53 @@
     </div>
     {% endif %}
 
+    {% if whats_new %}
+    <div class="whats-new" id="whats-new">
+      <div class="whats-new-head">
+        <h2>Since you last looked<span class="since">{{ whats_new.since|localtime }}</span></h2>
+        <button type="button" class="btn btn-sm" onclick="dismissWhatsNew(this)">Got it</button>
+      </div>
+      {% if whats_new.sources %}
+      <h3>New sources</h3>
+      <ul>
+        {% for s in whats_new.sources %}
+        <li>
+          <strong>{{ s.display_name }}</strong>
+          {% if s.added_in %}<span class="wn-tag">Added in {{ s.added_in }}</span>{% endif %}
+          {% if s.advanced %}<span class="wn-tag">Paid / TV provider</span>{% endif %}
+          {% if s.enabled %}
+            <span class="wn-tag wn-on">On</span>
+          {% elif s.hidden %}
+            <button type="button" class="btn-link" onclick="whatsNewShowFull({{ s.id }}, this)">Hidden in lite mode, show it →</button>
+          {% else %}
+            <a href="/admin/sources?open={{ s.id }}">Set up →</a>
+          {% endif %}
+        </li>
+        {% endfor %}
+      </ul>
+      {% endif %}
+      {% if whats_new.new_channels or whats_new.gone_channels %}
+      <h3>Channel lineup</h3>
+      <ul>
+        {% if whats_new.new_channels %}
+        <li><strong>+{{ whats_new.new_channel_total }}</strong> new on
+          {% for row in whats_new.new_channels[:4] %}{{ row.source }} ({{ row.count }}){{ ', ' if not loop.last }}{% endfor %}{% if whats_new.new_channels|length > 4 %} and {{ whats_new.new_channels|length - 4 }} more{% endif %}
+        </li>
+        {% endif %}
+        {% if whats_new.gone_channels %}
+        <li><strong>−{{ whats_new.gone_channel_total }}</strong> gone from
+          {% for row in whats_new.gone_channels[:4] %}{{ row.source }} ({{ row.count }}){{ ', ' if not loop.last }}{% endfor %}{% if whats_new.gone_channels|length > 4 %} and {{ whats_new.gone_channels|length - 4 }} more{% endif %}
+        </li>
+        {% endif %}
+        {% if whats_new.pending_review %}
+        <li><a href="/admin/channels?review=pending">{{ whats_new.pending_review }} waiting for your review →</a></li>
+        {% endif %}
+        <li><a href="/admin/reports/channel-changes?window=since">See every channel in the Channel Changes report →</a></li>
+      </ul>
+      {% endif %}
+    </div>
+    {% endif %}
+
     <div class="stats">
       <div class="stat-card" title="Channels that are active upstream and enabled for output — these appear in your M3U/EPG feeds. The Channels page shows all records in the database, including inactive and manually disabled channels."><div class="value">{{ total_channels }}</div><div class="label">Output Channels</div><div class="sub-label">active &amp; enabled for M3U/EPG</div></div>
       <div class="stat-card"><div class="value">{{ sources|length }}</div><div class="label">Sources</div></div>
@@ -351,6 +413,30 @@
 
   <script>
     const APP_TIME_ZONE = {{ app_timezone_name|tojson }};
+
+    // "Since you last looked" card: Got it moves the server-side marker, so it
+    // clears on every browser, not just this one.
+    async function dismissWhatsNew(button) {
+      button.disabled = true;
+      try {
+        const r = await fetch('/admin/whats-new/seen', { method: 'POST' });
+        if (!r.ok) throw new Error(r.status);
+        document.getElementById('whats-new')?.remove();
+      } catch (e) {
+        button.disabled = false;
+        alert('Could not save that. Please try again.');
+      }
+    }
+    async function whatsNewShowFull(sourceId, button) {
+      button.disabled = true;
+      try {
+        await setLiteModePreference(false);
+        window.location.href = `/admin/sources?open=${sourceId}`;
+      } catch (e) {
+        button.disabled = false;
+        alert('Could not switch out of lite mode. Please try again.');
+      }
+    }
     const _pollTimers  = {};
     const _scrapeBtn   = {};
     const _scrapeStart = {};  // sourceId → ms timestamp when scrape was triggered

@@ -149,6 +149,7 @@ def _parse_freelivesports_title(raw: str | None) -> tuple[str | None, int | None
 
 class FreeLiveSportsScraper(BaseScraper):
     source_name     = "freelivesports"
+    added_in = '1.9.0'
     display_name    = "FreeLiveSports"
     stream_audit_enabled = True
     epg_quality = 'partial'   # event descriptions present; no poster artwork

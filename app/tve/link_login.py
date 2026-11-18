@@ -33,7 +33,7 @@ from .adobe_pass import TVEAuthError, TVENotAuthorizedError, TVEPendingAuthError
 logger = logging.getLogger(__name__)
 
 STATUS_KEY = 'tve:link-login:status'
-LINK_FAMILIES = ('legacy', 'nbc', 'tcm', 'fox', 'amcn', 'discovery', 'versant', 'univision', 'disney', 'tennis', 'dazn', 'cspan', 'sundance', 'cnn', 'nesn', 'monumental', 'altitude', 'motv', 'snp')
+LINK_FAMILIES = ('legacy', 'nbc', 'tcm', 'fox', 'amcn', 'discovery', 'versant', 'univision', 'disney', 'tennis', 'dazn', 'cspan', 'sundance', 'cnn', 'nesn', 'monumental', 'altitude', 'motv', 'snp', 'newsmax')
 _PER_TARGET_TIMEOUT = 10 * 60
 _POLL_SECONDS = 3.0
 _POLL_MAX_SECONDS = 15.0
@@ -69,9 +69,55 @@ def _provider_not_accepted(adapter, mso_id: str) -> str | None:
             f"It only accepts: {', '.join(names)}.")
 
 
-def job_timeout(family: str) -> int:
+def job_timeout(family: str, mso_id: str | None = None) -> int:
     targets = {'amcn': 4, 'disney': 2, 'dazn': 2}.get(family, 1)
+    if mso_id == 'Hulu':
+        targets += 1  # the Hulu code step (_hulu_link_step) may come first
     return targets * _PER_TARGET_TIMEOUT + 300
+
+
+def _hulu_link_step(account, set_status, quit_if_superseded) -> bool | None:
+    """For a Hulu account: make sure a Hulu device is linked (app/tve/mvpd/
+    hulu.py), showing the user ONE Hulu code if it isn't, so every network
+    after it signs in through the link instead of the user opening its link.
+    True when linked, False to fall back to plain links (Hulu unreachable,
+    code not entered in time), None when the run was superseded."""
+    from .mvpd import hulu
+    if hulu.hulu_link(account):
+        try:
+            hulu.user_token(account, force_refresh=True)  # is the link still good?
+            return True
+        except hulu.HuluNotLinked:
+            logger.info('[link-login] saved Hulu link was refused; linking again')
+        except Exception as exc:  # noqa: BLE001
+            logger.info('[link-login] could not check the Hulu link, using plain links: %s', exc)
+            return False
+    serial = hulu.new_link_serial(account)
+    try:
+        code = hulu.register_device_code(serial)
+    except Exception as exc:  # noqa: BLE001
+        logger.info('[link-login] could not get a Hulu code, using plain links: %s', exc)
+        return False
+    set_status('waiting', 'Link your Hulu account', label='Hulu', url=hulu.ACTIVATE_URL, code=code)
+    logger.info('[link-login] waiting for the Hulu code to be entered')
+    deadline = time.monotonic() + _PER_TARGET_TIMEOUT
+    delay = _POLL_SECONDS
+    while time.monotonic() < deadline:
+        if quit_if_superseded('Hulu'):
+            return None
+        try:
+            link = hulu.poll_device_code(code, serial)
+        except Exception as exc:  # noqa: BLE001
+            logger.info('[link-login] Hulu code check failed, retrying: %s', exc)
+            link = None
+        if link:
+            hulu.save_hulu_link(account, link)
+            logger.info('[link-login] Hulu linked')
+            return True
+        time.sleep(delay)
+        delay = min(delay * 1.3, _POLL_MAX_SECONDS)
+    logger.info('[link-login] Hulu code was not entered in time; using plain links')
+    return False
 
 
 # ── adapters ─────────────────────────────────────────────────────────────────
@@ -735,6 +781,78 @@ class _Tennis:
         return 'authorized'
 
 
+class _Newsmax:
+    """Newsmax — one Adobe v2 sign-in under newsmaxtv.com's `NEWSMAX`
+    requestor. The site hands out a fresh Adobe client per registration and
+    the sign-in is bound to it, so the client's id and secret are saved with
+    the sign-in and reused for playback."""
+    error_key = 'newsmax'
+    adobe_requestor, brand_label = 'NEWSMAX', 'Newsmax'
+
+    def __init__(self, account, mso_id: str, requestor_id: str | None):
+        from ..models import Source
+        from ..scrapers.newsmax_tve import NewsmaxTVEScraper
+        self.account, self.mso_id = account, mso_id
+        self.source = Source.query.filter_by(name='newsmax_tve').first()
+        if not self.source or not self.source.is_enabled:
+            raise TVEAuthError('Enable the Newsmax TVE source before signing in to it.')
+        self.scraper = NewsmaxTVEScraper(config=dict(self.source.config or {}))
+
+    def targets(self):
+        return ['Newsmax']
+
+    def start(self, label):
+        from .adobe_pass import refresh_adobe_client_token
+        from ..scrapers.newsmax_tve import (ADOBE_BASE, DOMAIN_NAME, REDIRECT_URL, REQUESTOR_ID,
+                                            adobe_headers, register_client)
+        saved = (self.account.config or {}).get('newsmax_mvpd_auth') or {}
+        if saved.get('mso_id') == self.mso_id and saved.get('client_id') and saved.get('client_secret'):
+            client = {'client_id': saved['client_id'], 'client_secret': saved['client_secret']}
+        else:
+            client = register_client()
+        token = refresh_adobe_client_token(client['client_id'], client['client_secret'])
+        headers = adobe_headers(token, client['client_id'])
+        r = requests.post(f'{ADOBE_BASE}/api/v2/{REQUESTOR_ID}/sessions', timeout=30, headers=headers,
+                          data={'mvpd': self.mso_id, 'domainName': DOMAIN_NAME, 'redirectUrl': REDIRECT_URL})
+        data = r.json() if r.ok else {}
+        ctx = {'client': client, 'headers': headers,
+               'profile_url': f'{ADOBE_BASE}/api/v2/{REQUESTOR_ID}/profiles/{self.mso_id}'}
+        if data.get('reasonType') == 'authenticated':
+            return None, ctx
+        if not data.get('url'):
+            raise TVEAuthError(f'Newsmax: Adobe did not return a sign-in URL (HTTP {r.status_code}).')
+        return ADOBE_BASE + data['url'], ctx
+
+    def poll(self, ctx):
+        r = requests.get(ctx['profile_url'], headers=ctx['headers'], timeout=20)
+        if not r.ok:
+            return None
+        return ((r.json() or {}).get('profiles') or {}).get(self.mso_id) or None
+
+    def save(self, ctx, profile):
+        from ..config_store import persist_source_cache_updates
+        from ..extensions import db
+        from ..scrapers.newsmax_tve import ADOBE_BASE, REQUESTOR_ID, RESOURCE
+
+        r = requests.post(f'{ADOBE_BASE}/api/v2/{REQUESTOR_ID}/decisions/preauthorize/{self.mso_id}', timeout=20,
+                          json={'resources': [RESOURCE]},
+                          headers={**ctx['headers'], 'Content-Type': 'application/json'})
+        decisions = (r.json() or {}).get('decisions') or [] if r.ok else []
+        cfg = dict(self.account.config or {})
+        cfg['newsmax_mvpd_auth'] = {'mso_id': self.mso_id, 'client_id': ctx['client']['client_id'],
+                                    'client_secret': ctx['client']['client_secret'],
+                                    'captured_at': int(time.time())}
+        self.account.config = cfg
+        db.session.commit()
+        self.scraper._update_cache('newsmax_client', {})
+        self.scraper._update_cache('newsmax_authz', {})
+        persist_source_cache_updates(self.source.id, self.scraper._pending_cache_updates)
+        self.scraper._pending_cache_updates = {}
+        if decisions and not any(d.get('authorized') for d in decisions):
+            raise TVENotAuthorizedError('your package doesn\'t include Newsmax')
+        return 'authorized'
+
+
 class _Cspan:
     """C-SPAN — Adobe's v1 regcode sign-in under the `C-SPAN` requestor (v2
     isn't enabled for it), one sign-in for all three networks. The sign-in is
@@ -1283,7 +1401,14 @@ class _Discovery:
     the signed-in token. That token only comes back in the body — the
     session's `st` cookie is still the expired short-lived anonymous one — so
     it has to be set as `st`, after which the scraper's normal path works.
-    Worked through Spectrum, which the browser sign-in struggles with."""
+    Worked through Spectrum, which the browser sign-in struggles with.
+
+    Hulu is different: a Discovery pairing made through Hulu can't be renewed
+    without the user, and Discovery drops it within hours (#97). So for Hulu
+    the code shown is Hulu's own device code (hulu.com/activate), which links
+    a Hulu device to the account (app/tve/mvpd/hulu.py). Discovery is then
+    signed in through that link, and so is every later renewal, unattended.
+    An account that's already linked signs in straight away, no code."""
     error_key = 'discovery'
 
     def __init__(self, account, mso_id: str, requestor_id: str | None):
@@ -1299,7 +1424,21 @@ class _Discovery:
     def targets(self):
         return ['Discovery']
 
+    def _hulu_start(self):
+        from .mvpd import hulu
+        link = hulu.hulu_link(self.account)
+        if link:
+            try:
+                hulu.user_token(self.account, force_refresh=True)  # is the link still good?
+                return '', {'hulu_linked': True}
+            except hulu.HuluNotLinked:
+                logger.info('[link-login] Discovery: saved Hulu link was refused; linking again')
+        serial = hulu.new_link_serial(self.account)
+        return hulu.ACTIVATE_URL, {'hulu_serial': serial, 'code': hulu.register_device_code(serial)}
+
     def start(self, label):
+        if self.mso_id == 'Hulu':
+            return self._hulu_start()
         from ..config_store import persist_source_config_updates
         from ..scrapers.discovery_tve import API_BASE, BRAND_ID, PARTNER_ID, _auth_widget_headers
         session = self.scraper._session()
@@ -1328,6 +1467,12 @@ class _Discovery:
             'session': session, 'headers': {**headers, 'Content-Type': 'application/json'}, 'code': code}
 
     def poll(self, ctx):
+        if ctx.get('hulu_linked'):
+            return {'hulu': None}
+        if ctx.get('hulu_serial'):
+            from .mvpd.hulu import poll_device_code
+            link = poll_device_code(ctx['code'], ctx['hulu_serial'])
+            return {'hulu': link} if link else None
         from ..scrapers.discovery_tve import API_BASE
         r = ctx['session'].post(f'{API_BASE}/authentication/linkDevice/login', json={},
                                 headers=ctx['headers'], timeout=20)
@@ -1335,7 +1480,36 @@ class _Discovery:
             return None  # 204 until the code is entered and the sign-in lands
         return ((r.json().get('data') or {}).get('attributes') or {}).get('token') or None
 
+    def _hulu_save(self, link):
+        from ..config_store import persist_source_cache_updates, persist_source_config_updates
+        from ..scrapers.discovery_tve import API_BASE, _browser_headers
+        from .mvpd.hulu import hulu_link, save_hulu_link
+        previous = hulu_link(self.account)
+        if link:
+            save_hulu_link(self.account, link)
+        # The scraper's own sign-in, which now goes through the Hulu link.
+        try:
+            session = self.scraper._authenticate()
+        except Exception:
+            # e.g. the code was entered in a Hulu account without Live TV:
+            # don't let it replace a link that worked.
+            if link and previous:
+                save_hulu_link(self.account, previous)
+            raise
+        persist_source_cache_updates(self.source.id, self.scraper._pending_cache_updates)
+        self.scraper._pending_cache_updates = {}
+        if self.scraper._pending_config_updates:
+            persist_source_config_updates(self.source.id, self.scraper._pending_config_updates)
+            self.scraper._pending_config_updates = {}
+        me = session.get(f'{API_BASE}/users/me', headers=_browser_headers(), timeout=15)
+        attrs = ((me.json().get('data') or {}).get('attributes') or {}) if me.ok else {}
+        if not me.ok or attrs.get('anonymous', True):
+            raise TVEAuthError(f'Discovery didn\'t accept the Hulu sign-in (HTTP {me.status_code}).')
+        return 'authorized'
+
     def save(self, ctx, token):
+        if isinstance(token, dict) and 'hulu' in token:
+            return self._hulu_save(token['hulu'])
         from ..config_store import persist_source_cache_updates
         from ..scrapers.discovery_tve import (API_BASE, SESSION_CACHE_KEY, _browser_headers, _cookie_dict,
                                               _jwt_exp, _restore_cookies)
@@ -1363,7 +1537,7 @@ _ADAPTERS = {'legacy': _Legacy, 'nbc': _Nbc, 'tcm': _Tcm, 'fox': _Fox, 'amcn': _
              'disney': _Disney, 'tennis': _Tennis, 'dazn': _Dazn, 'cspan': _Cspan,
              'sundance': _Sundance, 'cnn': _Cnn, 'nesn': _Nesn,
              'monumental': _Monumental, 'altitude': _Altitude, 'motv': _MyOutdoorTV,
-             'snp': _Snp}
+             'snp': _Snp, 'newsmax': _Newsmax}
 
 
 # ── job ──────────────────────────────────────────────────────────────────────
@@ -1437,6 +1611,14 @@ def run_link_login(family: str, requestor_id: str | None, mso_id: str, run_id: s
             set_status('error', not_accepted)
             return
 
+        # Hulu: link a Hulu device once, then every network signs in through it.
+        # Discovery isn't an Adobe link; its adapter uses the same link itself.
+        hulu_ready = False
+        if mso_id == 'Hulu' and account is not None and family != 'discovery':
+            hulu_ready = _hulu_link_step(account, set_status, quit_if_superseded)
+            if hulu_ready is None:
+                return
+
         for i, label in enumerate(targets):
             if quit_if_superseded(label):
                 return
@@ -1462,6 +1644,18 @@ def run_link_login(family: str, requestor_id: str | None, mso_id: str, run_id: s
                     steps[i].update(state='failed', message=str(exc)[:160])
                     continue
             code = ctx.get('code') if isinstance(ctx, dict) else None
+            if hulu_ready and url:
+                from .mvpd.hulu import complete_signin_url
+                try:
+                    if complete_signin_url(url, account):
+                        logger.info('[link-login] %s: signed in through the linked Hulu device', label)
+                        url, code = '', None  # nothing for the user to open
+                except TVENotAuthorizedError as exc:
+                    steps[i].update(state='failed', message=str(exc)[:160])
+                    logger.info('[link-login] %s: Hulu said no: %s', label, exc)
+                    continue
+                except Exception as exc:  # noqa: BLE001
+                    logger.info('[link-login] %s: Hulu sign-in failed, showing the link instead: %s', label, exc)
             set_status('waiting', f'Sign in for {label}', label=label, url=url or '', code=code or '')
             logger.info('[link-login] %s: waiting for the %s sign-in', label, getattr(adapter, 'mso_id', mso_id))
 

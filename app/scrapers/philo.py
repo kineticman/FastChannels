@@ -105,6 +105,7 @@ _DESC_CACHE_MAX = 8000
 class PhiloScraper(BaseScraper):
 
     source_name          = "philo"
+    added_in = '4.9.0'
     display_name         = "Philo"
     scrape_interval      = 60
     is_premium           = True

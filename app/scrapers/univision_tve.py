@@ -94,6 +94,7 @@ class UnivisionTVEScraper(MvpdCooldownMixin, BaseScraper):
     """Univision, UniMás, Galavisión, TUDN (+ free N+ 24/7, Zona TUDN, Canal ViX)."""
 
     source_name = 'univision_tve'
+    added_in = '5.7.0'
     display_name = 'Univision TVE'
     source_category = 'tve'
     is_premium = True

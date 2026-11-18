@@ -90,6 +90,19 @@ def login_to_mvpd(
     Raises TVEAuthError for any MSO with no backend registered here yet,
     or that only a browser can sign in to (see require_scripted_mvpd_login).
     """
+    if mso_id == 'Hulu':
+        # Signs in with a linked Hulu device (hulu.py), never a saved password,
+        # so it goes before the saved-login check.
+        from ..accounts import tve_account_for_network
+        from .hulu import HuluNotLinked, hulu_link, hulu_oauth_login
+        account = tve_account_for_network(key)
+        if account is not None and hulu_link(account):
+            try:
+                return hulu_oauth_login(page_url, account)
+            except HuluNotLinked as exc:
+                from ..signin_notice import mark_signin_needed
+                mark_signin_needed(key, str(exc))
+                raise
     require_saved_login(username, password, key=key)
     require_scripted_mvpd_login(mso_id, key=key)
     expected_host = _EXPECTED_HOST_SUBSTRING.get(mso_id)

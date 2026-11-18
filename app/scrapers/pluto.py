@@ -220,6 +220,7 @@ def _pluto_img(url):
 
 class PlutoScraper(BaseScraper):
     source_name     = "pluto"
+    added_in = '1.9.0'
     display_name    = "Pluto TV"
     stream_audit_enabled = True
     scrape_interval = 360

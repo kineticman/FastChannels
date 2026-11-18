@@ -242,6 +242,7 @@ def _raise_if_spectrum_routed(mso_id: str, mso_login_url: str, response: request
 
 class DiscoveryTVEScraper(MvpdCooldownMixin, BaseScraper):
     source_name = 'discovery_tve'
+    added_in = '5.0.0'
     display_name = 'Discovery TVE'
     source_category = 'tve'
     is_premium = True
@@ -491,13 +492,17 @@ class DiscoveryTVEScraper(MvpdCooldownMixin, BaseScraper):
         })
 
     def _authenticate(self) -> requests.Session:
+        from ..tve.mvpd.hulu import hulu_link
         account = tve_account_for(self.source_name)
-        if not account or not account.is_usable():
-            raise TVEAuthError('TVE credentials are not configured in Settings.')
-        cfg = account.config or {}
+        cfg = (account.config or {}) if account else {}
         mso_id = (cfg.get('yt_dlp_mso_id') or cfg.get('selected_mso_id') or cfg.get('adobe_mso_id') or 'Cox').strip()
         mso_name = (cfg.get('selected_mso_name') or mso_id).strip()
-        if account.is_separate():
+        # A linked Hulu device signs in without a saved password or the user
+        # (app/tve/mvpd/hulu.py), whichever account it's on.
+        hulu_linked = mso_id == 'Hulu' and bool(account and account.is_enabled and hulu_link(account))
+        if not account or not (account.is_usable() or hulu_linked):
+            raise TVEAuthError('TVE credentials are not configured in Settings.')
+        if account.is_separate() and not hulu_linked:
             # A separate login signs in by phone link and has no saved
             # username/password, so only the user can sign it in again.
             raise _browser_signin_required(mso_name, separate=True)

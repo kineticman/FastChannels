@@ -5,7 +5,7 @@ Nightly bulk cache of tvtv.us guide data for all FAST channel stations in
 the bundled station index.  Fetches 2 days of grid data (today + 1) and
 stores it in the tvtv_program_cache table.
 
-Called by the background worker on a cron schedule (default: 03:00 UTC).
+Called by the background worker on a cron schedule (03:00-03:25 local, jittered).
 
 tvtv retired their JSON grid API (/api/v1/lineup/.../grid/...) in a site
 redesign — it 404s unconditionally now, for every lineup — so this fetches
@@ -33,14 +33,35 @@ log = logging.getLogger(__name__)
 
 _BATCH_SIZE  = 20    # station IDs fetched (threaded) per pacing chunk
 _BATCH_DELAY = 1.0   # seconds between pacing chunks within a day
-_FRAGMENT_WORKERS = 8  # concurrent per-station htmx fetches per chunk
+_FRAGMENT_WORKERS = 4  # concurrent per-station htmx fetches per chunk
 _FRAGMENT_DELAY = 0.0  # optional pace between per-station fragment calls
-_DAY_DELAY   = 1.0   # seconds between days
 _DAYS        = 2     # days of guide data to cache (today + 1)
 _PROGRESS_LOG_EVERY = 10  # log a progress line every N batches within a day
+# tvtv refusing us (see refresh_tvtv_cache): after _BLOCK_AFTER failed batches
+# in a row pause _BLOCK_PAUSE seconds; _BLOCK_GRACE more failures after that
+# end the pass. Failed batches get one retry pass _RETRY_COOLDOWN seconds later.
+_BLOCK_AFTER    = 3
+_BLOCK_PAUSE    = 60
+_BLOCK_GRACE    = 2
+_RETRY_COOLDOWN = 300
 
 _TVTV_BASE = "https://tvtv.us"
 _FRAGMENT_THREAD_STATE = threading.local()
+# Why fragment fetches failed this pass ("HTTP 429", "Timeout", ...), for the log.
+_FAILURES: dict[str, int] = {}
+_FAILURES_LOCK = threading.Lock()
+
+
+def _note_failure(exc: Exception) -> None:
+    status = getattr(getattr(exc, "response", None), "status_code", None)
+    key = f"HTTP {status}" if status else type(exc).__name__
+    with _FAILURES_LOCK:
+        _FAILURES[key] = _FAILURES.get(key, 0) + 1
+
+
+def _failure_summary() -> str:
+    with _FAILURES_LOCK:
+        return ", ".join(f"{k}={v}" for k, v in sorted(_FAILURES.items(), key=lambda kv: -kv[1])) or "no detail"
 
 # Lineup label stored on cache rows for stations not present in the bundled
 # station_index.json (display/record-keeping only — the fragment fetch
@@ -116,21 +137,23 @@ def _parse_fragment_airings(html: str, start: datetime, end: datetime) -> list[d
 
         subtitle_el = airing.select_one(".gridSubtitle")
         subtitle = subtitle_el.get_text(" ", strip=True) if subtitle_el else None
-        title_el = airing.find("div", recursive=False)
-        if title_el is not None:
-            title = title_el.get_text(" ", strip=True)
-        else:
-            title_parts: list[str] = []
-            for child in airing.children:
-                if isinstance(child, NavigableString):
-                    text = str(child).strip()
-                    if text:
-                        title_parts.append(text)
-                elif getattr(child, "name", None) != "span":
-                    text = child.get_text(" ", strip=True)
-                    if text:
-                        title_parts.append(text)
-            title = " ".join(title_parts).strip()
+        # The airing is either `Title<span class=gridSubtitle>…</span>` or the
+        # same wrapped in a <div>; take the title from whichever holds it,
+        # skipping the subtitle span so it isn't glued onto the title.
+        title_el = airing.find("div", recursive=False) or airing
+        title_parts: list[str] = []
+        for child in title_el.children:
+            if isinstance(child, NavigableString):
+                text = str(child).strip()
+                if text:
+                    title_parts.append(text)
+            elif getattr(child, "name", None) != "span":
+                text = child.get_text(" ", strip=True)
+                if text:
+                    title_parts.append(text)
+        title = " ".join(title_parts).strip()
+        if subtitle and subtitle == title:
+            subtitle = None
 
         program_id = airing.get("data-id")
         key = (program_id or "", start_ms)
@@ -209,6 +232,7 @@ def _fetch_fragment_station(session, station_id: str, start: datetime, end: date
                 r.raise_for_status()
             except Exception as exc:
                 log.debug("[tvtv-cache] fragment failed %s day=%s: %s", station_id, day_key, exc)
+                _note_failure(exc)
                 return None
 
             for item in _parse_fragment_airings(r.text, start, end):
@@ -285,16 +309,24 @@ def _fetch_batch_via_fragments(session, station_ids: list[str],
 # ---------------------------------------------------------------------------
 
 def _upsert_rows(rows: list[dict]) -> int:
-    """Bulk-insert rows, ignoring duplicates (station_id, start_time)."""
+    """Bulk-upsert rows on (station_id, start_time).
+
+    A re-fetched airing overwrites the cached one, so guide corrections
+    (title, subtitle, runtime) land on the next refresh instead of waiting
+    for the old row to expire.
+    """
+    from sqlalchemy.dialects.sqlite import insert as sqlite_insert
     from .extensions import db
     from .models import TvtvProgramCache
     if not rows:
         return 0
-    # SQLite INSERT OR IGNORE honours the UNIQUE constraint.
-    db.session.execute(
-        TvtvProgramCache.__table__.insert().prefix_with("OR IGNORE"),
-        rows,
+    stmt = sqlite_insert(TvtvProgramCache.__table__)
+    stmt = stmt.on_conflict_do_update(
+        index_elements=["station_id", "start_time"],
+        set_={col: stmt.excluded[col] for col in
+              ("lineup", "program_id", "title", "subtitle", "end_time", "fetched_at")},
     )
+    db.session.execute(stmt, rows)
     return len(rows)
 
 
@@ -359,94 +391,107 @@ def refresh_tvtv_cache(days: int = _DAYS, dry_run: bool = False,
     # Reuse one warmed session for the entire refresh run.
     session = _get_session() if not dry_run else None
 
+    # Every (day, batch) to fetch, in order. tvtv starts refusing an IP after a
+    # burst of requests: on 2026-11-16..18 prod and test (one public IP, both at
+    # 03:00) lost every batch from about a minute in. So a run of failed
+    # batches pauses, then stops the pass, and what failed is tried again
+    # once after a cooldown instead of being hammered through.
+    work = []
     for day_offset in range(days):
         start, end = _grid_window(day_offset, now_utc)
-        batches = [
-            all_station_ids[i: i + _BATCH_SIZE]
-            for i in range(0, len(all_station_ids), _BATCH_SIZE)
-        ]
-
+        batches = [all_station_ids[i: i + _BATCH_SIZE]
+                   for i in range(0, len(all_station_ids), _BATCH_SIZE)]
         log.info("[tvtv-cache] day+%d: %d stations in %d batches",
                  day_offset, len(all_station_ids), len(batches))
+        work.extend((day_offset, start, end, batch) for batch in batches)
 
-        day_errors = 0
-        day_rows   = 0
-        day_error_reasons: dict[str, int] = {}
+    if dry_run:
+        total_batches = len(work)
+        work = []
+    _FAILURES.clear()
 
-        def _log_progress(batch_num: int) -> None:
-            if batch_num % _PROGRESS_LOG_EVERY == 0 or batch_num == len(batches):
-                log.info("[tvtv-cache] day+%d: %d/%d batches (%d rows, %d errors so far)",
-                          day_offset, batch_num, len(batches), day_rows, day_errors)
+    def _store(day_offset: int, results: dict[str, list[dict]]) -> bool:
+        nonlocal total_rows
+        rows = []
+        for sid, airings in results.items():
+            for item in airings:
+                item_start = _parse_start(item)
+                if not item_start:
+                    continue
+                duration = int(item.get("duration") or 0)
+                rows.append({
+                    "station_id": sid,
+                    "lineup":     lineup_by_station[sid],
+                    "program_id": item.get("programId"),
+                    "title":      (item.get("title") or item.get("programTitle") or "Unknown").strip(),
+                    "subtitle":   (item.get("subtitle") or "").strip() or None,
+                    "start_time": item_start,
+                    "end_time":   item_start + timedelta(minutes=duration),
+                    "fetched_at": fetched_at,
+                })
+        try:
+            total_rows += _upsert_rows(rows)
+            db.session.commit()
+            return True
+        except OperationalError as exc:
+            db.session.rollback()
+            if "locked" not in str(exc).lower():
+                raise
+            # A concurrent scrape (separate worker process, separate
+            # connection) can hold SQLite's single writer lock past our
+            # busy_timeout. Skip this batch and keep going rather than
+            # letting it abort the whole run.
+            log.warning("[tvtv-cache] day+%d: batch write hit 'database is locked', skipping batch",
+                        day_offset)
+            return False
 
-        for batch_num, batch in enumerate(batches, start=1):
-            if dry_run:
-                total_batches += 1
-                continue
-
-            results, failure_reason = _fetch_batch_via_fragments(session, batch, start, end)
+    def _run_pass(items: list, label: str) -> tuple[list, int]:
+        """Fetch and store items; returns (items whose fetch failed, batches
+        lost to a locked database)."""
+        nonlocal total_batches
+        failed: list = []
+        locked = 0
+        consecutive = 0
+        for n, item in enumerate(items, start=1):
+            day_offset, start, end, batch = item
+            results, _reason = _fetch_batch_via_fragments(session, batch, start, end)
             if not results:
-                total_errors += 1
-                day_errors   += 1
-                reason = failure_reason or "empty response"
-                day_error_reasons[reason] = day_error_reasons.get(reason, 0) + 1
-                _log_progress(batch_num)
-                time.sleep(_BATCH_DELAY)
+                failed.append(item)
+                consecutive += 1
+                if consecutive == _BLOCK_AFTER:
+                    log.warning("[tvtv-cache] %s: %d batches in a row failed (%s); pausing %ds",
+                                label, consecutive, _failure_summary(), _BLOCK_PAUSE)
+                    time.sleep(_BLOCK_PAUSE)
+                elif consecutive >= _BLOCK_AFTER + _BLOCK_GRACE:
+                    log.warning("[tvtv-cache] %s: tvtv still refusing after the pause; "
+                                "leaving %d batches for later", label, len(items) - n)
+                    failed.extend(items[n:])
+                    break
+                else:
+                    time.sleep(_BATCH_DELAY)
                 continue
-
-            rows = []
-            for sid, airings in results.items():
-                for item in airings:
-                    item_start = _parse_start(item)
-                    if not item_start:
-                        continue
-                    duration = int(item.get("duration") or 0)
-                    item_end = item_start + timedelta(minutes=duration)
-                    rows.append({
-                        "station_id": sid,
-                        "lineup":     lineup_by_station[sid],
-                        "program_id": item.get("programId"),
-                        "title":      (item.get("title") or item.get("programTitle") or "Unknown").strip(),
-                        "subtitle":   (item.get("subtitle") or "").strip() or None,
-                        "start_time": item_start,
-                        "end_time":   item_end,
-                        "fetched_at": fetched_at,
-                    })
-
-            try:
-                inserted = _upsert_rows(rows)
-                total_rows += inserted
-                day_rows   += inserted
-                db.session.commit()
-            except OperationalError as exc:
-                db.session.rollback()
-                if "locked" not in str(exc).lower():
-                    raise
-                # A concurrent scrape (separate worker process, separate
-                # connection) can hold SQLite's single writer lock past
-                # our busy_timeout. Treat it like any other batch failure
-                # — skip this batch and keep going — rather than letting
-                # it abort the whole run and lose every remaining batch.
-                log.warning("[tvtv-cache] day+%d: batch write hit 'database is locked', skipping batch",
-                            day_offset)
-                total_errors += 1
-                day_errors   += 1
-                day_error_reasons["database is locked"] = day_error_reasons.get("database is locked", 0) + 1
-                _log_progress(batch_num)
-                time.sleep(_BATCH_DELAY)
-                continue
-            total_batches += 1
-            _log_progress(batch_num)
+            consecutive = 0
+            if _store(day_offset, results):
+                total_batches += 1
+            else:
+                locked += 1
+            if n % _PROGRESS_LOG_EVERY == 0 or n == len(items):
+                log.info("[tvtv-cache] %s: %d/%d batches (%d rows, %d failed so far)",
+                         label, n, len(items), total_rows, len(failed))
             time.sleep(_BATCH_DELAY)
+        return failed, locked
 
-        if day_errors:
-            reason_summary = ", ".join(
-                f"{reason}={count}"
-                for reason, count in sorted(day_error_reasons.items())
-            ) or "unknown"
-            log.warning("[tvtv-cache] day+%d: %d/%d batches failed (%s)",
-                        day_offset, day_errors, len(batches), reason_summary)
-
-        time.sleep(_DAY_DELAY)
+    failed, locked = _run_pass(work, "pass 1") if work else ([], 0)
+    if failed:
+        log.warning("[tvtv-cache] pass 1: %d/%d batches failed (%s); retrying them in %ds",
+                    len(failed), len(work), _failure_summary(), _RETRY_COOLDOWN)
+        _FAILURES.clear()
+        time.sleep(_RETRY_COOLDOWN)
+        failed, locked2 = _run_pass(failed, "retry")
+        locked += locked2
+        if failed:
+            log.warning("[tvtv-cache] retry: %d batches still failed (%s)", len(failed), _failure_summary())
+    total_errors = len(failed) + locked
 
     if not dry_run:
         deleted = _delete_expired(now_utc)

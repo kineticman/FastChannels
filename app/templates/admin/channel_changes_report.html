@@ -227,20 +227,27 @@
     <div class="toolbar">
       <span class="toolbar-label">Window</span>
       {% for key, days in window_options.items() %}
-      <a class="chip {% if key == selected_window %}active{% endif %}" href="/admin/reports/channel-changes?window={{ key }}">
+      <a class="chip {% if key == selected_window %}active{% endif %}" href="/admin/reports/channel-changes?window={{ key }}&kind={{ selected_kind }}">
         {% if key == '1d' %}Today{% else %}{{ days }} Days{% endif %}
       </a>
+      {% endfor %}
+      {% if has_seen_marker %}
+      <a class="chip {% if selected_window == 'since' %}active{% endif %}" href="/admin/reports/channel-changes?window=since&kind={{ selected_kind }}">Since Last Looked</a>
+      {% endif %}
+      <span class="toolbar-label" style="margin-left:1rem">Channels</span>
+      {% for key, label in [('linear', 'Linear'), ('events', 'Events'), ('all', 'All')] %}
+      <a class="chip {% if key == selected_kind %}active{% endif %}" href="/admin/reports/channel-changes?window={{ selected_window }}&kind={{ key }}" title="{% if key == 'linear' %}Regular 24/7 channels{% elif key == 'events' %}Game and one-off event channels{% else %}Both{% endif %}">{{ label }}</a>
       {% endfor %}
     </div>
 
     <div class="stats">
       <div class="stat">
-        <div class="stat-label">New{% if window_days == 1 %} Today{% else %} in Window{% endif %}</div>
+        <div class="stat-label">New{{ window_stat }}</div>
         <div class="stat-value">{{ new_rows|length }}</div>
         <div class="stat-sub">Channels first inserted since {{ window_start|localtime }}</div>
       </div>
       <div class="stat">
-        <div class="stat-label">Now Inactive{% if window_days == 1 %} Today{% else %} in Window{% endif %}</div>
+        <div class="stat-label">Now Inactive{{ window_stat }}</div>
         <div class="stat-value">{{ inferred_lost_rows|length }}</div>
         <div class="stat-sub">Channels that went inactive since {{ window_start|localtime }}</div>
       </div>
@@ -268,7 +275,7 @@
 
     <div class="grid">
       <section class="card">
-        <h2>New{% if window_days == 1 %} Today{% else %} in Last {{ window_days }} Days{% endif %}</h2>
+        <h2>New{{ window_heading }}</h2>
         <div class="section-subtitle">Channels added to the lineup within the selected window.</div>
         {% if new_daily_counts %}
         <div class="mini-heading">Daily Buckets</div>
@@ -306,7 +313,7 @@
       </section>
 
       <section class="card">
-        <h2>Now Inactive{% if window_days == 1 %} Today{% else %} in Last {{ window_days }} Days{% endif %}</h2>
+        <h2>Now Inactive{{ window_heading }}</h2>
         <div class="section-subtitle">Channels that went inactive within the selected window. Timing is approximate — based on when the change was detected, not when the channel actually disappeared.</div>
         {% if inferred_lost_daily_counts %}
         <div class="mini-heading">Daily Buckets</div>
@@ -374,7 +381,7 @@
       </section>
 
       <section class="card">
-        <h2>Returned{% if window_days == 1 %} Today{% else %} in Last {{ window_days }} Days{% endif %}</h2>
+        <h2>Returned{{ window_heading }}</h2>
         <div class="section-subtitle">Channels that were missing from scrapes and have come back. Timing is approximate.</div>
         <div class="source-list">
           {% for source, count in returned_counts %}
@@ -403,7 +410,7 @@
       </section>
 
       <section class="card">
-        <h2>Content Swapped{% if window_days == 1 %} Today{% else %} in Last {{ window_days }} Days{% endif %}</h2>
+        <h2>Content Swapped{{ window_heading }}</h2>
         <div class="section-subtitle">Enabled channels where the upstream slot rotated to different content under the same channel ID (e.g. a Vizio FEATURED slot). These need a Gracenote review — editing the channel's Gracenote mapping clears it from this list.</div>
         {% if content_swap_daily_counts %}
         <div class="mini-heading">Daily Buckets</div>
@@ -451,6 +458,7 @@
         <thead>
           <tr style="border-bottom:1px solid var(--border)">
             <th style="text-align:left;padding:0.4rem 0.6rem;color:var(--text-soft);font-weight:600">Source</th>
+            <th style="text-align:left;padding:0.4rem 0.6rem;color:var(--text-soft);font-weight:600" title="The FastChannels release that first included this source">Added In</th>
             <th style="text-align:right;padding:0.4rem 0.6rem;color:var(--text-soft);font-weight:600">Active</th>
             <th style="text-align:right;padding:0.4rem 0.6rem;color:var(--text-soft);font-weight:600">At Risk</th>
             <th style="text-align:left;padding:0.4rem 0.6rem;color:var(--text-soft);font-weight:600">Interval</th>
@@ -462,6 +470,7 @@
           {% for src in source_health %}
           <tr style="border-bottom:1px solid var(--surface)">
             <td style="padding:0.4rem 0.6rem;color:var(--text);font-weight:500">{{ src.display_name }}</td>
+            <td style="padding:0.4rem 0.6rem;color:var(--text-muted)"{% if src.arrived_at %} title="Arrived on this server {{ src.arrived_at|localtime }}"{% endif %}>{% if src.added_in %}{{ src.added_in }}{% elif src.added_in is none %}Unreleased{% else %}—{% endif %}</td>
             <td style="padding:0.4rem 0.6rem;text-align:right;color:var(--text-strong)">{{ src.active }}</td>
             <td style="padding:0.4rem 0.6rem;text-align:right;color:{% if src.at_risk > 0 %}var(--warning){% else %}var(--text-dim){% endif %}">
               {% if src.at_risk > 0 %}{{ src.at_risk }}{% else %}—{% endif %}

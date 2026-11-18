@@ -24,7 +24,7 @@ from __future__ import annotations
 import threading
 import time
 import uuid
-from urllib.parse import urljoin
+from urllib.parse import parse_qs, urljoin, urlparse
 
 from ._common import EmptyPlaylistError, Network, NetChannel, logger, parse_iso, program
 
@@ -67,21 +67,32 @@ def catalog(s) -> list[dict]:
 # client following a 302 doesn't send. Those streams go through the Free
 # Networks playlist proxy with the tenant's headers; everything else still
 # gets a plain redirect (Network.proxies).
+_ORIGIN_HOST = 'origin002-ams01.sotalcloud.com'
 _MEDIATAILOR_HOSTS = ('mediatailor.us-west-2.amazonaws.com', 'mediatailor.us-east-1.amazonaws.com',
                       'mediatailor.us-east-2.amazonaws.com')
 
 
 class SotalProxy:
-    """Mixin for Sotal tenants: proxy MediaTailor streams with the tenant's headers."""
+    """Mixin for Sotal tenants: proxy MediaTailor streams with the tenant's
+    headers, and streams from Sotal's own origin (see _ORIGIN), whose
+    playlists answer 401 to a non-browser User-Agent (Lavf, python-requests);
+    the proxy sends a browser one. The origin's segments need neither."""
     tenant: tuple[str, str]
     proxied = True
-    proxy_hosts = _MEDIATAILOR_HOSTS
+    proxy_hosts = _MEDIATAILOR_HOSTS + (_ORIGIN_HOST,)
 
     def proxies(self, url: str) -> bool:
         return self.proxy_allows(url)
 
     def proxy_headers(self) -> dict:
         return headers(self.tenant)
+
+    def child_url(self, parent_url: str, uri: str) -> str:
+        # The origin lists segments as bare paths and answers 401 when the
+        # playlist's ticket query is copied onto them.
+        if urlparse(parent_url).hostname == _ORIGIN_HOST:
+            return urljoin(parent_url, uri)
+        return super().child_url(parent_url, uri)
 
 
 class OGNetwork(SotalProxy, Network):
@@ -194,7 +205,25 @@ def _playback_url(s, tenant, asset_id: str, token: str) -> str:
     live = next((res for res in resources if res.get('type') == 'hls-live'), None)
     if not live:
         raise RuntimeError(f'Sotal {tenant[0]} channel {asset_id} has no live stream')
-    r = s.session.post(f'{_SDP}/assets/{asset_id}/resources/{live["id"]}/playback-sessions',
+    url = _new_session(s, tenant, asset_id, live['id'], token)
+    problem = _stream_problem(s, tenant, url)
+    if problem:
+        if _stitched(url):
+            # The ticket noisypeak just used is refused by the origin, so the
+            # origin gets a ticket of its own.
+            ticket = parse_qs(urlparse(_new_session(s, tenant, asset_id, live['id'], token)).query) \
+                .get('session_ticket', [None])[0]
+            origin = _ORIGIN.format(live['id'], ticket) if ticket else None
+            if origin and not _stream_problem(s, tenant, origin):
+                logger.info('[free_networks] Sotal %s channel %s: ad stitcher %s, playing from origin',
+                            tenant[0], asset_id, problem)
+                return origin
+        raise EmptyPlaylistError(f'Sotal {tenant[0]} channel {asset_id} {problem}')
+    return url
+
+
+def _new_session(s, tenant, asset_id: str, resource_id, token: str) -> str:
+    r = s.session.post(f'{_SDP}/assets/{asset_id}/resources/{resource_id}/playback-sessions',
                        json={}, headers=headers(tenant, token), timeout=20)
     if r.status_code == 401:
         raise PermissionError(f'Sotal {tenant[0]} token rejected')
@@ -202,10 +231,21 @@ def _playback_url(s, tenant, asset_id: str, token: str) -> str:
     url = ((r.json() or {}).get('data') or {}).get('playback_url')
     if not url:
         raise RuntimeError(f'Sotal {tenant[0]} gave no playback URL for channel {asset_id}')
-    problem = _stream_problem(s, tenant, url)
-    if problem:
-        raise EmptyPlaylistError(f'Sotal {tenant[0]} channel {asset_id} {problem}')
     return url
+
+
+# Sotal's content server, which noisypeak's ad stitcher fronts ('/d/ams-av/...').
+# Checked 2026-11-18: the stitcher served segment-less variants for Flou's
+# Miami TV, Jenny Live and RCN channels (still empty after 24 s of polling)
+# while the origin served live segments for all 12. A session ticket works at
+# the origin until noisypeak has used it, then the origin answers 401. Only
+# used when the stitched URL fails. Played through the proxy (SotalProxy).
+_ORIGIN = f'https://{_ORIGIN_HOST}/contentserver/v2/distributions/{{}}/content/m.m3u8?session_ticket={{}}'
+
+
+def _stitched(url: str) -> bool:
+    parts = urlparse(url)
+    return 'noisypeak.com' in parts.netloc and '/ams-av/' in parts.path
 
 
 def _description(text: str | None) -> str | None:

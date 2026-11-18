@@ -23,7 +23,7 @@ from werkzeug.exceptions import HTTPException
 
 from flask import Blueprint, redirect, abort, request, Response, render_template, g, stream_with_context, current_app, jsonify
 from app.config_store import persist_source_config_updates, persist_source_cache_updates, load_source_cache
-from ..hls import inspect_hls_drm, parse_stream_info
+from ..hls import inspect_hls_drm, parse_stream_info, rewrite_playlist
 from ..models import Channel, Source
 from ..url import public_base_url
 from ..scrapers import registry
@@ -854,39 +854,54 @@ def pluto_variant_proxy():
     )
 
 
-@play_bp.route('/play/tubi/<channel_id>/proxy.m3u8')
-def tubi_manifest_proxy(channel_id: str):
+@play_bp.route('/play/<source_name>/<channel_id>/proxy.m3u8')
+def browser_master_proxy(source_name: str, channel_id: str):
     """
-    Tubi master manifest proxy.
+    Same-origin master playlist for sources with browser_master_proxy (Tubi, MLB).
 
-    Shaka follows the 302 redirect from our play route to Tubi's CDN with
-    Origin: null (cross-origin redirect). Even though Tubi returns ACAO: *,
-    some Shaka/Chrome combinations reject null-origin + wildcard ACAO.  Fetching
-    the master server-side and returning it as a same-origin response eliminates
-    the redirect entirely.  Variant playlists and segments are left direct —
-    both use ACAO: * or echo-origin CORS which works fine for Shaka's real origin.
+    Shaka follows the 302 from our play route to the CDN with Origin: null (a
+    cross-origin redirect). Some CDNs send no CORS header for that origin, or
+    Chrome rejects null-origin + wildcard ACAO. Fetching the master server-side
+    and returning it from our origin removes the redirect. Every URL in it is
+    made absolute, so variants and segments load straight from the CDN with the
+    page's real Origin — except on the source's browser_relay_hosts (CDNs that
+    refuse that Origin too), whose URLs go through browser_relay below.
+
+    Sources with their own /play/<source>/<id>/proxy.m3u8 route match that
+    route first (a static segment outranks <source_name>).
     """
     from urllib.parse import unquote as _unquote
 
+    scraper_cls = registry.get(source_name)
+    if not scraper_cls or not getattr(scraper_cls, 'browser_master_proxy', False):
+        abort(404)
     raw_id = _unquote(channel_id)
     channel = (
         Channel.query
         .join(Source)
-        .filter(Source.name == 'tubi', Channel.source_channel_id == raw_id)
+        .filter(Source.name == source_name, Channel.source_channel_id == raw_id)
         .first()
     )
     if not channel:
         abort(404)
 
-    scraper_cls = registry.get('tubi')
-    if not scraper_cls:
-        return _unavailable_response()
     scraper = scraper_cls(config=channel.source.config or {})
     try:
         master_url = scraper.resolve(channel.stream_url)
     except Exception as e:
-        logger.warning('[tubi-proxy] resolve failed for %s: %s', raw_id[:40], e)
-        return _unavailable_response()
+        logger.warning('[browser-proxy] %s resolve failed for %s: %s', source_name, raw_id[:40], e)
+        return _unavailable_response(str(e))
+    finally:
+        if scraper._pending_config_updates:
+            try:
+                persist_source_config_updates(channel.source_id, scraper._pending_config_updates, wait=False)
+            except Exception:
+                pass
+        if getattr(scraper, '_pending_cache_updates', None):
+            try:
+                persist_source_cache_updates(channel.source_id, scraper._pending_cache_updates, wait=False)
+            except Exception:
+                pass
 
     if not master_url or not master_url.startswith('http'):
         return _unavailable_response()
@@ -895,26 +910,70 @@ def tubi_manifest_proxy(channel_id: str):
         r = _requests.get(master_url, timeout=10)
         r.raise_for_status()
     except Exception as e:
-        logger.warning('[tubi-proxy] master fetch failed for %s: %s', raw_id[:40], e)
+        # Requests exceptions can carry the signed URL; log only its type.
+        logger.warning('[browser-proxy] %s master fetch failed for %s: %s', source_name, raw_id[:40],
+                       type(e).__name__)
         return _unavailable_response()
 
-    effective_url = r.url
+    return _browser_playlist_response(rewrite_playlist(r.text, r.url, _browser_relay_mapper(source_name, channel_id,
+                                                                                           scraper_cls)))
 
-    lines = []
-    for line in r.text.splitlines():
-        stripped = line.strip()
-        if stripped and not stripped.startswith('#'):
-            line = stripped if stripped.startswith('http') else urljoin(effective_url, stripped)
-        lines.append(line)
 
-    return Response(
-        '\n'.join(lines),
-        mimetype='application/vnd.apple.mpegurl',
-        headers={
-            'Cache-Control': 'no-cache',
-            'Access-Control-Allow-Origin': '*',
-        },
-    )
+def _browser_playlist_response(body: str) -> Response:
+    return Response(body, mimetype='application/vnd.apple.mpegurl',
+                    headers={'Cache-Control': 'no-cache', 'Access-Control-Allow-Origin': '*'})
+
+
+def _browser_relay_mapper(source_name: str, channel_id: str, scraper_cls):
+    """map_url for rewrite_playlist: URLs on the source's relay hosts go through
+    /play/<source>/<id>/relay; the rest load straight from the CDN."""
+    hosts = getattr(scraper_cls, 'browser_relay_hosts', frozenset())
+    if not hosts:
+        return None
+    base = f'/play/{_url_quote(source_name, safe="")}/{_url_quote(channel_id, safe="")}/relay?url='
+
+    def mapper(url: str, kind: str) -> str:
+        return base + _url_quote(url, safe='') if urlsplit(url).hostname in hosts else url
+    return mapper
+
+
+@play_bp.route('/play/<source_name>/<channel_id>/relay')
+def browser_relay(source_name: str, channel_id: str):
+    """A playlist or segment on one of the source's browser_relay_hosts, fetched
+    server-side for the admin player (those CDNs reject the page's Origin)."""
+    scraper_cls = registry.get(source_name)
+    url = request.args.get('url', '')
+    parts = urlsplit(url)
+    if (not scraper_cls or not getattr(scraper_cls, 'browser_master_proxy', False) or parts.scheme != 'https'
+            or parts.hostname not in getattr(scraper_cls, 'browser_relay_hosts', frozenset())):
+        abort(403)
+    try:
+        r = _requests.get(url, timeout=(5, 20), stream=True)
+    except Exception as e:
+        logger.warning('[browser-relay] %s fetch failed (%s): %s', source_name, parts.hostname, type(e).__name__)
+        abort(502)
+    if r.status_code != 200:
+        r.close()
+        logger.warning('[browser-relay] %s %s answered HTTP %s', source_name, parts.hostname, r.status_code)
+        abort(502)
+    if parts.path.endswith('.m3u8') or 'mpegurl' in (r.headers.get('Content-Type') or '').lower():
+        text = r.text
+        return _browser_playlist_response(
+            rewrite_playlist(text, r.url, _browser_relay_mapper(source_name, channel_id, scraper_cls)))
+
+    def generate():
+        try:
+            for chunk in r.iter_content(64 * 1024):
+                if chunk:
+                    yield chunk
+        finally:
+            r.close()
+
+    headers = {'Cache-Control': 'no-cache', 'Access-Control-Allow-Origin': '*'}
+    if r.headers.get('Content-Length'):
+        headers['Content-Length'] = r.headers['Content-Length']
+    return Response(generate(), content_type=r.headers.get('Content-Type') or 'video/mp2t', headers=headers,
+                    direct_passthrough=True)
 
 
 @play_bp.route('/play/fubo/<channel_id>/proxy.m3u8')
@@ -1605,6 +1664,19 @@ def stirr_segment_proxy():
 
 
 
+def _mpd_head_has_base(mpd: str) -> bool:
+    """True when the MPD declares a <BaseURL> before its first Period.
+
+    Proxies that serve a manifest from our origin add a top-level BaseURL when
+    it lacks one, so relative segment paths resolve against the CDN, not us.
+    Only the header counts: server-inserted ad periods carry their own BaseURL,
+    and checking the whole document switched the fix off for every content
+    period from the first ad break on (CNN TVE in FC Player, 2026-11-13). A
+    period's absolute BaseURL overrides the top-level one, so adding it is safe.
+    """
+    return bool(re.search(r'<BaseURL\b', mpd.partition('<Period')[0]))
+
+
 @play_bp.route('/play/amazon_prime_free/<channel_id>/dash.mpd')
 @play_bp.route('/play/amazon_sports/<channel_id>/dash.mpd')
 def amazon_dash_proxy(channel_id: str):
@@ -1701,7 +1773,7 @@ def amazon_dash_proxy(channel_id: str):
     # player resolves those paths against our proxy URL and requests segments from
     # us (→ 404).  Inject a global <BaseURL> pointing to the CDN directory so
     # segment requests go directly to the CDN.
-    if not re.search(r'<BaseURL\b', mpd):
+    if not _mpd_head_has_base(mpd):
         cdn_base = _urljoin(dash_url, '.')  # CDN directory containing the .mpd
         mpd = mpd.replace('<Period ', f'<BaseURL>{cdn_base}</BaseURL>\n  <Period ', 1)
 
@@ -1850,6 +1922,27 @@ def sportsnet_pittsburgh_tve_dash(channel_id: str):
     return play('sportsnet_pittsburgh_tve', _unquote(channel_id))
 
 
+@play_bp.route('/play/paramount/<channel_id>/dash.mpd')
+def paramount_dash(channel_id: str):
+    """Paramount+ Channels under a .mpd name for FastChannels Player, like
+    versant_tve_dash: on the .m3u8 URL the Player parsed the DASH manifest as
+    HLS (ERROR_CODE_PARSING_MANIFEST_MALFORMED, Fire TV 2026-11-14). The
+    ordinary resolve + 302."""
+    from urllib.parse import unquote as _unquote
+    return play('paramount', _unquote(channel_id))
+
+
+@play_bp.route('/play/hbomax/<channel_id>/dash.mpd')
+def hbomax_dash(channel_id: str):
+    """HBO Max live events under a .mpd name for FastChannels Player, like
+    versant_tve_dash/paramount_dash: on the .m3u8 URL the Player parsed the
+    Bolt DASH manifest as HLS (ERROR_CODE_PARSING_MANIFEST_MALFORMED, Fire TV
+    2026-11-17). The manifest's BaseURLs are absolute and CORS is open, so this
+    is the ordinary resolve + 302."""
+    from urllib.parse import unquote as _unquote
+    return play('hbomax', _unquote(channel_id))
+
+
 @play_bp.route('/play/vix/<channel_id>/dash.mpd')
 def vix_dash(channel_id: str):
     """ViX under a .mpd name for FastChannels Player, like versant_tve_dash.
@@ -1857,6 +1950,51 @@ def vix_dash(channel_id: str):
     resolve + 302."""
     from urllib.parse import unquote as _unquote
     return play('vix', _unquote(channel_id))
+
+
+@play_bp.route('/play/hulu_live/<channel_id>/dash.mpd')
+def hulu_live_dash(channel_id: str):
+    """Hulu + Live TV's manifest, served (not redirected) for FastChannels
+    Player, PrismCast and the admin/watch players alike. Hulu's own MPD
+    refreshes are a proprietary patch format no standard player applies, so
+    HuluLiveScraper.live_manifest() hands out a full MPD on every poll, with
+    the <Location> removed so players keep polling here. This also covers
+    CORS: Hulu's manifest host allows only www.hulu.com, its segment hosts '*'
+    (the MPD's BaseURLs are absolute). ?hd=1 is the 1080p L1 manifest, which
+    only FastChannels Player gets (prepare_player_extras)."""
+    from urllib.parse import unquote as _unquote
+
+    raw_id = _unquote(channel_id)
+    channel = (Channel.query.join(Source)
+               .filter(Source.name == 'hulu_live', Channel.source_channel_id == raw_id).first())
+    if not channel:
+        abort(404)
+    if _channel_is_retired(channel):
+        return _gone_response()
+    scraper_cls = registry.get('hulu_live')
+    if not scraper_cls:
+        return _unavailable_response()
+    scraper = scraper_cls(config=channel.source.config or {})
+    try:
+        mpd = scraper.live_manifest(channel.stream_url, hd=request.args.get('hd') == '1')
+    except Exception as e:
+        logger.warning('[hulu_live-dash] manifest failed for %s (%s): %s', channel.name, raw_id[:40], e)
+        return _unavailable_response()
+    finally:
+        # The per-tune license URL (dash_cache) must be saved before the
+        # player's license request, a separate request, reads it back.
+        if getattr(scraper, '_pending_cache_updates', None):
+            try:
+                persist_source_cache_updates(channel.source_id, scraper._pending_cache_updates, wait=False)
+            except Exception:
+                pass
+        if scraper._pending_config_updates:
+            try:
+                persist_source_config_updates(channel.source_id, scraper._pending_config_updates, wait=False)
+            except Exception:
+                pass
+    return Response(mpd, mimetype='application/dash+xml',
+                    headers={'Cache-Control': 'no-cache', 'Access-Control-Allow-Origin': '*'})
 
 
 # Lura's segment hosts (live-N.vix.com) send CORS to https://vix.com only, so a
@@ -1974,7 +2112,21 @@ def cnn_tve_dash(channel_id: str):
     return play('cnn_tve', _unquote(channel_id))
 
 
-def cnn_manifest_response(manifest_url: str):
+def _renew_cnn_stream(scraper, channel) -> str:
+    """A new CNN stream session after the CDN refused the cached URL."""
+    scraper.forget_stream(channel.stream_url)
+    url = scraper.resolve(channel.stream_url)
+    if getattr(scraper, '_pending_cache_updates', None):
+        try:
+            persist_source_cache_updates(channel.source_id, scraper._pending_cache_updates, wait=False)
+        except Exception as e:
+            from ..extensions import db
+            db.session.rollback()
+            logger.warning('[cnn-tve] failed to persist the new stream session: %s', e)
+    return url
+
+
+def cnn_manifest_response(manifest_url: str, renew=None):
     """CNN's manifest served from our URL with absolute segment URLs.
 
     Bolt's manifest has no BaseURL; its SegmentTemplate paths are relative to
@@ -1985,18 +2137,29 @@ def cnn_manifest_response(manifest_url: str):
     media/initialization templates are made absolute. Not an injected
     <BaseURL>: the token path has '&'s, and ffmpeg re-parses BaseURL text as
     XML and drops it. Refreshes come back here and reuse the tune's URL
-    (resolve()).
+    (resolve()) for as long as the CDN serves it; when it refuses it (4xx),
+    renew() starts one new session and that manifest is served instead.
     """
     from urllib.parse import urljoin as _urljoin
     from xml.sax.saxutils import escape as _xml_escape, unescape as _xml_unescape
     try:
         r = _requests.get(manifest_url, timeout=10)
+        if renew is not None and 400 <= r.status_code < 500:
+            logger.info('[cnn-tve] CDN refused the stream session (HTTP %s), starting a new one', r.status_code)
+            r = _requests.get(renew(), timeout=10)
         r.raise_for_status()
     except Exception as e:
         logger.warning('[cnn-tve] manifest fetch failed: %s', e)
         return _unavailable_response()
     manifest_text = r.text
-    if not re.search(r'<BaseURL\b', manifest_text):
+    head, _, _ = manifest_text.partition('<Period')
+    # Server-inserted ad periods carry their own <BaseURL> (another CDN), and
+    # their relative paths resolve against it, so they're left alone. Only
+    # periods without one are made absolute. Skipping the whole manifest when
+    # any BaseURL appeared broke every content period from the first ad break
+    # on, for the hour the ads stayed in the window: segment 404s from us and
+    # FC Player giving up (2026-11-13).
+    if not re.search(r'<BaseURL\b', head):
         upstream = str(r.url)
 
         def _abs(m):
@@ -2005,7 +2168,12 @@ def cnn_manifest_response(manifest_url: str):
                 return m.group(0)
             return f'{m.group(1)}="{_xml_escape(_urljoin(upstream, path), {chr(34): "&quot;"})}"'
 
-        manifest_text = re.sub(r'\b(media|initialization)="([^"]*)"', _abs, manifest_text)
+        def _period(m):
+            if re.search(r'<BaseURL\b', m.group(0)):
+                return m.group(0)
+            return re.sub(r'\b(media|initialization)="([^"]*)"', _abs, m.group(0))
+
+        manifest_text = re.sub(r'<Period\b.*?</Period>', _period, manifest_text, flags=re.S)
     return Response(
         manifest_text,
         mimetype='application/dash+xml',
@@ -2120,12 +2288,14 @@ def dazn_tve_dash(channel_id: str):
     # whose manifest has absolute BaseURLs on segment hosts that aren't
     # user-agent bound and send CORS, so it's served untouched. Only DAZN's
     # own CDN needs the relay.
-    if not re.search(r'<BaseURL[^>]*>\s*https?://', mpd):
+    # Only the MPD header decides: an ad period's own absolute BaseURL must not
+    # switch the relay off for the content periods (see _mpd_head_has_base).
+    if not re.search(r'<BaseURL[^>]*>\s*https?://', mpd.partition('<Period')[0]):
         if urlsplit(r.url).netloc != urlsplit(stream['manifest']).netloc:
             base = r.url.split('?', 1)[0].rsplit('/', 1)[0] + '/'
         else:
             base = request.host_url.rstrip('/') + f'/play/dazn_tve/{_quote(raw_id, safe="")}/seg/'
-        mpd = re.sub(r'<BaseURL>[^<]*</BaseURL>\s*', '', mpd)
+        mpd = re.sub(r'<BaseURL>(?!\s*https?://)[^<]*</BaseURL>\s*', '', mpd)
         mpd = mpd.replace('<Period', f'<BaseURL>{base}</BaseURL>\n  <Period', 1)
     return Response(mpd, mimetype='application/dash+xml',
                     headers={'Cache-Control': 'no-cache', 'Access-Control-Allow-Origin': '*'})
@@ -2692,7 +2862,7 @@ def pbs_dash_proxy(channel_id: str):
     # URL after redirects) so relative paths resolve correctly. Other profiles
     # (e.g. kids-main via MediaTailor) already ship an absolute BaseURL — leave
     # those alone.
-    if '<BaseURL>' not in manifest_text:
+    if not _mpd_head_has_base(manifest_text):
         upstream_dir = _urljoin(str(r.url), '.')
         manifest_text = re.sub(
             r'(<MPD\b[^>]*>)',
@@ -2801,7 +2971,7 @@ def nbc_tve_dash_proxy(channel_id: str):
         _drop_audio, manifest_text, flags=re.DOTALL,
     )
 
-    if '<BaseURL>' not in manifest_text:
+    if not _mpd_head_has_base(manifest_text):
         upstream_dir = _urljoin(str(r.url), '.')
         manifest_text = re.sub(
             r'(<MPD\b[^>]*>)',
@@ -3161,8 +3331,12 @@ def play(source_name: str, channel_id: str):
     if _channel_is_retired(channel):
         return _gone_response()
 
-    # Custom channels log full detail (incl. cache/resolver) via _log_custom_play_path
-    _log_play_req = logger.debug if source_name == 'custom' else logger.info
+    # Custom channels log full detail (incl. cache/resolver) via _log_custom_play_path.
+    # CNN's dash.mpd is refetched through here every 4s for as long as it plays
+    # (cnn_manifest_response); the tune itself is logged by the bridge trigger or the
+    # watch page, and a new CNN stream session by cnn_tve.resolve().
+    _quiet = source_name == 'custom' or (source_name == 'cnn_tve' and request.path.endswith('/dash.mpd'))
+    _log_play_req = logger.debug if _quiet else logger.info
     _log_play_req(
         '[play] request_id=%s ip=%s source=%s channel_id=%s channel_name=%s',
         getattr(g, 'request_id', '-'), client_ip, source_name, channel_id, channel.name,
@@ -3197,7 +3371,9 @@ def play(source_name: str, channel_id: str):
 
     # Paramount+ matches: the AES-128 key needs the account's token, so the
     # playlists go through the proxy that routes key requests through us.
-    if source_name == 'paramount':
+    # Paramount+ Channels (channel:<slug>) are Widevine DASH and take the
+    # normal resolve + 302 path below.
+    if source_name == 'paramount' and channel.source_channel_id.startswith('event:'):
         from urllib.parse import quote as _quote
         encoded_id = _quote(channel.source_channel_id, safe='')
         return redirect(
@@ -3579,7 +3755,7 @@ def play(source_name: str, channel_id: str):
             redirect_kind='direct',
         )
     if source_name == 'cnn_tve':
-        return cnn_manifest_response(resolved_url)
+        return cnn_manifest_response(resolved_url, renew=lambda: _renew_cnn_stream(scraper, channel))
     if _is_hudl_master(resolved_url):
         return hudl_master_response(resolved_url)
     return redirect(resolved_url, 302)

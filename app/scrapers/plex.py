@@ -408,6 +408,7 @@ def _merge_luma_into_gaps(
 class PlexScraper(BaseScraper):
 
     source_name           = "plex"
+    added_in = '1.9.0'
     display_name          = "Plex"
     scrape_interval       = 180  # Multi-day guide horizon; 3h cadence is sufficient
     channel_refresh_hours = 0    # fetch channel list every run — cheap (one grid call + genre maps); avoids channel-list staleness between refreshes

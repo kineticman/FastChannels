@@ -79,8 +79,11 @@ REDIRECT_URL = (f'{SITE}/tve/adobetve/login?requestorId={REQUESTOR_ID}&resetTveS
 _LICENSE_URL = 'https://license.drm.indazn.com/widevine/v1/license'
 _IMAGE = 'https://image.discovery.indazn.com/ca/v3/{kind}/none/{id}/{fit}/center/center/none/80/400/300/png/image?brand=dazn'
 _APP_VERSION = '0.150.1-hotfix.f8b078689'
-# The zones every account sees the free channels under.
-_BASE_ZONES = ('cle_cv',)
+# The rail lists the free channels with no zone at all; a zone only adds
+# regional tiles (yes_national → YES National), so every zone comes from
+# the token's `geo` claim. (Was 'cle_cv', an Ohio zone from the build
+# account's token that changed nothing — rail checked 2026-11-14.)
+_BASE_ZONES: tuple[str, ...] = ()
 # Refresh the DAZN token this long before it expires.
 _TOKEN_MARGIN = 20 * 60
 # Reuse a resolved stream until this close to its CDN token's expiry.
@@ -227,6 +230,7 @@ class DaznTVEScraper(BaseScraper):
     """DAZN Live TV: the free channels plus YES/MSG through a TV provider."""
 
     source_name = 'dazn_tve'
+    added_in = '5.7.0'
     display_name = 'DAZN'
     source_category = 'tve'
     is_premium = True
@@ -317,8 +321,16 @@ class DaznTVEScraper(BaseScraper):
                 gracenote_id=resolve_gracenote('dazn_tve', lookup_key=asset),
             ))
         if rsn_status(token) != 'ActivePaid':
-            logger.info('[dazn_tve] no TV provider linked — free channels only')
-        logger.info('[dazn_tve] %d channels (zones %s)', len(out), ','.join(zones(token)))
+            logger.info('[dazn_tve] no YES/MSG entitlement on the token (no TV provider linked?)')
+        # What the token itself carries, so a log from an account we can't
+        # sign in to (e.g. a direct DAZN YES subscriber, issue #97) shows
+        # which entitlements and regional zones DAZN gave it.
+        tok = claims(token)
+        logger.info('[dazn_tve] token: productStatus=%s entitlements=%s geo=%s',
+                    json.dumps(tok.get('productStatus') or {}, sort_keys=True),
+                    ','.join(sorted(entitlements(token))) or '-',
+                    json.dumps(tok.get('geo') or {}, sort_keys=True))
+        logger.info('[dazn_tve] %d channels (zones %s)', len(out), ','.join(zones(token)) or '-')
         if skipped:
             logger.info('[dazn_tve] skipped %d not entitled: %s', sum(map(len, skipped.values())),
                         '; '.join(f'needs {needs}: {", ".join(titles)}' for needs, titles in skipped.items()))

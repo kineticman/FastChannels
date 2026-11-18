@@ -2613,7 +2613,30 @@
       document.getElementById(`dash-row-${sourceId}`)?.classList.add('scraping');
     }
 
+    // The health line under a source ("⚠ <last_error>", "Updated 2h ago", …) is
+    // rendered server-side at page load, so a scrape that finishes while the
+    // page is open would leave it stale (#95: a fixed Roku kept showing the
+    // old "Expecting value" error). Re-render it from the server and swap it
+    // in, carrying over the live "· audited …" span so it isn't blanked.
+    async function _refreshHealthLine(sourceId) {
+      const audit = document.getElementById(`audit-last-result-${sourceId}`);
+      const oldLine = audit?.closest('.health-line');
+      if (!oldLine) return;
+      try {
+        const r = await fetch(location.pathname + location.search, {credentials: 'same-origin'});
+        if (!r.ok) return;
+        const doc = new DOMParser().parseFromString(await r.text(), 'text/html');
+        const parsed = doc.getElementById(`audit-last-result-${sourceId}`)?.closest('.health-line');
+        if (!parsed || !oldLine.isConnected) return;
+        const newLine = document.importNode(parsed, true);
+        newLine.querySelector(`#audit-last-result-${sourceId}`)?.replaceWith(audit);
+        oldLine.replaceWith(newLine);
+        if (typeof _refreshRelTimes === 'function') _refreshRelTimes();
+      } catch (e) { /* keep the old line */ }
+    }
+
     function _showResult(sourceId, lastError) {
+      _refreshHealthLine(sourceId);
       delete _scrapeStart[sourceId];
       document.getElementById(`dash-row-${sourceId}`)?.classList.remove('scraping');
       const btn = _scrapeBtn[sourceId];
@@ -3973,7 +3996,23 @@
       const email = String(info.email || values.email || '');
       const byCode = info.signup === 'otp';
       const tveSignin = cfg && cfg.tve_signin ? renderTveSigninSection(sourceId, cfg.tve_signin) : '';
-      const intro = byCode
+      // Direct subscribers (beta) sign in to the account that has the
+      // subscription and skip the TV provider step.
+      const methodField = (schema || []).find(f => f.key === 'sign_in_method');
+      const subscriber = !!methodField && values.sign_in_method === 'subscription';
+      const methodSelect = methodField ? `
+        <div class="field field-full" style="margin:.75rem 0">
+          <label for="cfg-${sourceId}-sign_in_method">${escapeHtml(methodField.label)}</label>
+          <select id="cfg-${sourceId}-sign_in_method" data-key="sign_in_method"
+                  onchange="viewliftSetMethod(${sourceId}, this.value)">
+            ${methodField.options.map(o => `<option value="${escapeHtml(String(o.value))}"${(values.sign_in_method || 'tve') === o.value ? ' selected' : ''}>${escapeHtml(o.label)}</option>`).join('')}
+          </select>
+          <div class="help">${escapeHtml(methodField.help_text || '')}</div>
+          <span class="config-status" id="config-status-${sourceId}"></span>
+        </div>` : '';
+      const intro = subscriber
+        ? `Sign in to the ${brand} account your subscription is under. ${brand} emails you a code. There is no password.`
+        : byCode
         ? `${brand} links your TV provider to a free ${brand} account. Enter its email (or a new one at ${escapeHtml(info.domain || '')}) and ${brand} emails you a code. There is no password.`
         : `${brand} links your TV provider to a free ${brand} account. Enter any email address and the account is created right away, with no code or password. ${brand} doesn't check the address.`;
       return `
@@ -4002,9 +4041,17 @@
             <button class="btn btn-cancel btn-sm" type="button" onclick="viewliftSendCode(${sourceId}, '${sourceName}')">Resend</button>
           </div>
         </div>
-        <div class="config-subtitle" style="font-weight:600">2. TV provider</div>
-        ${info.market_note ? `<div class="config-note">${escapeHtml(info.market_note)}.</div>` : ''}
-        ${tveSignin}`;
+        ${methodSelect}
+        <div id="tve-signin-wrap-${sourceId}"${subscriber ? ' style="display:none"' : ''}>
+          <div class="config-subtitle" style="font-weight:600">2. TV provider</div>
+          ${info.market_note ? `<div class="config-note">${escapeHtml(info.market_note)}.</div>` : ''}
+          ${tveSignin}
+        </div>`;
+    }
+
+    function viewliftSetMethod(sourceId, method) {
+      toggleTveSigninForMethod(sourceId, method);
+      saveSourceConfig(sourceId);
     }
 
     async function viewliftSendCode(sourceId, sourceName) {
@@ -5192,11 +5239,15 @@
     function renderParamountConfig(sourceId, schema, values, cfg) {
       const info = (cfg && cfg.paramount) || {};
       const detail = info.signed_in ? 'Signed in' : (info.signin_error || '');
+      const showtime = info.showtime_available === true
+        ? 'Your plan includes Showtime, so Showtime East and West are added too.'
+        : (info.showtime_available === false
+            ? 'Your plan doesn\'t include Showtime. Showtime East and West are added if you upgrade.'
+            : 'Showtime East and West are added too if your plan includes Showtime.');
       return `
         <div class="config-title">Paramount+ Settings</div>
         <div class="config-subtitle" style="font-weight:600">Sign in</div>
-        <div class="config-note">Adds Paramount+ live sports — UEFA, Serie A, EFL, UFC, rugby and more — as temporary
-          channels, one per match in the next two days. Needs a Paramount+ subscription, or a TV provider that includes Paramount+.
+        <div class="config-note">Needs a Paramount+ subscription, or a TV provider that includes Paramount+.
           If you get Paramount+ through your TV provider, first connect the provider to your Paramount+ account
           at paramountplus.com → Account → TV Provider.</div>
         <div class="espn-auth-options">
@@ -5204,8 +5255,151 @@
                    info.signed_in, detail,
                    'Get a code, enter it at paramountplus.com/activate/androidtv on your phone or computer, then sign in with your Paramount+ email and password.')}
         </div>
-        <div class="config-note" style="margin-top:0.8rem">Match channels retire an hour after the stream window ends and are deleted a day later.</div>`;
+        <div class="config-subtitle" style="margin-top:0.8rem">Match channels</div>
+        <div class="config-note">Live sports — UEFA, Serie A, EFL, UFC, rugby and more — as temporary event channels,
+          one per match in the next two days. They play in any player. Match channels retire an hour after the
+          stream window ends and are deleted a day later.</div>
+        ${_eventToggle('include_events', 'Include match channels', values)}
+        <div class="config-subtitle" style="margin-top:0.8rem">Paramount+ Channels</div>
+        <div class="config-note">Paramount+'s regular 24/7 channels with a full guide: South Park, SpongeBob, Paw Patrol,
+          CSI, Star Trek, RuPaul's Drag Race, sitcom, reality and movie channels. ${showtime}
+          These channels use DRM, so they play only through a DRM bridge (FastChannels Player or PrismCast)
+          and appear in the bridge playlists, not the standard one.</div>
+        ${_eventToggle('include_channels', 'Include Paramount+ Channels', values)}
+        ${_saveRow(sourceId)}`;
     }
+    function renderHBOMaxConfig(sourceId, schema, values, cfg) {
+      const info = (cfg && cfg.hbomax) || {};
+      const signedIn = !!info.signed_in;
+      const when = info.signed_in_at ? ` ${_epochAgo(info.signed_in_at)}` : '';
+      const statusLine = signedIn
+        ? `<span style="color:var(--success-soft)">&#10003; Signed in${info.email ? ' as ' + escapeHtml(info.email) : ''}${when}</span>`
+        : (info.signin_error ? `<span style="color:var(--danger-soft)">${escapeHtml(info.signin_error)}</span>` : '');
+      return `
+        <div class="config-title">HBO Max Settings</div>
+        <div class="config-note">Adds HBO Max live sports events (TNT, TBS, truTV) as temporary channels, one per event
+          airing now or in the next two days. Needs an HBO Max subscription. These are DRM (Widevine) streams, so they play
+          only through a DRM bridge. HBO's own channels aren't carried — Max streams events, not linear channels.</div>
+        <div class="fields-grid">
+          <div class="field">
+            <label for="cfg-${sourceId}-email">HBO Max email</label>
+            <input type="text" id="cfg-${sourceId}-email" data-key="email" data-secret="false"
+                   value="${escapeHtml(String(values.email || ''))}" placeholder="you@example.com" autocomplete="off">
+          </div>
+          <div class="field">
+            <label for="cfg-${sourceId}-password">HBO Max password</label>
+            <input type="password" id="cfg-${sourceId}-password" data-key="password" data-secret="true"
+                   value="${escapeHtml(String(values.password || ''))}" autocomplete="off">
+          </div>
+        </div>
+        <div class="config-actions" style="justify-content:flex-start;gap:0.6rem;flex-wrap:wrap">
+          <button class="btn btn-run" type="button" onclick="saveSourceConfig(${sourceId})">Save settings</button>
+          <button class="btn btn-run" type="button" id="hbomax-signin-btn-${sourceId}"
+                  onclick="hbomaxSignIn(${sourceId})">${signedIn ? 'Sign in again' : 'Sign in to HBO Max'}</button>
+          ${signedIn ? `<button class="btn btn-cancel btn-sm" type="button" onclick="hbomaxClear(${sourceId})">Sign out</button>` : ''}
+          <span class="config-status" id="config-status-${sourceId}"></span>
+        </div>
+        <div style="margin-top:0.5rem" id="hbomax-status-${sourceId}">${statusLine}</div>
+        <div class="config-note" style="margin-top:0.4rem">Sign-in runs a real browser in the background to get past bot
+          protection, so it can take up to a minute. The session lasts a long time, so you rarely need to sign in again.</div>
+        <div class="advanced-box" style="margin-top:0.8rem">
+          <button type="button" class="advanced-toggle" onclick="toggleAdvanced(this)">
+            <span>Trouble signing in? Paste a session instead</span>
+            <span class="advanced-chevron">▼</span>
+          </button>
+          <div class="advanced-body">
+            <div class="config-note">If the automatic sign-in won't work, sign in at play.hbomax.com in your own browser,
+              open DevTools → Application → Cookies, copy the value of the <code>st</code> cookie, and paste it here.</div>
+            <div class="field field-full">
+              <label for="hbomax-st-${sourceId}">st cookie value</label>
+              <textarea id="hbomax-st-${sourceId}" rows="3" style="width:100%;font-family:monospace;font-size:0.8rem"
+                        placeholder="eyJhbGciOi…"></textarea>
+            </div>
+            <button class="btn btn-run btn-sm" type="button" onclick="hbomaxSaveManual(${sourceId})">Save session</button>
+          </div>
+        </div>`;
+    }
+
+    async function hbomaxSignIn(sourceId) {
+      const btn = document.getElementById(`hbomax-signin-btn-${sourceId}`);
+      const statusEl = document.getElementById(`hbomax-status-${sourceId}`);
+      // Save the email/password first so the background job has them.
+      await saveSourceConfig(sourceId);
+      btn.disabled = true;
+      statusEl.innerHTML = '<span style="color:var(--text-muted)">Starting sign-in…</span>';
+      try {
+        const r = await fetch(`/api/sources/${sourceId}/hbomax-login/start`, {method: 'POST'});
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok) {
+          statusEl.innerHTML = `<span style="color:var(--danger-soft)">${escapeHtml(d.error || 'Could not start sign-in.')}</span>`;
+          btn.disabled = false;
+          return;
+        }
+        hbomaxPollState(sourceId, Date.now() + 150000);
+      } catch (e) {
+        statusEl.innerHTML = '<span style="color:var(--danger-soft)">Network error starting sign-in.</span>';
+        btn.disabled = false;
+      }
+    }
+
+    async function hbomaxPollState(sourceId, deadline) {
+      const statusEl = document.getElementById(`hbomax-status-${sourceId}`);
+      const btn = document.getElementById(`hbomax-signin-btn-${sourceId}`);
+      try {
+        const r = await fetch(`/api/sources/${sourceId}/hbomax-login/state`);
+        const d = await r.json().catch(() => ({}));
+        if (d.state === 'success') {
+          statusEl.innerHTML = '<span style="color:var(--success-soft)">&#10003; Signed in</span>';
+          setTimeout(() => loadSourceConfig(sourceId, 'hbomax'), 700);
+          return;
+        }
+        if (d.state === 'error') {
+          statusEl.innerHTML = `<span style="color:var(--danger-soft)">${escapeHtml(d.message || 'Sign-in failed.')}</span>`;
+          if (btn) btn.disabled = false;
+          return;
+        }
+        statusEl.innerHTML = `<span style="color:var(--text-muted)">${escapeHtml(d.message || 'Signing in…')}</span>`;
+        if (Date.now() < deadline) {
+          setTimeout(() => hbomaxPollState(sourceId, deadline), 3000);
+        } else {
+          statusEl.innerHTML = '<span style="color:var(--warning-soft)">Sign-in is taking longer than expected — check back shortly.</span>';
+          if (btn) btn.disabled = false;
+        }
+      } catch (e) {
+        if (Date.now() < deadline) setTimeout(() => hbomaxPollState(sourceId, deadline), 3000);
+      }
+    }
+
+    async function hbomaxClear(sourceId) {
+      if (!confirm('Sign out of HBO Max? The saved session will be removed.')) return;
+      try {
+        await fetch(`/api/sources/${sourceId}/hbomax-auth`, {method: 'DELETE'});
+      } catch (e) { /* local sign-out still proceeds */ }
+      loadSourceConfig(sourceId, 'hbomax');
+    }
+
+    async function hbomaxSaveManual(sourceId) {
+      const el = document.getElementById(`hbomax-st-${sourceId}`);
+      const statusEl = document.getElementById(`hbomax-status-${sourceId}`);
+      const st = (el?.value || '').trim();
+      if (!st) return;
+      try {
+        const r = await fetch(`/api/sources/${sourceId}/hbomax-login/manual`, {
+          method: 'POST', headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({st}),
+        });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok) {
+          statusEl.innerHTML = `<span style="color:var(--danger-soft)">${escapeHtml(d.error || 'Could not save the session.')}</span>`;
+          return;
+        }
+        statusEl.innerHTML = '<span style="color:var(--success-soft)">&#10003; Session saved</span>';
+        setTimeout(() => loadSourceConfig(sourceId, 'hbomax'), 700);
+      } catch (e) {
+        statusEl.innerHTML = '<span style="color:var(--danger-soft)">Network error saving the session.</span>';
+      }
+    }
+
     function renderB1gPlusConfig(sourceId, schema, values, cfg) {
       const info = (cfg && cfg.b1g_plus) || {};
       let detail = info.signin_error || '';
@@ -5227,6 +5421,101 @@
           extended while it's still live. Event channels retire an hour after that and are deleted a day later.</div>
         ${_b1gPlusFilter(sourceId, info)}
         ${_saveRow(sourceId)}`;
+    }
+
+    function renderMlbConfig(sourceId, schema, values, cfg) {
+      const info = (cfg && cfg.mlb) || {};
+      const ents = info.entitlements || [];
+      let detail = info.signin_error || '';
+      if (info.signed_in) {
+        detail = `Signed in${info.email ? ' as ' + escapeHtml(info.email) : ''}`;
+      }
+      let access = '';
+      if (info.signed_in && info.entitlements_at) {
+        const relink = escapeHtml(info.relink_url || 'https://www.mlb.com/commerce/mvpd/mlb-network');
+        access = ents.includes('MLBN')
+          ? `<div class="config-note" style="margin-top:0.6rem">&#10003; MLB Network is on this account.</div>`
+          : `<div class="config-note" style="margin-top:0.6rem;color:var(--danger-soft)">MLB Network isn't on this account.
+              To get it through your TV provider, <a href="${relink}" target="_blank" rel="noopener">link your provider at mlb.com</a>
+              (do this again if the link expires), then rescrape.</div>`;
+      }
+      return `
+        <div class="config-title">MLB Settings</div>
+        <div class="config-subtitle" style="font-weight:600">Sign in</div>
+        <div class="config-note">Adds MLB Network and live games from MLB.TV, depending on what your MLB account includes.
+          MLB Network comes with MLB.TV, MLB+, or a TV provider linked to your MLB account at mlb.com.</div>
+        <div class="espn-auth-options">
+          ${codeLinkOption(sourceId, 'mlb', 'mlb', 'account', 'MLB', 'MLB account',
+                   info.signed_in, detail,
+                   'Get a code, then go to ids.mlb.com/activate on your phone or computer, sign in to your MLB account and enter it. Codes last 10 minutes.')}
+        </div>
+        ${access}
+        <div class="config-subtitle" style="margin-top:0.8rem">Game channels</div>
+        <div class="config-note">Adds each live game the account can play as a temporary channel, up to two days ahead.
+          A game's stream starts about 30 minutes before first pitch. Game channels retire an hour after the game
+          and are deleted a day later.</div>
+        ${_eventToggle('include_games', 'Include live game channels', values)}
+        ${_saveRow(sourceId)}`;
+    }
+
+    function renderHuluLiveConfig(sourceId, schema, values, cfg) {
+      const info = (cfg && cfg.hulu_live) || {};
+      let detail = info.signin_error || '';
+      if (info.signed_in) {
+        detail = info.live_tv === false
+          ? 'Signed in, but this Hulu account doesn\'t include Live TV.'
+          : 'Signed in' + (info.max_streams ? ` — up to ${info.max_streams} streams at once on this plan` : '');
+      }
+      const copy = (!info.signed_in && info.tve_link_available) ? `
+        <div class="config-note" style="margin-top:0.6rem">Your TV Everywhere sign-in already has Hulu linked.
+          <button class="btn btn-run btn-sm" type="button" id="hulu-live-copy-btn-${sourceId}"
+                  onclick="huluLiveCopyTve(${sourceId})">Use that Hulu sign-in</button>
+          <span class="amazon-status-text" id="hulu-live-copy-status-${sourceId}"></span></div>` : '';
+      const loc = info.home_latlon ? ` (${escapeHtml(String(info.home_latlon.lat))}, ${escapeHtml(String(info.home_latlon.long))})` : '';
+      return `
+        <div class="config-title">Hulu + Live TV Settings</div>
+        <div class="config-subtitle" style="font-weight:600">Sign in</div>
+        <div class="config-note">Adds your Hulu + Live TV channels and guide, including your local stations.
+          Needs a Hulu plan with Live TV. Every channel is DRM (Widevine), so they play only through a DRM bridge
+          (FastChannels Player or PrismCast). Each stream counts toward your Hulu plan's stream limit.</div>
+        <div class="espn-auth-options">
+          ${codeLinkOption(sourceId, 'hulu-live', 'hulu_live', 'account', 'Hulu', 'Hulu account',
+                   info.signed_in, detail,
+                   'Get a code, then go to hulu.com/activate on your phone or computer, sign in to Hulu and enter it.')}
+        </div>
+        ${copy}
+        <div class="config-subtitle" style="margin-top:0.8rem">Home location</div>
+        <div class="fields-grid">
+          <div class="field">
+            <label for="cfg-${sourceId}-home_location">ZIP code, or latitude, longitude${loc}</label>
+            <input type="text" id="cfg-${sourceId}-home_location" data-key="home_location" data-secret="false"
+                   value="${escapeHtml(String(values.home_location || ''))}" placeholder="43215  or  39.96, -83.00" autocomplete="off">
+            <div class="help">Hulu picks your local channels from this and plays locals only inside their market.
+              Leave it blank to use this server's IP location.</div>
+          </div>
+        </div>
+        ${_saveRow(sourceId)}`;
+    }
+
+    async function huluLiveCopyTve(sourceId) {
+      const btn = document.getElementById(`hulu-live-copy-btn-${sourceId}`);
+      const statusEl = document.getElementById(`hulu-live-copy-status-${sourceId}`);
+      btn.disabled = true;
+      statusEl.innerHTML = '<span style="color:var(--text-muted)">Signing in…</span>';
+      try {
+        const r = await fetch(`/api/sources/${sourceId}/hulu-live-link/copy-tve`, { method: 'POST' });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok) {
+          statusEl.innerHTML = `<span style="color:var(--danger-soft)">${escapeHtml(d.error || 'Sign-in failed.')}</span>`;
+          return;
+        }
+        statusEl.innerHTML = '<span style="color:var(--success-soft)">&#10003; Signed in — updating channels…</span>';
+        setTimeout(() => loadSourceConfig(sourceId, 'hulu_live'), 1500);
+      } catch (e) {
+        statusEl.innerHTML = '<span style="color:var(--danger-soft)">Network error.</span>';
+      } finally {
+        btn.disabled = false;
+      }
     }
 
     function renderNsnConfig(sourceId, schema, values, cfg) {
@@ -6504,6 +6793,11 @@
       } catch (e) { /* the status lines just stay as they were */ }
     }
 
+    function toggleTveSigninForMethod(sourceId, method) {
+      const wrap = document.getElementById(`tve-signin-wrap-${sourceId}`);
+      if (wrap) wrap.style.display = method === 'subscription' ? 'none' : '';
+    }
+
     function renderConfigFields(sourceId, sourceName, schema, values, cfg) {
       // TVE sources: the sign-in choice is the whole section, or follows the
       // source's own settings when it has any (NBC).
@@ -6544,10 +6838,16 @@
         return renderCbsSportsConfig(sourceId, schema, values, cfg);
       } else if (sourceName === 'paramount') {
         return renderParamountConfig(sourceId, schema, values, cfg);
+      } else if (sourceName === 'hbomax') {
+        return renderHBOMaxConfig(sourceId, schema, values, cfg);
       } else if (sourceName === 'b1g_plus') {
         return renderB1gPlusConfig(sourceId, schema, values, cfg);
+      } else if (sourceName === 'mlb') {
+        return renderMlbConfig(sourceId, schema, values, cfg);
       } else if (sourceName === 'nsn') {
         return renderNsnConfig(sourceId, schema, values, cfg);
+      } else if (sourceName === 'hulu_live') {
+        return renderHuluLiveConfig(sourceId, schema, values, cfg);
       } else if (sourceName === 'gray_local') {
         return renderGrayLocalConfig(sourceId, schema, values, cfg);
       } else if (sourceName === 'sling') {
@@ -6573,7 +6873,11 @@
           ).join('');
           const multiple = f.multiple ? ' multiple' : '';
           const size = f.multiple ? ` size="${Math.min(Math.max(f.options.length, 4), 8)}"` : '';
-          control = `<select id="cfg-${sourceId}-${f.key}" data-key="${f.key}"${multiple}${size}>${opts}</select>`;
+          // sign_in_method (SportsNet Pittsburgh): a direct subscription has no
+          // TV provider, so the provider sign-in section follows the choice.
+          const toggle = f.key === 'sign_in_method' && tveSignin
+            ? ` onchange="toggleTveSigninForMethod(${sourceId}, this.value)"` : '';
+          control = `<select id="cfg-${sourceId}-${f.key}" data-key="${f.key}"${multiple}${size}${toggle}>${opts}</select>`;
         } else if (f.field_type === 'checklist' && Array.isArray(f.options) && f.options.length) {
           // Checked = on. The saved value lists the unchecked options.
           const off = new Set(String(val).split(',').map(v => v.trim()).filter(Boolean));
@@ -6664,7 +6968,7 @@
           <button class="btn btn-cancel" type="button" onclick="clearConfigFields(${sourceId})">Clear</button>
           <button class="btn btn-run" type="button" onclick="saveSourceConfig(${sourceId})">Save Settings</button>
         </div>
-        ${tveSignin ? `<div style="margin-top:1.25rem">${tveSignin}</div>` : ''}`;
+        ${tveSignin ? `<div id="tve-signin-wrap-${sourceId}" style="margin-top:1.25rem${values.sign_in_method === 'subscription' ? ';display:none' : ''}">${tveSignin}</div>` : ''}`;
     }
 
     async function deleteInactiveChannels(sourceId, days = 7) {
@@ -7040,6 +7344,11 @@
     document.addEventListener('DOMContentLoaded', () => {
       _loadCollapsedCats().forEach(cat => _applyCategoryCollapse(cat, true));
       _restoreOffCollapse();
+
+      // ?open=<source id> (dashboard "Since you last looked" card): expand that
+      // source's group and open its panel, even when lite mode tucks it away.
+      const openId = parseInt(new URLSearchParams(location.search).get('open'), 10);
+      if (openId && document.getElementById(`config-panel-row-${openId}`)) scrollToConfig(openId);
 
       // Load persisted audit results
       document.querySelectorAll('[id^="audit-last-result-"]').forEach(el => {

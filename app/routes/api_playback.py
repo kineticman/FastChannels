@@ -658,10 +658,17 @@ def _get_playback_info(ch, fast_mode=True, browser=False):
     # the 302) rather than the redirect target, sending sub-playlist requests back
     # to our server.  The proxy fetches the master server-side and rewrites all
     # variant URLs to absolute proxy URLs, eliminating the relative-URL problem.
-    if ch.source and ch.source.name in ('fubo', 'tubi', 'pluto', 'samsung') and ch.source_channel_id:
+    _browser_proxy = bool(ch.source and getattr(registry.get(ch.source.name), 'browser_master_proxy', False))
+    if ch.source and (ch.source.name in ('fubo', 'pluto', 'samsung') or _browser_proxy) and ch.source_channel_id:
         from urllib.parse import quote as _quote
         _enc = _quote(ch.source_channel_id, safe='')
         preview_url = f'/play/{ch.source.name}/{_enc}/proxy.m3u8'
+
+    # Free Networks channels on CDNs whose CORS admits only their own site
+    # (Network.browser_relay_hosts): relay the preview's playlists and segments.
+    if ch.source and ch.source.name == 'free_networks' and ch.source_channel_id:
+        from .free_networks_proxy import browser_relay_url
+        preview_url = browser_relay_url(ch) or preview_url
 
     # Custom YouTube channels: googlevideo's HLS CDN sends no
     # Access-Control-Allow-Origin for a third-party page, and the playback URL is
@@ -715,13 +722,18 @@ def _get_playback_info(ch, fast_mode=True, browser=False):
         from urllib.parse import quote as _quote
         preview_url = f'/play/versant_tve/{_quote(ch.source_channel_id, safe="")}/dash.mpd'
     from ..scrapers.viewlift_tve import VIEWLIFT_SOURCES
-    if ch.source and ch.source.name in VIEWLIFT_SOURCES and ch.source_channel_id:
+    if (ch.source and ch.source.name in VIEWLIFT_SOURCES and ch.source_channel_id
+            and (ch.stream_type or '').lower() == 'dash'):
         from urllib.parse import quote as _quote
         preview_url = f'/play/{ch.source.name}/{_quote(ch.source_channel_id, safe="")}/dash.mpd'
     if (ch.source and ch.source.name == 'sportsnet_pittsburgh_tve' and ch.source_channel_id
             and (ch.stream_type or '').lower() == 'dash'):
         from urllib.parse import quote as _quote
         preview_url = f'/play/sportsnet_pittsburgh_tve/{_quote(ch.source_channel_id, safe="")}/dash.mpd'
+    if (ch.source and ch.source.name == 'paramount' and ch.source_channel_id
+            and (ch.stream_type or '').lower() == 'dash'):
+        from urllib.parse import quote as _quote
+        preview_url = f'/play/paramount/{_quote(ch.source_channel_id, safe="")}/dash.mpd'
     if ch.source and ch.source.name == 'vix' and ch.source_channel_id:
         from urllib.parse import quote as _quote
         # A browser can't fetch ViX's segments (CORS is vix.com-only), so the
@@ -733,9 +745,18 @@ def _get_playback_info(ch, fast_mode=True, browser=False):
     if ch.source and ch.source.name == 'cnn_tve' and ch.source_channel_id:
         from urllib.parse import quote as _quote
         preview_url = f'/play/cnn_tve/{_quote(ch.source_channel_id, safe="")}/dash.mpd'
+    if ch.source and ch.source.name == 'hbomax' and ch.source_channel_id:
+        from urllib.parse import quote as _quote
+        preview_url = f'/play/hbomax/{_quote(ch.source_channel_id, safe="")}/dash.mpd'
     if ch.source and ch.source.name == 'dazn_tve' and ch.source_channel_id:
         from urllib.parse import quote as _quote
         preview_url = f'/play/dazn_tve/{_quote(ch.source_channel_id, safe="")}/dash.mpd'
+    if ch.source and ch.source.name == 'hulu_live' and ch.source_channel_id:
+        from urllib.parse import quote as _quote
+        # A served manifest for every player (see hulu_live_dash in play.py).
+        preview_url = f'/play/hulu_live/{_quote(ch.source_channel_id, safe="")}/dash.mpd'
+        playback_mode = 'dash'
+        stream_type = 'dash'
 
     # Philo → DASH+Widevine. Philo's MPD CDN locks CORS to philo.com, so the
     # route proxies the manifest body with permissive CORS (segments are CORS-*
@@ -822,6 +843,13 @@ def _get_playback_info(ch, fast_mode=True, browser=False):
     }
 
 
+def _free_network_name(ch) -> str | None:
+    if not ch.source or ch.source.name != 'free_networks':
+        return None
+    from ..scrapers.free_networks import network_name
+    return network_name(ch.source_channel_id)
+
+
 @playback_bp.route('/channels/<int:channel_id>/preview', methods=['GET'])
 def preview_channel(channel_id):
     ch = Channel.query.get_or_404(channel_id)
@@ -902,6 +930,7 @@ def preview_channel(channel_id):
             'source_name': ch.source.name if ch.source else None,
             'source_display_name': ch.source.display_name if ch.source else None,
             'source_channel_id': ch.source_channel_id,
+            'network_display_name': _free_network_name(ch),
             'stream_type': stream_type or None,
             'playback_mode': playback_mode,
             'category': ch.category,

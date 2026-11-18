@@ -12,7 +12,7 @@ watch.nesn.com is a ViewLift site; the flow is viewlift_tve.py's. Scoped
 from __future__ import annotations
 
 from .base import BaseScraper, ConfigField
-from .viewlift_tve import ViewLiftTVEScraper
+from .viewlift_tve import ViewLiftTVEScraper, sign_in_method_field
 
 SCHEME = 'nesn-tve://'
 API_BASE = 'https://nesn.api.viewlift.com'
@@ -22,6 +22,7 @@ class NesnTVEScraper(ViewLiftTVEScraper, BaseScraper):
     """NESN and NESN Plus via ViewLift + Adobe Pass v2 (New England providers only)."""
 
     source_name = 'nesn_tve'
+    added_in = '5.7.0'
     display_name = 'NESN TVE'
     license_url = f'{API_BASE}/v1/license/widevine/acquire'
 
@@ -51,4 +52,5 @@ class NesnTVEScraper(ViewLiftTVEScraper, BaseScraper):
         ConfigField('email', 'NESN account email', placeholder='you@example.com',
                     help_text='The free NESN account the TV provider sign-in is linked to '
                               '(passwordless — NESN emails you a code).'),
+        sign_in_method_field('NESN'),
     ]

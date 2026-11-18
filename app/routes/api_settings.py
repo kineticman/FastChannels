@@ -590,6 +590,8 @@ def bridge_live_test():
             manifest_url = f'/play/{channel.source.name}/{encoded_id}/dash.mpd?hd=1'
             license_url = (f'{request.host_url.rstrip("/")}/play/{channel.source.name}/license'
                            f'?channel_id={encoded_id}&hd=1')
+        elif channel.source.name == 'hulu_live' and manifest_url:
+            manifest_url += '?hd=1'  # as prepare_player_extras: the Player gets the 1080p manifest
         if manifest_url.startswith('/'):
             manifest_url = urljoin(request.host_url, manifest_url.lstrip('/'))
         if not manifest_url:

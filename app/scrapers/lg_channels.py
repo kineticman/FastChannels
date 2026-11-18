@@ -46,6 +46,7 @@ class LGChannelsScraper(BaseScraper):
     """
 
     source_name = "lg-channels"
+    added_in = '1.9.0'
     display_name = "LG Channels"
     scrape_interval = 180  # schedulelist horizon is fairly short; refresh guide more often
     stream_audit_enabled = True

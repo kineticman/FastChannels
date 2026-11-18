@@ -30,8 +30,13 @@ class MyOutdoorTVTVEScraper(ViewLiftTVEScraper, BaseScraper):
     """MyOutdoorTV's live channels via ViewLift + Adobe Pass v2."""
 
     source_name = 'myoutdoortv_tve'
+    added_in = '5.9.0'
     display_name = 'MyOutdoorTV TVE'
-    license_url = f'{API_BASE}/v1/license/widevine/acquire'
+    # Clear HLS: the entitlement returns only an hls asset (Amagi playouts,
+    # checked 2026-11-13), so no license and no bridge.
+    license_url = None
+    all_channels_require_drm_bridge = False
+    channel_stream_type = 'hls'
 
     key = 'motv'
     brand = 'MyOutdoorTV'
@@ -56,7 +61,11 @@ class MyOutdoorTVTVEScraper(ViewLiftTVEScraper, BaseScraper):
     }
     account_signup = 'email'
     otp_enabled = False
+    # No emailed code, so a subscriber's existing account can't be signed in.
+    direct_subscription = False
     market_note = 'MyOutdoorTV is not available to your TV provider account in your area'
+    # Its TVE plan is per channel (tve-charter-oc), matched from channelIds.
+    send_channel_ids = True
 
     config_schema = [
         ConfigField('email', 'MyOutdoorTV account email', placeholder='you@example.com',

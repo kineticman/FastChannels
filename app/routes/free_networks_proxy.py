@@ -140,13 +140,19 @@ def free_networks_proxy(channel_id: str):
 
     # child_url works from the URL we asked for: a redirect may drop the query.
     base = master_url if urlsplit(r.url).path == urlsplit(master_url).path else r.url
+    def variant(uri: str) -> str:
+        # A variant on a host the proxy won't fetch (Sotal's origin hands some
+        # off to the channel's own Wowza server) plays straight from there.
+        url = net.child_url(base, uri)
+        return _variant_url(sid, url) if _allowed(net, url) else url
+
     lines = []
     for line in r.text.splitlines():
         stripped = line.strip()
         if stripped and not stripped.startswith('#'):
-            line = _variant_url(sid, net.child_url(base, stripped))
+            line = variant(stripped)
         elif stripped.startswith(('#EXT-X-MEDIA', '#EXT-X-I-FRAME-STREAM-INF')) and 'URI=' in stripped:
-            line = _URI_RE.sub(lambda m: f'URI="{_variant_url(sid, net.child_url(base, m.group(1)))}"', line)
+            line = _URI_RE.sub(lambda m: f'URI="{variant(m.group(1))}"', line)
         lines.append(line)
     return _playlist_response('\n'.join(lines) + '\n')
 
@@ -191,3 +197,88 @@ def free_networks_variant_proxy(channel_id: str):
             line = _URI_RE.sub(lambda m: f'URI="{net.child_url(base, m.group(1))}"', line)
         lines.append(line)
     return _playlist_response('\n'.join(lines) + '\n')
+
+
+# ── Browser relay (admin preview only) ──────────────────────────────────────
+# Some CDNs lock CORS to their own site (BEATMAG: Access-Control-Allow-Origin
+# https://ott.shift.tv on playlists and segments), so the admin player can't
+# load them from our page however the playlist reaches it. For networks that
+# list such hosts in browser_relay_hosts, the watch preview points here and
+# every playlist and segment on those hosts is fetched server-side. /play and
+# M3U clients, which ignore CORS, never come through here.
+
+def browser_relay_url(channel: Channel) -> str | None:
+    """The admin preview URL for a channel whose CDN refuses our page, or None."""
+    try:
+        scraper = registry.get('free_networks')(config=channel.source.config or {})
+        net = scraper.network_for(channel.stream_url)
+        parsed = scraper._split_url(channel.stream_url)
+    except Exception:  # noqa: BLE001
+        return None
+    hosts = getattr(net, 'browser_relay_hosts', ()) if net is not None else ()
+    # A network's other channels may sit on an open CDN (SHIFT TV itself).
+    ref = parsed[1] if parsed else ''
+    if not hosts or (ref.startswith('http') and (urlsplit(ref).hostname or '').lower() not in hosts):
+        return None
+    return f'/play/free_networks/{quote(channel.source_channel_id, safe="")}/browser.m3u8'
+
+
+@free_networks_proxy_bp.route('/play/free_networks/<channel_id>/browser.m3u8')
+@free_networks_proxy_bp.route('/play/free_networks/<channel_id>/browser.ts')
+def free_networks_browser_relay(channel_id: str):
+    from ..hls import rewrite_playlist
+
+    channel = _channel(channel_id)
+    scraper_cls = registry.get('free_networks')
+    scraper = scraper_cls(config=channel.source.config or {}) if scraper_cls else None
+    net = scraper.network_for(channel.stream_url) if scraper else None
+    hosts = tuple(getattr(net, 'browser_relay_hosts', ()) or ())
+    if not hosts:
+        abort(404)
+    url = request.args.get('url', '')
+    if not url:
+        try:
+            url = scraper.resolve(channel.stream_url)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning('[free_networks browser] resolve failed for %s: %s', channel.source_channel_id, exc)
+            return _unavailable_response()
+    parts = urlsplit(url)
+    if parts.scheme != 'https' or (parts.hostname or '').lower() not in hosts:
+        if not request.args.get('url') and parts.scheme in ('http', 'https'):
+            return redirect(url, 302)  # this channel's CDN takes our page as is
+        abort(403)
+    try:
+        r = _HTTP.get(url, timeout=(5, 20), stream=True,
+                      headers={'User-Agent': _UA, **(net.proxy_headers() or {})})
+    except _requests.RequestException as exc:
+        logger.warning('[free_networks browser] fetch failed for %s: %s', channel.source_channel_id,
+                       type(exc).__name__)
+        abort(502)
+    if r.status_code != 200:
+        r.close()
+        abort(502)
+    base = f'/play/free_networks/{quote(channel.source_channel_id, safe="")}/browser'
+
+    def relay(u: str, kind: str) -> str:
+        if (urlsplit(u).hostname or '').lower() not in hosts:
+            return u
+        ext = 'm3u8' if kind == 'playlist' else 'ts'
+        return f'{base}.{ext}?url={quote(u, safe="")}'
+
+    if parts.path.endswith('.m3u8') or 'mpegurl' in (r.headers.get('Content-Type') or '').lower():
+        text = r.text
+        return _playlist_response(rewrite_playlist(text, r.url, relay))
+
+    def generate():
+        try:
+            for chunk in r.iter_content(64 * 1024):
+                if chunk:
+                    yield chunk
+        finally:
+            r.close()
+
+    headers = {'Cache-Control': 'no-cache', 'Access-Control-Allow-Origin': '*'}
+    if r.headers.get('Content-Length'):
+        headers['Content-Length'] = r.headers['Content-Length']
+    return Response(generate(), content_type=r.headers.get('Content-Type') or 'video/mp2t', headers=headers,
+                    direct_passthrough=True)

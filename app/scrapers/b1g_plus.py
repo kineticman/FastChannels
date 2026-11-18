@@ -72,6 +72,10 @@ _TOKEN_CHECK_TTL = 12 * 3600
 _LINK_POLL_SECONDS = 5.0
 # Codes last 5 minutes; a little slack for clock drift.
 _LINK_TIMEOUT = 330
+# Play-time calls: Channels DVR gives up on a tuner after 20 s, so check-access plus
+# access/hls must both fit inside that. No retries — a hung API (B1G+ outage
+# 2026-11-14) otherwise held the request 62 s for a 503 nobody was waiting for.
+_PLAY_TIMEOUT = (4, 8)
 
 LINK_STATUS_KEY = 'b1g_plus:link:status'
 SIGNIN_CONFIG_KEYS = ('token', 'user_id', 'email', 'signed_in_at', 'token_checked_at',
@@ -371,6 +375,7 @@ def event_matches_filter(event: dict, config: dict) -> bool:
 
 class B1GPlusScraper(BaseScraper):
     source_name = 'b1g_plus'
+    added_in = '5.9.0'
     display_name = 'B1G+'
     source_category = 'premium'
     is_premium = True
@@ -567,9 +572,13 @@ class B1GPlusScraper(BaseScraper):
             raise B1GAuthError('B1G+: sign in on the Sources page.')
         return token
 
+    def _play_post(self, url: str, token: str):
+        # A bare session: the shared one retries read timeouts, which only delays the failure.
+        with requests.Session() as s:
+            return s.post(url, json={}, headers=_headers(token), timeout=_PLAY_TIMEOUT)
+
     def _check_access(self, content_id: int, token: str):
-        return self.session.post(f'{API}contents/{content_id}/check-access', json={},
-                                 headers=_headers(token), timeout=20)
+        return self._play_post(f'{API}contents/{content_id}/check-access', token)
 
     def audit_resolve(self, raw_url: str) -> str:
         # An upcoming event has no stream yet; its place in the schedule is the check.
@@ -596,8 +605,7 @@ class B1GPlusScraper(BaseScraper):
         content_token = (r.json() or {}).get('data')
         if not content_token:
             raise RuntimeError('B1G+: no access token for this event')
-        r = self.session.post(f'{API}contents/{content_id}/access/hls', json={},
-                              headers=_headers(content_token), timeout=20)
+        r = self._play_post(f'{API}contents/{content_id}/access/hls', content_token)
         data = r.json() if r.headers.get('content-type', '').startswith('application/json') else {}
         if not r.ok or data.get('status') == 'error':
             code = data.get('code')

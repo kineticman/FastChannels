@@ -194,6 +194,20 @@ def tve_network_status(account) -> list[dict]:
         'needs_signin': _needs_signin('tennis', tennis_last_signed_in_at, _errors('tennis_tve')),
     })
 
+    newsmax_last_signed_in_at = (_cfg('newsmax_tve').get('newsmax_mvpd_auth') or {}).get('captured_at')
+    newsmax_error_message, newsmax_error_at = _last_error('newsmax', newsmax_last_signed_in_at, _errors('newsmax_tve'))
+    entries.append({
+        'source': 'newsmax_tve',
+        'label': 'Newsmax TVE',
+        'last_signed_in_at': newsmax_last_signed_in_at,
+        'note': 'Sign in with a link on your phone or computer.',
+        'family': 'newsmax',
+        'requestor_id': None,
+        'last_error_message': newsmax_error_message,
+        'last_error_at': newsmax_error_at,
+        'needs_signin': _needs_signin('newsmax', newsmax_last_signed_in_at, _errors('newsmax_tve')),
+    })
+
     dazn_last_signed_in_at = (_cfg('dazn_tve').get('dazn_auth') or {}).get('captured_at')
     dazn_error_message, dazn_error_at = _last_error('dazn', dazn_last_signed_in_at, _errors('dazn_tve'))
     entries.append({
@@ -253,20 +267,27 @@ def tve_network_status(account) -> list[dict]:
         'needs_signin': _needs_signin('cnn', cnn_last_signed_in_at, _errors('cnn_tve')),
     })
 
+    # A direct SNP subscriber signs in from the source settings alone, so the
+    # row (and its Sign in button) would only mislead.
+    from ..models import Source
+    _snp_source = Source.query.filter_by(name='sportsnet_pittsburgh_tve').first()
+    snp_subscriber = ((_snp_source.config or {}) if _snp_source else {}).get('sign_in_method') == 'subscription'
     snp_last_signed_in_at = (_cfg('sportsnet_pittsburgh_tve').get('snp_auth') or {}).get('captured_at')
     snp_error_message, snp_error_at = _last_error('snp', snp_last_signed_in_at, _errors('sportsnet_pittsburgh_tve'))
-    entries.append({
-        'source': 'sportsnet_pittsburgh_tve',
-        'label': 'SportsNet Pittsburgh TVE (SNP, SNP+)',
-        'last_signed_in_at': snp_last_signed_in_at,
-        'note': 'Enter your SNP email and password in the SportsNet Pittsburgh TVE source settings, then sign in '
-                'to your TV provider with a link on your phone or computer.',
-        'family': 'snp',
-        'requestor_id': None,
-        'last_error_message': snp_error_message,
-        'last_error_at': snp_error_at,
-        'needs_signin': _needs_signin('snp', snp_last_signed_in_at, _errors('sportsnet_pittsburgh_tve')),
-    })
+    if not snp_subscriber:
+        entries.append({
+            'source': 'sportsnet_pittsburgh_tve',
+            'label': 'SportsNet Pittsburgh TVE (SNP, SNP+)',
+            'last_signed_in_at': snp_last_signed_in_at,
+            'note': 'Needs a free SNP account: enter its email and password in the SportsNet Pittsburgh TVE source '
+                    'settings, then sign in to your TV provider here with a link on your phone or computer. Pay SNP '
+                    'directly? Choose "Direct subscription" on its source card; no sign-in is needed here.',
+            'family': 'snp',
+            'requestor_id': None,
+            'last_error_message': snp_error_message,
+            'last_error_at': snp_error_at,
+            'needs_signin': _needs_signin('snp', snp_last_signed_in_at, _errors('sportsnet_pittsburgh_tve')),
+        })
 
     # ViewLift sites (viewlift_tve.py): an account on the site, then a phone link.
     for source, family, label, market in (
@@ -276,6 +297,10 @@ def tve_network_status(account) -> list[dict]:
         ('altitude_tve', 'altitude', 'Altitude TVE (Altitude Sports)', "Altitude's Rocky Mountain market"),
         ('myoutdoortv_tve', 'motv', 'MyOutdoorTV TVE', None),
     ):
+        # A direct subscriber (viewlift_tve.py, beta) has no TV provider to sign in.
+        _vl_source = Source.query.filter_by(name=source).first()
+        if ((_vl_source.config or {}) if _vl_source else {}).get('sign_in_method') == 'subscription':
+            continue
         last_signed_in_at = (_cfg(source).get(f'{family}_mvpd_auth') or {}).get('captured_at')
         error_message, error_at = _last_error(family, last_signed_in_at, _errors(source))
         note = 'Sign in with a link on your phone or computer.'
@@ -283,6 +308,9 @@ def tve_network_status(account) -> list[dict]:
             note += f' Plays only for TV provider accounts in {market}.'
         else:
             note += ' Your TV package needs Outdoor Channel, Sportsman Channel or World Fishing Network.'
+        if source != 'myoutdoortv_tve':
+            note += (' Pay the network directly? Choose "Direct subscription" on its source card; '
+                     'no sign-in is needed here.')
         entries.append({
             'source': source,
             'label': label,

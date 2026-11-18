@@ -66,7 +66,8 @@ _MAINTENANCE_JOB_LABELS = {
 }
 _SIGNIN_FUNC_PREFIXES = (
     'app.tve.', 'app.scrapers.espn.run_', 'app.scrapers.nfl.run_link', 'app.scrapers.cbs_sports.run_link',
-    'app.scrapers.paramount.run_link', 'app.scrapers.b1g_plus.run_link',
+    'app.scrapers.paramount.run_link', 'app.scrapers.b1g_plus.run_link', 'app.scrapers.mlb.run_link',
+    'app.scrapers.hbomax_login.run_hbomax_login', 'app.scrapers.hulu_live.run_link',
 )
 
 

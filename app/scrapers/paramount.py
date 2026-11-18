@@ -1,4 +1,6 @@
-"""Paramount+ (source paramount) — live sports matches as event channels.
+"""Paramount+ (source paramount) — live sports matches as event channels, plus
+the "Paramount+ Channels" (South Park, SpongeBob, CSI, …) as bridge-only DRM
+channels.
 
 Scoped 2026-10-21 (dev/paramount/SCOPED.md). Paramount+'s live sports leagues
 (UEFA, Serie A, EFL, UFC, rugby, …) are "discrete" live channels: each match
@@ -23,6 +25,27 @@ Paramount+ through a TV provider connect it to their Paramount+ account first
 
 The saved session is checked for a valid sign-in. Paramount+ determines
 match availability when playback metadata is requested.
+
+Paramount+ Channels (channelTypes 'vod_to_live', live/channels.json) are 24/7
+loops of Paramount's library. Each has a fixed videoContentId and Widevine
+DASH (assetType live_dash_drm), so they play only through a DRM bridge.
+apps-api v3.1 irdeto-control/session-token.json, called with the signed-in
+session, returns the manifest (streamingUrl), the license URL
+(cbsi.live.ott.irdeto.com/widevine/getlicense?…&ContentId=<id>) and the
+license token (ls_session, a JWT for the account, 8 hours). The license
+proxy sends `Authorization: Bearer <ls_session>`. Without the session the
+endpoint answers with no token and no manifest. The web player's
+metadata.json now hands out an anonymous token and no manifest for this
+session, so it can't be used for these channels. Each channel's
+listings.json gives about 37 hours of guide with TMS ids.
+
+Showtime East and West (slugs showtime-east / showtime-west, fixed content
+ids, assetType live_hls_drm) aren't in live/channels.json for an account
+without Showtime, but their listings.json is public. session-token.json
+gives every signed-in account a token for them, but only an entitled one gets
+a streamingUrl, so the scrape adds them only when it does
+(config showtime_available). Not yet tested with a Showtime account: the
+manifest may turn out to be HLS, which is logged and skipped.
 """
 from __future__ import annotations
 
@@ -56,6 +79,16 @@ ACTIVATE_URL = f'{_PPLUS}/activate/androidtv/'
 
 EVENT_SCHEME = 'paramount://event/'
 EVENT_CHANNEL_PREFIX = 'event:'
+CHANNEL_SCHEME = 'paramount://channel/'
+CHANNEL_PREFIX = 'channel:'
+LICENSE_URL = 'https://cbsi.live.ott.irdeto.com/widevine/getlicense'
+_SESSION_TOKEN_PATH = 'v3.1/androidtv/irdeto-control/session-token.json'
+_LISTING_ROWS = 100
+# Paramount+ channel category slug → FastChannels category.
+_CHANNEL_CATEGORIES = {'comedy': 'Comedy', 'drama': 'Drama', 'kids-family': 'Kids',
+                       'reality': 'Reality TV', 'news': 'News', 'sports': 'Sports',
+                       'showtime': 'Movies'}
+SHOWTIME_SLUGS = {'showtime-east': 'Showtime East', 'showtime-west': 'Showtime West'}
 # Hosts the play proxy may fetch for this source.
 KEY_HOST = 'cbsi.live.ott.irdeto.com'
 PLAYLIST_HOSTS = ('dai.google.com',)
@@ -75,6 +108,9 @@ _SIGNIN_LOST = 'The Paramount+ sign-in expired or was removed — sign in again.
 # contentId → (Authorization header value, expiry epoch). Per process; a miss
 # costs one metadata.json fetch.
 _KEY_TOKENS: dict[str, tuple[str, float]] = {}
+# contentId → {'manifest', 'license_url', 'auth', 'exp'} from session-token.json
+# for the DRM channels. Per process; the license proxy refetches on a miss.
+_DRM_SESSIONS: dict[str, dict] = {}
 
 
 class ParamountAuthError(TVEAuthError):
@@ -214,6 +250,35 @@ def _jwt_exp(header_value: str) -> float:
         return 0.0
 
 
+def parse_channel_url(raw_url: str) -> tuple[str, str]:
+    """(contentId, channel slug) from a Paramount+ Channels stream_url."""
+    m = re.match(r'paramount://channel/([\w-]+)\?slug=([\w-]+)$', raw_url or '')
+    if not m:
+        raise ValueError(f'Unsupported Paramount+ stream URL: {raw_url}')
+    return m.group(1), m.group(2)
+
+
+def drm_session(cookies: dict, content_id: str, force: bool = False) -> dict:
+    """Manifest, license URL and license Authorization for one DRM channel,
+    cached per process until 10 minutes before the token expires."""
+    cached = _DRM_SESSIONS.get(content_id)
+    if not force and cached and time.time() < cached['exp'] - _TOKEN_MARGIN:
+        return cached
+    r = requests.get(f'{_APPS_API}/{_SESSION_TOKEN_PATH}', params=_app_params(contentId=content_id),
+                     cookies=cookies, headers={'User-Agent': _TV_UA}, timeout=20)
+    r.raise_for_status()
+    data = r.json() or {}
+    token = (data.get('ls_session') or '').strip()
+    if not token or not data.get('streamingUrl'):
+        raise ParamountAuthError('Paramount+: this channel isn\'t available to this account')
+    auth = f'Bearer {token}'
+    session = {'manifest': data['streamingUrl'], 'auth': auth,
+               'license_url': data.get('url') or f'{LICENSE_URL}?CrmId=cbsi&AccountId=cbsi&SubContentType=Default&ContentId={content_id}',
+               'exp': _jwt_exp(auth) or time.time() + 3600}
+    _DRM_SESSIONS[content_id] = session
+    return session
+
+
 def parse_event_url(raw_url: str) -> tuple[str, str, int | None]:
     """(contentId, league slug, stream end epoch) from an event stream_url."""
     m = re.match(r'paramount://event/([\w-]+)\?slug=([\w-]+)&end=(\d+)$', raw_url or '')
@@ -226,17 +291,28 @@ def parse_event_url(raw_url: str) -> tuple[str, str, int | None]:
 
 class ParamountScraper(BaseScraper):
     source_name = 'paramount'
+    added_in = '5.7.0'
     display_name = 'Paramount+'
     source_category = 'premium'
     is_premium = True
     scrape_interval = 360
-    # Every channel is a match; its listing is the check (see audit_resolve).
-    stream_audit_enabled = False
+    # The audit's default (linear) scope covers the Paramount+ Channels: it
+    # resolves each manifest, confirms Widevine (bridge) and fills the
+    # resolution badge. Matches are event channels, skipped unless the audit
+    # is run with events included; then their listing is the check.
+    stream_audit_enabled = True
+    # Marks the source DRM-capable: its DASH channels (Paramount+ Channels) are
+    # bridge-only. The real per-channel URL comes from get_license_url.
+    license_url = LICENSE_URL
 
     config_required = True
     # Set by the activation-code sign-in, never typed; hidden from the card.
     config_schema = [
         ConfigField('cookies', 'Paramount+ session', secret=True, hidden=True),
+        ConfigField('include_events', 'Include match channels', field_type='toggle', default='true',
+                    help_text='Live sports matches as temporary channels, one per match.'),
+        ConfigField('include_channels', 'Include Paramount+ Channels', field_type='toggle', default='true',
+                    help_text='24/7 channels such as South Park and SpongeBob (DRM bridge only).'),
     ]
 
     # ── auth ──
@@ -246,6 +322,9 @@ class ParamountScraper(BaseScraper):
 
     def _signed_in(self) -> bool:
         return bool(self._cookies().get('CBS_COM'))
+
+    def _flag(self, key: str) -> bool:
+        return str(self.config.get(key, 'true')).strip().lower() in ('1', 'true', 'yes', 'on')
 
     def _refresh_status(self) -> None:
         """Re-check the saved sign-in every 6 hours."""
@@ -276,9 +355,56 @@ class ParamountScraper(BaseScraper):
         r.raise_for_status()
         return r.json() or {}
 
+    def _live_channels(self) -> list[dict]:
+        cached = getattr(self, '_live_channel_list', None)
+        if cached is None:
+            cached = self._get('live/channels.json', rows=200, start=0).get('channels') or []
+            self._live_channel_list = cached
+        return cached
+
     def _leagues(self) -> list[dict]:
-        return [c for c in self._get('live/channels.json', rows=200, start=0).get('channels') or []
+        return [c for c in self._live_channels()
                 if 'discrete' in (c.get('channelTypes') or []) and c.get('slug')]
+
+    def _drm_channels(self) -> list[dict]:
+        """Paramount+ Channels: 24/7 Widevine loops with a fixed content id,
+        plus Showtime East/West when the account can play them."""
+        listed = self._live_channels()
+        out = [c for c in listed
+               if 'vod_to_live' in (c.get('channelTypes') or []) and c.get('slug') and c.get('videoContentId')]
+        return out + self._showtime_channels({c.get('slug'): c for c in listed})
+
+    def _showtime_channels(self, listed: dict[str, dict]) -> list[dict]:
+        out, available = [], False
+        for slug, name in SHOWTIME_SLUGS.items():
+            chan = dict(listed.get(slug) or {})
+            if not chan.get('videoContentId'):
+                try:
+                    items = self._get(f'live/channels/{slug}/listings.json', rows=1, start=0,
+                                      showListing='true').get('listing') or []
+                except requests.RequestException as exc:
+                    logger.warning('[paramount] %s listings unavailable: %s', slug, exc)
+                    continue
+                if not items or not items[0].get('videoContentId'):
+                    continue
+                chan.update({'slug': slug, 'videoContentId': items[0]['videoContentId']})
+            chan.setdefault('channelName', name)
+            chan['channelCategorySlugs'] = ['showtime']
+            try:
+                manifest = drm_session(self._cookies(), chan['videoContentId'])['manifest']
+            except ParamountAuthError:
+                continue   # signed in, but the plan has no Showtime
+            except requests.RequestException as exc:
+                logger.warning('[paramount] %s check failed: %s', slug, exc)
+                continue
+            available = True
+            if '.mpd' not in manifest.split('?')[0]:
+                logger.warning('[paramount] %s manifest isn\'t DASH (%s); skipped until supported',
+                               slug, manifest.split('?')[0][-40:])
+                continue
+            out.append(chan)
+        self._update_config('showtime_available', available)
+        return out
 
     def _events(self) -> list[tuple[dict, dict]]:
         """(league, listing) for every match whose stream window overlaps the next two days."""
@@ -305,10 +431,13 @@ class ParamountScraper(BaseScraper):
 
     def fetch_channels(self) -> list[ChannelData]:
         self._event_items = []
+        self._drm_items = []
         self.hide_missing_event_channels = True
         if not self._signed_in():
             return []
-        self._event_items = self._events()
+        self._live_channel_list = None
+        self.excluded_channel_ids = set()
+        self._event_items = self._events() if self._flag('include_events') else []
         self._matchups = {}
         resolver = MatchupResolver(self.cache.get(MATCHUP_CACHE_KEY), self.source_name)
         channels = []
@@ -341,11 +470,55 @@ class ParamountScraper(BaseScraper):
                 delete_at=end + timedelta(seconds=EVENT_END_GRACE_SECONDS + 24 * 3600),
             ))
         self._update_cache(MATCHUP_CACHE_KEY, resolver.export())
+        channels.extend(self._drm_channel_data())
         return channels
+
+    def _drm_channel_data(self) -> list[ChannelData]:
+        if not self._flag('include_channels'):
+            # Turned off: retire the rows now rather than after missed scrapes.
+            self.excluded_channel_ids = {f'{CHANNEL_PREFIX}{slug}' for slug in self._known_channel_slugs()}
+            return []
+        try:
+            self._drm_items = self._drm_channels()
+        except requests.RequestException as exc:
+            logger.warning('[paramount] Paramount+ Channels unavailable: %s', exc)
+            self._drm_items = []
+        out = []
+        for c in self._drm_items:
+            slug = c['slug']
+            cats = c.get('channelCategorySlugs') or []
+            category = next((_CHANNEL_CATEGORIES[x] for x in cats if x in _CHANNEL_CATEGORIES), 'Entertainment')
+            if slug == 'movies':
+                category = 'Movies'
+            logo = c.get('filePathLogoSelected') or c.get('filePathLogo')
+            name = (c.get('channelName') or slug).strip()
+            out.append(ChannelData(
+                source_channel_id=f'{CHANNEL_PREFIX}{slug}',
+                name=name,
+                slug=f'paramount-plus-{slug}',
+                stream_url=f'{CHANNEL_SCHEME}{c["videoContentId"]}?slug={slug}',
+                logo_url=_IMAGES + logo if logo else None,
+                category=category,
+                language='en',
+                country='US',
+                stream_type='dash',
+                guide_key=f'PPLUS:{slug}',
+                description=(c.get('description') or '').strip() or None,
+                tags=['Paramount+ Channels'] + (['Showtime'] if slug in SHOWTIME_SLUGS else []),
+            ))
+        return out
+
+    def _known_channel_slugs(self) -> set[str]:
+        try:
+            listed = {c['slug'] for c in self._live_channels()
+                      if 'vod_to_live' in (c.get('channelTypes') or []) and c.get('slug')}
+        except requests.RequestException:
+            listed = set()
+        return listed | set(SHOWTIME_SLUGS)
 
     def fetch_epg(self, channels: list[ChannelData], **kwargs) -> list[ProgramData]:
         wanted = {ch.source_channel_id for ch in channels}
-        programs = []
+        programs = self._drm_epg(wanted)
         for league, item in getattr(self, '_event_items', []):
             cid = f'{EVENT_CHANNEL_PREFIX}{item["videoContentId"]}'
             start = _epoch_ms(item.get('startTimestamp') or item.get('streamStartTimestamp'))
@@ -370,6 +543,46 @@ class ParamountScraper(BaseScraper):
                 is_live=True,
                 episode_id=str(item.get('id') or item['videoContentId']),
             ))
+        return programs
+
+    def _drm_epg(self, wanted: set[str]) -> list[ProgramData]:
+        programs = []
+        for c in getattr(self, '_drm_items', []):
+            cid = f'{CHANNEL_PREFIX}{c["slug"]}'
+            if cid not in wanted:
+                continue
+            try:
+                listing = self._get(f'live/channels/{c["slug"]}/listings.json', rows=_LISTING_ROWS, start=0,
+                                    showListing='true').get('listing') or []
+            except requests.RequestException as exc:
+                logger.warning('[paramount] %s listings unavailable: %s', c['slug'], exc)
+                continue
+            for item in listing:
+                start = _epoch_ms(item.get('startTimestamp'))
+                end = _epoch_ms(item.get('endTimestamp'))
+                title = (item.get('title') or '').strip()
+                if not start or not end or end <= start or not title:
+                    continue
+                thumb = (item.get('filePathThumb') or '').removeprefix('files/')
+                episode_title = (item.get('episodeTitle') or '').strip()
+                aired = _epoch_ms(item.get('originalAirDate'))
+                programs.append(ProgramData(
+                    source_channel_id=cid,
+                    title=title,
+                    start_time=start,
+                    end_time=end,
+                    description=(item.get('description') or '').strip() or None,
+                    poster_url=_THUMBS + thumb if thumb else None,
+                    rating=item.get('rating') or None,
+                    episode_title=episode_title if episode_title and episode_title != title else None,
+                    season=item.get('seasonNumber') or None,
+                    episode=item.get('episodeNumber') or None,
+                    original_air_date=aired.date() if aired else None,
+                    # TMS ids: MV… is a movie, EP…/SH… a series episode.
+                    program_type='movie' if str(item.get('tmsProgramId') or item.get('tmsSeriesId') or '').startswith('MV') else None,
+                    series_id=item.get('tmsSeriesId') or None,
+                    episode_id=item.get('tmsProgramId') or (str(item['id']) if item.get('id') else None),
+                ))
         return programs
 
     # ── playback ──
@@ -410,12 +623,68 @@ class ParamountScraper(BaseScraper):
         return self._playback(content_id, slug)[0]
 
     def audit_resolve(self, raw_url: str) -> str:
+        if (raw_url or '').startswith(CHANNEL_SCHEME):
+            return self._resolve_channel(raw_url)
         # An upcoming match has no stream yet; its place in the listings is the check.
         return raw_url
 
+    def _resolve_channel(self, raw_url: str) -> str:
+        """A Paramount+ Channels DASH manifest (Widevine; bridge-only)."""
+        content_id, _ = parse_channel_url(raw_url)
+        self._require_signed_in()
+        return drm_session(self._cookies(), content_id)['manifest']
+
+    # ── DRM license proxy wiring ──
+
+    @staticmethod
+    def _channel_content_id(channel_id: str | None) -> str | None:
+        if not channel_id or not channel_id.startswith(CHANNEL_PREFIX):
+            return None
+        from ..models import Channel, Source
+        row = (Channel.query.join(Source).with_entities(Channel.stream_url)
+               .filter(Source.name == 'paramount', Channel.source_channel_id == channel_id).first())
+        try:
+            return parse_channel_url(row[0])[0] if row else None
+        except ValueError:
+            return None
+
+    @classmethod
+    def get_license_url(cls, config: dict, channel_id: str | None = None) -> str | None:
+        content_id = cls._channel_content_id(channel_id)
+        if not content_id:
+            # Matches aren't DRM; the base URL only marks the source DRM-capable.
+            return cls.license_url if not channel_id else None
+        cached = _DRM_SESSIONS.get(content_id)
+        return (cached or {}).get('license_url') or (
+            f'{LICENSE_URL}?CrmId=cbsi&AccountId=cbsi&SubContentType=Default&ContentId={content_id}')
+
+    @classmethod
+    def prepare_license_request(cls, challenge: bytes, config: dict, channel_id: str | None = None, **kwargs):
+        headers = {'Content-Type': 'application/octet-stream', 'Origin': _PPLUS, 'Referer': _PPLUS + '/'}
+        content_id = cls._channel_content_id(channel_id)
+        cookies = config.get('cookies') or {}
+        if content_id and cookies.get('CBS_COM'):
+            try:
+                headers['Authorization'] = drm_session(cookies, content_id)['auth']
+            except (requests.RequestException, ParamountAuthError) as exc:
+                logger.warning('[paramount] license token for %s unavailable: %s', channel_id, exc)
+        return challenge, headers
+
+    @classmethod
+    def get_kodi_props_for_channel(cls, base_url: str, source_channel_id: str) -> dict[str, str]:
+        if not (source_channel_id or '').startswith(CHANNEL_PREFIX):
+            return {}
+        from urllib.parse import quote
+        return {'inputstream.adaptive.license_type': 'com.widevine.alpha',
+                'inputstream.adaptive.license_key': (
+                    f'{base_url}/play/paramount/license?channel_id={quote(source_channel_id, safe="")}||R{{SSM}}|')}
+
     def resolve(self, raw_url: str) -> str:
         """The match's DAI master playlist. Its key lines need the proxy
-        (app/routes/paramount_proxy.py), so play() never redirects here directly."""
+        (app/routes/paramount_proxy.py), so play() never redirects here directly. A Paramount+ Channels URL
+        resolves to its Widevine DASH manifest instead."""
+        if (raw_url or '').startswith(CHANNEL_SCHEME):
+            return self._resolve_channel(raw_url)
         content_id, slug, end = parse_event_url(raw_url)
         if end is not None and time.time() >= end + EVENT_END_GRACE_SECONDS:
             raise StreamDeadError('Paramount+ match has ended')

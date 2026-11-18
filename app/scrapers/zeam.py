@@ -36,6 +36,7 @@ class ZeamScraper(BaseScraper):
     """
 
     source_name = 'zeam'
+    added_in = '5.7.0'
     display_name = 'Zeam'
     scrape_interval = 360
     stream_audit_enabled = True

@@ -277,6 +277,7 @@ def _event_sport_league(video: dict) -> tuple[str | None, str | None]:
 
 class CBSSportsScraper(BaseScraper):
     source_name = 'cbs_sports'
+    added_in = '5.7.0'
     display_name = 'CBS'
     source_category = 'premium'
     is_premium = True

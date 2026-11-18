@@ -8,7 +8,7 @@ a scope:
                      master bridge playlists), one number per channel
   a feed id          that feed's standard, Gracenote and mixed playlists
 
-Until 5.10 the Default feed and the master playlists were numbered apart
+Until 5.9.5 the Default feed and the master playlists were numbered apart
 (and /m3u/gracenote and the master Gracenote bridge playlists apart again,
 in scopes -1 and -2), so one channel could show three or four numbers.
 unify_main_numbers() made them one, once, keeping the Default feed's numbers;
@@ -17,10 +17,19 @@ the old -1/-2/Default rows are left in place, unread, for a downgrade.
 settle() is the one allocator. It runs before every artifact build and after
 a scrape; playlists, admin pages and APIs only read. Its rules, in order:
 
-  1. Locks. A channel locked to a number (Channel.number_pinned) takes it in
-     every scope it is in, moving whoever had it there. In the main scope
-     a lock also wins while its channel is off; in a feed, the lock of a
-     channel that is not in the feed only keeps new channels off the number.
+  0. Feed locks. A row locked in a feed (ChannelNumber.locked, a number the
+     user typed in that feed's editor) never moves: not for a provider
+     number, a new start, a reorder or a renumber. While its
+     channel is out of the feed the row is held, with no time limit, until
+     the user unlocks it. Only feeds have them; the main numbers' lock is
+     the Channels-page one.
+  1. Locks. A channel locked to a number on the Channels page
+     (Channel.number_pinned) takes it in the main numbers, moving whoever had
+     it, and wins there while its channel is off. It is the main numbers'
+     lock only: feeds number the channel like any other, and a fixed number
+     in a feed is a feed lock (rule 0). scope_main_locks() made that switch
+     once, turning each feed row a Channels-page lock was holding into a
+     feed lock at the same number, so nothing moved.
   2. Keep. A member with a row keeps it, unless a lock or a provider number
      (DirecTV channel numbers) claims it, or it is below its floor (the
      scope's start changed).
@@ -31,8 +40,9 @@ a scrape; playlists, admin pages and APIs only read. Its rules, in order:
      provider number has.
 
 A Gracenote ID change moves no one: every scope holds both kinds of channel.
-Provider numbers and decimal locks stay output overlays
-(m3u.apply_provider_numbers).
+Provider numbers and decimal locks stay output overlays, applied with the
+feed locks by m3u.shown_numbers, the one helper every playlist and page
+uses to turn a scope's rows into the numbers it prints.
 
 Channel.number is the user's lock while number_pinned is set. Otherwise
 settle() writes the main number there as a copy for pages and sorting;
@@ -68,6 +78,14 @@ def _now() -> datetime:
 def is_seeded() -> bool:
     try:
         return AppSettings.get().chnum_seeded_at is not None
+    except Exception:  # noqa: BLE001 -- a pre-upgrade schema has no column yet
+        db.session.rollback()
+        return False
+
+
+def locks_scoped() -> bool:
+    try:
+        return AppSettings.get().chnum_locks_scoped_at is not None
     except Exception:  # noqa: BLE001 -- a pre-upgrade schema has no column yet
         db.session.rollback()
         return False
@@ -133,6 +151,12 @@ def held_channel_ids() -> set[int]:
             .filter(ChannelNumber.released_at.isnot(None)).distinct().all()}
 
 
+def scope_locks(scope_id: int) -> dict[int, int]:
+    """{channel_id: number} for a scope's feed-locked rows, held ones included."""
+    return dict(db.session.query(ChannelNumber.channel_id, ChannelNumber.number)
+                .filter(ChannelNumber.scope_id == scope_id, ChannelNumber.locked == True).all())
+
+
 def lock_map() -> dict[int, int]:
     """{channel_id: number} for every whole-number lock, on or off."""
     return dict(db.session.query(Channel.id, Channel.number)
@@ -170,7 +194,8 @@ def allocate(members, existing: dict[int, tuple[int, datetime | None]], *,
              floor, new_floor, order_key, locks: dict[int, int], provider: set[int],
              holdable: dict[int, datetime], absent_locks_win: bool,
              avoid: set[int] = frozenset(),
-             refuse=lambda m, n: False) -> dict[int, tuple[int, datetime | None]]:
+             refuse=lambda m, n: False,
+             scope_locks: dict[int, int] | None = None) -> dict[int, tuple[int, datetime | None]]:
     """The numbering rules (see the module docstring), as a pure function.
 
     members    channels in the scope (need .id; floor/new_floor/order_key see them)
@@ -179,6 +204,7 @@ def allocate(members, existing: dict[int, tuple[int, datetime | None]], *,
     new_floor  member -> where its search for a new number starts
     avoid      numbers new channels must not get (another scope's, see settle)
     refuse     (member, number) -> True when that member may not keep that number
+    scope_locks  the scope's feed locks, {channel_id: number}: fixed, members or not
 
     Returns the scope's rows after settling, {channel_id: (number, released_at)}.
     """
@@ -186,9 +212,19 @@ def allocate(members, existing: dict[int, tuple[int, datetime | None]], *,
     taken: set[int] = set()
     member_ids = {m.id for m in members}
 
+    for cid, n in sorted((scope_locks or {}).items()):
+        if n in taken:
+            continue
+        rel = None
+        if cid not in member_ids:
+            row = existing.get(cid)
+            rel = (row[1] if row is not None else None) or _now()
+        final[cid] = (n, rel)
+        taken.add(n)
+
     for m in sorted(members, key=lambda m: m.id):
         n = locks.get(m.id)
-        if n is not None and n not in taken:
+        if m.id not in final and n is not None and n not in taken:
             final[m.id] = (n, None)
             taken.add(n)
 
@@ -232,9 +268,10 @@ def _existing(scope_id: int) -> dict[int, tuple[int, datetime | None]]:
     ).filter(ChannelNumber.scope_id == scope_id).all()}
 
 
-def _write(scope_id: int, existing: dict, final: dict) -> int:
+def _write(scope_id: int, existing: dict, final: dict, locked=frozenset()) -> int:
     """Apply a scope's settled rows: delete what changed, then insert, so the
-    unique (scope, number) index never sees two rows on one number."""
+    unique (scope, number) index never sees two rows on one number. `locked`:
+    the feed-locked channels, whose rows keep the flag when rewritten."""
     table = ChannelNumber.__table__
     changed = [cid for cid, row in existing.items()
                if cid not in final or final[cid][0] != row[0]
@@ -245,8 +282,8 @@ def _write(scope_id: int, existing: dict, final: dict) -> int:
             table.c.scope_id == scope_id, table.c.channel_id.in_(changed[i:i + _BATCH])))
     if added:
         db.session.execute(insert(table), [
-            {'scope_id': scope_id, 'channel_id': cid,
-             'number': final[cid][0], 'released_at': final[cid][1]} for cid in added
+            {'scope_id': scope_id, 'channel_id': cid, 'number': final[cid][0],
+             'released_at': final[cid][1], 'locked': cid in locked} for cid in added
         ])
     return len(changed) + len(added)
 
@@ -286,6 +323,9 @@ def settle() -> None:
     if not is_unified() and not unify_main_numbers():
         logger.error('[chnum] main channel numbers are not unified; not settling')
         return
+    if not locks_scoped() and not scope_main_locks():
+        logger.error('[chnum] Channels-page locks are not scoped yet; not settling')
+        return
     db.session.flush()
     # SQLite's legacy transaction mode does not begin a transaction for a
     # SELECT. Take its writer lock before reading the allocation inputs, or a
@@ -296,7 +336,10 @@ def settle() -> None:
     db.session.execute(update(table).where(table.c.id == 1).values(id=table.c.id))
     settings = AppSettings.get()
     locks = lock_map()
-    provider = _reserved_provider_numbers()
+    provider = _reserved_provider_numbers(main=True)
+    # In feeds a Channels-page-locked channel shows its provider number
+    # (rule 1), so that number is reserved there too.
+    feed_provider = _reserved_provider_numbers(main=False)
     holdable = _holdable()
     common = dict(locks=locks, provider=provider, holdable=holdable)
 
@@ -327,12 +370,15 @@ def settle() -> None:
         members = (_selected_channel_stubs(filters, gracenote=False)
                    + _selected_channel_stubs(filters, gracenote=True))
         existing = _existing(feed.id)
+        fixed = scope_locks(feed.id)
         rows = allocate(
             members, existing, floor=lambda m, s=feed.chnum_start: s,
             new_floor=lambda m, s=feed.chnum_start: s,
             order_key=feed_order_key(feed.source_order, main_number),
-            absent_locks_win=False, **common)
-        writes += _write(feed.id, existing, rows)
+            # Channels-page locks are the main numbers' only (rule 1).
+            locks={}, provider=feed_provider, holdable=holdable,
+            absent_locks_win=False, scope_locks=fixed)
+        writes += _write(feed.id, existing, rows, locked=set(fixed))
 
     # Rows of deleted feeds.
     feed_ids = {f.id for f in Feed.query.with_entities(Feed.id).all()}
@@ -364,19 +410,21 @@ def _mirror_master_numbers(master: dict[int, int]) -> None:
 
 
 def plan_numbers(members, start: int, existing: dict | None = None,
-                 source_order=None) -> dict[int, int]:
+                 source_order=None, scope_locks: dict | None = None,
+                 main: bool = False) -> dict[int, int]:
     """Numbers an unsaved feed (or a saved one with edited filters or start)
     would get, by the same rules, without storing anything. `existing` is the
-    feed's rows when it has some."""
+    feed's rows when it has some, `scope_locks` its feed locks. `main`: planning
+    the main numbers, the only ones Channels-page locks apply to (rule 1)."""
     from .generators.m3u import _reserved_provider_numbers
     existing = existing or {}
     master = read_scope(MASTER_SCOPE)
     rows = allocate(
         members, existing, floor=lambda m: start, new_floor=lambda m: start,
         order_key=feed_order_key(source_order, lambda m: master.get(m.id, float('inf'))),
-        locks=lock_map(), provider=_reserved_provider_numbers(),
+        locks=lock_map() if main else {}, provider=_reserved_provider_numbers(main=main),
         holdable={cid: rel for cid, (_, rel) in existing.items() if rel is not None},
-        absent_locks_win=False)
+        absent_locks_win=False, scope_locks=scope_locks)
     return {cid: n for cid, (n, rel) in rows.items() if rel is None}
 
 
@@ -386,11 +434,13 @@ def scope_rows(scope_id: int) -> dict[int, tuple[int, datetime | None]]:
 
 
 # ------------------------------------------------------------------ edits
-def clear_rows(scope_id: int, channel_ids=None) -> None:
+def clear_rows(scope_id: int, channel_ids=None, *, keep_locked: bool = False) -> None:
     """Drop a scope's rows (or some channels' rows in it); the next settle
-    numbers those channels afresh."""
+    numbers those channels afresh. keep_locked leaves feed-locked rows."""
     table = ChannelNumber.__table__
     stmt = delete(table).where(table.c.scope_id == scope_id)
+    if keep_locked:
+        stmt = stmt.where(table.c.locked == False)
     if channel_ids is None:
         db.session.execute(stmt)
         return
@@ -406,6 +456,29 @@ def delete_channel_rows(channel_ids) -> None:
     ids = list(channel_ids)
     for i in range(0, len(ids), _BATCH):
         db.session.execute(delete(table).where(table.c.channel_id.in_(ids[i:i + _BATCH])))
+
+
+def lock_row(scope_id: int, channel_id: int, number: int) -> None:
+    """Lock a channel to a number in a feed. Another unlocked row on that
+    number is dropped (the next settle numbers it afresh); the caller has
+    refused a number another feed lock holds."""
+    table = ChannelNumber.__table__
+    db.session.execute(delete(table).where(
+        table.c.scope_id == scope_id,
+        db.or_(table.c.channel_id == channel_id,
+               db.and_(table.c.number == number, table.c.locked == False))))
+    db.session.flush()
+    db.session.execute(insert(table), [{'scope_id': scope_id, 'channel_id': channel_id,
+                                        'number': number, 'released_at': None, 'locked': True}])
+
+
+def unlock_row(scope_id: int, channel_id: int) -> None:
+    """Unlock a channel's number in a feed. A member keeps the number (it is
+    sticky like any other) unless it is below the feed's start; one out of the
+    feed keeps it only while the usual hold would (the next settle decides)."""
+    table = ChannelNumber.__table__
+    db.session.execute(update(table).where(
+        table.c.scope_id == scope_id, table.c.channel_id == channel_id).values(locked=False))
 
 
 def replace_rows(scope_id: int, numbers: dict[int, int]) -> None:
@@ -565,6 +638,53 @@ def seed_channel_numbers() -> bool:
     if skipped:
         logger.warning('[chnum] seed: %d number(s) already taken in their scope, renumbered '
                        'at the next settle: %s', len(skipped), ', '.join(skipped[:20]))
+    return True
+
+
+def scope_main_locks() -> bool:
+    """Make Channels-page locks the main numbers' lock only, once. Until now
+    a Channels-page lock also took its number in every feed; from here a feed
+    numbers the channel like any other. So nothing moves at the switch, each
+    feed row that a lock is holding (the channel's row is on its locked
+    number) becomes a feed lock at that number: the same number, now shown as
+    FEED LOCK, which the user can unlock. Held rows too (the channel is out
+    of the feed or gone inactive), so it gets the number back when it
+    returns. A locked channel that was off with no row in a feed has nothing
+    to convert there and is numbered afresh when it comes back. Disabled
+    feeds too, so re-enabling one later moves nothing either. Returns True
+    once done."""
+    if locks_scoped():
+        return True
+    if 'chnum_locks_scoped_at' not in AppSettings.__table__.c:
+        return False  # see unify_main_numbers: an old models.py can't record it
+    table = ChannelNumber.__table__
+    try:
+        feed_ids = [fid for (fid,) in db.session.query(Feed.id)
+                    .filter(Feed.slug != 'default').all()]
+        held = []
+        if feed_ids:
+            held = (db.session.query(table.c.scope_id, table.c.channel_id)
+                    .join(Channel, Channel.id == table.c.channel_id)
+                    .filter(table.c.scope_id.in_(feed_ids),
+                            table.c.locked == False,
+                            Channel.number_pinned == True,
+                            Channel.number.isnot(None),
+                            table.c.number == Channel.number)
+                    .all())
+        for scope_id, channel_id in held:
+            db.session.execute(update(table).where(
+                table.c.scope_id == scope_id, table.c.channel_id == channel_id).values(locked=True))
+        AppSettings.get().chnum_locks_scoped_at = _now()
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        logger.exception('[chnum] could not scope the Channels-page locks')
+        return False
+    if held:
+        logger.info('[chnum] Channels-page locks now apply to the main numbers only; '
+                    'kept %d feed number(s) they were holding as feed locks', len(held))
+    else:
+        logger.info('[chnum] Channels-page locks now apply to the main numbers only')
     return True
 
 

@@ -49,6 +49,7 @@ class Source(db.Model):
     gracenote_resync_done = db.Column(db.Boolean, default=False, nullable=False)  # one-time stale-native-GNID backfill done
     new_channel_policy = db.Column(db.String(16), default='inherit', nullable=False)  # inherit | enabled | review — how newly-scraped channels enter
     scraper_missing_since = db.Column(db.DateTime(timezone=True), nullable=True)  # set when no scraper class is registered for this source; cleared if it reappears
+    created_at      = db.Column(db.DateTime(timezone=True), nullable=True)  # set by seed_sources() when the row is first inserted (a new scraper reached this install); NULL = predates tracking
 
     channels = db.relationship('Channel', backref='source', lazy='dynamic',
                                 cascade='all, delete-orphan')
@@ -174,10 +175,17 @@ class TVEAccount(db.Model):
         by phone link — it has no username/password."""
         return (self.provider_id or '').startswith('mvpd:')
 
+    def has_hulu_link(self) -> bool:
+        """A Hulu device linked by code (app/tve/mvpd/hulu.py), which signs in
+        in place of a username/password."""
+        link = (self.config or {}).get('hulu_device') or {}
+        return bool(isinstance(link, dict) and link.get('device_token'))
+
     def is_usable(self) -> bool:
         """Turned on and set up enough for its sources to play: the shared
-        account needs its username/password, a separate login doesn't."""
-        return bool(self.is_enabled and (self.has_credentials() or self.is_separate()))
+        account needs its username/password (or a linked Hulu device), a
+        separate login doesn't."""
+        return bool(self.is_enabled and (self.has_credentials() or self.is_separate() or self.has_hulu_link()))
 
     def to_safe_dict(self):
         cfg = self.config or {}
@@ -452,6 +460,7 @@ class ChannelNumber(db.Model):
     scope_id is a feed id, or one of the master scopes (0, -1, -2, see
     app.chnum), so it has no foreign key. released_at is set
     while the channel is out of the scope and its number is held for it.
+    locked marks a number the user set in a feed's editor (a feed lock).
     Written only by app.chnum. (FeedChannelNumber is the previous store, left
     untouched so a downgrade still finds its numbers.)
     """
@@ -462,6 +471,8 @@ class ChannelNumber(db.Model):
                             primary_key=True, autoincrement=False)
     number      = db.Column(db.Integer, nullable=False)
     released_at = db.Column(db.DateTime, nullable=True)
+    locked      = db.Column(db.Boolean, nullable=False, default=False,
+                            server_default=db.text('0'))
 
     __table_args__ = (
         db.UniqueConstraint('scope_id', 'number', name='uq_channel_numbers_scope_number'),
@@ -479,10 +490,12 @@ class AppSettings(db.Model):
     master_gracenote_chnum_start = db.Column(db.Integer, nullable=True)  # unused since the main numbers were unified (app.chnum)
     chnum_seeded_at      = db.Column(db.DateTime, nullable=True)  # channel_numbers seeded from the previous numbering (app.chnum.seed_channel_numbers)
     chnum_unified_at     = db.Column(db.DateTime, nullable=True)  # Default feed and master playlists made one set of numbers (app.chnum.unify_main_numbers)
+    chnum_locks_scoped_at = db.Column(db.DateTime, nullable=True)  # Channels-page locks made main-numbers-only; feed rows they held became feed locks (app.chnum.scope_main_locks)
     channels_dvr_url     = db.Column(db.Text, nullable=True)     # e.g. http://192.168.1.x:8089
     public_base_url      = db.Column(db.Text, nullable=True)     # e.g. http://192.168.1.x:5523
     timezone_name        = db.Column(db.String(64), nullable=True)  # IANA timezone, e.g. America/New_York
     lite_mode            = db.Column(db.Boolean, nullable=False, default=False, server_default=db.text('0'))  # UI preference only; fresh installs opt in during schema setup
+    whats_new_seen_at    = db.Column(db.DateTime, nullable=True)  # "Since you last looked" baseline: sources/channels newer than this are new to the user
     auto_allow_new_channels = db.Column(db.Boolean, nullable=False, default=True, server_default=db.text('1'))  # newly-scraped channels enter feeds enabled (vs. held for review)
     event_channels_skip_review = db.Column(db.Boolean, nullable=False, default=True, server_default=db.text('1'))  # new fc:event channels enter enabled even when the source policy is review (#83)
     gracenote_auto_fill  = db.Column(db.Boolean, nullable=False, default=True, server_default=db.text('1'))  # scrapers auto-assign Gracenote IDs

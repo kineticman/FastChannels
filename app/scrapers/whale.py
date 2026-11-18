@@ -107,6 +107,7 @@ def _fill_url_macros(url: str) -> str:
 
 class WhaleScraper(BaseScraper):
     source_name          = "whale"
+    added_in = '4.2.0'
     display_name         = "Whale TV+"
     scrape_interval      = 720
     stream_audit_enabled = True

@@ -16,7 +16,7 @@ Scoped 2026-10-27 from a signed-in HAR (dev/hitlist/viewlift_rsn_scoping_2026-10
 from __future__ import annotations
 
 from .base import BaseScraper, ConfigField
-from .viewlift_tve import ViewLiftTVEScraper
+from .viewlift_tve import ViewLiftTVEScraper, sign_in_method_field
 
 API_BASE = 'https://api.monumentalsportsnetwork.com'
 
@@ -25,6 +25,7 @@ class MonumentalTVEScraper(ViewLiftTVEScraper, BaseScraper):
     """Monumental Sports Network 1 and 2 via ViewLift + Adobe Pass v2 (DMV providers only)."""
 
     source_name = 'monumental_tve'
+    added_in = '5.9.0'
     display_name = 'Monumental Sports TVE'
     license_url = f'{API_BASE}/v1/license/widevine/acquire'
 
@@ -55,4 +56,5 @@ class MonumentalTVEScraper(ViewLiftTVEScraper, BaseScraper):
         ConfigField('email', 'Monumental account email', placeholder='you@example.com',
                     help_text='The free Monumental account the TV provider sign-in is linked to. '
                               'Any address works: Monumental doesn\'t check it.'),
+        sign_in_method_field('Monumental'),
     ]

@@ -167,7 +167,7 @@ def tve_network_status_route():
 _TVE_SOURCE_NAMES = ('aenetworks_tve', 'fox_tve', 'discovery_tve', 'amcn_tve', 'warner_tve', 'nbc_tve',
                      'versant_tve', 'univision_tve', 'disney_tve', 'tennis_tve', 'dazn_tve', 'cspan_tve',
                      'sundance_tve', 'cnn_tve', 'nesn_tve', 'monumental_tve', 'altitude_tve',
-                     'myoutdoortv_tve', 'sportsnet_pittsburgh_tve')
+                     'myoutdoortv_tve', 'sportsnet_pittsburgh_tve', 'newsmax_tve')
 
 # FOX One is a Premium source with its own settings (sign-in method,
 # separate login, home ZIP); a TVE reset only drops the sign-in it got from
@@ -230,6 +230,7 @@ def tve_reset():
                                             'univision_user', 'univision_qpat_user',
                                             'univision_media_tokens', 'disney_adobe_tokens',
                                             'disney_streams', 'tennis_client', 'tennis_streams',
+                                            'newsmax_client', 'newsmax_authz',
                                             'dazn_session', 'dazn_streams',
                                             'cspan_tve_client', 'cspan_tve_authz',
                                             'sundance_session', 'sundance_streams',
@@ -432,9 +433,11 @@ def tve_link_login_start():
     if family == 'legacy' and not requestor_id:
         return jsonify({'error': 'requestor_id is required.'}), 400
     account = tve_account_for_network(requestor_id if family == 'legacy' else family)
-    if not account or not account.is_usable():
+    mso_id = tve_account_mso_id(account) if account else ''
+    # Hulu signs in with a Hulu code (the run's first step), never a password.
+    hulu_ok = bool(account and account.is_enabled and mso_id == 'Hulu')
+    if not account or not (account.is_usable() or hulu_ok):
         return jsonify({'error': 'Enter and save your TV provider username and password first.'}), 400
-    mso_id = tve_account_mso_id(account)
     # Same worker: a browser sign-in left waiting for this network would
     # hold the link job in the queue for up to 30 minutes.
     stop_family_browser_login(family, requestor_id)
@@ -444,7 +447,7 @@ def tve_link_login_start():
     # A new run_id in the status retires any job still waiting on an older link.
     _redis.from_url(current_app.config['REDIS_URL']).setex(STATUS_KEY, 900, json.dumps(status))
     get_signin_queue().enqueue('app.tve.link_login.run_link_login', family, requestor_id, mso_id, run_id,
-                             job_timeout=job_timeout(family))
+                             job_timeout=job_timeout(family, mso_id))
     return jsonify(status)
 
 

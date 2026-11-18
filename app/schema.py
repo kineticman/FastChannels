@@ -326,6 +326,7 @@ def ensure_runtime_schema(*, fresh_install: bool | None = None) -> None:
             " channel_id INTEGER NOT NULL REFERENCES channels(id) ON DELETE CASCADE,"
             " number INTEGER NOT NULL,"
             " released_at DATETIME,"
+            " locked BOOLEAN NOT NULL DEFAULT 0,"
             " PRIMARY KEY (scope_id, channel_id),"
             " CONSTRAINT uq_channel_numbers_scope_number UNIQUE (scope_id, number)"
             ")"
@@ -333,13 +334,20 @@ def ensure_runtime_schema(*, fresh_install: bool | None = None) -> None:
         conn.execute(text(
             "CREATE INDEX IF NOT EXISTS ix_channel_numbers_channel_id ON channel_numbers (channel_id)"
         ))
+        # Feed locks (6.0): a number the user set in a feed's editor.
+        cn_cols = {row[1] for row in conn.execute(text("PRAGMA table_info(channel_numbers)"))}
+        if "locked" not in cn_cols:
+            conn.execute(text(
+                "ALTER TABLE channel_numbers ADD COLUMN locked BOOLEAN NOT NULL DEFAULT 0"
+            ))
         tables.add("channel_numbers")
         if "app_settings" in tables:
             as_cols = {row[1] for row in conn.execute(text("PRAGMA table_info(app_settings)"))}
             for col, ddl in (("master_chnum_start", "INTEGER"),
                              ("master_gracenote_chnum_start", "INTEGER"),
                              ("chnum_seeded_at", "DATETIME"),
-                             ("chnum_unified_at", "DATETIME")):
+                             ("chnum_unified_at", "DATETIME"),
+                             ("chnum_locks_scoped_at", "DATETIME")):
                 if col not in as_cols:
                     conn.execute(text(f"ALTER TABLE app_settings ADD COLUMN {col} {ddl}"))
 
@@ -572,6 +580,16 @@ def ensure_runtime_schema(*, fresh_install: bool | None = None) -> None:
             _ensure_app_settings_row(conn)
             if fresh_install:
                 conn.execute(text("UPDATE app_settings SET lite_mode = 1 WHERE id = 1"))
+            if "whats_new_seen_at" not in cols:
+                conn.execute(text("ALTER TABLE app_settings ADD COLUMN whats_new_seen_at DATETIME"))
+            # Baseline for "Since you last looked": the first boot that has the
+            # column starts the clock, so an upgrade doesn't report every
+            # existing source/channel as new. Fresh installs are re-baselined in
+            # seed_sources(), after their sources are first inserted.
+            conn.execute(text(
+                "UPDATE app_settings SET whats_new_seen_at = CURRENT_TIMESTAMP "
+                "WHERE id = 1 AND whats_new_seen_at IS NULL"
+            ))
 
         if "sources" in tables:
             src_cols = {
@@ -624,6 +642,13 @@ def ensure_runtime_schema(*, fresh_install: bool | None = None) -> None:
                 # import failure (bad deploy, missing dep) doesn't nuke real data.
                 conn.execute(text(
                     "ALTER TABLE sources ADD COLUMN scraper_missing_since DATETIME"
+                ))
+            if "created_at" not in src_cols:
+                # Stamped by seed_sources() when a new scraper's row is first
+                # inserted — i.e. when the source reached this install. Existing
+                # rows stay NULL ("predates tracking"), never reported as new.
+                conn.execute(text(
+                    "ALTER TABLE sources ADD COLUMN created_at DATETIME"
                 ))
 
         if "channels" in tables:

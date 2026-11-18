@@ -48,6 +48,14 @@ Key facts established by probing:
   a fixed one. With no Widevine asset it falls back to a clear DASH, then HLS,
   asset, and logs which asset types the answer had.
 
+- Direct subscribers (NESN 360 and the like, no TV provider): the source's
+  'sign_in_method' setting set to 'subscription' skips Adobe and plays with
+  the ViewLift account's own token, the same token a TV-provider sign-in
+  ends up playing with. Untested (beta): written for #72 without a
+  subscriber account on any tenant. Off for a site that can't sign an
+  existing account in (MyOutdoorTV: no emailed code), since every
+  subscriber already has one.
+
 Every config, cache and Redis key is `<key>_…`, so NESN (key 'nesn') keeps
 the keys it had before this module was split out of nesn_tve.py.
 """
@@ -120,6 +128,18 @@ def _guide_gracenote(epg_url: str) -> str | None:
     return m.group(1) if m else None
 
 
+def sign_in_method_field(brand: str):
+    """The 'How do you get <brand>?' setting a site with direct_subscription
+    lists in its config_schema."""
+    from .base import ConfigField
+    return ConfigField(
+        'sign_in_method', f'How do you get {brand}?', field_type='select', default='tve',
+        options=[{'value': 'tve', 'label': 'Through my TV provider'},
+                 {'value': 'subscription', 'label': f'Direct subscription (I pay {brand})'}],
+        help_text=f'Direct subscription: sign in to the {brand} account that has your subscription; '
+                  'no TV provider sign-in is needed. Beta: not yet tested with a subscriber account.')
+
+
 class ViewLiftTVEScraper(MvpdCooldownMixin, BaseScraper):
     """A ViewLift tenant's live channels with a TV provider sign-in. Not a
     source itself (no source_name); each site subclasses it, listing
@@ -135,6 +155,10 @@ class ViewLiftTVEScraper(MvpdCooldownMixin, BaseScraper):
     is_beta = True
 
     # ── per site ──
+    # What the channels are listed as, and which clear rendition resolve()
+    # prefers when the entitlement has no Widevine asset. MyOutdoorTV's
+    # entitlement answers clear HLS only.
+    channel_stream_type = 'dash'
     # Prefix for config/cache/Redis keys, the link-login family and the
     # sign-in status key (app/tve/status.py, signin_notice).
     key = ''
@@ -160,6 +184,19 @@ class ViewLiftTVEScraper(MvpdCooldownMixin, BaseScraper):
     otp_enabled = True
     # Said when the entitlement answers contentGeoRestricted.
     market_note = ''
+    # Send the Adobe-authorized resources as identitySignInTve's channelIds.
+    # A site whose TVE plans are per channel (MyOutdoorTV: "TVE Charter
+    # Spectrum OC") attaches the plan only from that list; without it the link
+    # returns 200 but the entitlement answers SVOD_SUBSCRIPTION_NOT_FOUND.
+    # Off where the site's own web client leaves it out (Altitude).
+    send_channel_ids = False
+    # Offer the direct-subscription sign-in ('sign_in_method' = 'subscription').
+    # Needs a way to sign an existing account in: otp, or email with the code
+    # fallback.
+    direct_subscription = True
+
+    def _subscriber(self) -> bool:
+        return self.direct_subscription and (self.config.get('sign_in_method') or 'tve') == 'subscription'
 
     # ── page config / channel discovery ──────────────────────────────────────
 
@@ -219,7 +256,7 @@ class ViewLiftTVEScraper(MvpdCooldownMixin, BaseScraper):
                 slug=f'{self.scheme.removesuffix("://")}-{cid}',
                 logo_url=ch.get('logo'),
                 stream_url=f'{self.scheme}{cid}',
-                stream_type='dash',
+                stream_type=self.channel_stream_type,
                 category=self.channel_category,
                 language='en',
                 country='US',
@@ -408,9 +445,10 @@ class ViewLiftTVEScraper(MvpdCooldownMixin, BaseScraper):
                 'token': result['authorizationToken'], 'refresh_token': result['refreshToken'],
                 'signed_in_at': int(time.time())}
 
-    def _account_token(self) -> tuple[str, dict]:
-        """The account's user token (refreshed when it nears its 30-day expiry;
-        the refreshed one lives in the source cache) and the login."""
+    def _account_token(self, force: bool = False) -> tuple[str, dict]:
+        """The account's user token (refreshed when it nears its 30-day expiry,
+        or when forced; the refreshed one lives in the source cache) and the
+        login."""
         login = self.config.get(f'{self.key}_account') or {}
         if not login.get('refresh_token'):
             raise self._sign_in_needed(
@@ -421,7 +459,7 @@ class ViewLiftTVEScraper(MvpdCooldownMixin, BaseScraper):
         if cached.get('signed_in_at') != login.get('signed_in_at'):
             cached = {'token': login['token'], 'signed_in_at': login.get('signed_in_at')}
         exp = _jwt_payload(cached.get('token') or '').get('exp') or 0
-        if exp - time.time() > _ACCOUNT_MARGIN:
+        if not force and exp - time.time() > _ACCOUNT_MARGIN:
             return cached['token'], login
         try:
             r = requests.get(f'{self.api_base}/identity/refresh/{login["refresh_token"]}',
@@ -491,12 +529,19 @@ class ViewLiftTVEScraper(MvpdCooldownMixin, BaseScraper):
             return None
 
     def _sign_in_needed(self, message: str) -> TVEAuthError:
-        from ..tve.signin_notice import mark_signin_needed
-        mark_signin_needed(self.key, message)
+        # A direct subscriber has nothing to fix on the TV Everywhere page.
+        if not self._subscriber():
+            from ..tve.signin_notice import mark_signin_needed
+            mark_signin_needed(self.key, message)
         return TVEAuthError(message)
 
     def _viewlift_session(self, force: bool = False) -> dict:
-        """A ViewLift user token that carries the TV-provider sign-in."""
+        """A ViewLift user token that carries the TV-provider sign-in, or for a
+        direct subscriber the account's own token."""
+        if self._subscriber():
+            token, login = self._account_token(force=force)
+            return {'token': token, 'exp': _jwt_payload(token).get('exp') or time.time() + 7 * 86400,
+                    'mso_id': None, 'account_signed_in_at': login.get('signed_in_at'), 'cached_at': time.time()}
         account = self._account()
         auth = (account.config or {}).get(f'{self.key}_mvpd_auth') or {}
         if not auth.get('client_id') or not auth.get('device_fingerprint'):
@@ -554,6 +599,8 @@ class ViewLiftTVEScraper(MvpdCooldownMixin, BaseScraper):
                 'adbDeviceId': client.session.headers['ap-device-identifier'],
                 'adobeMetadata': {'zip': None, 'encryptedZip': attr('zip')},
             }}
+            if self.send_channel_ids:
+                variables['input']['channelIds'] = [res for res, ok in decisions.items() if ok]
             query = ('mutation ($site: String!, $input: SignInTveInput!) { identitySignInTve(site: $site, '
                      'input: $input) { userId tveUserId provider authorizationToken refreshToken } }')
             r = requests.post(f'{api}/graphql', json={'query': query, 'variables': variables},
@@ -600,11 +647,16 @@ class ViewLiftTVEScraper(MvpdCooldownMixin, BaseScraper):
         status, body = self._entitlement(page, ch, session['token'])
         if status in (401, 403) and body.get('errorCode') != 'contentGeoRestricted':
             # A token ViewLift no longer honours, or a package change since it
-            # was minted: re-mint it from the Adobe sign-in once.
+            # was minted: re-mint it from the Adobe sign-in (a subscriber:
+            # refresh the account token) once.
             logger.info('[%s] entitlement HTTP %s (%s) for %s; renewing the ViewLift sign-in',
                         self.source_name, status, body.get('errorCode'), cid)
             session = self._viewlift_session(force=True)
             status, body = self._entitlement(page, ch, session['token'])
+        if status == 403 and body.get('errorCode') == 'contentGeoRestricted' and session.get('mso_id') is None:
+            raise TVENotAuthorizedError(
+                f'{self.display_name}: {self.brand} won\'t play {ch["title"]} for this subscription from here '
+                f'(contentGeoRestricted{", device ZIP " + str(body["deviceZip"]) if body.get("deviceZip") else ""}).')
         if status == 403 and body.get('errorCode') == 'contentGeoRestricted':
             raise TVENotAuthorizedError(
                 f'{self.display_name}: {self.market_note} '
@@ -612,6 +664,24 @@ class ViewLiftTVEScraper(MvpdCooldownMixin, BaseScraper):
         if status == 403 and body.get('errorCode') == 'TVE_SUBSCRIPTION_NOT_FOUND':
             raise TVENotAuthorizedError(
                 f'{self.display_name}: not entitled to {ch["title"]} ({body.get("errorMessage")}).')
+        if (status == 403 and session.get('mso_id') is None
+                and body.get('errorCode') in ('SVOD_SUBSCRIPTION_NOT_FOUND', 'TVE_SUBSCRIPTION_NOT_FOUND')):
+            # Reported as an error, not a geo block, for the reason below.
+            raise RuntimeError(
+                f'{self.display_name}: no {self.brand} subscription found on the account '
+                f'{(self.config.get(f"{self.key}_account") or {}).get("email") or ""} for {ch["title"]} '
+                f'({body.get("errorCode")}). Sign in with the email your subscription is under, or switch '
+                f'"How do you get {self.brand}?" to TV provider.')
+        if status == 403 and body.get('errorCode') == 'SVOD_SUBSCRIPTION_NOT_FOUND':
+            # ViewLift took the sign-in but found no package on it, even after a
+            # re-mint. Not a geo block, and not proof the account lacks the
+            # channel (the same login can play on the web), so it's reported as
+            # an error rather than switching the channel off. The message keeps
+            # out "HTTP 403" so the audit doesn't read it as a geo block.
+            raise RuntimeError(
+                f'{self.display_name}: the network found no subscription on this sign-in for '
+                f'{ch["title"]} (SVOD_SUBSCRIPTION_NOT_FOUND'
+                f'{": " + body["errorMessage"] if body.get("errorMessage") else ""}).')
         if status != 200 or not body.get('playable', True):
             raise RuntimeError(f'{self.display_name}: entitlement for {cid} failed: '
                                f'HTTP {status} {body.get("errorCode") or ""}')
@@ -625,10 +695,10 @@ class ViewLiftTVEScraper(MvpdCooldownMixin, BaseScraper):
             license_url = widevine.get('licenseUrl')
             license_exp = _jwt_payload(token.split('|', 1)[-1]).get('exp') or time.time() + 6 * 3600
         else:
-            # Unconfirmed: no DRM asset, so try a clear rendition (DASH first,
-            # since the channels are registered as DASH).
+            # No DRM asset: a clear rendition, the kind the channels are
+            # listed as first.
             url = None
-            for kind in ('dash', 'hls'):
+            for kind in dict.fromkeys((self.channel_stream_type, 'dash', 'hls')):
                 asset = assets.get(kind)
                 url = asset.get('url') if isinstance(asset, dict) else asset
                 if url:

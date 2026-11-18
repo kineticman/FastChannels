@@ -203,6 +203,7 @@ class SundanceTVEScraper(BaseScraper):
     """SundanceTV (24/7) with a Sundance account and a TV-provider sign-in."""
 
     source_name = 'sundance_tve'
+    added_in = '5.7.0'
     display_name = 'SundanceTV (AMC Networks)'
     source_category = 'tve'
     is_premium = True

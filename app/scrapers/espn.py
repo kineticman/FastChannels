@@ -828,6 +828,7 @@ def run_adobe_signin(pending: dict) -> None:
 
 class ESPNScraper(BaseScraper):
     source_name = 'espn'
+    added_in = '5.4.0'
     display_name = 'ESPN'
     source_category = 'premium'
     is_premium = True

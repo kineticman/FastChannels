@@ -101,6 +101,14 @@ def is_source_config_complete(source_name: str, scraper_cls, values: dict | None
     if source_name == 'b1g_plus':
         return bool(saved.get('token'))
 
+    # MLB — "configured" means the TV-code sign-in saved a refresh token.
+    if source_name == 'mlb':
+        return bool(saved.get('refresh_token'))
+
+    # Hulu + Live TV — "configured" means a Hulu device code link is saved.
+    if source_name == 'hulu_live':
+        return bool((saved.get('hulu_device') or {}).get('device_token'))
+
     # Paramount+ — "configured" means the activation-code sign-in saved a session.
     if source_name == 'paramount':
         return bool((saved.get('cookies') or {}).get('CBS_COM'))

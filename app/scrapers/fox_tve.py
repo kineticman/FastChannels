@@ -937,6 +937,7 @@ def resolve_fox_sports_hls(channel: FoxTVEChannel) -> str:
 
 class FoxTVEScraper(MvpdCooldownMixin, BaseScraper):
     source_name = 'fox_tve'
+    added_in = '5.0.0'
     display_name = 'FOX TVE'
     source_category = 'tve'
     is_premium = True

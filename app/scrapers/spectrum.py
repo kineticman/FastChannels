@@ -140,6 +140,7 @@ _MAX_TRACKED_SESSIONS = 2  # self-imposed, one under Spectrum's real 3-session A
 
 class SpectrumScraper(BaseScraper):
     source_name = 'spectrum'
+    added_in = '5.3.0'
     display_name = 'Spectrum'
     is_premium = True
     source_category = 'premium'

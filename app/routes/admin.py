@@ -12,10 +12,11 @@ from ..extensions import db
 from .. import folded_sources
 from .. import admin_auth
 from ..models import Source, Channel, Feed, AppSettings, Program, SourceCache
+from ..chnum import MASTER_SCOPE
 from ..generators.m3u import (
     _apply_event_filter,
     _build_channel_query,
-    apply_provider_numbers,
+    shown_numbers,
     _drm_bridge_query_filters,
     _has_gracenote_claim,
     feed_to_query_filters,
@@ -161,28 +162,33 @@ def _chnum_titles(page_items, main_map: dict) -> dict[int, str]:
     """Hover text for the Channels page number: the channel's number in the
     Default feed and /m3u, then in each feed that numbers it on its own."""
     from ..models import ChannelNumber
-    from ..generators.m3u import apply_provider_numbers
+    from ..generators.m3u import shown_numbers
     if not page_items:
         return {}
     feeds = dict(Feed.query.filter(Feed.is_enabled == True, Feed.slug != 'default')
                  .order_by(Feed.name).with_entities(Feed.id, Feed.name).all())
     by_id = {ch.id: ch for ch in page_items}
     per_feed: dict[int, dict[int, int]] = {}
+    feed_locked: dict[int, set[int]] = {}
     if feeds:
-        rows = (db.session.query(ChannelNumber.scope_id, ChannelNumber.channel_id, ChannelNumber.number)
+        rows = (db.session.query(ChannelNumber.scope_id, ChannelNumber.channel_id,
+                                 ChannelNumber.number, ChannelNumber.locked)
                 .filter(ChannelNumber.channel_id.in_(list(by_id)),
                         ChannelNumber.scope_id.in_(list(feeds)),
                         ChannelNumber.released_at.is_(None))
                 .all())
-        for scope_id, cid, n in rows:
+        for scope_id, cid, n, locked in rows:
             per_feed.setdefault(scope_id, {})[cid] = n
-    shown = {fid: apply_provider_numbers([by_id[c] for c in nums], nums)
+            if locked:
+                feed_locked.setdefault(scope_id, set()).add(cid)
+    shown = {fid: shown_numbers([by_id[c] for c in nums], nums, fid)
              for fid, nums in per_feed.items()}
     titles = {}
     for cid in by_id:
         lines = [f'Default feed and /m3u: {main_map.get(cid) or "not numbered"}']
-        lines += [f'{name}: {shown[fid][cid]}' for fid, name in feeds.items()
-                  if cid in shown.get(fid, {})]
+        lines += [f'{name}: {shown[fid][cid]}'
+                  + (' (locked in this feed)' if cid in feed_locked.get(fid, ()) else '')
+                  for fid, name in feeds.items() if cid in shown.get(fid, {})]
         if len(lines) == 1:
             lines.append('In no other feed.')
         titles[cid] = '\n'.join(lines)
@@ -233,7 +239,7 @@ def _sort_ids_by_shown_number(q, full_map: dict, *, descending: bool) -> list[in
                         source=SimpleNamespace(name=r.source_name))
         for r in rows
     ]
-    shown = apply_provider_numbers(stubs, full_map)
+    shown = shown_numbers(stubs, full_map, MASTER_SCOPE)
 
     def name_key(name):
         n = (name or '').lower()
@@ -271,7 +277,8 @@ def _page_default_feed_chnum_map(page_items, full_map: dict | None = None) -> di
     persist or compare as integers."""
     if not page_items:
         return {}
-    full_map = apply_provider_numbers(page_items, full_map if full_map is not None else _default_feed_chnum_map_full())
+    full_map = shown_numbers(page_items, full_map if full_map is not None else _default_feed_chnum_map_full(),
+                             MASTER_SCOPE)
     page_ids = {ch.id for ch in page_items}
     return {channel_id: chnum for channel_id, chnum in full_map.items() if channel_id in page_ids}
 
@@ -775,6 +782,13 @@ def dashboard():
     server_country = get_server_country()
     # TV-provider sign-ins that lapsed and need a person to redo them (see
     # app/tve/signin_notice.py). Never let this break the dashboard.
+    # "Since you last looked" card (app/whats_new.py). Never let it break the dashboard.
+    try:
+        from app.whats_new import build_whats_new
+        whats_new = build_whats_new(all_scrapers, lite=bool(ui_context()['lite']))
+    except Exception:  # noqa: BLE001
+        current_app.logger.exception('[dashboard] could not build the whats-new card')
+        whats_new = None
     try:
         from app.tve.signin_notice import pending_signins
         signins_needed = pending_signins()
@@ -782,6 +796,7 @@ def dashboard():
         current_app.logger.exception('[dashboard] could not read pending sign-ins')
         signins_needed = []
     return render_template('admin/dashboard.html', sources=sources,
+                           whats_new=whats_new,
                            enabled_sources=enabled_sources, disabled_sources=disabled_sources,
                            enabled_source_groups=enabled_source_groups,
                            disabled_source_groups=disabled_source_groups,
@@ -1637,7 +1652,7 @@ def guide_programs():
 
     def _movie_year(p):
         cats = f'{p.category or ""};{ch_cat.get(p.channel_id, "")}'.casefold().split(';')
-        is_movie = p.program_type == 'movie' or any(c.strip() in ('movie', 'movies') for c in cats)
+        is_movie = p.program_type == 'movie' or (p.program_type != 'episode' and any(c.strip() in ('movie', 'movies') for c in cats))
         if is_movie and p.original_air_date:
             return p.original_air_date.year
         # A Gracenote MV match is a movie even when the scraper didn't tag it.
@@ -1734,23 +1749,29 @@ def channels_chnum_map():
 def feeds():
     app_settings = AppSettings.get()
     sources    = Source.query.filter_by(is_enabled=True).order_by(Source.display_name).all()
-    # Sources folded into Free Networks stay pickable under their old names,
-    # which is what saved feeds hold; "Free Networks" picks its other networks.
+    # Free Networks' networks are picked in their own panel (fn_networks), by
+    # feed name "free_networks:<key>"; a folded source's old name still means
+    # its network (app/folded_sources.py). The source order keeps the folded
+    # names it always offered.
+    order_sources = sources
     if any(s.name == folded_sources.HOST for s in sources):
-        sources = sorted(
-            [*sources, *(SimpleNamespace(name=k, display_name=v, epg_only=False)
+        order_sources = sorted(
+            [*sources, *(SimpleNamespace(name=k, display_name=v)
                          for k, v in folded_sources.FOLDED.items())],
             key=lambda s: (s.display_name or s.name).casefold())
     feeds      = Feed.query.order_by(Feed.name).all()
     # Per-source channel tallies for the feed modal: how many channels each
     # source can actually contribute to a feed (mirrors the feed_eligible
     # predicate), plus why the rest can't, so checking a dead source in the
-    # modal explains itself instead of silently adding nothing.
-    source_counts = {
-        s.name: {'display': s.display_name or s.name, 'epg_only': bool(s.epg_only),
-                 'eligible': 0, 'disabled': 0, 'total': 0}
-        for s in sources
-    }
+    # modal explains itself instead of silently adding nothing. Networks get
+    # one too, and Free Networks counts all of them: ticking it in the editor
+    # ticks every network.
+    def _tally(display, epg_only=False):
+        return {'display': display, 'epg_only': bool(epg_only), 'eligible': 0, 'disabled': 0, 'total': 0}
+    source_counts = {s.name: _tally(s.display_name or s.name, s.epg_only) for s in sources}
+    net_names = {}
+    if folded_sources.HOST in source_counts:
+        net_names = folded_sources.network_display_names()
     _cnt_rows = db.session.query(
         Source.name, Channel.source_channel_id, Channel.is_active, Channel.is_enabled, Channel.stream_url != None,
         Channel.requires_drm_bridge,
@@ -1758,15 +1779,45 @@ def feeds():
      .filter(Source.is_enabled == True).all()
     show_drm = ui_context()['show_drm']
     for name, scid, active, enabled, has_url, bridge in _cnt_rows:
-        entry = source_counts.get(folded_sources.folded_key(name, scid) or name)
-        if entry is None:
-            continue
-        entry['total'] += 1
-        if active and has_url and not entry['epg_only'] and (show_drm or not bridge):
-            if enabled:
-                entry['eligible'] += 1
-            else:
-                entry['disabled'] += 1
+        entries = []
+        net = folded_sources.network_of(name, scid) if net_names else None
+        if net:
+            key = folded_sources.network_feed_name(net)
+            if key not in source_counts:
+                source_counts[key] = _tally(net_names.get(net, net))
+            entries.append(source_counts[key])
+        if name in source_counts:
+            entries.append(source_counts[name])
+        for entry in entries:
+            entry['total'] += 1
+            if active and has_url and not entry['epg_only'] and (show_drm or not bridge):
+                if enabled:
+                    entry['eligible'] += 1
+                else:
+                    entry['disabled'] += 1
+    # The networks panel lists networks with channels here, plus any a saved
+    # feed names (under either spelling), so that selection stays visible.
+    # The folded networks are always listed: "free_networks" doesn't cover
+    # them, so a feed holds each by name, and one with no channels today
+    # must still be saved as ticked or left out for when its channels return.
+    fn_networks = []
+    if net_names:
+        saved = {folded_sources.feed_network(n) for f in feeds
+                 for key in ('sources', 'exclude_sources')
+                 for n in ((f.filters or {}).get(key) or [])} - {None}
+        keys = {folded_sources.feed_network(k) for k, v in source_counts.items()
+                if folded_sources.feed_network(k) and v['total']} | saved | set(folded_sources.FOLDED)
+        for net in keys:
+            key = folded_sources.network_feed_name(net)
+            source_counts.setdefault(key, _tally(net_names.get(net, net)))
+            fn_networks.append({'key': key, 'net': net, 'display': source_counts[key]['display'],
+                                'eligible': source_counts[key]['eligible']})
+        fn_networks.sort(key=lambda n: n['display'].casefold())
+    # Feed cards show a network pick by its name, under either spelling.
+    source_labels = {k: f"FN · {v['display']}" for k, v in source_counts.items()
+                     if folded_sources.feed_network(k)}
+    source_labels.update({k: source_labels.get(folded_sources.network_feed_name(k), k)
+                          for k in folded_sources.FOLDED})
     cats = db.session.query(Channel.category)\
         .filter(Channel.is_active == True, Channel.category != None)\
         .distinct().order_by(Channel.category).all()
@@ -1811,7 +1862,9 @@ def feeds():
         'sources':       len(sources),
     }
     return render_template('admin/feeds.html',
-                           feeds=feeds, sources=sources,
+                           feeds=feeds, sources=sources, order_sources=order_sources,
+                           fn_networks=fn_networks, source_labels=source_labels,
+                           folded_networks=sorted(folded_sources.FOLDED),
                            categories=categories, languages=languages, countries=countries,
                            sports=sports,
                            base_url=base_url,
@@ -2121,6 +2174,12 @@ def logs():
     return render_template('admin/logs.html')
 
 
+@admin_bp.route('/whats-new/seen', methods=['POST'])
+def whats_new_seen():
+    from app.whats_new import mark_seen
+    return jsonify({'seen_at': mark_seen().isoformat() + 'Z'})
+
+
 @admin_bp.route('/reports/channel-changes')
 def channel_changes_report():
     from ..timezone_utils import current_zoneinfo
@@ -2134,11 +2193,35 @@ def channel_changes_report():
         '30d': 30,
     }
     selected_window = (request.args.get('window') or '1d').strip().lower()
-    if selected_window not in window_options:
+    seen_at = settings.whats_new_seen_at  # naive UTC, the dashboard card's marker
+    if selected_window == 'since' and seen_at is None:
         selected_window = '1d'
-    window_days = window_options[selected_window]
+    if selected_window not in window_options and selected_window != 'since':
+        selected_window = '1d'
+    # Channel kind: event channels (games, one-off events) churn daily and bury
+    # the lineup changes, so the report defaults to regular linear channels.
+    from ..channel_tags import event_channel_clause
+    selected_kind = (request.args.get('kind') or 'linear').strip().lower()
+    if selected_kind not in ('linear', 'events', 'all'):
+        selected_kind = 'linear'
+    kind_filters = {
+        'linear': [~event_channel_clause()],
+        'events': [event_channel_clause()],
+        'all': [],
+    }[selected_kind]
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-    window_start = today_start - timedelta(days=window_days - 1)
+    if selected_window == 'since':
+        window_days = None
+        window_start = seen_at.replace(tzinfo=timezone.utc).astimezone(local_tz)
+        filter_start = seen_at  # stored timestamps are UTC wall time
+        window_heading = ' Since You Last Looked'
+        window_stat = ' Since Last Looked'
+    else:
+        window_days = window_options[selected_window]
+        window_start = today_start - timedelta(days=window_days - 1)
+        filter_start = window_start
+        window_heading = ' Today' if window_days == 1 else f' in Last {window_days} Days'
+        window_stat = ' Today' if window_days == 1 else ' in Window'
 
     # NOTE: defer(Source.config) is load-bearing. Source.config is JSON and the
     # Roku source's is ~1.2MB; without deferring it, this (Channel, Source) join
@@ -2149,7 +2232,8 @@ def channel_changes_report():
         db.session.query(Channel, Source)
         .join(Source, Source.id == Channel.source_id)
         .options(defer(Source.config))
-        .filter(Channel.created_at >= window_start)
+        .filter(*kind_filters)
+        .filter(Channel.created_at >= filter_start)
         .order_by(Channel.created_at.desc(), Source.display_name.asc(), Channel.name.asc())
         .all()
     )
@@ -2158,9 +2242,10 @@ def channel_changes_report():
         db.session.query(Channel, Source)
         .join(Source, Source.id == Channel.source_id)
         .options(defer(Source.config))
+        .filter(*kind_filters)
         .filter(
             Channel.is_active == False,
-            Channel.went_inactive_at >= window_start,
+            Channel.went_inactive_at >= filter_start,
         )
         .order_by(Channel.went_inactive_at.desc(), Source.display_name.asc(), Channel.name.asc())
         .all()
@@ -2170,6 +2255,7 @@ def channel_changes_report():
         db.session.query(Channel, Source)
         .join(Source, Source.id == Channel.source_id)
         .options(defer(Source.config))
+        .filter(*kind_filters)
         .filter(
             Channel.is_active == True,
             Channel.missed_scrapes > 0,
@@ -2182,9 +2268,10 @@ def channel_changes_report():
         db.session.query(Channel, Source)
         .join(Source, Source.id == Channel.source_id)
         .options(defer(Source.config))
+        .filter(*kind_filters)
         .filter(
             Channel.is_active == True,
-            Channel.returned_at >= window_start,
+            Channel.returned_at >= filter_start,
         )
         .order_by(Channel.returned_at.desc(), Source.display_name.asc(), Channel.name.asc())
         .all()
@@ -2199,7 +2286,8 @@ def channel_changes_report():
         db.session.query(Channel, Source)
         .join(Source, Source.id == Channel.source_id)
         .options(defer(Source.config))
-        .filter(Channel.identity_changed_at >= window_start)
+        .filter(*kind_filters)
+        .filter(Channel.identity_changed_at >= filter_start)
         .order_by(Channel.identity_changed_at.desc(), Source.display_name.asc(), Channel.name.asc())
         .all()
     )
@@ -2232,6 +2320,7 @@ def channel_changes_report():
     # Per-source health summary
     now_utc = datetime.now(timezone.utc)
     all_sources = Source.query.filter(Source.is_enabled == True).order_by(Source.display_name).all()
+    report_scrapers = _scraper_registry.get_all()  # built-in scrapers only, not user playlists
     source_health = []
     for src in all_sources:
         active = Channel.query.filter_by(source_id=src.id, is_active=True).count()
@@ -2240,6 +2329,11 @@ def channel_changes_report():
         at_risk = Channel.query.filter_by(source_id=src.id, is_active=True).filter(Channel.missed_scrapes > 0).count()
         source_health.append({
             'display_name': src.display_name,
+            # FastChannels release that first shipped it; '' for user playlists
+            # and custom channels, None for a registered but unreleased scraper.
+            'added_in': (getattr(report_scrapers.get(src.name), 'added_in', None)
+                         if src.name in report_scrapers else ''),
+            'arrived_at': src.created_at,  # when it reached this install (None = predates tracking)
             'active': active,
             'at_risk': at_risk,
             'last_scraped_at': src.last_scraped_at,
@@ -2258,6 +2352,10 @@ def channel_changes_report():
         selected_window=selected_window,
         window_days=window_days,
         window_options=window_options,
+        window_heading=window_heading,
+        selected_kind=selected_kind,
+        window_stat=window_stat,
+        has_seen_marker=seen_at is not None,
         new_rows=new_rows,
         new_counts=_group_counts(new_rows),
         new_daily_counts=_daily_counts(new_rows, 'created_at'),

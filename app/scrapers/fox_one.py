@@ -199,6 +199,7 @@ def _now_utc() -> datetime:
 
 class FoxOneScraper(MvpdCooldownMixin, BaseScraper):
     source_name = 'fox_one'
+    added_in = '5.0.0'
     display_name = 'FOX One'
     source_category = 'premium'
     is_premium = True
