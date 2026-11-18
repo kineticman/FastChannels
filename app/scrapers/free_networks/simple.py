@@ -192,6 +192,23 @@ NETWORKS = [
                    language=lang, country=country, gracenote_id=gn)
         for cid, name, path, logo, lang, country, gn in _3ABN_CHANNELS
     ]),
+    StaticNetwork('tna', 'TNA Wrestling', [
+        # watch.tnawrestling.com (DICE/Vesper) lists both as THIRD_PARTY_PLAYBACK
+        # events; its stream API hands back these fixed Amagi playouts, which
+        # play without the site's (free) sign-in. Clear 1080p, CORS *. 121991 is
+        # the TNA station Pluto, DirecTV and Fubo map; en Español has none.
+        # Checked 2026-11-18.
+        NetChannel('tna247', 'TNA Wrestling 24/7',
+                   'https://amg00966-amg00966c1-endeavorstreaming-worldwide-9267.playouts.now.amagi.tv/'
+                   'playlist/amg00966-anthem-tnawrestling-endeavorstreamingworldwide/playlist.m3u8',
+                   logo=_TMS_LOGO.format('121991'),
+                   category='Sports', gracenote_id='121991'),
+        NetChannel('tnaespanol', 'TNA Wrestling en Español',
+                   'https://amg00966-amg00966c17-amgplt0642.playout.now3.amagi.tv/ts-us-e2-n2/'
+                   'playlist/amg00966-amg00966c17-amgplt0642/playlist.m3u8',
+                   logo='https://img.dge-prod.dicelaboratory.com/thumbnails/297951/480x270/latest.jpg',
+                   category='Sports', language='es'),
+    ]),
     StaticNetwork('eplustv6', 'EPlusTV 6', [
         # Bundled PNG rendered from eplustv6.com/assets/svgs/tv6-logo.svg: the
         # logo cache can't decode SVG and Channels DVR apps can't display it.
