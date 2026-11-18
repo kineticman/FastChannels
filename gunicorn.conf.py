@@ -100,7 +100,9 @@ _SUCCESS_SUPPRESS_PATTERNS = (
 # Warner TVE (TBS/TNT/truTV/TCM) relays everything below the master: a variant
 # refresh and a segment every ~6s per viewer, plus a key per rotation.
 # Free Networks' playlist proxy (TrillerTV) refreshes a variant every ~6s per
-# viewer; the tune still shows as the app's [play] request line.
+# viewer; the tune still shows as the app's [play] request line. Its admin
+# preview relay (BEATMAG) fetches a variant and a segment every ~2s per viewer;
+# the first browser.m3u8 (no ?url=) still logs.
 # Pluto's "Route playlists through FastChannels" refreshes a video and an audio
 # variant every ~5s per viewer; the tune still shows as the app's [play] request line.
 # The admin player's generic relay (browser_relay_hosts, e.g. MLB) fetches a
@@ -110,7 +112,7 @@ _SUCCESS_SUPPRESS_RE = re.compile(
     r'|(?:GET|HEAD) /play/vix/[^/]+/(?:seg\?|browser\.mpd\?s=)'
     r'|(?:GET|HEAD) /play/paramount/[^/]+/(?:variant\.m3u8|key)\?url='
     r'|(?:GET|HEAD) /play/warner_tve/[^/]+/(?:variant\.m3u8|key|segment\.ts)\?url='
-    r'|(?:GET|HEAD) /play/free_networks/[^/]+/variant\.m3u8\?url='
+    r'|(?:GET|HEAD) /play/free_networks/[^/]+/(?:variant\.m3u8|browser\.(?:m3u8|ts))\?url='
     r'|(?:GET|HEAD) /play/pluto/variant\?'
     r'|(?:GET|HEAD) /play/[^/ ]+/[^/ ]+/relay\?')
 _DASH_RE = re.compile(r'(?:GET|HEAD) /play/(amazon_prime_free|amazon_sports|cox|philo|sling|pbs|vidaa|fubo|dazn_tve|cnn_tve|hulu_live)/[^/]+/dash\.mpd')
@@ -122,7 +124,8 @@ _PLUTO_VARIANT_QUERY_RE = re.compile(r'("(?:GET|HEAD) /play/pluto/variant)\?[^ ]
 # Warner's ?url= carries the CDN token; ~8h valid, so keep it out of the log.
 _WARNER_PROXY_QUERY_RE = re.compile(r'("(?:GET|HEAD) /play/warner_tve/[^/]+/(?:variant\.m3u8|key|segment\.ts))\?[^ ]+')
 # Free Networks proxy variants carry signed CDN URLs too.
-_FREE_NETWORKS_PROXY_QUERY_RE = re.compile(r'("(?:GET|HEAD) /play/free_networks/[^/]+/variant\.m3u8)\?[^ ]+')
+_FREE_NETWORKS_PROXY_QUERY_RE = re.compile(
+    r'("(?:GET|HEAD) /play/free_networks/[^/]+/(?:variant\.m3u8|browser\.(?:m3u8|ts)))\?[^ ]+')
 # The generic relay's ?url= carries the CDN's signed token (MLB: 24-48h).
 _RELAY_QUERY_RE = re.compile(r'("(?:GET|HEAD) /play/[^/ ]+/[^/ ]+/relay)\?[^ ]+')
 
