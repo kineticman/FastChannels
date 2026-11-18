@@ -16,7 +16,7 @@ from ._common import UA, EmptyPlaylistError, NetChannel
 from . import (
     adultswim, aetn, aljazeera, arirang, ballysports, beond, bloomberg, cbn, cbsnews, cgtn, cineverse, cw, dw, ewtn,
     freetv, fstv, gameandfish, hallmark, heartland, hsn,
-    i24news, jtv, ksl, mansa, newsmax, newsnation, nhk, nwsl, og_network, outside, positiv, qvc, scripps, shift, simple,
+    i24news, jtv, ksl, mansa, newsmax, newsnation, nhk, nwsl, og_network, outside, positiv, qvc, redbull, scripps, shift, simple,
     sinclair, shout, sotal_partners, tastemade, tbn, triller, trt, vsin, yahoo,
 )
 
@@ -29,7 +29,7 @@ NETWORKS = [
     hsn.HSN(), qvc.QVC(), tastemade.Tastemade(), aetn.AETN(), ksl.KSL(), cbn.CBN(),
     gameandfish.GameAndFish(), outside.OutsideTV(), cw.CW(), cineverse.Cineverse(), og_network.OGNetwork(),
     *sotal_partners.NETWORKS, beond.BeOND(), mansa.Mansa(), freetv.FreeTV(), nwsl.NWSL(), triller.Triller(), heartland.Heartland(), shout.Shout(),
-    yahoo.Yahoo(), cgtn.CGTN(), shift.Shift(), jtv.JTV(), vsin.VSiN(),
+    yahoo.Yahoo(), cgtn.CGTN(), shift.Shift(), jtv.JTV(), vsin.VSiN(), redbull.RedBull(),
     # Once sources of their own; key = old source name (app/folded_sources.py)
     adultswim.AdultSwim(), ballysports.BallySports(), hallmark.Hallmark(),
     *simple.NETWORKS,
@@ -179,7 +179,7 @@ class FreeNetworksScraper(BaseScraper):
     Free networks that stream on their own websites: news (DW, Al Jazeera, i24NEWS, TRT,
     NHK, Arirang, CGTN, Bloomberg, CBS News, Scripps, Newsmax2 + World at War, NewsNation, Free Speech TV, Sky
     News, Global News, KSL, Yahoo Finance), sports (Yahoo Sports Network, SportsGrid, SPEED SPORT 1, VSiN,
-    SHIFT TV), faith (EWTN, PosiTV, TBN, CBN, NRB, theDove, 3ABN's ten networks), shopping
+    SHIFT TV, Red Bull TV's nine channels), faith (EWTN, PosiTV, TBN, CBN, NRB, theDove, 3ABN's ten networks), shopping
     (HSN, QVC, JTV, Shop LC), BEATMAG's music channels, Sinclair's diginets (Comet, Charge!, TheNest), Tastemade, A+E's
     FAST channels, The CW's FAST lineup, Cineverse's channels, OG Network, TrueTVplus, Flou TV, FreeTV, BeOND, Mansa, Outside TV, Game & Fish TV, NWSL+ 24/7, Bowling TV, TrillerTV's free channels, Heartland+, Shout! TV, Adult Swim,
     Bally Sports Live, Hallmark and a few singles.
