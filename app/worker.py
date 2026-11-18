@@ -4618,16 +4618,19 @@ if __name__ == '__main__':
         # 03:00 user local time — _tz (resolved at construction above) follows the
         # timezone configured in admin/settings, via the same guarded zoneinfo path
         # the rest of the app uses, so the UI and scheduler can't silently diverge.
+        # Jittered up to 25 min: tvtv rate-limits per IP, and installs sharing
+        # one (prod + test here) all starting at 03:00:00 got refused together.
         scheduler.add_job(_scheduled_tvtv_cache_refresh, 'cron',
-                          hour=3, minute=0, timezone=_tz,
+                          hour=3, minute=0, timezone=_tz, jitter=1500,
                           id='tvtv_cache_refresh_night', max_instances=1, coalesce=True,
                           misfire_grace_time=3600)
 
-        # Nightly DB backup at 03:30 user-local — staggered 30 min after the tvtv
-        # refresh so they don't both hit the DB at once. Keeps the newest 3 in
-        # /data/backups (volume-mounted, survives container rebuilds).
+        # Nightly DB backup at 04:00 user-local — after the jittered tvtv refresh
+        # (starts by 03:25, ~8 min, longer with a retry pass) so they don't both
+        # hit the DB at once. Keeps the newest 3 in /data/backups (volume-mounted,
+        # survives container rebuilds).
         scheduler.add_job(_scheduled_db_backup, 'cron',
-                          hour=3, minute=30, timezone=_tz,
+                          hour=4, minute=0, timezone=_tz,
                           id='db_backup_night', max_instances=1, coalesce=True,
                           misfire_grace_time=3600)
 
