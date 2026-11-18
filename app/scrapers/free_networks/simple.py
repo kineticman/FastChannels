@@ -176,18 +176,6 @@ NETWORKS = [
                    logo=_TMS_LOGO.format('138647'), category='Sports', gracenote_id='138647',
                    description='Motorsports: dirt track, sprint cars, short track and more.'),
     ]),
-    StaticNetwork('vsin', 'VSiN', [
-        # VSiN's free channel: the Zype linear stream the VSIN Watch app's
-        # guide plays (video.vsin.com, Maz), clear 1080p. Gracenote is VSiN's
-        # streaming station (tvtv's now-playing matched the app's guide on
-        # 2026-11-17).
-        NetChannel('vsin', 'VSiN',
-                   'https://na.linear.zype.com/987593e6-5894-4f92-bf21-7282da9084f4/'
-                   '2514774e-d092-4253-b02d-c2bf3127c934-hls4/live.m3u8',
-                   logo='https://assets.maz.tv/yatso91lgu4fy5buhuv2aqobunw7.png', category='Sports',
-                   gracenote_id='108970',
-                   description='The Vegas Stats & Information Network: sports betting news and analysis.'),
-    ]),
     StaticNetwork('shoplc', 'Shop LC', [
         # shoplc.com/pages/live-tv's Shaka player loads this Akamai HLS (and a
         # DASH twin), clear 1080p. Checked 2026-11-17.
