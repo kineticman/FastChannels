@@ -608,24 +608,30 @@ def _provider_number_sources() -> set[str]:
     return names
 
 
-def _reserved_provider_numbers() -> set[int]:
-    """Integer provider numbers of every active, enabled, unpinned channel in an
-    opted-in source. Allocators treat these as taken. Sub-channels ("305.1")
-    can't collide with an integer tvg-chno, so only whole numbers are reserved."""
+def _reserved_provider_numbers(main: bool = True) -> set[int]:
+    """Integer provider numbers of every active, enabled channel in an opted-in
+    source that prints its provider number in this kind of scope. Allocators
+    treat these as taken. Sub-channels ("305.1") can't collide with an integer
+    tvg-chno, so only whole numbers are reserved. `main`: the main numbers,
+    where a Channels-page lock replaces the provider number; in a feed that
+    lock doesn't apply (chnum rule 1), so the channel shows its provider
+    number there and the number stays reserved."""
     sources = _provider_number_sources()
     if not sources:
         return set()
+    filters = [
+        Source.name.in_(sources),
+        Channel.is_active == True,
+        Channel.is_enabled == True,
+        Channel.provider_number.isnot(None),
+        Channel.pinned_chno.is_(None),
+    ]
+    if main:
+        filters.append(db.or_(Channel.number_pinned == False, Channel.number_pinned == None))
     rows = (
         db.session.query(Channel.provider_number)
         .join(Source)
-        .filter(
-            Source.name.in_(sources),
-            Channel.is_active == True,
-            Channel.is_enabled == True,
-            Channel.provider_number.isnot(None),
-            db.or_(Channel.number_pinned == False, Channel.number_pinned == None),
-            Channel.pinned_chno.is_(None),
-        )
+        .filter(*filters)
         .all()
     )
     return {int(pn) for (pn,) in rows if pn and pn.strip().isdigit()}
@@ -640,16 +646,16 @@ def shown_numbers(channels, chnum_map: dict, scope: int | None = None) -> dict:
     The one place feed locks meet the overlays: playlists, the feed editor
     preview, the Channels page and the transfer report all come through
     here, so what a page shows can't drift from what a playlist prints."""
+    from ..chnum import MASTER_SCOPE, scope_locks
     fixed = frozenset()
-    if scope is not None:
-        from ..chnum import MASTER_SCOPE, scope_locks
-        if scope != MASTER_SCOPE:
-            fixed = frozenset(scope_locks(scope))
-    return apply_provider_numbers(channels, chnum_map, fixed=fixed)
+    if scope is not None and scope != MASTER_SCOPE:
+        fixed = frozenset(scope_locks(scope))
+    return apply_provider_numbers(channels, chnum_map, fixed=fixed,
+                                  main=(scope == MASTER_SCOPE))
 
 
 def apply_provider_numbers(channels, chnum_map: dict, sources: set[str] | None = None,
-                           fixed=frozenset()) -> dict:
+                           fixed=frozenset(), main: bool = True) -> dict:
     """Overlay text channel numbers onto a resolved chnum map (output only).
     Call shown_numbers() instead when rendering a scope; it supplies `fixed`.
 
@@ -657,7 +663,8 @@ def apply_provider_numbers(channels, chnum_map: dict, sources: set[str] | None =
       keeps its number, and no overlay may take that number;
     * then a decimal lock (Channel.pinned_chno, e.g. "700.1");
     * then, for opted-in sources, the stored provider_number ("305.1"),
-      unless the channel has a whole-number lock;
+      unless the channel has a whole-number lock and `main` is set (a
+      Channels-page lock is the main numbers' only, chnum rule 1);
     * everything else keeps its app-assigned number.
     """
     fixed = {cid for cid in fixed if chnum_map.get(cid) is not None}
@@ -686,7 +693,7 @@ def apply_provider_numbers(channels, chnum_map: dict, sources: set[str] | None =
         src = getattr(ch, 'source', None)
         if src is None or getattr(src, 'name', None) not in sources:
             continue
-        if getattr(ch, 'number_pinned', False) and getattr(ch, 'number', None) is not None:
+        if main and getattr(ch, 'number_pinned', False) and getattr(ch, 'number', None) is not None:
             continue
         pn = (getattr(ch, 'provider_number', None) or '').strip()
         if not pn:
@@ -755,7 +762,7 @@ def build_manual_order_map(channels, order_ids: list[int], start: int,
         if main and getattr(ch, 'number_pinned', False) and ch.number is not None and ch.number not in used:
             result[ch.id] = ch.number
             used.add(ch.number)
-    used |= _reserved_provider_numbers() | set(reserved)
+    used |= _reserved_provider_numbers(main=main) | set(reserved)
     cursor = start
     for ch in ordered:
         if ch.id in result:

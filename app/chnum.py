@@ -336,7 +336,10 @@ def settle() -> None:
     db.session.execute(update(table).where(table.c.id == 1).values(id=table.c.id))
     settings = AppSettings.get()
     locks = lock_map()
-    provider = _reserved_provider_numbers()
+    provider = _reserved_provider_numbers(main=True)
+    # In feeds a Channels-page-locked channel shows its provider number
+    # (rule 1), so that number is reserved there too.
+    feed_provider = _reserved_provider_numbers(main=False)
     holdable = _holdable()
     common = dict(locks=locks, provider=provider, holdable=holdable)
 
@@ -373,7 +376,7 @@ def settle() -> None:
             new_floor=lambda m, s=feed.chnum_start: s,
             order_key=feed_order_key(feed.source_order, main_number),
             # Channels-page locks are the main numbers' only (rule 1).
-            locks={}, provider=provider, holdable=holdable,
+            locks={}, provider=feed_provider, holdable=holdable,
             absent_locks_win=False, scope_locks=fixed)
         writes += _write(feed.id, existing, rows, locked=set(fixed))
 
@@ -419,7 +422,7 @@ def plan_numbers(members, start: int, existing: dict | None = None,
     rows = allocate(
         members, existing, floor=lambda m: start, new_floor=lambda m: start,
         order_key=feed_order_key(source_order, lambda m: master.get(m.id, float('inf'))),
-        locks=lock_map() if main else {}, provider=_reserved_provider_numbers(),
+        locks=lock_map() if main else {}, provider=_reserved_provider_numbers(main=main),
         holdable={cid: rel for cid, (_, rel) in existing.items() if rel is not None},
         absent_locks_win=False, scope_locks=scope_locks)
     return {cid: n for cid, (n, rel) in rows.items() if rel is None}
@@ -642,10 +645,14 @@ def scope_main_locks() -> bool:
     """Make Channels-page locks the main numbers' lock only, once. Until now
     a Channels-page lock also took its number in every feed; from here a feed
     numbers the channel like any other. So nothing moves at the switch, each
-    feed row that a lock is holding (the channel is in the feed, on its locked
+    feed row that a lock is holding (the channel's row is on its locked
     number) becomes a feed lock at that number: the same number, now shown as
-    FEED LOCK, which the user can unlock. Disabled feeds too, so re-enabling
-    one later moves nothing either. Returns True once done."""
+    FEED LOCK, which the user can unlock. Held rows too (the channel is out
+    of the feed or gone inactive), so it gets the number back when it
+    returns. A locked channel that was off with no row in a feed has nothing
+    to convert there and is numbered afresh when it comes back. Disabled
+    feeds too, so re-enabling one later moves nothing either. Returns True
+    once done."""
     if locks_scoped():
         return True
     if 'chnum_locks_scoped_at' not in AppSettings.__table__.c:
@@ -660,7 +667,6 @@ def scope_main_locks() -> bool:
                     .join(Channel, Channel.id == table.c.channel_id)
                     .filter(table.c.scope_id.in_(feed_ids),
                             table.c.locked == False,
-                            table.c.released_at.is_(None),
                             Channel.number_pinned == True,
                             Channel.number.isnot(None),
                             table.c.number == Channel.number)

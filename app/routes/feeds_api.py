@@ -550,7 +550,7 @@ def lock_feed_channel_number(feed_id, channel_id):
         return jsonify({'error': f'{number} is already locked to "{other.name if other else holder}" '
                                  'in this feed. Unlock it first or choose a different number.'}), 409
     if (str(number) != (ch.provider_number or '').strip()
-            and number in _reserved_provider_numbers()):
+            and number in _reserved_provider_numbers(main=False)):
         return jsonify({'error': f'{number} is used by a channel numbered by its provider '
                                  '(e.g. DirecTV channel numbers). Choose a different number.'}), 409
 
