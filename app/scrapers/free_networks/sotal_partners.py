@@ -11,8 +11,9 @@ the ones whose name isn't in OG's catalog are listed here. Checked
 without an account: CameraSmileTV, Captiva TV, Race Central, SportTVplus,
 ...; plus Celebrity Scene MAX and Dr. Joe TV), Flou TV adds VueWho, The TRUMP
 Channel, New America Channel and El Reino Infantil plus some carried
-elsewhere; some of Flou's (Miami TV, FreeTV, RCN) serve empty playlists, which
-resolve() reports as such. Vidway, NOMADlife and Watchie run on the same
+elsewhere; Flou's Miami TV, Jenny Live and RCN channels get segment-less
+playlists from the noisypeak ad stitcher, so they play from Sotal's origin
+instead (og_network._ORIGIN). Vidway, NOMADlife and Watchie run on the same
 backend too but added nothing beyond these. Rows titled "DO NOT USE ..." are
 skipped. A channel on both sites (VueWho) goes to TrueTVplus, whose copy plays;
 Flou lists it only while the TrueTVplus network is switched off.

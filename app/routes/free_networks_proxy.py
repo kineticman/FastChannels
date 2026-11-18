@@ -140,13 +140,19 @@ def free_networks_proxy(channel_id: str):
 
     # child_url works from the URL we asked for: a redirect may drop the query.
     base = master_url if urlsplit(r.url).path == urlsplit(master_url).path else r.url
+    def variant(uri: str) -> str:
+        # A variant on a host the proxy won't fetch (Sotal's origin hands some
+        # off to the channel's own Wowza server) plays straight from there.
+        url = net.child_url(base, uri)
+        return _variant_url(sid, url) if _allowed(net, url) else url
+
     lines = []
     for line in r.text.splitlines():
         stripped = line.strip()
         if stripped and not stripped.startswith('#'):
-            line = _variant_url(sid, net.child_url(base, stripped))
+            line = variant(stripped)
         elif stripped.startswith(('#EXT-X-MEDIA', '#EXT-X-I-FRAME-STREAM-INF')) and 'URI=' in stripped:
-            line = _URI_RE.sub(lambda m: f'URI="{_variant_url(sid, net.child_url(base, m.group(1)))}"', line)
+            line = _URI_RE.sub(lambda m: f'URI="{variant(m.group(1))}"', line)
         lines.append(line)
     return _playlist_response('\n'.join(lines) + '\n')
 
