@@ -300,6 +300,25 @@
                     padding-top: 1rem; padding-bottom: 1.25rem;
                     border-top: 1px solid var(--surface-5);
                     position: sticky; bottom: 0; background: var(--surface); z-index: 10; }
+    /* Section links under the title and a footer hint: the left column runs
+       well below the fold, and Events / Numbering were easy to miss. */
+    .modal-jump { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem;
+                  margin: -0.6rem 0 1.1rem; font-size: 0.78rem; color: var(--text-dim); }
+    .modal-jump button {
+      background: var(--bg); border: 1px solid var(--surface-5); color: var(--text-soft);
+      border-radius: 999px; padding: 0.2rem 0.7rem; font-size: 0.78rem; cursor: pointer; font-family: inherit;
+    }
+    .modal-jump button:hover { border-color: var(--focus-accent); color: var(--text); }
+    .field-box { scroll-margin-top: 1rem; }
+    .more-below {
+      margin-right: auto; align-self: center; background: transparent; cursor: pointer;
+      border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent); border-radius: 999px; color: var(--accent);
+      padding: 0.3rem 0.8rem; font-size: 0.8rem; font-family: inherit;
+    }
+    .more-below:hover { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, transparent); }
+    .more-below .arrow { display: inline-block; animation: more-bob 1.6s ease-in-out infinite; }
+    @keyframes more-bob { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(2px); } }
+    @media (prefers-reduced-motion: reduce) { .more-below .arrow { animation: none; } }
     .save-status { font-size: 0.8rem; font-weight: 500; min-width: 80px; text-align: right; align-self: center; }
     .save-status.ok    { color: var(--success-soft); }
     .save-status.error { color: var(--danger); }
@@ -1049,11 +1068,18 @@
 <div class="overlay" id="modal-overlay">
   <div class="modal modal-feed">
     <h3 id="modal-title">New Feed</h3>
+    <div class="modal-jump" role="navigation" aria-label="Feed settings sections">
+      <span>Sections:</span>
+      <button type="button" onclick="jumpToSection('fs-feed')">Feed</button>
+      <button type="button" onclick="jumpToSection('fs-channels')">Which channels</button>
+      <button type="button" onclick="jumpToSection('events-box')">Events</button>
+      <button type="button" onclick="jumpToSection('fs-numbering')">Numbering</button>
+    </div>
     <input type="hidden" id="edit-id" value="">
 
     <div class="modal-cols">
     <div class="modal-col-def">
-    <fieldset class="field-box">
+    <fieldset class="field-box" id="fs-feed">
       <legend>Feed</legend>
       <div class="field">
         <label for="f-name">Name <span style="color:var(--danger)">*</span></label>
@@ -1065,7 +1091,7 @@
       </div>
     </fieldset>
 
-    <fieldset class="field-box">
+    <fieldset class="field-box" id="fs-channels">
       <legend>Which channels</legend>
       <div class="help box-intro">Every list left unchecked includes everything. Checked items in one list are alternatives; the lists narrow each other. Click a source or category twice to leave it out instead: new channels from it stay out too.</div>
       <div class="field">
@@ -1179,7 +1205,7 @@
       </div>
     </fieldset>
 
-    <fieldset class="field-box">
+    <fieldset class="field-box" id="fs-numbering">
       <legend>Numbering</legend>
       <div class="field">
         <label for="f-chnum">Starting number for this feed <span class="label-note">tvg-chno</span></label>
@@ -1255,6 +1281,9 @@
     </div><!-- /modal-cols -->
 
     <div class="modal-footer">
+      <button type="button" class="more-below" id="more-below" hidden onclick="jumpToSection('events-box')">
+        More below: Events, Numbering <span class="arrow" aria-hidden="true">↓</span>
+      </button>
       <span class="save-status" id="modal-status"></span>
       <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
       <button class="btn btn-primary" id="save-btn" onclick="saveFeed()">Save Feed</button>
@@ -1617,8 +1646,11 @@ async function openModal(feed = null) {
   });
   syncSportsField();
 
-  document.getElementById('modal-overlay').classList.add('open');
+  const overlay = document.getElementById('modal-overlay');
+  overlay.classList.add('open');
+  overlay.scrollTop = 0;
   document.getElementById('f-name').focus();
+  watchMoreBelow();
 
   await Promise.all([
     ensureChannelsLoaded(),
@@ -1633,7 +1665,37 @@ async function openModal(feed = null) {
   checkChnumConflict();
 }
 
+// ── "More below" hint + section links ─────────────────────────────────────
+function jumpToSection(id) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  el.scrollIntoView({ behavior: reduce ? 'auto' : 'smooth', block: 'start' });
+}
+let _moreBelowObserver = null;
+function watchMoreBelow() {
+  // Shown while the Numbering box is still below the visible part of the
+  // modal; gone once the user has scrolled to it.
+  const hint = document.getElementById('more-below');
+  const target = document.getElementById('fs-numbering');
+  if (!hint || !target || !('IntersectionObserver' in window)) return;
+  if (_moreBelowObserver) _moreBelowObserver.disconnect();
+  _moreBelowObserver = new IntersectionObserver(entries => {
+    for (const e of entries) {
+      const below = !e.isIntersecting && e.boundingClientRect.top > 0;
+      hint.hidden = !below;
+    }
+  }, {
+    root: document.getElementById('modal-overlay'), threshold: 0,
+    // The sticky footer covers the bottom of the overlay: count only what
+    // shows above it.
+    rootMargin: `0px 0px -${(document.querySelector('#modal-overlay .modal-footer')?.offsetHeight || 70) + 20}px 0px`,
+  });
+  _moreBelowObserver.observe(target);
+}
+
 function closeModal() {
+  if (_moreBelowObserver) { _moreBelowObserver.disconnect(); _moreBelowObserver = null; }
   document.getElementById('modal-overlay').classList.remove('open');
   _chnumRanges = [];
 }
