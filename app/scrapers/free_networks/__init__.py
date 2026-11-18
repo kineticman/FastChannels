@@ -16,8 +16,8 @@ from ._common import UA, EmptyPlaylistError, NetChannel
 from . import (
     adultswim, aetn, aljazeera, arirang, ballysports, beond, bloomberg, cbn, cbsnews, cgtn, cineverse, cowboyplus, cw, dw, ewtn,
     freetv, fstv, gameandfish, hallmark, heartland, hsn,
-    i24news, jtv, ksl, mansa, newsmax, newsnation, nhk, nwsl, og_network, outside, positiv, qvc, redbull, scripps, shift, simple,
-    sinclair, shout, sotal_partners, tastemade, tbn, triller, trt, vsin, yahoo,
+    i24news, jtv, ksl, mansa, newsmax, newsnation, nhk, nwsl, og_network, olympics, outside, positiv, qvc, redbull, scripps, shift, simple,
+    sinclair, shout, sotal_partners, sportstv, tastemade, tbn, triller, trt, vsin, yahoo,
 )
 
 logger = logging.getLogger(__name__)
@@ -29,7 +29,8 @@ NETWORKS = [
     hsn.HSN(), qvc.QVC(), tastemade.Tastemade(), aetn.AETN(), ksl.KSL(), cbn.CBN(),
     gameandfish.GameAndFish(), outside.OutsideTV(), cw.CW(), cineverse.Cineverse(), og_network.OGNetwork(),
     *sotal_partners.NETWORKS, beond.BeOND(), mansa.Mansa(), freetv.FreeTV(), nwsl.NWSL(), triller.Triller(), heartland.Heartland(), shout.Shout(),
-    yahoo.Yahoo(), cgtn.CGTN(), shift.Shift(), jtv.JTV(), vsin.VSiN(), redbull.RedBull(), olympics.Olympics(), cowboyplus.CowboyPlus(), sportstv.SportsTV(), redbull.RedBull(), olympics.Olympics(), cowboyplus.CowboyPlus(), redbull.RedBull(), olympics.Olympics(), redbull.RedBull(),
+    yahoo.Yahoo(), cgtn.CGTN(), shift.Shift(), jtv.JTV(), vsin.VSiN(), redbull.RedBull(),
+    olympics.Olympics(), cowboyplus.CowboyPlus(), sportstv.SportsTV(),
     # Once sources of their own; key = old source name (app/folded_sources.py)
     adultswim.AdultSwim(), ballysports.BallySports(), hallmark.Hallmark(),
     *simple.NETWORKS,
