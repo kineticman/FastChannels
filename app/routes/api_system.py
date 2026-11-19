@@ -196,7 +196,8 @@ def _process_stats() -> dict:
 @system_bp.route('/stations/<station_id>/now-playing', methods=['GET'])
 def station_now_playing(station_id):
     """
-    Return now/next program for a Gracenote/TMS stationId via tvtv.us.
+    Return now/next program for a Gracenote/TMS stationId from the guide cache
+    (app/guide_cache.py), fetched live when the cache does not cover it.
     Used by the Gracenote Suggestions helper to let users verify that a
     suggested stationId actually matches what their channel is broadcasting.
     """
@@ -209,7 +210,7 @@ def station_now_playing(station_id):
 
 @system_bp.route('/tvtv/cache/refresh', methods=['POST'])
 def tvtv_cache_refresh():
-    """Queue an immediate refresh of the tvtv guide cache."""
+    """Queue an immediate refresh of the Gracenote guide cache (historical route name)."""
     status = trigger_tvtv_cache_refresh()
     messages = {
         'queued':   'Refresh queued.',

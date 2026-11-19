@@ -64,7 +64,7 @@ MLBN_GRACENOTE = '62081'
 MLBN_LOGO = 'https://a.espncdn.com/watchespn/images/web/network_logos/channel_logo_mlb_2x.png'
 # mlb.com/network/tv-schedule embeds this page: about two weeks of MLB Network
 # listings (show, episode, synopsis, talent, live/premiere flags, show art) in its
-# Next.js data stream. tvtv's cache (about a day, titles only) is the fallback.
+# Next.js data stream. The Gracenote guide cache (app/guide_cache.py) is the fallback.
 MLBN_SCHEDULE_URL = 'https://www.mlb.com/network/modules/schedule/full'
 MLBN_SCHEDULE_CACHE_KEY = 'mlbn_schedule'
 _MLBN_SCHEDULE_TTL = 6 * 3600
@@ -771,8 +771,8 @@ class MLBScraper(BaseScraper):
             if not mlbn:
                 gracenote = next((ch.gracenote_id for ch in channels if ch.source_channel_id == MLBN_CHANNEL_ID),
                                  None) or MLBN_GRACENOTE
-                from .free_networks import FreeNetworksScraper
-                mlbn = FreeNetworksScraper._tvtv_programs(self, MLBN_CHANNEL_ID, gracenote)
+                from ..guide_cache import station_programs
+                mlbn = station_programs(MLBN_CHANNEL_ID, gracenote, 'mlb')
             programs.extend(mlbn)
         for pk, game, item, start, end in getattr(self, '_game_items', []):
             cid = f'{GAME_CHANNEL_PREFIX}{pk}'

@@ -1,11 +1,9 @@
 """
 tvtv_cache.py
 
-Nightly bulk cache of tvtv.us guide data for all FAST channel stations in
-the bundled station index.  Fetches 2 days of grid data (today + 1) and
-stores it in the tvtv_program_cache table.
-
-Called by the background worker on a cron schedule (03:00-03:25 local, jittered).
+tvtv.us provider for the guide cache (app/guide_cache.py owns the tables,
+the provider order and every read). Gracenote's listings site is tried first;
+this module fetches whatever it didn't store.
 
 tvtv retired their JSON grid API (/api/v1/lineup/.../grid/...) in a site
 redesign — it 404s unconditionally now, for every lineup — so this fetches
@@ -13,7 +11,10 @@ per-station via tvtv's htmx fragment endpoint instead, with bounded
 concurrency (see _fetch_batch_via_fragments). Uses curl_cffi for a
 browser-like HTTP session without a headless browser bootstrap.
 
-Standalone dry run (prints stats, writes nothing):
+program_details() reads tvtv's program dialog (/dlg/program?id=<TMS id>) for
+guide_cache.program_details().
+
+Standalone tvtv-only dry run (prints stats, writes nothing):
     docker exec fastchannels python -m app.tvtv_cache --dry-run
 """
 
@@ -229,6 +230,10 @@ def _fetch_fragment_station(session, station_id: str, start: datetime, end: date
             url = f"{_TVTV_BASE}/partial/source/{day_key}/{station_id}"
             try:
                 r = session.get(url, timeout=20)
+                # 400/404 is "no such station" (unknown id), not a refusal:
+                # an empty result, so it doesn't feed the block/retry logic.
+                if r.status_code in (400, 404):
+                    return []
                 r.raise_for_status()
             except Exception as exc:
                 log.debug("[tvtv-cache] fragment failed %s day=%s: %s", station_id, day_key, exc)
@@ -308,28 +313,6 @@ def _fetch_batch_via_fragments(session, station_ids: list[str],
 # DB write
 # ---------------------------------------------------------------------------
 
-def _upsert_rows(rows: list[dict]) -> int:
-    """Bulk-upsert rows on (station_id, start_time).
-
-    A re-fetched airing overwrites the cached one, so guide corrections
-    (title, subtitle, runtime) land on the next refresh instead of waiting
-    for the old row to expire.
-    """
-    from sqlalchemy.dialects.sqlite import insert as sqlite_insert
-    from .extensions import db
-    from .models import TvtvProgramCache
-    if not rows:
-        return 0
-    stmt = sqlite_insert(TvtvProgramCache.__table__)
-    stmt = stmt.on_conflict_do_update(
-        index_elements=["station_id", "start_time"],
-        set_={col: stmt.excluded[col] for col in
-              ("lineup", "program_id", "title", "subtitle", "end_time", "fetched_at")},
-    )
-    db.session.execute(stmt, rows)
-    return len(rows)
-
-
 def _delete_expired(now_utc: datetime) -> int:
     """Remove entries whose end_time is more than 1 hour in the past."""
     from .db_batches import delete_in_batches
@@ -343,7 +326,7 @@ def _delete_expired(now_utc: datetime) -> int:
 # ---------------------------------------------------------------------------
 
 def refresh_tvtv_cache(days: int = _DAYS, dry_run: bool = False,
-                       station_ids: list[str] | None = None) -> dict[str, Any]:
+                       station_ids: list[str] | None = None, prune: bool = True) -> dict[str, Any]:
     """
     Fetch `days` days of guide data for the given station IDs (or all mapped
     gracenote_ids from the Channel table if station_ids is None) and store
@@ -412,25 +395,13 @@ def refresh_tvtv_cache(days: int = _DAYS, dry_run: bool = False,
 
     def _store(day_offset: int, results: dict[str, list[dict]]) -> bool:
         nonlocal total_rows
-        rows = []
-        for sid, airings in results.items():
-            for item in airings:
-                item_start = _parse_start(item)
-                if not item_start:
-                    continue
-                duration = int(item.get("duration") or 0)
-                rows.append({
-                    "station_id": sid,
-                    "lineup":     lineup_by_station[sid],
-                    "program_id": item.get("programId"),
-                    "title":      (item.get("title") or item.get("programTitle") or "Unknown").strip(),
-                    "subtitle":   (item.get("subtitle") or "").strip() or None,
-                    "start_time": item_start,
-                    "end_time":   item_start + timedelta(minutes=duration),
-                    "fetched_at": fetched_at,
-                })
+        from .guide_cache import store_station, tvtv_item_to_airing
+        start, end = _grid_window(day_offset, now_utc)
         try:
-            total_rows += _upsert_rows(rows)
+            for sid, items in results.items():
+                airings = [a for a in (tvtv_item_to_airing(i) for i in items) if a]
+                total_rows += store_station(sid, airings, "tvtv", start, end + timedelta(minutes=1),
+                                            lineup=lineup_by_station[sid], now=fetched_at)
             db.session.commit()
             return True
         except OperationalError as exc:
@@ -493,7 +464,7 @@ def refresh_tvtv_cache(days: int = _DAYS, dry_run: bool = False,
             log.warning("[tvtv-cache] retry: %d batches still failed (%s)", len(failed), _failure_summary())
     total_errors = len(failed) + locked
 
-    if not dry_run:
+    if not dry_run and prune:
         deleted = _delete_expired(now_utc)
         db.session.commit()
     else:
@@ -515,145 +486,50 @@ def refresh_tvtv_cache(days: int = _DAYS, dry_run: bool = False,
 
 
 # ---------------------------------------------------------------------------
-# Query helpers (for future use)
+# Program details by TMS id (tvtv's program dialog)
 # ---------------------------------------------------------------------------
 
-def get_now_next(station_id: str, now_utc: datetime | None = None) -> dict[str, Any]:
-    """
-    Return now/next from the DB cache for a stationId.
-    Returns None values if no cache entry covers the current time.
-    """
-    from .models import TvtvProgramCache
-    now_utc = now_utc or datetime.now(timezone.utc)
+class TvtvRateLimited(Exception):
+    pass
 
-    rows = (
-        TvtvProgramCache.query
-        .filter(
-            TvtvProgramCache.station_id == station_id,
-            TvtvProgramCache.end_time   > now_utc - timedelta(minutes=5),
-            TvtvProgramCache.start_time < now_utc + timedelta(hours=4),
-        )
-        .order_by(TvtvProgramCache.start_time)
-        .limit(10)
-        .all()
-    )
 
-    now_row = next_row = None
-    for row in rows:
-        if row.start_time <= now_utc < row.end_time:
-            now_row = row
-        elif row.start_time > now_utc and now_row is not None:
-            next_row = row
+def program_details(session, program_id: str) -> dict:
+    """Episode details from tvtv's program dialog, in guide_cache field names
+    (title, episode_title, season, episode, rating, description). {} when tvtv
+    has nothing for the id; raises TvtvRateLimited on HTTP 429."""
+    from bs4 import BeautifulSoup
+    r = session.get(f"{_TVTV_BASE}/dlg/program", params={"id": program_id}, timeout=20,
+                    headers={"HX-Request": "true", "Accept": "text/html, */*"})
+    if r.status_code == 429:
+        raise TvtvRateLimited()
+    if r.status_code == 404:
+        return {}
+    r.raise_for_status()
+    soup = BeautifulSoup(r.text, "html.parser")
+    panel = soup.find(id="main-panel")
+    if not panel:
+        return {}
+    out: dict = {}
+    h1 = soup.find("h1")
+    if h1 and h1.get_text(strip=True):
+        out["title"] = h1.get_text(" ", strip=True)
+    h2 = panel.find("h2", recursive=False)
+    if h2 and h2.get_text(strip=True) and not re.fullmatch(r"\d{4}", h2.get_text(strip=True)):
+        out["episode_title"] = h2.get_text(" ", strip=True)   # a movie's h2 is its year
+    paras = [x for x in panel.find_all("p", recursive=False) if not x.attrs]
+    for x in paras:
+        m = re.match(r"Season (\d+); Episode (\d+)", x.get_text(" ", strip=True))
+        if m:
+            out["season"], out["episode"] = int(m.group(1)), int(m.group(2))
             break
-
-    if now_row is None:
-        next_row = next((r for r in rows if r.start_time > now_utc), None)
-
-    def _row_dict(r):
-        if r is None:
-            return None
-        return {
-            "title":      r.title,
-            "subtitle":   r.subtitle,
-            "program_id": r.program_id,
-            "start":      r.start_time.isoformat(),
-            "end":        r.end_time.isoformat(),
-        }
-
-    return {
-        "station_id": station_id,
-        "source":     "cache",
-        "now":        _row_dict(now_row),
-        "next":       _row_dict(next_row),
-    }
-
-
-# Gracenote movie airings carry "(1961, Western)" as their tvtv subtitle.
-_SUBTITLE_YEAR = re.compile(r"^\((\d{4})\b")
-_LEADING_ARTICLE = re.compile(r"^(the|a|an)\s+")
-_BRACKETED = re.compile(r"\[[^\]]*\]|\([^)]*\)")
-_NON_ALNUM = re.compile(r"[^0-9a-z]+")
-# A FAST airing and its tvtv row rarely start on the same second.
-_MOVIE_MATCH_SLOP = 300
-
-
-def _norm_title(title: str | None) -> str:
-    t = _BRACKETED.sub(" ", (title or "").casefold()).strip()
-    t = _LEADING_ARTICLE.sub("", t)
-    return _NON_ALNUM.sub("", t)
-
-
-def _titles_agree(ours: str, theirs: str) -> bool:
-    if not ours or not theirs:
-        return False
-    if ours == theirs:
-        return True
-    shorter, longer = sorted((ours, theirs), key=len)
-    return len(shorter) >= 6 and longer.startswith(shorter)
-
-
-def _epoch(dt: datetime) -> float:
-    # SQLite hands back naive UTC.
-    return (dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)).timestamp()
-
-
-class MovieYearLookup:
-    """Release years for movie airings on Gracenote-mapped stations, taken from
-    the tvtv cache. An airing gets a year only when tvtv has a Gracenote movie
-    (MV…) starting within a few minutes on the same station *and* the titles
-    agree — FAST schedules drift from Gracenote's, and a time-only match would
-    hand one movie another's year."""
-
-    def __init__(self, rows):
-        self._by_station: dict[str, list[tuple[float, str, int]]] = {}
-        max_year = datetime.now(timezone.utc).year + 1
-        for station_id, title, subtitle, start in rows:
-            m = _SUBTITLE_YEAR.match(subtitle or "")
-            if not m or not 1900 <= int(m.group(1)) <= max_year:
-                continue
-            # The cached title has the subtitle appended to it.
-            if subtitle and title and title.endswith(subtitle):
-                title = title[: -len(subtitle)]
-            self._by_station.setdefault(station_id, []).append(
-                (_epoch(start), _norm_title(title), int(m.group(1)))
-            )
-
-    def __bool__(self) -> bool:
-        return bool(self._by_station)
-
-    def year_for(self, station_id: str | None, title: str | None, start: datetime) -> int | None:
-        rows = self._by_station.get(station_id or "")
-        if not rows:
-            return None
-        ours = _norm_title(title)
-        t = _epoch(start)
-        for row_start, theirs, year in rows:
-            if abs(row_start - t) <= _MOVIE_MATCH_SLOP and _titles_agree(ours, theirs):
-                return year
-        return None
-
-
-def movie_year_lookup(station_ids, start: datetime, end: datetime) -> MovieYearLookup:
-    """Load cached Gracenote movie airings for ``station_ids`` in [start, end)."""
-    from .models import TvtvProgramCache
-    ids = sorted({s for s in station_ids if s})
-    if not ids:
-        return MovieYearLookup([])
-    rows = []
-    for i in range(0, len(ids), 500):
-        rows.extend(
-            TvtvProgramCache.query
-            .with_entities(TvtvProgramCache.station_id, TvtvProgramCache.title,
-                           TvtvProgramCache.subtitle, TvtvProgramCache.start_time)
-            .filter(
-                TvtvProgramCache.station_id.in_(ids[i:i + 500]),
-                TvtvProgramCache.program_id.like("MV%"),
-                TvtvProgramCache.end_time > start,
-                TvtvProgramCache.start_time < end,
-            )
-            .all()
-        )
-    return MovieYearLookup(rows)
+    label = panel.find(string=re.compile("Parental Rating"))
+    rating_el = label.parent.find_previous_sibling("div") if label else None
+    if rating_el and rating_el.get_text(strip=True):
+        out["rating"] = rating_el.get_text(strip=True)
+    desc = paras[-1].get_text(" ", strip=True) if paras else ""
+    if desc and not re.match(r"(Season \d|Director|Writer)", desc) and desc != out.get("episode_title"):
+        out["description"] = desc
+    return out
 
 
 # ---------------------------------------------------------------------------

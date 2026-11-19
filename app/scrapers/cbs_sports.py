@@ -546,14 +546,14 @@ class CBSSportsScraper(BaseScraper):
                     programs.extend(grid)
                     gridded.add(code)
         # Free 24/7 channels without a Paramount+ grid (NFL Channel always; HQ and
-        # Golazo when their listings fail) take tvtv's cached guide for their
-        # Gracenote ID, which the nightly tvtv refresh fetches for every applied ID.
+        # Golazo when their listings fail) take the Gracenote guide cache for their
+        # Gracenote ID, which the nightly refresh fetches for every applied ID.
         gracenote = {ch.source_channel_id: ch.gracenote_id for ch in channels}
         for code, meta in NETWORKS.items():
             station_id = gracenote.get(code) or meta.get('gracenote')
             if code in wanted and code not in gridded and meta.get('dai') and station_id:
-                from .free_networks import FreeNetworksScraper
-                rows = FreeNetworksScraper._tvtv_programs(self, code, station_id)
+                from ..guide_cache import station_programs
+                rows = station_programs(code, station_id, 'cbs_sports')
                 if rows:
                     programs.extend(rows)
                     gridded.add(code)

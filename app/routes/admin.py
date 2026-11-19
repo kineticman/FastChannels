@@ -1626,8 +1626,8 @@ def guide_programs():
     )
 
     # Movies show their release year. Most scrapers don't give one, so for a
-    # channel mapped to a Gracenote station borrow it from the tvtv cache.
-    from ..tvtv_cache import movie_year_lookup, MovieYearLookup
+    # channel mapped to a Gracenote station borrow it from the guide cache.
+    from ..guide_cache import movie_years as movie_year_lookup, MovieYearLookup
     guide_channels = (
         Channel.query
         .options(load_only(Channel.id, Channel.category, Channel.gracenote_id, Channel.slug))
@@ -1647,7 +1647,7 @@ def guide_programs():
     try:
         movie_years = movie_year_lookup(gn_station.values(), window_start_utc, window_end_utc)
     except Exception:
-        current_app.logger.warning('[guide] tvtv movie-year lookup failed', exc_info=True)
+        current_app.logger.warning('[guide] guide-cache movie-year lookup failed', exc_info=True)
         movie_years = MovieYearLookup([])
 
     def _movie_year(p):

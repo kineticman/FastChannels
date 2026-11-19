@@ -39,7 +39,7 @@ Key facts established by probing:
   needs no headers beyond the challenge.
 - Guide: HLN from the same wme-digital schedule widget warner_tve uses
   (it has no CNN or CNN International); CNN and CNN International from
-  the tvtv cache under their Gracenote IDs.
+  the Gracenote guide cache (app/guide_cache.py) under their Gracenote IDs.
 """
 from __future__ import annotations
 
@@ -169,7 +169,7 @@ class CNNTVEScraper(MvpdCooldownMixin, BaseScraper):
         return out
 
     def fetch_epg(self, channels: list[ChannelData], **kwargs) -> list[ProgramData]:
-        from .free_networks import FreeNetworksScraper
+        from ..guide_cache import station_programs
         from .warner_tve import WarnerTVEScraper, _fetch_widget_schedule
 
         programs = []
@@ -184,7 +184,7 @@ class CNNTVEScraper(MvpdCooldownMixin, BaseScraper):
                 grouped = _fetch_widget_schedule(c['widget'])
                 rows = WarnerTVEScraper._parse_widget_schedule(like, grouped) if grouped else []
             if not rows and ch.gracenote_id:
-                rows = FreeNetworksScraper._tvtv_programs(self, ch.source_channel_id, ch.gracenote_id)
+                rows = station_programs(ch.source_channel_id, ch.gracenote_id, 'cnn_tve')
             programs.extend(rows or WarnerTVEScraper._placeholder_epg(like))
         logger.info('[cnn_tve] %d guide entries', len(programs))
         return programs

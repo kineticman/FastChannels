@@ -350,9 +350,9 @@ class DisneyTVEScraper(MvpdCooldownMixin, BaseScraper):
                     logger.warning('[disney_tve] guide for %s failed: %s', key, exc)
                     schedules[key] = []
             if brand == '001' and not schedules[key] and ch.gracenote_id:
-                from .free_networks import FreeNetworksScraper
-                rows = FreeNetworksScraper._tvtv_programs(self, ch.source_channel_id, ch.gracenote_id)
-                logger.info('[disney_tve] no Disney guide for %s; %d entries from tvtv', ch.name, len(rows))
+                from ..guide_cache import station_programs
+                rows = station_programs(ch.source_channel_id, ch.gracenote_id, 'disney_tve')
+                logger.info('[disney_tve] no Disney guide for %s; %d entries from the Gracenote guide cache', ch.name, len(rows))
                 programs.extend(rows)
                 continue
             shift = timedelta(hours=3) if _is_west(ch.name) else timedelta(0)

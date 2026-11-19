@@ -948,6 +948,51 @@ def ensure_runtime_schema(*, fresh_install: bool | None = None) -> None:
                 conn.execute(text(
                     "ALTER TABLE tvtv_program_cache ADD COLUMN subtitle VARCHAR(512)"
                 ))
+            # Which guide provider wrote the airing (app/guide_cache.py).
+            if "source" not in tvtv_cols:
+                conn.execute(text(
+                    "ALTER TABLE tvtv_program_cache ADD COLUMN source VARCHAR(16)"
+                ))
+
+        # tms_programs: provider-neutral details per TMS program id
+        # (models.TmsProgram, written by app/guide_cache.py).
+        if "tms_programs" not in tables:
+            conn.execute(text(
+                "CREATE TABLE IF NOT EXISTS tms_programs ("
+                " program_id VARCHAR(32) PRIMARY KEY,"
+                " title VARCHAR(512),"
+                " episode_title VARCHAR(512),"
+                " season INTEGER,"
+                " episode INTEGER,"
+                " description TEXT,"
+                " rating VARCHAR(32),"
+                " release_year INTEGER,"
+                " series_id VARCHAR(32),"
+                " image VARCHAR(256),"
+                " source VARCHAR(16),"
+                " last_seen DATETIME,"
+                " detail_checked_at DATETIME"
+                ")"
+            ))
+            conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS idx_tms_programs_last_seen"
+                " ON tms_programs (last_seen)"
+            ))
+            tables.add("tms_programs")
+
+        # guide_stations: the stations the guide cache keeps (models.GuideStation).
+        if "guide_stations" not in tables:
+            conn.execute(text(
+                "CREATE TABLE IF NOT EXISTS guide_stations ("
+                " station_id VARCHAR(32) PRIMARY KEY,"
+                " source VARCHAR(64),"
+                " name VARCHAR(128),"
+                " pinned BOOLEAN NOT NULL DEFAULT 0,"
+                " first_needed DATETIME,"
+                " last_needed DATETIME"
+                ")"
+            ))
+            tables.add("guide_stations")
 
         if "programs" in tables:
             program_cols = {

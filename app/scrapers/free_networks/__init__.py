@@ -12,6 +12,7 @@ from urllib3.util.retry import Retry
 
 from ..base import BaseScraper, ChannelData, ConfigField, ProgramData, StreamDeadError
 from ...gracenote_map import resolve_gracenote
+from ...guide_cache import station_programs
 from ._common import UA, EmptyPlaylistError, NetChannel
 from . import (
     adultswim, aetn, aljazeera, arirang, ballysports, beond, bloomberg, cbn, cbsnews, cgtn, cineverse, cowboyplus, cw, dw, ewtn,
@@ -194,10 +195,10 @@ class FreeNetworksScraper(BaseScraper):
     down. Channel IDs are "<network>.<id>" and stream URLs are opaque
     "freenet://<network>/<ref>", resolved by the network at play time.
 
-    Channels whose network has no guide of its own use the tvtv cache for their
-    Gracenote ID, if they have one (built-in, community CSV under provider
-    'free_networks', or set by the user); with neither, they get hourly blocks
-    named after the channel. A network whose guide fetch fails or is skipped
+    Channels whose network has no guide of its own use the Gracenote guide
+    cache (app/guide_cache.py) for their Gracenote ID, if they have one
+    (built-in, community CSV under provider 'free_networks', or set by the
+    user); with neither, they get hourly blocks named after the channel. A network whose guide fetch fails or is skipped
     (Network.programs returning None) keeps its stored guide.
     """
 
@@ -388,7 +389,7 @@ class FreeNetworksScraper(BaseScraper):
                 p.source_channel_id = f'{key}.{p.source_channel_id}'
             programs.extend(progs)
 
-            # Borrow the tvtv cache for channels this network gave no guide for;
+            # Borrow the Gracenote guide cache for channels this network gave no guide for;
             # failing that, fill hourly blocks named after the channel (what
             # custom channels get) so clients don't show an empty row. A skipped
             # or failed fetch leaves the network's guided channels untouched.
@@ -397,15 +398,15 @@ class FreeNetworksScraper(BaseScraper):
                 gid = gracenote.get(cd.source_channel_id)
                 if nc.id in covered:
                     # A guide of its own with holes (Tastemade Travel's can start
-                    # half a day out): fill them from tvtv where it has rows.
+                    # half a day out): fill them from the guide cache where it has rows.
                     if gid and net.borrows_tvtv(nc.id) and _has_hole(covered[nc.id]):
-                        rows = _outside(self._tvtv_programs(cd.source_channel_id, gid), covered[nc.id])
+                        rows = _outside(station_programs(cd.source_channel_id, gid, self.source_name), covered[nc.id])
                         borrowed += len(rows)
                         programs.extend(rows)
                     continue
                 if skipped and net.has_guide(nc.id):
                     continue
-                rows = self._tvtv_programs(cd.source_channel_id, gid) if gid and net.borrows_tvtv(nc.id) else []
+                rows = station_programs(cd.source_channel_id, gid, self.source_name) if gid and net.borrows_tvtv(nc.id) else []
                 if rows:
                     borrowed += len(rows)
                 elif not net.has_guide(nc.id):
@@ -413,7 +414,7 @@ class FreeNetworksScraper(BaseScraper):
                     filled += 1
                 programs.extend(rows)
             extra = ''.join([' (not fetched, kept stored guide)' if skipped else '',
-                             f' + {borrowed} from tvtv' if borrowed else '',
+                             f' + {borrowed} from the guide cache' if borrowed else '',
                              f', {filled} channel(s) with placeholder blocks' if filled else ''])
             elapsed = time.monotonic() - t0
             native_total += len(progs)
@@ -428,7 +429,7 @@ class FreeNetworksScraper(BaseScraper):
                 logger.debug('[%s] %s: %d guide entries%s (%.1fs)', self.source_name, net.name,
                              len(progs), extra, elapsed)
 
-        summary = f'{native_total} native + {borrowed_total} tvtv-borrowed'
+        summary = f'{native_total} native + {borrowed_total} borrowed from the guide cache'
         if placeholders:
             breakdown = ', '.join(f'{name} {n}' for name, n in
                                   sorted(placeholders.items(), key=lambda kv: (-kv[1], kv[0])))
@@ -583,23 +584,3 @@ class FreeNetworksScraper(BaseScraper):
             return None
         earliest = min(stored)
         return earliest if earliest.tzinfo else earliest.replace(tzinfo=timezone.utc)
-
-    def _tvtv_programs(self, scid: str, station_id: str) -> list[ProgramData]:
-        try:
-            from app.models import TvtvProgramCache
-            now = datetime.now(timezone.utc)
-            rows = (TvtvProgramCache.query
-                    .filter(TvtvProgramCache.station_id == str(station_id),
-                            TvtvProgramCache.end_time > now - timedelta(hours=1))
-                    .order_by(TvtvProgramCache.start_time)
-                    .all())
-        except Exception:
-            logger.debug('[%s] tvtv cache unavailable', self.source_name, exc_info=True)
-            return []
-        out = []
-        for r in rows:
-            start = r.start_time if r.start_time.tzinfo else r.start_time.replace(tzinfo=timezone.utc)
-            end = r.end_time if r.end_time.tzinfo else r.end_time.replace(tzinfo=timezone.utc)
-            out.append(ProgramData(source_channel_id=scid, title=r.title, start_time=start,
-                                   end_time=end, episode_title=r.subtitle or None))
-        return out

@@ -78,7 +78,6 @@ logger = logging.getLogger(__name__)
 _CHANNEL_MISS_THRESHOLD = 3
 _STALE_STARTED_JOB_GRACE_SECONDS = 300
 _SCRAPER_MISSING_GRACE_DAYS = 7
-_TVTV_CACHE_STARTUP_RETRY_COOLDOWN_HOURS = 12
 
 flask_app = create_app()
 from app.config import VERSION as _VERSION
@@ -298,11 +297,11 @@ def _scrape_job_already_active(q: Queue, source_name: str) -> bool:
 def _any_scrapes_active() -> bool:
     """Return True if any scraper jobs are queued or running.
 
-    tvtv-cache-refresh (both the nightly cron and manual triggers) defers
+    A manual tvtv-cache-refresh (every due guide station at once) defers
     while this is True, so a started-job marker left behind by a scrape
     worker that died mid-job must not count as "active" forever — reuse the
     same heartbeat-based staleness check _scrape_job_already_active() uses,
-    or a single stuck marker would starve tvtv-cache-refresh indefinitely.
+    or a single stuck marker would starve it indefinitely.
     """
     try:
         r = redis.from_url(flask_app.config['REDIS_URL'])
@@ -2218,41 +2217,18 @@ def run_artifact_build(cache_keys: list[str]):
     _refresh_xml_artifacts_subprocess(timeout_seconds=300, only_keys=set(cache_keys))
 
 
-def run_tvtv_cache_refresh():
-    """Fetch 2 days of tvtv guide data for all indexed FAST stations and store in DB."""
+def run_tvtv_cache_refresh(max_stations: int | None = None):
+    """Refresh the Gracenote guide cache (app/guide_cache.py): the stations
+    something reads guide data from, Gracenote's listings first, tvtv as
+    fallback. Runs nightly; a manual refresh does the same. The name is
+    historical; the job id and route keep it."""
     with flask_app.app_context():
-        from app.tvtv_cache import refresh_tvtv_cache
-        from app.tvtv_lookup import get_station_entry
-        import sqlalchemy as sa
+        from app.guide_cache import refresh
 
         settings = AppSettings.get()
         settings.tvtv_cache_last_attempt_at = datetime.now(timezone.utc)
         db.session.commit()
-
-        # Applied channel IDs.
-        applied = set(
-            str(r) for r in db.session.execute(
-                sa.select(sa.func.distinct(Channel.gracenote_id))
-                .where(Channel.gracenote_id.isnot(None))
-            ).scalars().all() if r
-        )
-
-        # Community map suggestion IDs — pre-cache so the suggestions modal can
-        # show guide previews even before an ID has been applied to a channel.
-        from app.gracenote_map import get_all_tmsids
-        community = set(str(t) for t in (get_all_tmsids() or []) if t)
-
-        # Fetch every applied/community ID, not just ones in the bundled
-        # station_index.json — tvtv's fragment endpoint can serve guide data
-        # for stations outside the index (see _UNINDEXED_LINEUP in tvtv_cache).
-        station_ids = sorted(applied | community)
-        unindexed = sum(1 for sid in station_ids if not get_station_entry(sid))
-        logger.info('[tvtv-cache] fetching %d station IDs (%d applied + %d community-only, %d unindexed)',
-                    len(station_ids), len(applied),
-                    len(community - applied), unindexed)
-
-        summary = refresh_tvtv_cache(days=2, station_ids=station_ids)
-        logger.info('[tvtv-cache] refresh complete: %s', summary)
+        refresh(max_stations=max_stations)
 
 
 def _invalidate_and_refresh_xml() -> None:
@@ -4597,37 +4573,32 @@ if __name__ == '__main__':
                           id='gracenote_exclusions_remote_refresh', max_instances=1, coalesce=True)
 
         def _scheduled_tvtv_cache_refresh() -> str:
+            # Only the stations something reads (~100), a few short commits, so
+            # it doesn't defer for scrapes.
             try:
                 r = redis.from_url(flask_app.config['REDIS_URL'])
                 q = Queue('maintenance', connection=r)
                 job_id = 'tvtv-cache-refresh'
-                if _any_scrapes_active():
-                    logger.info('[tvtv-cache] scraper work active; deferring refresh')
-                    return 'deferred'
                 active_ids = set(q.get_job_ids()) | set(StartedJobRegistry(q.name, connection=q.connection).get_job_ids())
                 if job_id in active_ids:
-                    logger.info('[tvtv-cache] refresh already queued/running, skipping')
+                    logger.info('[guide-cache] refresh already queued/running, skipping')
                     return 'active'
                 q.enqueue('app.worker.run_tvtv_cache_refresh', job_timeout=1800, job_id=job_id)
-                logger.info('[tvtv-cache] enqueued refresh job')
+                logger.info('[guide-cache] enqueued nightly refresh')
                 return 'queued'
             except Exception as exc:
-                logger.warning('[tvtv-cache] could not enqueue via RQ: %s', exc)
+                logger.warning('[guide-cache] could not enqueue via RQ: %s', exc)
                 return 'error'
 
-        # 03:00 user local time — _tz (resolved at construction above) follows the
-        # timezone configured in admin/settings, via the same guarded zoneinfo path
-        # the rest of the app uses, so the UI and scheduler can't silently diverge.
-        # Jittered up to 25 min: tvtv rate-limits per IP, and installs sharing
-        # one (prod + test here) all starting at 03:00:00 got refused together.
+        # 03:00 user local time, jittered up to 25 min: the guide providers
+        # rate-limit per IP, and installs sharing one (prod + test here) would
+        # otherwise all start at 03:00:00.
         scheduler.add_job(_scheduled_tvtv_cache_refresh, 'cron',
                           hour=3, minute=0, timezone=_tz, jitter=1500,
                           id='tvtv_cache_refresh_night', max_instances=1, coalesce=True,
                           misfire_grace_time=3600)
 
-        # Nightly DB backup at 04:00 user-local — after the jittered tvtv refresh
-        # (starts by 03:25, ~8 min, longer with a retry pass) so they don't both
-        # hit the DB at once. Keeps the newest 3 in /data/backups (volume-mounted,
+        # Nightly DB backup at 04:00 user-local. Keeps the newest 3 in /data/backups (volume-mounted,
         # survives container rebuilds).
         scheduler.add_job(_scheduled_db_backup, 'cron',
                           hour=4, minute=0, timezone=_tz,
@@ -4764,53 +4735,6 @@ if __name__ == '__main__':
                     _enqueue_xml_refresh_job()
             except Exception:
                 logger.exception('[xml-cache] startup refresh failed')
-
-            # Trigger tvtv cache refresh at startup if the cache is empty or stale.
-            try:
-                from app.models import TvtvProgramCache
-                from sqlalchemy import func as sa_func
-                from datetime import timezone as _tz
-                now_utc = datetime.now(_tz.utc)
-                newest = db.session.query(sa_func.max(TvtvProgramCache.fetched_at)).scalar()
-                if newest is None:
-                    stale = True
-                else:
-                    if newest.tzinfo is None:
-                        newest = newest.replace(tzinfo=_tz.utc)
-                    age_hours = (now_utc - newest).total_seconds() / 3600
-                    stale = age_hours > 25
-                if stale:
-                    settings = AppSettings.get()
-                    last_attempt = settings.tvtv_cache_last_attempt_at
-                    if last_attempt is not None and last_attempt.tzinfo is None:
-                        last_attempt = last_attempt.replace(tzinfo=_tz.utc)
-                    attempt_age_hours = (
-                        (now_utc - last_attempt).total_seconds() / 3600
-                        if last_attempt is not None else None
-                    )
-                    if attempt_age_hours is not None and attempt_age_hours < _TVTV_CACHE_STARTUP_RETRY_COOLDOWN_HOURS:
-                        logger.info(
-                            '[tvtv-cache] stale/empty at startup (newest=%s), but last attempt was %.1fh ago; skipping startup retry',
-                            newest,
-                            attempt_age_hours,
-                        )
-                        startup_status = 'cooldown'
-                    else:
-                        startup_status = _scheduled_tvtv_cache_refresh()
-                        logger.info('[tvtv-cache] stale/empty at startup (newest=%s) — status=%s', newest, startup_status)
-                    if newest is None and startup_status == 'deferred':
-                        retry_at = datetime.now(_tz.utc) + timedelta(minutes=30)
-                        scheduler.add_job(
-                            _scheduled_tvtv_cache_refresh,
-                            'date',
-                            run_date=retry_at,
-                            id='tvtv_cache_empty_retry',
-                            replace_existing=True,
-                            misfire_grace_time=3600,
-                        )
-                        logger.info('[tvtv-cache] empty cache startup retry scheduled for %s', retry_at.isoformat())
-            except Exception:
-                logger.exception('[tvtv-cache] startup staleness check failed')
 
             try:
                 from app.gracenote_map import fetch_remote_gracenote_map

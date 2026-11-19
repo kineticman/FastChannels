@@ -700,9 +700,11 @@ class AppSettings(db.Model):
 
 class TvtvProgramCache(db.Model):
     """
-    Rolling 3-day cache of tvtv.us guide data for all indexed FAST stations.
-    Refreshed nightly via the background worker.  Used by the Gracenote
-    Suggestions helper and available for future EPG enrichment.
+    Airings per Gracenote station, whichever guide provider supplied them
+    (Gracenote's listings site or tvtv.us; see app/guide_cache.py, the only
+    writer and the read API). The table keeps its historical name. `subtitle`
+    is the episode title; a program's other details live in TmsProgram,
+    joined on program_id.
     """
     __tablename__ = 'tvtv_program_cache'
 
@@ -716,9 +718,55 @@ class TvtvProgramCache(db.Model):
     end_time    = db.Column(db.DateTime(timezone=True), nullable=False)
     fetched_at  = db.Column(db.DateTime(timezone=True), nullable=False,
                             default=lambda: datetime.now(timezone.utc))
+    source      = db.Column(db.String(16), nullable=True)   # 'gracenote' | 'tvtv'
 
     __table_args__ = (
         db.UniqueConstraint('station_id', 'start_time', name='uq_tvtv_station_start'),
         db.Index('idx_tvtv_station_start', 'station_id', 'start_time'),
         db.Index('idx_tvtv_end_time',      'end_time'),
     )
+
+
+class TmsProgram(db.Model):
+    """
+    What we know about a TMS program id (EP…/SH…/MV…), from any guide provider.
+    Written by app/guide_cache.py, which merges: a provider's empty field never
+    blanks a stored one. detail_checked_at stamps a by-id detail lookup so a
+    miss isn't retried every scrape.
+    """
+    __tablename__ = 'tms_programs'
+
+    program_id    = db.Column(db.String(32), primary_key=True)
+    title         = db.Column(db.String(512), nullable=True)
+    episode_title = db.Column(db.String(512), nullable=True)
+    season        = db.Column(db.Integer, nullable=True)
+    episode       = db.Column(db.Integer, nullable=True)
+    description   = db.Column(db.Text, nullable=True)
+    rating        = db.Column(db.String(32), nullable=True)
+    release_year  = db.Column(db.Integer, nullable=True)
+    series_id     = db.Column(db.String(32), nullable=True)
+    image         = db.Column(db.String(256), nullable=True)
+    source        = db.Column(db.String(16), nullable=True)
+    last_seen     = db.Column(db.DateTime(timezone=True), nullable=True)
+    detail_checked_at = db.Column(db.DateTime(timezone=True), nullable=True)
+
+    __table_args__ = (
+        db.Index('idx_tms_programs_last_seen', 'last_seen'),
+    )
+
+
+class GuideStation(db.Model):
+    """
+    A Gracenote station whose guide FastChannels caches (app/guide_cache.py).
+    pinned rows come from app/data/guide_stations.json and are always cached;
+    the rest are recorded as scrapers read them (via Redis, flushed here by
+    each refresh) and kept while read within guide_cache._NEED_WINDOW_DAYS.
+    """
+    __tablename__ = 'guide_stations'
+
+    station_id   = db.Column(db.String(32), primary_key=True)
+    source       = db.Column(db.String(64), nullable=True)
+    name         = db.Column(db.String(128), nullable=True)
+    pinned       = db.Column(db.Boolean, nullable=False, default=False)
+    first_needed = db.Column(db.DateTime(timezone=True), nullable=True)
+    last_needed  = db.Column(db.DateTime(timezone=True), nullable=True)

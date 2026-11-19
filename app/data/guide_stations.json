@@ -1,0 +1,490 @@
+{
+ "_comment": "Gracenote stations whose guide FastChannels always caches (app/guide_cache.py): channels whose scraper borrows the guide or fills holes or filler from it. Stations a scraper reads are also picked up automatically and kept while read; list them here when found during scraper development so they're cached from the first run. `python -m app.guide_cache --needed` prints the current set.",
+ "stations": [
+  {
+   "station_id": "10146",
+   "source": "cnn_tve",
+   "name": "CNN International"
+  },
+  {
+   "station_id": "16604",
+   "source": "free_networks",
+   "name": "JTV"
+  },
+  {
+   "station_id": "33527",
+   "source": "free_networks",
+   "name": "Enlace"
+  },
+  {
+   "station_id": "44861",
+   "source": "free_networks",
+   "name": "EPlusTV 6 Jackson"
+  },
+  {
+   "station_id": "49097",
+   "source": "free_networks",
+   "name": "NRB TV"
+  },
+  {
+   "station_id": "49987",
+   "source": "free_networks",
+   "name": "3ABN Latino"
+  },
+  {
+   "station_id": "58646",
+   "source": "cnn_tve",
+   "name": "CNN"
+  },
+  {
+   "station_id": "60222",
+   "source": "free_networks",
+   "name": "QVC"
+  },
+  {
+   "station_id": "65731",
+   "source": "free_networks",
+   "name": "theDove TV"
+  },
+  {
+   "station_id": "68985",
+   "source": "free_networks",
+   "name": "3ABN Proclaim!"
+  },
+  {
+   "station_id": "78540",
+   "source": "free_networks",
+   "name": "3ABN Dare to Dream"
+  },
+  {
+   "station_id": "91096",
+   "source": "free_networks",
+   "name": "NewsNation"
+  },
+  {
+   "station_id": "91404",
+   "source": "free_networks",
+   "name": "CMC California Music Channel"
+  },
+  {
+   "station_id": "91994",
+   "source": "free_networks",
+   "name": "AccuWeather NOW"
+  },
+  {
+   "station_id": "93564",
+   "source": "free_networks",
+   "name": "Shop LC"
+  },
+  {
+   "station_id": "99085",
+   "source": "free_networks",
+   "name": "Sky News Arabia"
+  },
+  {
+   "station_id": "99867",
+   "source": "free_networks",
+   "name": "3ABN Kids"
+  },
+  {
+   "station_id": "101260",
+   "source": "free_networks",
+   "name": "QVC3"
+  },
+  {
+   "station_id": "104846",
+   "source": "free_networks",
+   "name": "CBS News 24/7"
+  },
+  {
+   "station_id": "106796",
+   "source": "free_networks",
+   "name": "CMC-USA Country Music Channel"
+  },
+  {
+   "station_id": "107076",
+   "source": "free_networks",
+   "name": "Tastemade"
+  },
+  {
+   "station_id": "107241",
+   "source": "free_networks",
+   "name": "Cheddar News"
+  },
+  {
+   "station_id": "108919",
+   "source": "cbs_sports,free_networks",
+   "name": "CBS Sports HQ"
+  },
+  {
+   "station_id": "109977",
+   "source": "free_networks",
+   "name": "CBN News Channel"
+  },
+  {
+   "station_id": "110291",
+   "source": "free_networks",
+   "name": "ET Live"
+  },
+  {
+   "station_id": "112732",
+   "source": "free_networks",
+   "name": "SportsGrid"
+  },
+  {
+   "station_id": "113452",
+   "source": "free_networks",
+   "name": "BUZZR"
+  },
+  {
+   "station_id": "113673",
+   "source": "free_networks",
+   "name": "Home.Made.Nation"
+  },
+  {
+   "station_id": "113780",
+   "source": "free_networks",
+   "name": "Crime 360"
+  },
+  {
+   "station_id": "114313",
+   "source": "free_networks",
+   "name": "Outside TV"
+  },
+  {
+   "station_id": "114492",
+   "source": "free_networks",
+   "name": "Global News Toronto"
+  },
+  {
+   "station_id": "114493",
+   "source": "free_networks",
+   "name": "Global News Calgary"
+  },
+  {
+   "station_id": "114494",
+   "source": "free_networks",
+   "name": "Global News National"
+  },
+  {
+   "station_id": "114495",
+   "source": "free_networks",
+   "name": "Global News BC"
+  },
+  {
+   "station_id": "114496",
+   "source": "free_networks",
+   "name": "Global News Edmonton"
+  },
+  {
+   "station_id": "118456",
+   "source": "free_networks",
+   "name": "Tiny House Nation"
+  },
+  {
+   "station_id": "121308",
+   "source": "free_networks",
+   "name": "Lifetime Holiday Movie Favorites"
+  },
+  {
+   "station_id": "121705",
+   "source": "cbs_sports",
+   "name": "NFL Channel"
+  },
+  {
+   "station_id": "121718",
+   "source": "free_networks",
+   "name": "Tastemade Travel"
+  },
+  {
+   "station_id": "121813",
+   "source": "paramount",
+   "name": "South Park"
+  },
+  {
+   "station_id": "121819",
+   "source": "paramount",
+   "name": "SpongeBob Universe"
+  },
+  {
+   "station_id": "121822",
+   "source": "paramount",
+   "name": "The Challenge"
+  },
+  {
+   "station_id": "121991",
+   "source": "free_networks",
+   "name": "TNA Wrestling 24/7"
+  },
+  {
+   "station_id": "122885",
+   "source": "free_networks",
+   "name": "Sky News"
+  },
+  {
+   "station_id": "123119",
+   "source": "free_networks",
+   "name": "CBS News Minnesota"
+  },
+  {
+   "station_id": "123120",
+   "source": "free_networks",
+   "name": "CBS News Colorado"
+  },
+  {
+   "station_id": "123121",
+   "source": "free_networks",
+   "name": "CBS News Bay Area"
+  },
+  {
+   "station_id": "123122",
+   "source": "free_networks",
+   "name": "CBS News Chicago"
+  },
+  {
+   "station_id": "123123",
+   "source": "free_networks",
+   "name": "CBS News Texas"
+  },
+  {
+   "station_id": "123124",
+   "source": "free_networks",
+   "name": "CBS News Sacramento"
+  },
+  {
+   "station_id": "123125",
+   "source": "free_networks",
+   "name": "CBS News New York"
+  },
+  {
+   "station_id": "123126",
+   "source": "free_networks",
+   "name": "CBS News Los Angeles"
+  },
+  {
+   "station_id": "123127",
+   "source": "free_networks",
+   "name": "CBS News Baltimore"
+  },
+  {
+   "station_id": "123128",
+   "source": "free_networks",
+   "name": "CBS News Philadelphia"
+  },
+  {
+   "station_id": "123129",
+   "source": "free_networks",
+   "name": "CBS News Pittsburgh"
+  },
+  {
+   "station_id": "123130",
+   "source": "free_networks",
+   "name": "CBS News Boston"
+  },
+  {
+   "station_id": "123380",
+   "source": "free_networks",
+   "name": "CBS News Miami"
+  },
+  {
+   "station_id": "123423",
+   "source": "free_networks",
+   "name": "Torque"
+  },
+  {
+   "station_id": "123424",
+   "source": "free_networks",
+   "name": "Perform"
+  },
+  {
+   "station_id": "123425",
+   "source": "free_networks",
+   "name": "Ax Men"
+  },
+  {
+   "station_id": "123426",
+   "source": "free_networks",
+   "name": "Ice Road Truckers"
+  },
+  {
+   "station_id": "123430",
+   "source": "free_networks",
+   "name": "Crime Cults Killers"
+  },
+  {
+   "station_id": "123431",
+   "source": "free_networks",
+   "name": "UnXplained Zone"
+  },
+  {
+   "station_id": "123432",
+   "source": "free_networks",
+   "name": "Deal Zone"
+  },
+  {
+   "station_id": "123433",
+   "source": "free_networks",
+   "name": "Modern Marvels"
+  },
+  {
+   "station_id": "123605",
+   "source": "free_networks",
+   "name": "Court TV"
+  },
+  {
+   "station_id": "125187",
+   "source": "free_networks",
+   "name": "Tastemade Home"
+  },
+  {
+   "station_id": "126369",
+   "source": "free_networks",
+   "name": "Dance Moms"
+  },
+  {
+   "station_id": "126439",
+   "source": "free_networks",
+   "name": "Military Heroes"
+  },
+  {
+   "station_id": "126738",
+   "source": "free_networks",
+   "name": "CBS News Detroit"
+  },
+  {
+   "station_id": "126864",
+   "source": "free_networks",
+   "name": "NBC LX Home"
+  },
+  {
+   "station_id": "129047",
+   "source": "free_networks",
+   "name": "Matched Married Meet"
+  },
+  {
+   "station_id": "129137",
+   "source": "free_networks",
+   "name": "Cold Case Files"
+  },
+  {
+   "station_id": "130385",
+   "source": "free_networks",
+   "name": "Inside Edition 24/7"
+  },
+  {
+   "station_id": "131429",
+   "source": "free_networks",
+   "name": "Duck Dynasty"
+  },
+  {
+   "station_id": "138647",
+   "source": "free_networks",
+   "name": "SPEED SPORT 1"
+  },
+  {
+   "station_id": "143339",
+   "source": "free_networks",
+   "name": "Al Jazeera Documentary"
+  },
+  {
+   "station_id": "143340",
+   "source": "free_networks",
+   "name": "Al Jazeera Mubasher"
+  },
+  {
+   "station_id": "146045",
+   "source": "free_networks",
+   "name": "Global News Montreal"
+  },
+  {
+   "station_id": "146046",
+   "source": "free_networks",
+   "name": "Global News Winnipeg"
+  },
+  {
+   "station_id": "146047",
+   "source": "free_networks",
+   "name": "Global News Halifax"
+  },
+  {
+   "station_id": "147367",
+   "source": "free_networks",
+   "name": "TheNest"
+  },
+  {
+   "station_id": "148202",
+   "source": "free_networks",
+   "name": "Car Chase"
+  },
+  {
+   "station_id": "158083",
+   "source": "free_networks",
+   "name": "Classic Car Auctions"
+  },
+  {
+   "station_id": "160400",
+   "source": "free_networks",
+   "name": "48 Hours"
+  },
+  {
+   "station_id": "161735",
+   "source": "free_networks",
+   "name": "60 Minutes"
+  },
+  {
+   "station_id": "163702",
+   "source": "free_networks",
+   "name": "JTV Español"
+  },
+  {
+   "station_id": "172207",
+   "source": "free_networks",
+   "name": "Storage Wars"
+  },
+  {
+   "station_id": "176608",
+   "source": "free_networks",
+   "name": "Live PD Presents"
+  },
+  {
+   "station_id": "177681",
+   "source": "free_networks",
+   "name": "QVC2"
+  },
+  {
+   "station_id": "177720",
+   "source": "free_networks",
+   "name": "Lifetime Movies: Love & Drama"
+  },
+  {
+   "station_id": "181303",
+   "source": "free_networks",
+   "name": "The First 48"
+  },
+  {
+   "station_id": "187516",
+   "source": "free_networks",
+   "name": "Yahoo Sports Network"
+  },
+  {
+   "station_id": "200290",
+   "source": "free_networks",
+   "name": "Bowling TV"
+  },
+  {
+   "station_id": "201079",
+   "source": "free_networks",
+   "name": "Judge Judy"
+  },
+  {
+   "station_id": "202596",
+   "source": "free_networks",
+   "name": "Hot Bench"
+  },
+  {
+   "station_id": "206205",
+   "source": "free_networks",
+   "name": "Watch AEW"
+  }
+ ]
+}
