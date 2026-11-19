@@ -14,10 +14,28 @@
       <div class="fields-grid" style="max-width:480px">
         <div class="field field-full">
           <label for="public-base-url">FastChannels Server URL</label>
-          <input type="text" id="public-base-url"
-                 placeholder="{{ detected_base_url or '192.168.1.50:5523' }}" value="{{ public_base_url }}"
-                 oninput="checkPublicBaseUrlPortWarning()">
+          <div style="display:flex;gap:0.5rem;align-items:center">
+            <input type="text" id="public-base-url" style="flex:1;min-width:0"
+                   placeholder="http://192.168.1.50:5523" value="{{ public_base_url }}"
+                   data-initial="{{ public_base_url }}"
+                   oninput="checkPublicBaseUrlPortWarning()"
+                   onkeydown="if (event.key === 'Enter') { event.preventDefault(); savePublicBaseUrlSettings(); }">
+            <button class="btn btn-primary" onclick="savePublicBaseUrlSettings()">Save</button>
+          </div>
+          <span class="save-status" id="public-base-url-status"></span>
           <div class="help">The address other devices use to reach FastChannels. Include <code>http://</code> and a port if needed, for example <code>http://192.168.1.50:5523</code>.</div>
+          {% set _detected_host = (detected_base_url or '').split('://')[-1].split(':')[0].strip('[]') %}
+          {% if not public_base_url and detected_base_url and _detected_host not in ('localhost', '127.0.0.1', '::1') %}
+          <div class="help" id="public-base-url-detected">
+            Not saved yet. You opened this page at <code>{{ detected_base_url }}</code>:
+            <button type="button" class="btn btn-secondary" style="padding:0.2rem 0.6rem;font-size:0.8rem"
+                    data-url="{{ detected_base_url }}" onclick="useDetectedPublicBaseUrl(this.dataset.url)">Use and save</button>
+          </div>
+          {% elif not public_base_url %}
+          <div class="help" id="public-base-url-detected" style="color:var(--warning-soft)">
+            Not saved yet. Type this machine's LAN address (not <code>localhost</code>, which other devices can't reach).
+          </div>
+          {% endif %}
           <div class="help" id="no-port-warning" style="color:var(--warning-soft);{% if not public_base_url_no_port_warning %} display:none;{% endif %}">
             No port specified — this is fine if you're behind a reverse proxy, but most direct installs need <code>:5523</code>.
           </div>
@@ -37,10 +55,6 @@
             </div>
           </details>
         </div>
-      </div>
-      <div class="field-actions">
-        <span class="save-status" id="public-base-url-status"></span>
-        <button class="btn btn-primary" onclick="savePublicBaseUrlSettings()">Save</button>
       </div>
     </div>
   </div>

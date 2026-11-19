@@ -139,7 +139,7 @@ async function saveSettings(body, statusId) {
     if (!r.ok) throw new Error(payload?.error || `HTTP ${r.status}`);
     status.className = 'save-status ok';
     status.textContent = '✓ Saved';
-    setTimeout(() => { status.textContent = ''; }, 2500);
+    setTimeout(() => { if (status.textContent === '✓ Saved') status.textContent = ''; }, 2500);
     return true;
   } catch (e) {
     status.className = 'save-status error';
@@ -218,12 +218,32 @@ function isPlaceholderPublicBaseUrl(value) {
   }
 }
 
+function useDetectedPublicBaseUrl(url) {
+  const input = document.getElementById('public-base-url');
+  input.value = url;
+  savePublicBaseUrlSettings();
+}
+
 async function savePublicBaseUrlSettings() {
-  const publicBaseUrl = document.getElementById('public-base-url').value.trim();
+  const input = document.getElementById('public-base-url');
+  const publicBaseUrl = input.value.trim();
+  // An empty box that was already empty is a no-op save that looks like
+  // success (the grey example text reads as a value). Clearing a saved value
+  // is still allowed so an env var can take over again.
+  if (!publicBaseUrl && !(input.dataset.initial || '').trim()) {
+    const status = document.getElementById('public-base-url-status');
+    status.className = 'save-status error';
+    status.textContent = '✕ Type the address first (the grey text is only an example)';
+    input.focus();
+    return;
+  }
   const ok = await saveSettings({
     public_base_url: publicBaseUrl || null,
   }, 'public-base-url-status');
   if (ok) {
+    input.dataset.initial = publicBaseUrl;
+    const hint = document.getElementById('public-base-url-detected');
+    if (hint) hint.style.display = publicBaseUrl ? 'none' : '';
     checkPublicBaseUrlPortWarning();
     settingsNeedsConfigState.public_base_url = !publicBaseUrl || isPlaceholderPublicBaseUrl(publicBaseUrl);
     refreshSettingsNeedsConfigBanner();
@@ -2434,31 +2454,37 @@ async function testDvrConnection() {
     const resp = await fetch('/api/dvr/test-connection');
     const data = await resp.json();
     if (data.ok) {
-      let msg = `Connected to Channels DVR v${data.version}`;
+      let msg = `✓ Saved — connected to Channels DVR v${data.version}`;
       if (data.username) msg += ` (${data.username})`;
       statusEl.textContent = msg;
       statusEl.className = 'save-status ok';
     } else {
-      statusEl.textContent = data.error || 'Connection failed.';
+      statusEl.textContent = '✕ Saved, but could not connect: ' + (data.error || 'connection failed.');
       statusEl.className = 'save-status error';
     }
   } catch (e) {
-    statusEl.textContent = 'Connection failed.';
+    statusEl.textContent = '✕ Saved, but could not connect.';
     statusEl.className = 'save-status error';
   }
 }
 
 async function saveDvrSettings() {
   const dvrUrl = document.getElementById('channels-dvr-url').value.trim();
-  const autoRefresh = document.getElementById('dvr-epg-auto-refresh').checked;
   const ok = await saveSettings({
     channels_dvr_url: dvrUrl || null,
-    dvr_epg_auto_refresh: autoRefresh,
   }, 'dvr-settings-status');
   if (ok) {
     settingsNeedsConfigState.channels_dvr_url = !dvrUrl && !settingsBootstrap.channelsDvrUrlFromEnv;
     refreshSettingsNeedsConfigBanner();
+    // Test right away so a typo shows up now, not at "Add to Channels DVR".
+    if (dvrUrl || settingsBootstrap.channelsDvrUrlFromEnv) await testDvrConnection();
   }
+}
+
+async function saveDvrAutoRefresh() {
+  await saveSettings({
+    dvr_epg_auto_refresh: document.getElementById('dvr-epg-auto-refresh').checked,
+  }, 'dvr-settings-status');
 }
 
 async function saveTimezoneSettings() {
