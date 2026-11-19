@@ -379,6 +379,17 @@ class ParamountScraper(BaseScraper):
         for slug, name in SHOWTIME_SLUGS.items():
             chan = dict(listed.get(slug) or {})
             if not chan.get('videoContentId'):
+                # The public channel record carries the logos (white =
+                # filePathLogoSelected) and the content id; listings.json has neither logo.
+                try:
+                    rec = self._get(f'live/channels/{slug}.json').get('channel') or {}
+                except requests.RequestException as exc:
+                    logger.warning('[paramount] %s channel record unavailable: %s', slug, exc)
+                    rec = {}
+                for key in ('videoContentId', 'filePathLogo', 'filePathLogoSelected', 'description'):
+                    if rec.get(key):
+                        chan.setdefault(key, rec[key])
+            if not chan.get('videoContentId'):
                 try:
                     items = self._get(f'live/channels/{slug}/listings.json', rows=1, start=0,
                                       showListing='true').get('listing') or []
@@ -388,6 +399,7 @@ class ParamountScraper(BaseScraper):
                 if not items or not items[0].get('videoContentId'):
                     continue
                 chan.update({'slug': slug, 'videoContentId': items[0]['videoContentId']})
+            chan['slug'] = slug
             chan.setdefault('channelName', name)
             chan['channelCategorySlugs'] = ['showtime']
             try:
