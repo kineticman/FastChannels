@@ -37,7 +37,10 @@ proxy sends `Authorization: Bearer <ls_session>`. Without the session the
 endpoint answers with no token and no manifest. The web player's
 metadata.json now hands out an anonymous token and no manifest for this
 session, so it can't be used for these channels. Each channel's
-listings.json gives about 37 hours of guide with TMS ids.
+listings.json runs about 16 days with TMS ids, but some channels (South Park,
+SpongeBob, The Challenge…) fill unscheduled hours with one repeated 6-18 h
+item. prgSvcId is the channel's Gracenote station, so those spans take tvtv's
+real airings, matched back to Paramount metadata by TMS id.
 
 Showtime East and West (slugs showtime-east / showtime-west, fixed content
 ids, assetType live_hls_drm) aren't in live/channels.json for an account
@@ -60,6 +63,7 @@ import requests
 
 from ..matchups import (MATCHUP_CACHE_KEY, MatchupResolver, event_label, matchup_body,
                         matchup_description, matchup_title)
+from ..gracenote_map import resolve_gracenote
 from ..tve.adobe_pass import TVEAuthError
 from ..sports import normalize_sport, sport_for_league
 from .base import (BaseScraper, ChannelData, ConfigField, ProgramData,
@@ -83,7 +87,21 @@ CHANNEL_SCHEME = 'paramount://channel/'
 CHANNEL_PREFIX = 'channel:'
 LICENSE_URL = 'https://cbsi.live.ott.irdeto.com/widevine/getlicense'
 _SESSION_TOKEN_PATH = 'v3.1/androidtv/irdeto-control/session-token.json'
-_LISTING_ROWS = 100
+# Listings run ~16 days; all of them are read so filler airings can borrow
+# episode metadata by TMS id, but only _EPG_HOURS of guide is emitted.
+_LISTING_ROWS = 1000
+_EPG_HOURS = 72
+# TMS id → Paramount episode metadata seen in any real listing, kept across
+# scrapes so filler airings from tvtv get episode titles for episodes that
+# aren't in the current listing. Entries unseen for _EPISODE_TTL_DAYS drop out.
+EPISODE_CACHE_KEY = 'paramount:episodes'
+_EPISODE_TTL_DAYS = 120
+_EPISODE_FIELDS = ('title', 'description', 'filePathThumb', 'rating', 'episodeTitle', 'seasonNumber',
+                   'episodeNumber', 'originalAirDate', 'tmsProgramId', 'tmsSeriesId')
+# Paramount+ Channels listings fill unscheduled hours with one repeated item
+# (South Park "201", a single movie, …) running 6-18 h. Real airings top out
+# near 3 h, so anything longer is replaced by the Gracenote station's airings.
+_FILLER_MINUTES = 300
 # Paramount+ channel category slug → FastChannels category.
 _CHANNEL_CATEGORIES = {'comedy': 'Comedy', 'drama': 'Drama', 'kids-family': 'Kids',
                        'reality': 'Reality TV', 'news': 'News', 'sports': 'Sports',
@@ -111,6 +129,36 @@ _KEY_TOKENS: dict[str, tuple[str, float]] = {}
 # contentId → {'manifest', 'license_url', 'auth', 'exp'} from session-token.json
 # for the DRM channels. Per process; the license proxy refetches on a miss.
 _DRM_SESSIONS: dict[str, dict] = {}
+
+
+def _listing_program(cid: str, item: dict, start: datetime, end: datetime) -> ProgramData:
+    title = (item.get('title') or '').strip()
+    thumb = (item.get('filePathThumb') or '').removeprefix('files/')
+    episode_title = (item.get('episodeTitle') or '').strip()
+    aired = _epoch_ms(item.get('originalAirDate'))
+    return ProgramData(
+        source_channel_id=cid,
+        title=title,
+        start_time=start,
+        end_time=end,
+        description=(item.get('description') or '').strip() or None,
+        poster_url=_THUMBS + thumb if thumb else None,
+        rating=item.get('rating') or None,
+        episode_title=episode_title if episode_title and episode_title != title else None,
+        season=item.get('seasonNumber') or None,
+        episode=item.get('episodeNumber') or None,
+        original_air_date=aired.date() if aired else None,
+        # TMS ids: MV… is a movie, EP…/SH… a series episode.
+        program_type='movie' if str(item.get('tmsProgramId') or item.get('tmsSeriesId') or '').startswith('MV') else None,
+        series_id=item.get('tmsSeriesId') or None,
+        episode_id=item.get('tmsProgramId') or (str(item['id']) if item.get('id') else None),
+    )
+
+
+def _generic_program(cid: str, chan: dict, start: datetime, end: datetime) -> ProgramData:
+    return ProgramData(source_channel_id=cid, title=(chan.get('channelName') or chan.get('slug') or 'Paramount+').strip(),
+                       start_time=start, end_time=end,
+                       description=(chan.get('description') or '').strip() or None)
 
 
 class ParamountAuthError(TVEAuthError):
@@ -296,6 +344,7 @@ class ParamountScraper(BaseScraper):
     source_category = 'premium'
     is_premium = True
     scrape_interval = 360
+    LAZY_CACHE_KEYS = frozenset({EPISODE_CACHE_KEY})
     # The audit's default (linear) scope covers the Paramount+ Channels: it
     # resolves each manifest, confirms Widevine (bridge) and fills the
     # resolution badge. Matches are event channels, skipped unless the audit
@@ -386,7 +435,7 @@ class ParamountScraper(BaseScraper):
                 except requests.RequestException as exc:
                     logger.warning('[paramount] %s channel record unavailable: %s', slug, exc)
                     rec = {}
-                for key in ('videoContentId', 'filePathLogo', 'filePathLogoSelected', 'description'):
+                for key in ('videoContentId', 'filePathLogo', 'filePathLogoSelected', 'description', 'prgSvcId'):
                     if rec.get(key):
                         chan.setdefault(key, rec[key])
             if not chan.get('videoContentId'):
@@ -517,6 +566,9 @@ class ParamountScraper(BaseScraper):
                 guide_key=f'PPLUS:{slug}',
                 description=(c.get('description') or '').strip() or None,
                 tags=['Paramount+ Channels'] + (['Showtime'] if slug in SHOWTIME_SLUGS else []),
+                # prgSvcId is the Gracenote station; it also puts the channel in
+                # the nightly tvtv refresh that _drm_epg fills filler from.
+                gracenote_id=resolve_gracenote('paramount', upstream_id=c.get('prgSvcId'), lookup_key=slug),
             ))
         return out
 
@@ -559,43 +611,110 @@ class ParamountScraper(BaseScraper):
 
     def _drm_epg(self, wanted: set[str]) -> list[ProgramData]:
         programs = []
+        today = int(time.time() // 86400)
+        known = dict(self.load_lazy_cache_key(EPISODE_CACHE_KEY) or {})
+        listings = []
         for c in getattr(self, '_drm_items', []):
-            cid = f'{CHANNEL_PREFIX}{c["slug"]}'
-            if cid not in wanted:
+            if f'{CHANNEL_PREFIX}{c["slug"]}' not in wanted:
                 continue
             try:
-                listing = self._get(f'live/channels/{c["slug"]}/listings.json', rows=_LISTING_ROWS, start=0,
-                                    showListing='true').get('listing') or []
+                listings.append((c, self._get(f'live/channels/{c["slug"]}/listings.json', rows=_LISTING_ROWS,
+                                              start=0, showListing='true').get('listing') or []))
             except requests.RequestException as exc:
                 logger.warning('[paramount] %s listings unavailable: %s', c['slug'], exc)
-                continue
+        # Remember episodes of the series that air on filler channels, from
+        # whichever channel lists them (SpongeBob also runs on Animation Favorites).
+        filler_series = {i.get('tmsSeriesId') for _, listing in listings
+                         if any((x.get('durationMins') or 0) > _FILLER_MINUTES for x in listing)
+                         for i in listing if i.get('tmsSeriesId')}
+        for _, listing in listings:
+            for i in listing:
+                if (i.get('tmsProgramId') and i.get('tmsSeriesId') in filler_series
+                        and (i.get('durationMins') or 0) <= _FILLER_MINUTES):
+                    known[str(i['tmsProgramId'])] = {**{k: i[k] for k in _EPISODE_FIELDS if i.get(k)},
+                                                     'seen': today}
+        for c, listing in listings:
+            cid = f'{CHANNEL_PREFIX}{c["slug"]}'
+            airings = None
+            horizon = datetime.now(timezone.utc) + timedelta(hours=_EPG_HOURS)
             for item in listing:
                 start = _epoch_ms(item.get('startTimestamp'))
                 end = _epoch_ms(item.get('endTimestamp'))
                 title = (item.get('title') or '').strip()
-                if not start or not end or end <= start or not title:
+                if not start or not end or end <= start or not title or start >= horizon:
                     continue
-                thumb = (item.get('filePathThumb') or '').removeprefix('files/')
-                episode_title = (item.get('episodeTitle') or '').strip()
-                aired = _epoch_ms(item.get('originalAirDate'))
-                programs.append(ProgramData(
-                    source_channel_id=cid,
-                    title=title,
-                    start_time=start,
-                    end_time=end,
-                    description=(item.get('description') or '').strip() or None,
-                    poster_url=_THUMBS + thumb if thumb else None,
-                    rating=item.get('rating') or None,
-                    episode_title=episode_title if episode_title and episode_title != title else None,
-                    season=item.get('seasonNumber') or None,
-                    episode=item.get('episodeNumber') or None,
-                    original_air_date=aired.date() if aired else None,
-                    # TMS ids: MV… is a movie, EP…/SH… a series episode.
-                    program_type='movie' if str(item.get('tmsProgramId') or item.get('tmsSeriesId') or '').startswith('MV') else None,
-                    series_id=item.get('tmsSeriesId') or None,
-                    episode_id=item.get('tmsProgramId') or (str(item['id']) if item.get('id') else None),
-                ))
+                if (end - start).total_seconds() <= _FILLER_MINUTES * 60:
+                    programs.append(_listing_program(cid, item, start, end))
+                    continue
+                # Filler: take the real airings from the Gracenote station
+                # (tvtv), with Paramount's own metadata where the TMS id
+                # appears as a real listing; a generic block covers the rest.
+                if airings is None:
+                    airings = self._tvtv_airings(c.get('prgSvcId'), horizon)
+                cursor = start
+                for a in airings:
+                    a_start, a_end = max(a['start'], cursor), min(a['end'], end)
+                    if a_end <= a_start:
+                        continue
+                    if a_start > cursor:
+                        programs.append(_generic_program(cid, c, cursor, a_start))
+                    meta = known.get(a['program_id'] or '')
+                    if meta:
+                        programs.append(_listing_program(cid, meta, a_start, a_end))
+                    else:
+                        pid = a['program_id'] or ''
+                        programs.append(ProgramData(
+                            source_channel_id=cid, title=a['title'], start_time=a_start, end_time=a_end,
+                            episode_title=a['subtitle'] if a['subtitle'] and a['subtitle'] != a['title'] else None,
+                            program_type='movie' if pid.startswith('MV') else None,
+                            episode_id=pid or None,
+                        ))
+                    cursor = a_end
+                if cursor < end:
+                    programs.append(_generic_program(cid, c, cursor, end))
+        if known:
+            self._update_cache(EPISODE_CACHE_KEY, {k: v for k, v in known.items()
+                                                   if today - (v.get('seen') or 0) <= _EPISODE_TTL_DAYS})
         return programs
+
+    def _tvtv_airings(self, station_id, until: datetime) -> list[dict]:
+        """Airings for a Gracenote station up to `until`: the tvtv cache (refreshed
+        nightly for every channel's gracenote_id, about two days), with a live tvtv
+        fetch for whatever the cache doesn't reach."""
+        if not station_id:
+            return []
+        station_id = str(station_id)
+        now = datetime.now(timezone.utc)
+        out = []
+        try:
+            from ..models import TvtvProgramCache
+            rows = (TvtvProgramCache.query
+                    .filter(TvtvProgramCache.station_id == station_id,
+                            TvtvProgramCache.end_time > now - timedelta(hours=1))
+                    .order_by(TvtvProgramCache.start_time).all())
+            for r in rows:
+                out.append({'program_id': r.program_id, 'title': r.title, 'subtitle': r.subtitle,
+                            'start': r.start_time if r.start_time.tzinfo else r.start_time.replace(tzinfo=timezone.utc),
+                            'end': r.end_time if r.end_time.tzinfo else r.end_time.replace(tzinfo=timezone.utc)})
+        except Exception:
+            logger.debug('[paramount] tvtv cache unavailable', exc_info=True)
+        covered = max((a['end'] for a in out), default=now - timedelta(hours=1))
+        if covered >= until - timedelta(hours=1):
+            return out
+        try:
+            from .. import tvtv_cache
+            items = tvtv_cache._fetch_fragment_station(tvtv_cache._get_session(), station_id, covered, until) or []
+        except Exception as exc:
+            logger.warning('[paramount] tvtv fetch for station %s failed: %s', station_id, exc)
+            items = []
+        for item in items:
+            a_start = tvtv_cache._parse_start(item)
+            if not a_start or a_start < covered:
+                continue
+            out.append({'program_id': item.get('programId'), 'title': (item.get('title') or '').strip(),
+                        'subtitle': (item.get('subtitle') or '').strip() or None, 'start': a_start,
+                        'end': a_start + timedelta(minutes=int(item.get('duration') or 0))})
+        return sorted((a for a in out if a['title'] and a['end'] > a['start']), key=lambda a: a['start'])
 
     # ── playback ──
 
