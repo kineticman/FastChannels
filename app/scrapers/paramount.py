@@ -102,6 +102,12 @@ _EPISODE_FIELDS = ('title', 'description', 'filePathThumb', 'rating', 'episodeTi
 # (South Park "201", a single movie, …) running 6-18 h. Real airings top out
 # near 3 h, so anything longer is replaced by the Gracenote station's airings.
 _FILLER_MINUTES = 300
+# tvtv's grid gives filler airings only a title and TMS id; its program dialog
+# has the episode details. It rate-limits, so each scrape looks up at most this
+# many unknown ids, paced, soonest first; results go into the episode memory.
+_TVTV_DETAIL_CAP = 30
+_TVTV_DETAIL_PACE = 6.0   # 59 lookups at 6 s drew no 429; 1.5 s hit one after ~5
+_TVTV_MISS_RETRY_DAYS = 7
 # Paramount+ channel category slug → FastChannels category.
 _CHANNEL_CATEGORIES = {'comedy': 'Comedy', 'drama': 'Drama', 'kids-family': 'Kids',
                        'reality': 'Reality TV', 'news': 'News', 'sports': 'Sports',
@@ -163,6 +169,48 @@ def _generic_program(cid: str, chan: dict, start: datetime, end: datetime) -> Pr
 
 class ParamountAuthError(TVEAuthError):
     pass
+
+
+class _TvtvRateLimited(Exception):
+    pass
+
+
+def _tvtv_program_details(session, program_id: str) -> dict:
+    """Episode metadata from tvtv's program dialog, in listing field names.
+    {} when tvtv has nothing for the id."""
+    from bs4 import BeautifulSoup
+    r = session.get('https://tvtv.us/dlg/program', params={'id': program_id}, timeout=20,
+                    headers={'HX-Request': 'true', 'Accept': 'text/html, */*'})
+    if r.status_code == 429:
+        raise _TvtvRateLimited()
+    if r.status_code == 404:
+        return {}
+    r.raise_for_status()
+    soup = BeautifulSoup(r.text, 'html.parser')
+    panel = soup.find(id='main-panel')
+    if not panel:
+        return {}
+    out = {'tmsProgramId': program_id}
+    h1 = soup.find('h1')
+    if h1 and h1.get_text(strip=True):
+        out['title'] = h1.get_text(' ', strip=True)
+    h2 = panel.find('h2', recursive=False)
+    if h2 and h2.get_text(strip=True) and not re.fullmatch(r'\d{4}', h2.get_text(strip=True)):
+        out['episodeTitle'] = h2.get_text(' ', strip=True)   # a movie's h2 is its year
+    paras = [x for x in panel.find_all('p', recursive=False) if not x.attrs]
+    for x in paras:
+        m = re.match(r'Season (\d+); Episode (\d+)', x.get_text(' ', strip=True))
+        if m:
+            out['seasonNumber'], out['episodeNumber'] = int(m.group(1)), int(m.group(2))
+            break
+    label = panel.find(string=re.compile('Parental Rating'))
+    rating_el = label.parent.find_previous_sibling('div') if label else None
+    if rating_el and rating_el.get_text(strip=True):
+        out['rating'] = rating_el.get_text(strip=True)
+    desc = paras[-1].get_text(' ', strip=True) if paras else ''
+    if desc and not re.match(r'(Season \d|Director|Writer)', desc) and desc != out.get('episodeTitle'):
+        out['description'] = desc
+    return out
 
 
 # ── account ──────────────────────────────────────────────────────────────────
@@ -614,6 +662,7 @@ class ParamountScraper(BaseScraper):
         today = int(time.time() // 86400)
         known = dict(self.load_lazy_cache_key(EPISODE_CACHE_KEY) or {})
         listings = []
+        pending = []   # (index in programs, cid, TMS id, start, end) with no metadata yet
         for c in getattr(self, '_drm_items', []):
             if f'{CHANNEL_PREFIX}{c["slug"]}' not in wanted:
                 continue
@@ -658,11 +707,14 @@ class ParamountScraper(BaseScraper):
                         continue
                     if a_start > cursor:
                         programs.append(_generic_program(cid, c, cursor, a_start))
-                    meta = known.get(a['program_id'] or '')
-                    if meta:
+                    pid = a['program_id'] or ''
+                    meta = known.get(pid)
+                    if pid and not (meta and meta.get('description')):
+                        pending.append((len(programs), cid, pid, a_start, a_end))
+                    if meta and meta.get('title'):
+                        meta['seen'] = today
                         programs.append(_listing_program(cid, meta, a_start, a_end))
                     else:
-                        pid = a['program_id'] or ''
                         programs.append(ProgramData(
                             source_channel_id=cid, title=a['title'], start_time=a_start, end_time=a_end,
                             episode_title=a['subtitle'] if a['subtitle'] and a['subtitle'] != a['title'] else None,
@@ -672,10 +724,51 @@ class ParamountScraper(BaseScraper):
                     cursor = a_end
                 if cursor < end:
                     programs.append(_generic_program(cid, c, cursor, end))
+        self._fill_tvtv_details(programs, pending, known, today)
         if known:
             self._update_cache(EPISODE_CACHE_KEY, {k: v for k, v in known.items()
                                                    if today - (v.get('seen') or 0) <= _EPISODE_TTL_DAYS})
         return programs
+
+    def _fill_tvtv_details(self, programs: list, pending: list, known: dict, today: int) -> None:
+        """Look up unknown filler episodes on tvtv (soonest first, capped and
+        paced) and upgrade their programs in place."""
+        todo = []
+        for _, _, pid, start, _ in sorted(pending, key=lambda x: x[3]):
+            meta = known.get(pid) or {}
+            if pid in todo or today - (meta.get('tvtv') or -999) < _TVTV_MISS_RETRY_DAYS:
+                continue
+            todo.append(pid)
+        todo = todo[:_TVTV_DETAIL_CAP]
+        if not todo:
+            return
+        try:
+            from .. import tvtv_cache
+            session = tvtv_cache._get_session()
+        except Exception:
+            logger.debug('[paramount] tvtv session unavailable', exc_info=True)
+            return
+        found = 0
+        for n, pid in enumerate(todo):
+            if n:
+                time.sleep(_TVTV_DETAIL_PACE)
+            try:
+                details = _tvtv_program_details(session, pid)
+            except _TvtvRateLimited:
+                logger.info('[paramount] tvtv rate-limited after %d episode lookups; rest next scrape', n)
+                break
+            except Exception as exc:
+                logger.debug('[paramount] tvtv details for %s failed: %s', pid, exc)
+                continue
+            # Paramount's own fields win; tvtv fills what's missing. 'tvtv' stamps
+            # the lookup so a miss isn't retried for _TVTV_MISS_RETRY_DAYS.
+            known[pid] = {**details, **known.get(pid, {}), 'seen': today, 'tvtv': today}
+            found += bool(details.get('title'))
+        for idx, cid, pid, start, end in pending:
+            meta = known.get(pid)
+            if meta and meta.get('title'):
+                programs[idx] = _listing_program(cid, meta, start, end)
+        logger.info('[paramount] tvtv episode details: %d of %d looked up', found, len(todo))
 
     def _tvtv_airings(self, station_id, until: datetime) -> list[dict]:
         """Airings for a Gracenote station up to `until`: the tvtv cache (refreshed
