@@ -1189,13 +1189,17 @@
           <span id="ord-note"></span>
           <button class="ch-bar-btn" type="button" onclick="sortOrderBySourceName()">Sort by source, then name</button>
           <button class="ch-bar-btn" type="button" onclick="sortOrderByCategoryName()">Sort by category, then name</button>
+          <button class="ch-bar-btn" type="button" id="ord-use-main" onclick="useMainNumbers(this)"
+                  title="Lock every channel in this feed to the number it has on the Channels page (the Default feed and /m3u)">Use main numbers</button>
+          <button class="ch-bar-btn" type="button" id="ord-unlock-all" style="display:none" onclick="unlockAllFeedNumbers(this)">Unlock all</button>
         </div>
         <div class="ord-tip">✎ <strong>Set your own number:</strong> click ✎ or a channel's number. It's locked in this feed only.</div>
         <div class="ch-src-hint" id="ord-new-hint" style="display:none"></div>
+        <div class="ch-src-hint" id="ord-start-hint" style="display:none"></div>
         <div class="ord-list" id="order-list"></div>
         <ul class="ord-legend">
           <li><strong>Reorder:</strong> drag, ⤒ / ⤓, or Sort, then Save Feed. Numbers follow from the starting number.</li>
-          <li><span class="ord-flock">FEED LOCK</span> Your number for this feed. Renumbering, reordering and a new start don't move it. ✕ unlocks.</li>
+          <li><span class="ord-flock">FEED LOCK</span> Your number for this feed. Renumbering, reordering and a new start don't move it. ✕ unlocks. <strong>Use main numbers</strong> locks every channel to its Channels-page number at once.</li>
           <li><strong>🔒 without the badge:</strong> fixed outside this feed (a provider number such as DirecTV, or a decimal number like 305.1 set on the Channels page).</li>
           <li><span class="ord-fpin">PIN</span> Hand-picked into this feed. Channels that match later are added at the end.</li>
         </ul>
@@ -1517,6 +1521,7 @@ function clearAllChannels() {
 async function openModal(feed = null) {
   document.getElementById('modal-title').textContent = feed ? 'Edit Feed' : 'New Feed';
   document.getElementById('edit-id').value    = feed ? feed.id : '';
+  _editFeedSlug = feed ? feed.slug : null;
   document.getElementById('f-name').value     = feed ? feed.name : '';
   document.getElementById('f-desc').value     = feed ? (feed.description || '') : '';
   document.getElementById('f-max').value      = feed ? (feed.filters.max_channels || '') : '';
@@ -1524,7 +1529,7 @@ async function openModal(feed = null) {
   const chnumPh = feed ? (FEED_CHNUM_PLACEHOLDER[feed.id] ?? 'auto') : 'auto';
   document.getElementById('f-chnum').placeholder = String(chnumPh);
   document.getElementById('f-chnum-help').textContent = feed
-    ? 'This feed\'s channels are numbered from here. Raising it renumbers the channels below the new start; every other channel keeps its number.'
+    ? 'This feed\'s channels are numbered from here. Raising it renumbers the channels below the new start; every other channel keeps its number. Lowering it moves nothing until you renumber.'
     : 'Leave blank to get a free block of numbers. This feed\'s channels are numbered from here.';
   document.getElementById('f-gracenote').value = feed ? (feed.filters.gracenote || '') : '';
   _sourceOrder = feed ? [...(feed.source_order || [])] : [];
@@ -2816,6 +2821,26 @@ function updateOrderNote() {
   if (fl) text += ` · ${fl} locked in this feed`;
   if (_orderDirty) text += ' · reordered — Save Feed to apply';
   document.getElementById('ord-note').textContent = text;
+  // Bulk feed locks: saved, non-Default feeds only.
+  const bulkOk = !!document.getElementById('edit-id').value && _editFeedSlug !== 'default';
+  document.getElementById('ord-use-main').style.display = bulkOk ? '' : 'none';
+  document.getElementById('ord-unlock-all').style.display = bulkOk && fl ? '' : 'none';
+
+  // A lowered start moves nothing (numbers are sticky), so the channels can
+  // sit far above "numbering from". Say so instead of looking broken.
+  const startHint = document.getElementById('ord-start-hint');
+  const loose = _orderRows.filter(r => !r.absent && !r.feed_locked && !r.pinned
+                                       && typeof r.number === 'number');
+  const lowest = loose.length ? Math.min(...loose.map(r => r.number)) : null;
+  const stranded = !_orderDirty && _orderStart != null && lowest != null
+                   && lowest >= _orderStart + n;
+  startHint.style.display = stranded ? '' : 'none';
+  if (stranded) {
+    startHint.textContent = `ℹ This feed numbers from ${_orderStart.toLocaleString()}, but its channels start at `
+      + `${lowest.toLocaleString()}: lowering the start doesn't move numbers already given out. `
+      + 'To renumber from the start, use a Sort button and Save Feed, or Renumber on the feed\'s card. '
+      + 'Or use "Use main numbers" to match the Channels page.';
+  }
 
   // Channels matched since the order was saved keep everyone else's number
   // stable by taking whatever numbers are free, which breaks a sorted list.
@@ -2993,6 +3018,64 @@ async function unlockChannelNumber(id) {
 }
 
 // Feed locks: a number typed in this editor, kept in this feed only.
+let _editFeedSlug = null;
+
+// Bulk: lock every channel here at its main number (the Channels page's).
+async function useMainNumbers(btn) {
+  const feedId = _feedLockBlocked();
+  if (feedId == null) return;
+  if (!confirm('Lock every channel in this feed to its main number (the one on the Channels page, '
+      + 'also used by the Default feed and /m3u)?\n\nEach becomes a FEED LOCK. Numbers you already '
+      + 'locked in this feed stay. "Unlock all" undoes this.')) return;
+  btn.disabled = true;
+  try {
+    const r = await fetch(`/api/feeds/${feedId}/use-main-numbers`, {method: 'POST'});
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) {
+      let msg = data.error || `Could not save (HTTP ${r.status})`;
+      if (data.warnings && data.warnings.length) msg += '\n\n' + data.warnings.slice(0, 3).join('\n');
+      alert(msg);
+    } else {
+      const skipped = data.skipped || [];
+      let msg = data.locked
+        ? `Locked ${data.locked} channel${data.locked === 1 ? '' : 's'} to their main numbers.`
+        : 'Nothing to lock: every channel already has a feed lock or no whole main number.';
+      if (data.kept) msg += `\n${data.kept} already locked in this feed kept their numbers.`;
+      if (skipped.length) {
+        msg += `\n\n${skipped.length} skipped (number taken):\n`
+          + skipped.slice(0, 10).map(s => `  ${s.number} ${s.name}: ${s.reason}`).join('\n')
+          + (skipped.length > 10 ? `\n  …and ${skipped.length - 10} more` : '');
+      }
+      alert(msg);
+    }
+  } catch (e) {
+    alert('Could not save: ' + e.message);
+  } finally {
+    btn.disabled = false;
+  }
+  await refreshOrderPreview();
+}
+
+async function unlockAllFeedNumbers(btn) {
+  const feedId = _feedLockBlocked();
+  if (feedId == null) return;
+  const fl = _orderRows.filter(r => r.feed_locked).length;
+  if (!confirm(`Unlock all ${fl} feed lock${fl === 1 ? '' : 's'} in this feed? `
+      + "Each channel keeps its number unless it is below this feed's starting number.")) return;
+  btn.disabled = true;
+  try {
+    const r = await fetch(`/api/feeds/${feedId}/feed-locks`, {method: 'DELETE'});
+    if (!r.ok) {
+      const data = await r.json().catch(() => ({}));
+      alert(data.error || `Could not save (HTTP ${r.status})`);
+    }
+  } catch (e) {
+    alert('Could not save: ' + e.message);
+  } finally {
+    btn.disabled = false;
+  }
+  await refreshOrderPreview();
+}
 function _feedLockBlocked() {
   const feedIdRaw = document.getElementById('edit-id').value;
   if (!feedIdRaw) { alert('Save the feed first, then set its numbers.'); return null; }

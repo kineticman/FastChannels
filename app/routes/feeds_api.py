@@ -596,6 +596,124 @@ def unlock_feed_channel_number(feed_id, channel_id):
     return jsonify({'status': 'unlocked', 'feed_id': feed.id, 'channel_id': channel_id})
 
 
+@feeds_api_bp.route('/<int:feed_id>/use-main-numbers', methods=['POST'])
+def use_main_numbers(feed_id):
+    """Feed-lock every channel in this feed at its main number (what the
+    Default feed and /m3u show), in one go: the bulk form of typing each
+    number in. Existing feed locks stay as they are. A channel is skipped when
+    its main number isn't a whole number (a decimal lock or a provider's
+    "305.1", which feeds show anyway), when another channel holds that number
+    as a feed lock here or shows it in another enabled feed, or when a
+    provider's channel takes it in feeds. Unlocked channels on a number taken
+    this way move to a free one at the settle."""
+    from ..chnum import MASTER_SCOPE, feed_scope, lock_row, scope_locks, scope_rows
+    from ..generators.m3u import _reserved_provider_numbers, shown_numbers
+    feed = Feed.query.get_or_404(feed_id)
+    if feed.slug in SYSTEM_FEED_SLUGS:
+        return jsonify({'error': 'The Default feed already uses the main numbers.'}), 403
+    if feed.chnum_start is None:
+        return jsonify({'error': 'Save the feed first.'}), 409
+
+    stubs, _ = _feed_member_stubs(feed_to_query_filters(feed.filters or {}))
+    master = {cid: n for cid, (n, rel) in scope_rows(MASTER_SCOPE).items() if rel is None}
+    main_shown = shown_numbers(stubs, master, MASTER_SCOPE)
+
+    locks = scope_locks(feed.id)
+    locked_numbers = {n: cid for cid, n in locks.items()}
+    provider_taken = _reserved_provider_numbers(main=False)
+
+    # Numbers other enabled feeds show, so a lock here can't repeat one on a
+    # different channel (the overlap check would refuse the whole batch).
+    elsewhere: dict[str, tuple[str, int]] = {}
+    for other in Feed.query.filter(Feed.is_enabled == True, Feed.id != feed.id,
+                                   Feed.slug != 'default').all():
+        scope = feed_scope(other)
+        o_stubs, _ = _feed_member_stubs(feed_to_query_filters(other.filters or {}))
+        o_rows = {cid: n for cid, (n, rel) in scope_rows(scope).items() if rel is None}
+        for cid, num in shown_numbers(o_stubs, o_rows, scope).items():
+            if num is not None:
+                elsewhere.setdefault(str(num), (other.name, cid))
+
+    baseline_warnings = set(get_global_chnum_overlaps())
+    locked, kept, skipped = 0, 0, []
+    for ch in sorted(stubs, key=lambda s: s.id):
+        num = main_shown.get(ch.id)
+        if ch.id in locks:
+            kept += 1
+            continue
+        if num is None:
+            continue
+        if not isinstance(num, int):
+            if not str(num).strip().isdigit():
+                continue    # decimal: feeds show the same overlay already
+            num = int(str(num).strip())
+        reason = None
+        holder = locked_numbers.get(num)
+        if holder is not None and holder != ch.id:
+            reason = 'locked to another channel in this feed'
+        elif (num in provider_taken
+              and str(num) != (getattr(ch, 'provider_number', None) or '').strip()):
+            reason = "a provider's channel number"
+        else:
+            other = elsewhere.get(str(num))
+            if other is not None and other[1] != ch.id:
+                reason = f'used in feed "{other[0]}"'
+        if reason:
+            skipped.append({'channel_id': ch.id, 'name': ch.name, 'number': num,
+                            'reason': reason})
+            continue
+        lock_row(feed.id, ch.id, num)
+        locked_numbers[num] = ch.id
+        locked += 1
+
+    if not locked:
+        db.session.rollback()
+        return jsonify({'status': 'unchanged', 'locked': 0, 'kept': kept,
+                        'skipped': skipped})
+
+    err = _safe_flush()
+    if err:
+        return err
+    from ..worker import _refresh_auto_channel_numbers
+    _refresh_auto_channel_numbers()
+    err = _safe_flush()
+    if err:
+        return err
+    new_warnings = [w for w in get_global_chnum_overlaps() if w not in baseline_warnings]
+    if new_warnings:
+        db.session.rollback()
+        return jsonify({'error': 'Channel number overlaps detected', 'warnings': new_warnings}), 409
+    err = _safe_commit()
+    if err:
+        return err
+    _invalidate_and_refresh_xml()
+    return jsonify({'status': 'locked', 'locked': locked, 'kept': kept, 'skipped': skipped})
+
+
+@feeds_api_bp.route('/<int:feed_id>/feed-locks', methods=['DELETE'])
+def unlock_all_feed_numbers(feed_id):
+    """Unlock every feed lock in this feed. Each channel keeps its number
+    (numbers are sticky) unless it is below the start; a channel out of the
+    feed keeps it only while the usual hold would."""
+    from ..chnum import scope_locks, unlock_row
+    feed = Feed.query.get_or_404(feed_id)
+    if feed.slug in SYSTEM_FEED_SLUGS:
+        return jsonify({'error': 'The Default feed has no feed locks.'}), 403
+    locks = scope_locks(feed.id)
+    for cid in locks:
+        unlock_row(feed.id, cid)
+    err = _safe_flush()
+    if err:
+        return err
+    from ..worker import _refresh_auto_channel_numbers
+    _refresh_auto_channel_numbers()
+    err = _safe_commit()
+    if err:
+        return err
+    _invalidate_and_refresh_xml()
+    return jsonify({'status': 'unlocked', 'unlocked': len(locks)})
+
+
 @feeds_api_bp.route('/<int:feed_id>', methods=['DELETE'])
 def delete_feed(feed_id):
     feed = Feed.query.get_or_404(feed_id)
