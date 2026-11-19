@@ -143,7 +143,7 @@ def known_devices() -> tuple[list[dict], str | None]:
 
     hdmi = normalize_address(settings.effective_fc_player_bridge_adb_address())
     if hdmi:
-        entry(hdmi)['roles'].append('HDMI Capture')
+        entry(hdmi)['roles'].append('Single-port HDMI Capture')
 
     ah4c_error = None
     try:

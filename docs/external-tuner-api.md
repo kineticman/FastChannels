@@ -1,6 +1,6 @@
 # External tuner API
 
-FastChannels' own hardware capture paths ([HDMI Capture and ah4c](fc-player-setup.md))
+FastChannels' own hardware capture paths ([Single-port HDMI Capture and ah4c](fc-player-setup.md))
 start FastChannels Player over ADB. Some tuners control their Android TV / Fire TV
 devices another way: APITuner, for example, uses its own on-device Agent app. The
 external tuner API lets a tuner like that use FastChannels for the parts it can't do
@@ -32,7 +32,7 @@ provider's license server, and only the device's HDMI output is captured.
 4. Run a scrape, or a Stream Audit, of the DRM sources you want to bridge. That marks
    their channels for bridge output.
 
-You don't need to set up HDMI Capture, ah4c or a device IP. External tuners count as a
+You don't need to set up Single-port HDMI Capture, ah4c or a device IP. External tuners count as a
 capture method, so DRM channels stay active and marked for bridge output on an install
 with no ADB device at all. The Bridge page shows the method as **Live**, and the Bridge
 healthcheck reports **External tuners: On**.

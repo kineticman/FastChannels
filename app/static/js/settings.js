@@ -369,7 +369,7 @@ async function createFcPlayerCaptureSource() {
 async function saveFcPlayerHdmiToggle() {
   const enabled = document.getElementById('fc-player-hdmi-enabled').checked;
   const ok = await saveSettings({fc_player_hdmi_enabled: enabled}, 'fc-player-status');
-  // Affects whether the HDMI Capture M3U option shows up on the Feeds page.
+  // Affects whether the Single-port HDMI Capture M3U option shows up on the Feeds page.
   if (ok) setTimeout(() => location.reload(), 700);
 }
 
@@ -2326,8 +2326,8 @@ async function runBridgeHealthcheck() {
       html += `<div class="bridge-healthcheck-row"><span class="bridge-healthcheck-icon ${_bridgeHealthcheckEsc(state)}">${icon[state] || '?'}</span><div><div class="bridge-healthcheck-name">${_bridgeHealthcheckEsc(check.name)}</div><div class="bridge-healthcheck-detail">${_bridgeHealthcheckEsc(check.detail)}</div>${check.fix ? `<div class="bridge-healthcheck-fix">Next step: ${_bridgeHealthcheckEsc(check.fix)}</div>` : ''}</div></div>`;
     }
     const readyForLiveTest = checks.some(check => check.name === 'FastChannels Player device' && check.status === 'ok')
-      && checks.some(check => check.name === 'HDMI Capture payload' && check.status === 'ok');
-    html += `<div class="bridge-live-test-next ${readyForLiveTest ? '' : 'not-ready'}"><div><strong>Final confirmation: Live bridge test</strong><div class="help">${readyForLiveTest ? 'Tune one real bridge channel and verify the Player → HDMI Capture path. This interrupts the configured device.' : 'Available after the FastChannels Player device and HDMI Capture payload checks pass.'}</div></div><button class="btn btn-secondary" id="bridge-live-test-open" onclick="openBridgeLiveTest()" ${readyForLiveTest ? '' : 'disabled'}>Live bridge test…</button></div>`;
+      && checks.some(check => check.name === 'Single-port HDMI Capture payload' && check.status === 'ok');
+    html += `<div class="bridge-live-test-next ${readyForLiveTest ? '' : 'not-ready'}"><div><strong>Final confirmation: Live bridge test</strong><div class="help">${readyForLiveTest ? 'Tune one real bridge channel and verify the Player → Single-port HDMI Capture path. This interrupts the configured device.' : 'Available after the FastChannels Player device and Single-port HDMI Capture payload checks pass.'}</div></div><button class="btn btn-secondary" id="bridge-live-test-open" onclick="openBridgeLiveTest()" ${readyForLiveTest ? '' : 'disabled'}>Live bridge test…</button></div>`;
     results.innerHTML = html;
     if (copy && _lastBridgeHealthcheckReport) copy.disabled = false;
   } catch (error) {
@@ -2367,7 +2367,7 @@ async function openBridgeLiveTest() {
       picker.innerHTML = '<div class="help">No active, enabled channels are currently marked for bridge output. Run Stream Audit on a DRM source first.</div>';
       return;
     }
-    picker.innerHTML = `<div class="bridge-live-test-warning"><strong>Live bridge test will change what is playing on the configured HDMI Capture device.</strong> It triggers one real bridge channel, waits briefly, and verifies the saved capture stream from inside FastChannels.</div>
+    picker.innerHTML = `<div class="bridge-live-test-warning"><strong>Live bridge test will change what is playing on the configured Single-port HDMI Capture device.</strong> It triggers one real bridge channel, waits briefly, and verifies the saved capture stream from inside FastChannels.</div>
       <label for="bridge-live-test-channel">Bridge channel to tune</label>
       <select id="bridge-live-test-channel">${_bridgeLiveTestChannels.map(channel => `<option value="${channel.id}">${_bridgeHealthcheckEsc(channel.label)}</option>`).join('')}</select>
       <div class="field-actions"><button class="btn btn-primary" id="bridge-live-test-run" onclick="runBridgeLiveTest()">Start live test</button></div>`;
@@ -2388,7 +2388,7 @@ async function runBridgeLiveTest() {
   const picker = document.getElementById('bridge-live-test-picker');
   const channel = _bridgeLiveTestChannels.find(item => item.id === Number(select?.value));
   if (!channel || !run || !picker) return;
-  if (!window.confirm(`Tune ${channel.label} on the HDMI Capture device now? This will interrupt anything currently playing there.`)) return;
+  if (!window.confirm(`Tune ${channel.label} on the Single-port HDMI Capture device now? This will interrupt anything currently playing there.`)) return;
   run.disabled = true;
   run.textContent = 'Tuning device and sampling capture…';
   try {

@@ -14,7 +14,7 @@
     <div class="toggle-row">
       <div class="toggle-row-text">
         <div class="toggle-row-label">Enable ah4c Capture</div>
-        <div class="toggle-row-help">Publishes a separate ah4c Capture M3U on the Feeds page. Each tune uses ah4c’s assigned tuner instead of the HDMI Capture stream. Turning this on also turns on hardware capture above.</div>
+        <div class="toggle-row-help">Publishes a separate ah4c Capture M3U on the Feeds page. Each tune uses ah4c’s assigned tuner instead of the Single-port HDMI Capture stream. Turning this on also turns on hardware capture above.</div>
       </div>
       <div class="toggle-row-control"><label class="toggle-switch"><input type="checkbox" id="fc-player-ah4c-enabled" {% if fc_player_ah4c_enabled %}checked{% endif %} onchange="saveFcPlayerAh4cToggle()"><span class="toggle-slider"></span></label></div>
     </div>
@@ -45,8 +45,8 @@
       <div class="fc-devices-grid" id="ah4c-activity-list" aria-live="polite"></div>
     </div>
     <details class="bridge-fallback-details">
-      <summary>Advanced: HDMI Capture device fallback</summary>
-      <div class="help">Normal ah4c operation uses its own <code>TUNERn_IP</code> values. The HDMI Capture device in the <a href="#bridge-card-single-encoder">HDMI Capture</a> card remains a compatibility fallback for an ah4c script that does not provide a tuner address.</div>
+      <summary>Advanced: Single-port HDMI Capture device fallback</summary>
+      <div class="help">Normal ah4c operation uses its own <code>TUNERn_IP</code> values. The Single-port HDMI Capture device in the <a href="#bridge-card-single-encoder">Single-port HDMI Capture</a> card remains a compatibility fallback for an ah4c script that does not provide a tuner address.</div>
     </details>
   </div>
 </div>

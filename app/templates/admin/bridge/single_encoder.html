@@ -1,10 +1,10 @@
-<!-- HDMI Capture (single stream) / FastChannels Player companion card -->
+<!-- Single-port HDMI Capture / FastChannels Player companion card -->
 <div class="source-card" id="bridge-card-single-encoder">
   <div class="source-header" style="cursor:default">
     <div class="source-title">
       <div class="source-icon">📲</div>
       <div>
-        <div class="source-name">HDMI Capture</div>
+        <div class="source-name">Single-port HDMI Capture</div>
         <div class="source-meta">Single stream — one FastChannels Player device captured through one fixed HDMI encoder</div>
       </div>
     </div>
@@ -13,16 +13,16 @@
     <div class="help" style="color:var(--warning-soft)">Best for one concurrent stream. The FastChannels Player companion app runs on a Fire TV or Android TV device; its HDMI output is captured back into your DVR through a fixed encoder URL.</div>
     <div class="toggle-row" style="margin-top:12px">
       <div class="toggle-row-text">
-        <div class="toggle-row-label">Enable HDMI Capture</div>
-        <div class="toggle-row-help">Publishes the HDMI Capture M3U on the Feeds page once the device IP and capture stream URL below are saved. Turning this on also turns on hardware capture above.</div>
+        <div class="toggle-row-label">Enable Single-port HDMI Capture</div>
+        <div class="toggle-row-help">Publishes the Single-port HDMI Capture M3U on the Feeds page once the device IP and capture stream URL below are saved. Turning this on also turns on hardware capture above.</div>
       </div>
       <div class="toggle-row-control"><label class="toggle-switch"><input type="checkbox" id="fc-player-hdmi-enabled" {% if fc_player_hdmi_enabled %}checked{% endif %} onchange="saveFcPlayerHdmiToggle()"><span class="toggle-slider"></span></label></div>
     </div>
     <div class="fields-grid" style="max-width:480px;margin-top:12px">
       <div class="field field-full">
-        <label for="fc-player-ip">HDMI Capture device IP</label>
+        <label for="fc-player-ip">Single-port HDMI Capture device IP</label>
         <input type="text" id="fc-player-ip" placeholder="192.168.1.50" value="{{ fc_player_ip }}">
-        <div class="help">adb port (<code>:5555</code>) is derived automatically. Required for HDMI Capture; also retained as a compatibility fallback when ah4c does not name a tuner device.</div>
+        <div class="help">adb port (<code>:5555</code>) is derived automatically. Required for Single-port HDMI Capture; also retained as a compatibility fallback when ah4c does not name a tuner device.</div>
       </div>
     </div>
     <div class="field-actions">
@@ -34,7 +34,7 @@
     <div class="toggle-row" style="margin-top:12px">
       <div class="toggle-row-text">
         <div class="toggle-row-label">Stop playback when nobody's watching</div>
-        <div class="toggle-row-help">For HDMI Capture, stop playback after about five minutes without Channels DVR activity or a FastChannels <code>/watch</code> heartbeat. Leave this off for third-party clients pointed straight at an M3U. ah4c stops its assigned device through its own disconnect hook.</div>
+        <div class="toggle-row-help">For Single-port HDMI Capture, stop playback after about five minutes without Channels DVR activity or a FastChannels <code>/watch</code> heartbeat. Leave this off for third-party clients pointed straight at an M3U. ah4c stops its assigned device through its own disconnect hook.</div>
       </div>
       <div class="toggle-row-control"><label class="toggle-switch"><input type="checkbox" id="fc-player-idle-stop-enabled" {% if fc_player_idle_stop_enabled %}checked{% endif %} onchange="saveFcPlayerIdleStopToggle()"><span class="toggle-slider"></span></label></div>
     </div>

@@ -565,7 +565,7 @@ def bridge_live_test():
     """Explicit, disruptive Player → HDMI Capture verification for one channel."""
     settings = AppSettings.get()
     if not fc_player_bridge.hdmi_bridge_active(settings):
-        return jsonify({'error': 'Enable Bridge mode, HDMI Capture, a device IP, and a fixed capture stream first.'}), 409
+        return jsonify({'error': 'Enable Bridge mode, Single-port HDMI Capture, a device IP, and a fixed capture stream first.'}), 409
     data = request.get_json(force=True) or {}
     try:
         channel_id = int(data.get('channel_id'))
@@ -658,10 +658,10 @@ def bridge_live_test():
 def bridge_live_test_stop():
     """Stop the Player after an explicit live test (or any fixed HDMI test tune)."""
     if not AppSettings.get().effective_fc_player_bridge_adb_address():
-        return jsonify({'error': 'No HDMI Capture device IP is configured.'}), 409
+        return jsonify({'error': 'No Single-port HDMI Capture device IP is configured.'}), 409
     if not fc_player_bridge.stop_playback():
         return jsonify({'error': 'FastChannels could not stop the Player device over ADB.'}), 502
-    return jsonify({'ok': True, 'message': 'FastChannels Player was stopped on the HDMI Capture device.'})
+    return jsonify({'ok': True, 'message': 'FastChannels Player was stopped on the Single-port HDMI Capture device.'})
 
 
 @settings_bp.route('/settings/bridge/healthcheck', methods=['POST'])
@@ -703,7 +703,7 @@ def bridge_healthcheck():
             fix = 'Turn on Bridge mode, then run Stream Audit on the sources you intend to bridge.'
         elif not (settings.prismcast_capture_configured() or fc_player_bridge.hardware_capture_configured(settings)):
             fix = ('No capture method is fully set up yet, so channels can\'t be marked. '
-                   'Finish setting up ah4c, HDMI Capture or PrismCast above (each tile lists what is missing).')
+                   'Finish setting up ah4c, Single-port HDMI Capture or PrismCast above (each tile lists what is missing).')
         else:
             fix = 'Run Stream Audit on the sources you intend to bridge, and check their channels are enabled.'
         add('warn', 'Bridge sources', f'{len(enabled_source_ids)} DRM-capable source(s) are enabled, but none are marked for bridge output.',
@@ -712,12 +712,12 @@ def bridge_healthcheck():
     # HDMI Capture is a fixed single-stream path. Probe only when it has been
     # selected/configured, so unused hardware never creates a scary failure.
     if not settings.fc_player_bridge_enabled:
-        add('skip', 'HDMI Capture', 'Hardware capture is disabled.')
+        add('skip', 'Single-port HDMI Capture', 'Hardware capture is disabled.')
     elif not settings.fc_player_bridge_hdmi_enabled and not settings.effective_fc_player_bridge_adb_address():
-        add('skip', 'HDMI Capture', 'HDMI Capture is disabled.')
+        add('skip', 'Single-port HDMI Capture', 'Single-port HDMI Capture is disabled.')
     elif not settings.effective_fc_player_bridge_adb_address():
-        add('warn', 'HDMI Capture device', 'No Android TV / Fire TV device IP is configured.',
-            'Enter the device IP in HDMI Capture, then approve its ADB prompt on the TV.')
+        add('warn', 'Single-port HDMI Capture device', 'No Android TV / Fire TV device IP is configured.',
+            'Enter the device IP in Single-port HDMI Capture, then approve its ADB prompt on the TV.')
     else:
         ok, message = fc_player_bridge.test_connection()
         add('ok' if ok else 'fail', 'FastChannels Player device', message,
@@ -742,11 +742,11 @@ def bridge_healthcheck():
 
         encoder_url = settings.effective_fc_player_bridge_encoder_url()
         if not settings.fc_player_bridge_hdmi_enabled:
-            add('skip', 'HDMI Capture stream', 'HDMI Capture is disabled.')
+            add('skip', 'Single-port HDMI Capture stream', 'Single-port HDMI Capture is disabled.')
         elif not encoder_url:
-            add('skip', 'HDMI Capture stream', 'No fixed encoder stream is configured.')
+            add('skip', 'Single-port HDMI Capture stream', 'No fixed encoder stream is configured.')
         else:
-            add('info', 'HDMI Capture endpoint',
+            add('info', 'Single-port HDMI Capture endpoint',
                 f'Testing saved stream {_stream_debug_path(encoder_url)} from inside the FastChannels container.')
             host = (urlsplit(encoder_url).hostname or '').lower()
             if host in {'localhost', '127.0.0.1', '::1'}:
@@ -756,23 +756,23 @@ def bridge_healthcheck():
             try:
                 with _req.get(encoder_url, stream=True, timeout=(3, 4)) as response:
                     if not response.ok:
-                        add('warn', 'HDMI Capture stream', f'The fixed encoder stream returned HTTP {response.status_code}.',
+                        add('warn', 'Single-port HDMI Capture stream', f'The fixed encoder stream returned HTTP {response.status_code}.',
                             'Confirm the capture device is powered on and the saved stream URL is correct.')
                     else:
                         sample = next(response.iter_content(chunk_size=32 * 1024), b'')
                         elapsed_ms = int((time.monotonic() - started) * 1000)
                         content_type = (response.headers.get('Content-Type') or 'unspecified').split(';', 1)[0]
                         if not sample:
-                            add('fail', 'HDMI Capture payload', f'The capture endpoint returned HTTP {response.status_code} but sent no data within {elapsed_ms} ms.',
+                            add('fail', 'Single-port HDMI Capture payload', f'The capture endpoint returned HTTP {response.status_code} but sent no data within {elapsed_ms} ms.',
                                 'Check the Channels DVR capture device and confirm it is producing a live stream.')
                         elif _looks_like_mpeg_ts(sample):
-                            add('ok', 'HDMI Capture payload',
+                            add('ok', 'Single-port HDMI Capture payload',
                                 f'Received {len(sample):,} bytes of MPEG-TS capture data in {elapsed_ms} ms ({content_type}). {_mpeg_ts_stream_summary(sample)}')
                         else:
-                            add('warn', 'HDMI Capture payload', f'Received {len(sample):,} bytes in {elapsed_ms} ms, but the sample did not resemble MPEG-TS ({content_type}).',
+                            add('warn', 'Single-port HDMI Capture payload', f'Received {len(sample):,} bytes in {elapsed_ms} ms, but the sample did not resemble MPEG-TS ({content_type}).',
                                 'Open the exact capture stream URL in VLC and verify Channels DVR is serving the expected capture stream.')
             except _req.RequestException:
-                add('fail', 'HDMI Capture payload', 'FastChannels could not connect to the fixed capture stream or receive a payload.',
+                add('fail', 'Single-port HDMI Capture payload', 'FastChannels could not connect to the fixed capture stream or receive a payload.',
                     'Confirm the capture host is reachable from Docker and that Channels DVR is producing the stream.')
 
     # ah4c owns its own capture hardware. Its status endpoint plus the per-tuner

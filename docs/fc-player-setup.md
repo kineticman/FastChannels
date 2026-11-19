@@ -1,4 +1,4 @@
-# HDMI Capture and ah4c Capture setup
+# Single-port HDMI Capture and ah4c Capture setup
 
 FastChannels Player is the Android playback companion used by FastChannels'
 hardware capture paths. When
@@ -30,7 +30,8 @@ Fire TV or Android TV device over ADB. Something else has to capture that
 device's HDMI output and hand it back to Channels DVR. There are two ways to
 do that:
 
-- **HDMI Capture (Single Stream)** (this guide's main path) — one fixed encoder/capture
+- **Single-port HDMI Capture** (this guide's main path) — one device on one
+  capture port, so one stream at a time, through one fixed encoder/capture
   stream URL, e.g. Channels DVR's own `capture://` source. Simplest option if
   you already have the specific capture setup this guide walks through.
 - **ah4c Capture (Multi-Tuner)** via [ah4c](https://github.com/sullrich/ah4c) — a separate, independently
@@ -46,7 +47,7 @@ FastChannels only supplies the channel list, playback details and guide. See the
 [external tuner API](external-tuner-api.md) instead of this guide.
 
 Steps 2 (ADB debugging) and 4 (installing the app) apply to both methods. Only
-Step 1 and the *HDMI Capture* part of Step 3 are specific to the
+Step 1 and the *Single-port HDMI Capture* part of Step 3 are specific to the
 single-encoder path.
 
 ## Before you begin
@@ -69,9 +70,9 @@ single-encoder path.
 You will need:
 
 - A dedicated Fire TV or Android TV device
-- Either a compatible HDMI capture device (HDMI Capture) or a running
+- Either a compatible HDMI capture device (Single-port HDMI Capture) or a running
   [ah4c](https://github.com/sullrich/ah4c) instance (ah4c method)
-- A working capture source in Channels DVR (HDMI Capture only — ah4c
+- A working capture source in Channels DVR (Single-port HDMI Capture only — ah4c
   handles this itself)
 - ADB access to the Fire TV or Android TV device
 - FastChannels 5.1.0 or newer
@@ -92,7 +93,9 @@ Only channels FastChannels has identified as requiring the bridge appear in a
 hardware-capture feed. Clear channels from the same sources remain in
 the regular feed and play directly.
 
-## 1. Set up and test HDMI Capture (Single Stream)
+<a id="1-set-up-and-test-hdmi-capture-single-stream"></a>
+
+## 1. Set up and test Single-port HDMI Capture
 
 If you're using ah4c instead, skip this step and continue with Step 2. You will
 configure ah4c after installing the player in Step 4.
@@ -100,16 +103,17 @@ configure ah4c after installing the player in Step 4.
 Set up your HDMI capture device before configuring FastChannels Player. The
 capture source must already be working in Channels DVR.
 
-For a capture setup walkthrough, see the first two posts here:
-<https://community.getchannels.com/t/fastchannels-fast-channels-aggregator-manager/45986/2671>
+For a capture setup walkthrough, see Channels DVR's
+[USB HDMI Capture](https://community.getchannels.com/t/usb-hdmi-capture/43085)
+thread, which covers the `capture://` source and compatible dongles.
 
 Once the capture source appears as a device in Channels DVR:
 
 1. In FastChannels, configure the **Channels DVR URL** under **Settings**.
-2. In the **HDMI Capture** card, select **Find from Channels DVR**.
+2. In the **Single-port HDMI Capture** card, select **Find from Channels DVR**.
 3. Search for and select the channel backed by the HDMI capture device, then
    select **Use selected stream**. Capture/HDMI-like names are shown first.
-4. Select **Save** in the HDMI Capture card.
+4. Select **Save** in the Single-port HDMI Capture card.
 
 FastChannels reads Channels DVR's MPEG-TS export itself, preserves any session
 parameter it needs, and uses the DVR address configured in FastChannels rather
@@ -196,7 +200,7 @@ for the pairing workflow.
 ### If FastChannels says the device is unauthorized
 
 Use these steps on either Fire TV or Android TV after the device IP is saved in
-**Bridge → HDMI Capture**:
+**Bridge → Single-port HDMI Capture**:
 
 1. Retry **Test connection**, or click **Refresh** in the **FastChannels Player
    devices** card, and watch the
@@ -228,7 +232,7 @@ must be enabled and authorized afterward for FastChannels to launch it.
 4. Download the APK and choose **Install** when prompted.
 5. Return to Developer Options and enable **ADB Debugging**, **Network
    Debugging**, or the device's compatible wireless ADB option.
-6. In **Bridge → HDMI Capture**, enter the device IP and retry the FastChannels
+6. In **Bridge → Single-port HDMI Capture**, enter the device IP and retry the FastChannels
    connection. Approve the ADB authorization prompt on the TV, selecting
    **Always allow from this computer** first.
 
@@ -236,7 +240,7 @@ must be enabled and authorized afterward for FastChannels to launch it.
 
 In the FastChannels admin interface, go to **Bridge**. The **FastChannels
 Player devices** card holds the settings shared by every device and lists each
-device; **HDMI Capture** and **ah4c Capture** each have their own card and Save
+device; **Single-port HDMI Capture** and **ah4c Capture** each have their own card and Save
 button.
 
 In the **FastChannels Player devices** card:
@@ -246,15 +250,15 @@ In the **FastChannels Player devices** card:
 - **Show captions when available:** Optional. Renders an English subtitle/CC
   track when the stream advertises one.
 
-In the **HDMI Capture** card, complete:
+In the **Single-port HDMI Capture** card, complete:
 
-- **Enable HDMI Capture:** Turns on the single-stream HDMI path and its M3U.
+- **Enable Single-port HDMI Capture:** Turns on the single-stream HDMI path and its M3U.
   Installs that already had a capture stream URL saved before this toggle
   existed are switched on automatically when they upgrade.
 
-- **HDMI Capture device IP:** Enter the IP address found in step 2.
+- **Single-port HDMI Capture device IP:** Enter the IP address found in step 2.
   FastChannels adds ADB port `5555` automatically. This is the device the
-  HDMI Capture path always triggers. ah4c Capture triggers whichever
+  Single-port HDMI Capture path always triggers. ah4c Capture triggers whichever
   device ah4c allocated for each tune (see [ah4c Capture](#ah4c-capture-multi-tuner)),
   falling back to this one only when ah4c doesn't name a device — so with more
   than one ah4c tuner, set this to any one of the sticks.
@@ -268,14 +272,14 @@ device**.)
 
 Before attempting a real bridge-only channel, use **Bridge → Post-install
 Healthcheck → Run healthcheck**. It checks the configured hardware paths
-without tuning a channel, samples the configured HDMI Capture stream from
+without tuning a channel, samples the configured Single-port HDMI Capture stream from
 inside the FastChannels container, and **Copy forum report** creates a concise,
 credential-free report to attach to a support post. PrismCast has its own
 specialized capture test in the PrismCast Capture card.
 
 When the non-disruptive check passes, **Live bridge test** is the optional
 end-to-end confirmation: choose one bridge-ready channel, confirm the warning,
-and FastChannels tunes the Player device then samples the HDMI Capture stream.
+and FastChannels tunes the Player device then samples the Single-port HDMI Capture stream.
 It intentionally interrupts anything playing on that device. The result shows
 the tested stream path, payload size, timing, and whether the Player reports
 active playback. It also reports the MPEG-TS program's detected video/audio
@@ -293,7 +297,7 @@ headless preset** keeps a powered device awake and prevents its screen/sleep
 timeouts from interrupting the HDMI encoder; FastChannels saves the prior
 values so **Restore previous settings** can put them back later.
 
-If you're using HDMI Capture, scroll to the **HDMI Capture** section and enter:
+If you're using Single-port HDMI Capture, scroll to the **Single-port HDMI Capture** section and enter:
 
 - **Capture/encoder stream URL:** the direct stream URL saved in step 1.
 
@@ -333,7 +337,7 @@ Building from source is also available in the [advanced
 section](#advanced-build-the-app-from-source).
 
 Once the app is installed, click **Test connection** in the **Single HDMI
-Capture** section (HDMI Capture only — ah4c Capture has no equivalent test
+Capture** section (Single-port HDMI Capture only — ah4c Capture has no equivalent test
 button here, since it runs its own reachability checks). FastChannels will
 check:
 
@@ -347,7 +351,7 @@ All checks should be green before continuing.
 
 [ah4c](https://github.com/sullrich/ah4c) is a separate, independently
 maintained project — not part of FastChannels, and not something FastChannels
-installs for you. Use it instead of HDMI Capture above if your
+installs for you. Use it instead of Single-port HDMI Capture above if your
 HDMI capture hardware isn't the one this guide documents; ah4c already knows
 how to drive Hauppauge, Magewell, Blackmagic DeckLink, and any network
 encoder, plus the same ADB-triggered app-launch mechanism as Step 2 above.
@@ -397,7 +401,7 @@ build or maintain on the ah4c side.
      **FC Player** version — a version number there confirms FastChannels Player
      is installed for the active Android user on that stick. **Not installed**
      means the player is absent for that user, even if it exists for another
-     user (install it with the button on the HDMI Capture card, or the manual
+     user (install it with the button on the Single-port HDMI Capture card, or the manual
      APK fallback). **Unknown** means the device did not report enough information
      to confirm installation for the active user. A stick whose
      display sleep timer is still armed will drop to "no signal" partway through
@@ -471,7 +475,7 @@ Open `/admin/feeds` in FastChannels. Under **Bridge outputs**, each feed
 includes up to two hardware-capture sections, depending on which capture
 method(s) you've set up:
 
-- **HDMI Capture** — the HDMI Capture path, with ready-to-use M3U and EPG
+- **Single-port HDMI Capture** — the Single-port HDMI Capture path, with ready-to-use M3U and EPG
   URLs.
 - **ah4c Capture** — the same channels, routed through ah4c instead, only
   shown once ah4c support is configured.
@@ -483,7 +487,7 @@ these), not instead of it. Use whichever one matches your capture method —
 importing both into Channels DVR at once would register the same channels
 twice.
 
-Click **📺 Add HDMI Capture to Channels DVR** (or **📺 Add ah4c Capture to
+Click **📺 Add Single-port HDMI Capture to Channels DVR** (or **📺 Add ah4c Capture to
 Channels DVR**) in the section you're using to register the source(s)
 automatically — Channels DVR is set to the correct MPEG-TS stream format for
 you. If you'd rather add it by hand (or Channels DVR isn't reachable from
@@ -492,7 +496,7 @@ XMLTV source yourself; see the MPEG-TS note below if you do.
 
 ## Stream limits and PrismCast fallback
 
-HDMI Capture is one device and one encoder, so it can only show one channel at
+Single-port HDMI Capture is one device and one encoder, so it can only show one channel at
 a time. FastChannels doesn't arbitrate that: every tune simply retunes the
 device. Out of the box, a second viewer — or a recording starting — changes
 the channel for everyone already on the capture card, including a recording
@@ -526,7 +530,7 @@ Things to get right:
 - **Use one feed for everything that shares the capture card.** Stream limits
   are per Channels DVR source. If Sling lives in one feed and Amazon in
   another, each feed's capture source gets its own limit and they will still
-  retune the same device out from under each other. Put every HDMI Capture
+  retune the same device out from under each other. Put every Single-port HDMI Capture
   channel in a single feed.
 - **Prefer Guide Mode "One mixed playlist".** With the default *Separate
   standard + Gracenote playlists*, each bridge output registers as two
@@ -535,7 +539,7 @@ Things to get right:
   simultaneous tunes on one capture card. Mixed mode (Channels DVR 2026.08.25
   or newer) collapses them into one source, and one limit covers everything.
 - **Fallback only covers channels both bridges carry.** A channel that only
-  HDMI Capture can play has nowhere to roll over to and gets "tuner
+  Single-port HDMI Capture can play has nowhere to roll over to and gets "tuner
   unavailable" while the card is busy.
 
 ## Troubleshooting

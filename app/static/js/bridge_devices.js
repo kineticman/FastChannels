@@ -224,7 +224,7 @@ async function loadBridgeDevices() {
   }
   _bdUpdateToolbar();
   if (!bridgeDevices.size) {
-    list.innerHTML = '<div class="fc-devices-empty">No devices yet. Set an HDMI Capture device IP, connect ah4c, or add a device here.</div>';
+    list.innerHTML = '<div class="fc-devices-empty">No devices yet. Set an Single-port HDMI Capture device IP, connect ah4c, or add a device here.</div>';
   }
   _bdStatus(data.ah4c_error || '', data.ah4c_error ? 'error' : '');
   for (const address of bridgeDevices.keys()) _bdProbe(address, seq);

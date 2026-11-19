@@ -27,7 +27,7 @@
     'hdmi': {
       'kicker': 'Single stream',
       'blurb': 'Best for a budget, one-stream setup: one Android/Fire TV device and one fixed HDMI capture input. It cannot serve simultaneous channels.',
-      'links': [('HDMI Capture setup guide', 'https://github.com/kineticman/FastChannels/blob/development/docs/fc-player-setup.md#1-set-up-and-test-hdmi-capture-single-stream')],
+      'links': [('Single-port HDMI Capture setup guide', 'https://github.com/kineticman/FastChannels/blob/development/docs/fc-player-setup.md#1-set-up-and-test-single-port-hdmi-capture')],
     },
     'external': {
       'kicker': 'APITuner and other tuners',
@@ -81,7 +81,7 @@
           </div>
           <div class="bridge-healthcheck-actions">
             <button class="btn btn-secondary" id="bridge-healthcheck-copy" onclick="copyBridgeHealthcheck()" disabled>Copy forum report</button>
-            <button class="btn btn-primary" id="bridge-healthcheck-run" onclick="runBridgeHealthcheck()" title="Checks Bridge mode, the FastChannels Player device, HDMI Capture and ah4c tuners without tuning a channel or changing a device.">Run healthcheck</button>
+            <button class="btn btn-primary" id="bridge-healthcheck-run" onclick="runBridgeHealthcheck()" title="Checks Bridge mode, the FastChannels Player device, Single-port HDMI Capture and ah4c tuners without tuning a channel or changing a device.">Run healthcheck</button>
           </div>
         </div>
         {% if usable_methods and not bridge_enabled and drm_bridge_recoverable_count %}
@@ -222,7 +222,7 @@
           <span><span class="bridge-dot bridge-dot-idle">○</span> supported, not live here</span>
           <span><span class="bridge-dot bridge-dot-na">–</span> not verified for this method</span>
         </div>
-        <div class="help">PrismCast's browser capture works for any source exposing DRM license handling. HDMI Capture, ah4c Capture and external tuners use FastChannels Player's native bridge, which is re-tested one source at a time. Each live method's bridge playlist is on <a href="/admin/feeds">Feeds</a>; import it alongside your regular feed, which excludes bridge-only DRM channels.</div>
+        <div class="help">PrismCast's browser capture works for any source exposing DRM license handling. Single-port HDMI Capture, ah4c Capture and external tuners use FastChannels Player's native bridge, which is re-tested one source at a time. Each live method's bridge playlist is on <a href="/admin/feeds">Feeds</a>; import it alongside your regular feed, which excludes bridge-only DRM channels.</div>
       </div>
     </div>
 

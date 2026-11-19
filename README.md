@@ -115,7 +115,7 @@ Go to **Admin → Feeds** and build filtered channel lists for your players (see
 | `/admin/feeds` | Create and manage named output feeds |
 | `/admin/guide` | Preview the EPG grid as your players will see it |
 | `/admin/settings` | Server URLs, Gracenote options, TV Everywhere sign-in, and system stats |
-| `/admin/bridge` | DRM bridge setup (Advanced mode) — HDMI Capture, ah4c Capture, PrismCast, post-install healthcheck, tuner authorization checks |
+| `/admin/bridge` | DRM bridge setup (Advanced mode) — Single-port HDMI Capture, ah4c Capture, PrismCast, post-install healthcheck, tuner authorization checks |
 | `/admin/logs` | Live log tail |
 | `/admin/reports/channel-changes` | Inferred New / Now Inactive / At Risk channels (BETA) |
 | `/admin/help` | In-app help and source gotchas |

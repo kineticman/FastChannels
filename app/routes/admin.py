@@ -1927,11 +1927,11 @@ def _bridge_methods(settings) -> list[dict]:
         },
         {
             'key': 'hdmi',
-            'label': 'HDMI Capture',
+            'label': 'Single-port HDMI Capture',
             'state': _state(bool(settings.fc_player_bridge_hdmi_enabled or encoder_url),
                             _fc_player_bridge.hdmi_capture_configured(settings)),
             'missing': _missing([('hardware capture toggle', player_on),
-                                 ('HDMI Capture toggle', settings.fc_player_bridge_hdmi_enabled),
+                                 ('Single-port HDMI Capture toggle', settings.fc_player_bridge_hdmi_enabled),
                                  ('device IP', adb),
                                  ('capture stream URL', encoder_url)]),
         },
