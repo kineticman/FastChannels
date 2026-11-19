@@ -15,7 +15,7 @@ from ...gracenote_map import resolve_gracenote
 from ._common import UA, EmptyPlaylistError, NetChannel
 from . import (
     adultswim, aetn, aljazeera, arirang, ballysports, beond, bloomberg, cbn, cbsnews, cgtn, cineverse, cowboyplus, cw, dw, ewtn,
-    freetv, fstv, gameandfish, hallmark, heartland, hsn,
+    freetv, fstv, gameandfish, gizmott, hallmark, heartland, hsn,
     i24news, jtv, ksl, mansa, newsmax, newsnation, nhk, nwsl, og_network, olympics, outside, positiv, qvc, redbull, scripps, shift, simple,
     sinclair, shout, sotal_partners, sportstv, tastemade, tbn, triller, trt, vsin, yahoo,
 )
@@ -30,7 +30,7 @@ NETWORKS = [
     gameandfish.GameAndFish(), outside.OutsideTV(), cw.CW(), cineverse.Cineverse(), og_network.OGNetwork(),
     *sotal_partners.NETWORKS, beond.BeOND(), mansa.Mansa(), freetv.FreeTV(), nwsl.NWSL(), triller.Triller(), heartland.Heartland(), shout.Shout(),
     yahoo.Yahoo(), cgtn.CGTN(), shift.Shift(), jtv.JTV(), vsin.VSiN(), redbull.RedBull(),
-    olympics.Olympics(), cowboyplus.CowboyPlus(), sportstv.SportsTV(),
+    olympics.Olympics(), cowboyplus.CowboyPlus(), sportstv.SportsTV(), *gizmott.NETWORKS,
     # Once sources of their own; key = old source name (app/folded_sources.py)
     adultswim.AdultSwim(), ballysports.BallySports(), hallmark.Hallmark(),
     *simple.NETWORKS,
@@ -182,7 +182,7 @@ class FreeNetworksScraper(BaseScraper):
     News, Global News, KSL, Yahoo Finance), sports (Yahoo Sports Network, SportsGrid, SPEED SPORT 1, VSiN,
     SHIFT TV, Red Bull TV's nine channels), faith (EWTN, PosiTV, TBN, CBN, NRB, theDove, 3ABN's ten networks), shopping
     (HSN, QVC, JTV, Shop LC), BEATMAG's music channels, Sinclair's diginets (Comet, Charge!, TheNest), Tastemade, A+E's
-    FAST channels, The CW's FAST lineup, Cineverse's channels, OG Network, TrueTVplus, Flou TV, FreeTV, BeOND, Mansa, Outside TV, Game & Fish TV, NWSL+ 24/7, Bowling TV, TrillerTV's free channels, Heartland+, Shout! TV, Adult Swim,
+    FAST channels, The CW's FAST lineup, Cineverse's channels, OG Network, TrueTVplus, Flou TV, FreeTV, BeOND, Mansa, Outside TV, Game & Fish TV, NWSL+ 24/7, Bowling TV, TrillerTV's free channels, Heartland+, Shout! TV, Christmas Plus, Documentary+, Adult Swim,
     Bally Sports Live, Hallmark and a few singles.
 
     Adult Swim, Bally Sports Live and Hallmark were sources of their own; their
