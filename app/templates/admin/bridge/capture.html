@@ -53,12 +53,8 @@
             </details>
           </div>
           <div class="field field-full">
-            <label for="capture-playlist-url">Playlist</label>
-            <div style="display:flex;gap:0.5rem">
-              <input type="text" id="capture-playlist-url" readonly style="flex:1;font-family:monospace">
-              <button class="btn btn-secondary" onclick="navigator.clipboard.writeText(document.getElementById('capture-playlist-url').value)">Copy</button>
-            </div>
-            <div class="help">Add to Channels DVR as an HLS source, with the stream limit set to your number of tuners. Not available: <span id="capture-incompatible"></span>. Amazon plays in SD only.</div>
+            <label>Playlists</label>
+            <div class="help" style="margin-top:0.25rem">Each feed has its Built-in Capture playlist on <a href="/admin/feeds">Feeds</a>, in the feed's Bridge-only section. Its <strong>Add Built-in to Channels DVR</strong> button sets everything up, including the stream limit.</div>
           </div>
         </div>
         <div class="help" style="margin-top:0.5rem" id="capture-tuner-status"></div>
@@ -104,7 +100,6 @@
         $('capture-quality').value = cfg.quality || '720p60';
         $('capture-encoder').value = cfg.encoder || 'auto';
       }
-      if (s.playlist_url) $('capture-playlist-url').value = s.playlist_url;
       const enc = s.encoder || {};
       const vendor = /intel/i.test(enc.driver || '') ? 'Intel' : /amd|radeon/i.test(enc.driver || '') ? 'AMD' : '';
       const gpuFailed = enc.kind !== 'vaapi' && /failed/i.test(enc.reason || '');
@@ -112,7 +107,6 @@
         : enc.kind === 'vaapi' ? `Using your GPU${vendor ? ' (' + vendor + ')' : ''}`
         : gpuFailed ? 'Using CPU (GPU didn\'t work)' : 'Using CPU';
       show('capture-gpu-tip', tunersRunning(s) && enc.kind !== 'vaapi' && !gpuFailed && (cfg.encoder || 'auto') === 'auto');
-      $('capture-incompatible').textContent = (s.incompatible_names || s.incompatible_sources || []).join(', ') || 'none';
 
       const tuners = s.tuners || [];
       const sessions = Object.fromEntries((s.sessions || []).map((x) => [x.session, x]));

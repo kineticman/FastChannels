@@ -60,28 +60,32 @@ never cut off someone who's watching.
 
 ## Add it to Channels DVR
 
-The Built-in Capture panel shows the playlist URL,
-`http://<your-server>:5523/m3u/capture`. It carries only the DRM channels that
-need a bridge, so add it next to your regular FastChannels playlist, not
-instead of it.
+Your capture playlists are on **Feeds**. Each feed's *Bridge-only (DRM)*
+section has a **Built-in** tab with two ways to add it:
 
-In Channels DVR, add a custom channels source:
+- **Add Built-in to Channels DVR** registers just this feed's DRM channels as
+  their own source, next to the feed's regular source. FastChannels sets the
+  format (HLS), the guide and the **stream limit** (your number of tuners) for
+  you. With the limit set, Channels DVR refuses an extra stream straight away
+  instead of asking for a tuner FastChannels doesn't have. If you change the
+  limit in Channels later, adding the feed again keeps your value.
+- **Add whole feed as one source** (feeds in *One mixed playlist* guide mode)
+  replaces the feed's regular source with one that carries everything: free
+  channels play directly and DRM channels go through Built-in Capture. There's
+  no stream limit, because FastChannels turns a DRM channel away itself when all
+  its tuners are busy, while free channels keep playing. Afterwards the Feeds
+  page offers to remove the sources this one replaces.
 
-| Setting | Value |
-|---|---|
-| Stream format | **HLS** |
-| Source URL | `http://<your-server>:5523/m3u/capture` |
-| XMLTV guide URL | `http://<your-server>:5523/epg.xml` |
-| Gracenote IDs | use them from the playlist when present (newer Channels DVR versions) |
-| Stream limit | **the same as your number of tuners** |
+Feeds in *Separate standard + Gracenote playlists* mode get two Built-in
+playlists (standard and Gracenote), like their regular ones; the button adds
+both.
 
-The stream limit matters: with it set, Channels DVR refuses an extra stream
-straight away instead of asking FastChannels for a tuner it doesn't have.
-
-To keep a lineup small, both URLs take the same filters as the regular
-playlist, for example
-`/m3u/capture?source=paramount&source=pbs` with
-`/epg.xml?source=paramount&source=pbs`.
+**Adding it by hand:** copy the URLs from the Built-in tab and add them as a
+custom channels source with stream format **HLS**, the feed's EPG URL as the
+XMLTV guide, and a stream limit equal to your number of tuners. Without a feed,
+`/m3u/capture` (with `/epg.xml`) and `/m3u/capture/gracenote` cover every DRM
+channel; both take the same filters as the regular playlist, for example
+`/m3u/capture?source=paramount&source=pbs`.
 
 **What to expect:**
 
@@ -90,6 +94,8 @@ playlist, for example
   is let go once Channels stops asking for it, then the new one starts.
 - The picture runs about 6–10 seconds behind live.
 - When the last viewer leaves, the tuner is freed within a minute.
+- When every tuner is busy, a new DRM channel is refused within about 10
+  seconds (Channels shows it as unavailable).
 
 ## Use your GPU
 
@@ -161,8 +167,10 @@ want to Channels DVR as separate sources.
 
 ### "All capture tuners are busy"
 
-Every tuner is in use. Raise **Tuners** if your server has room, and keep
-Channels DVR's stream limit for the source equal to the tuner count.
+Every tuner is in use. Raise **Tuners** if your server has room. For a
+separate Built-in source, keep Channels DVR's stream limit equal to the tuner
+count; with the whole-feed source, this message is how extra DRM tunes are
+turned away.
 
 ### A channel won't start
 

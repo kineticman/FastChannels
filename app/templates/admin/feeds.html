@@ -814,7 +814,8 @@
       {% set gn_count  = split.get('gracenote_count', 0) %}
       {% set bridged_total = split.get('bridged_count', 0) %}
       {% set android_bridge_total = split.get('drm_bridge_count', 0) + split.get('drm_bridge_gracenote_count', 0) %}
-      {% set any_bridge = prismcast_enabled or fc_player_enabled or fc_player_ah4c_configured %}
+      {% set capture_total = split.get('capture_count', 0) + split.get('capture_gracenote_count', 0) %}
+      {% set any_bridge = prismcast_enabled or fc_player_enabled or fc_player_ah4c_configured or capture_enabled %}
       {% set bridge_only_feed = standard_total == 0 and bridged_total > 0 %}
       {# The bridge lane shows whenever the feed has bridge channels, and on an empty
          feed too: an events-only feed sits at 0/0 between games and shouldn't lose
@@ -874,6 +875,7 @@
             <div class="bridge-tabs" role="tablist">
               {% if fc_player_ah4c_configured %}<button type="button" role="tab" class="bridge-tab" data-bridge="ah4c" onclick="selectBridgeTab(this)">ah4c <span class="tab-n">{{ android_bridge_total }}</span></button>{% endif %}
               {% if fc_player_enabled %}<button type="button" role="tab" class="bridge-tab" data-bridge="hdmi" onclick="selectBridgeTab(this)">Single-port <span class="tab-n">{{ android_bridge_total }}</span></button>{% endif %}
+              {% if capture_enabled %}<button type="button" role="tab" class="bridge-tab" data-bridge="capture" onclick="selectBridgeTab(this)">Built-in <span class="tab-n">{{ capture_total }}</span></button>{% endif %}
               {% if prismcast_enabled %}<button type="button" role="tab" class="bridge-tab" data-bridge="prismcast" onclick="selectBridgeTab(this)">PrismCast <span class="tab-n">{{ bridged_total }}</span></button>{% endif %}
             </div>
 
@@ -929,6 +931,41 @@
                         {% if not android_bridge_total %}disabled{% endif %}>📺 Add single-port to Channels DVR</button>
               </div>
               <p class="help">One device on one capture port, such as a USB HDMI dongle on Channels DVR's <code>capture://</code> source, so one stream at a time. Set up on the <a href="/admin/bridge">Bridge</a> page.</p>
+            </div>
+            {% endif %}
+
+            {% if capture_enabled %}
+            <div class="bridge-panel" data-bridge="capture" role="tabpanel">
+              <div class="feed-urls">
+                {% if mixed_guide %}
+                {{ url_chip('Built-in Mixed (' ~ capture_total ~ ')', base_url ~ '/feeds/' ~ feed.slug ~ '/m3u/capture/mixed') }}
+                {% else %}
+                {{ url_chip('Built-in (' ~ split.get('capture_count', 0) ~ ')', base_url ~ '/feeds/' ~ feed.slug ~ '/m3u/capture') }}
+                {% if split.get('capture_gracenote_count', 0) %}{{ url_chip('Built-in Gracenote (' ~ split.get('capture_gracenote_count', 0) ~ ')', base_url ~ '/feeds/' ~ feed.slug ~ '/m3u/capture/gracenote') }}{% endif %}
+                {% endif %}
+                {{ url_chip('EPG', base_url ~ feed_epg_path) }}
+              </div>
+              <div class="lane-actions">
+                <button class="btn btn-dvr" title="Register this feed's Built-in Capture output in Channels DVR, with the stream limit set to your {{ capture_tuners }} tuner{{ '' if capture_tuners == 1 else 's' }}"
+                        onclick='pushCaptureToDvr({{ feed.id }}, {{ feed.name|tojson }}, {{ split.get("capture_count", 0) + (split.get("capture_gracenote_count", 0) if mixed_guide else 0) }}, {{ 0 if mixed_guide else split.get("capture_gracenote_count", 0) }}, this)'
+                        {% if not capture_total %}disabled{% endif %}>📺 Add Built-in to Channels DVR</button>
+              </div>
+              <p class="help">Chrome inside FastChannels plays and records these. A new source gets a stream limit of {{ capture_tuners }}, your tuner count.{% if bridged_total > capture_total %} {{ bridged_total - capture_total }} channel{{ '' if bridged_total - capture_total == 1 else 's' }} from sources it can't play (CNN, HBO Max, Fubo) {{ 'is' if bridged_total - capture_total == 1 else 'are' }} left out.{% endif %}</p>
+              {% if mixed_guide and not bridge_only_feed %}
+              {% set capture_single_total = standard_total + capture_total %}
+              <div class="alt-option">
+                <div class="alt-head">Or skip the standard playlist and use one source for the whole feed</div>
+                <div class="feed-urls">
+                  {{ url_chip('Standard + Built-in (' ~ capture_single_total ~ ')', base_url ~ '/feeds/' ~ feed.slug ~ '/m3u/combined/capture') }}
+                </div>
+                <div class="lane-actions">
+                  <button class="btn btn-dvr" title="Register this whole feed (standard channels + Built-in Capture channels) as one custom source in Channels DVR"
+                          onclick='pushCombinedCaptureToDvr({{ feed.id }}, {{ feed.name|tojson }}, {{ capture_single_total }}, this)'
+                          {% if capture_single_total == 0 %}disabled{% endif %}>📺 Add whole feed as one source</button>
+                </div>
+                <p class="help">Replaces the standard source plus the Built-in one. No stream limit needed: when every capture tuner is busy, a DRM channel is turned away and the free channels keep playing.</p>
+              </div>
+              {% endif %}
             </div>
             {% endif %}
 
@@ -2272,8 +2309,15 @@ async function pushNativeToDvr(id, name, count, btn, force = false) {
   }
 }
 
-// ── Push the whole feed (standard + ah4c bridge) as one Channels DVR source ──
+// ── Push the whole feed (standard + bridge) as one Channels DVR source ──────
+// endpoint: push-combined-ah4c-to-dvr or push-combined-capture-to-dvr.
 async function pushCombinedAh4cToDvr(id, name, count, btn, force = false) {
+  return pushCombinedToDvr(id, name, count, btn, force, 'push-combined-ah4c-to-dvr');
+}
+async function pushCombinedCaptureToDvr(id, name, count, btn, force = false) {
+  return pushCombinedToDvr(id, name, count, btn, force, 'push-combined-capture-to-dvr');
+}
+async function pushCombinedToDvr(id, name, count, btn, force, endpoint) {
   if (count > 750 && !force) {
     const ok = confirm(
       `${name} has ${count} channels in one source.\n\nChannels DVR usually works best at 750 or fewer.\n\nAdd it anyway?`
@@ -2285,7 +2329,7 @@ async function pushCombinedAh4cToDvr(id, name, count, btn, force = false) {
   btn.textContent = '⏳ Adding…';
   const restore = () => { btn.disabled = false; btn.innerHTML = orig; };
   try {
-    const r = await fetch(`/api/feeds/${id}/push-combined-ah4c-to-dvr`, {
+    const r = await fetch(`/api/feeds/${id}/${endpoint}`, {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify(dvrPushBody(id, force || count > 750)),
@@ -2296,10 +2340,10 @@ async function pushCombinedAh4cToDvr(id, name, count, btn, force = false) {
       if (r.status === 409 && data.requires_mixed_confirm) {
         if (!confirm(data.error + '\n\nAdd it anyway?')) return;
         _mixedGuideConfirmed.add(id);
-        return pushCombinedAh4cToDvr(id, name, count, btn, true);
+        return pushCombinedToDvr(id, name, count, btn, true, endpoint);
       }
       if (r.status === 409 && data.requires_confirm && !force) {
-        return pushCombinedAh4cToDvr(id, name, count, btn, true);
+        return pushCombinedToDvr(id, name, count, btn, true, endpoint);
       }
       if (r.status === 504 || (r.status === 502 && /could not connect|timed out/i.test(data.error || ''))) {
         alert('Could not reach Channels DVR.\n\nGo to Settings → Channels DVR and use the Test Connection button to verify your server URL is correct and reachable.');
@@ -2320,6 +2364,60 @@ async function pushCombinedAh4cToDvr(id, name, count, btn, force = false) {
       restore();
     }, 3000);
   } catch(e) {
+    alert('Error: ' + e.message);
+    restore();
+  }
+}
+
+// ── Push Built-in Capture output to Channels DVR ───────────────────────────
+async function pushCaptureToDvr(id, name, stdCount, gnCount, btn, force = false) {
+  return pushBridgeOutputToDvr('push-capture-to-dvr', 'Built-in Capture', id, name, stdCount, gnCount, btn, force);
+}
+
+// Shared by bridge outputs that register one source (mixed) or a standard +
+// Gracenote pair (split): warns past 750 channels, handles the mixed-guide and
+// size confirmations, and offers to remove sources the push made redundant.
+async function pushBridgeOutputToDvr(endpoint, label, id, name, stdCount, gnCount, btn, force = false) {
+  const largest = Math.max(stdCount || 0, gnCount || 0);
+  if (largest > 750 && !force) {
+    if (!confirm(`${name}'s ${label} output has ${largest} channels in one source.\n\nChannels DVR usually works best at 750 or fewer.\n\nAdd it anyway?`)) return;
+  }
+  const orig = btn.innerHTML;
+  const restore = () => { btn.disabled = false; btn.innerHTML = orig; btn.style.background = ''; btn.style.color = ''; };
+  btn.disabled = true;
+  btn.textContent = '⏳ Adding…';
+  try {
+    const r = await fetch(`/api/feeds/${id}/${endpoint}`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(dvrPushBody(id, force || largest > 750)),
+    });
+    const data = await r.json();
+    if (!r.ok) {
+      restore();
+      if (r.status === 409 && data.requires_mixed_confirm) {
+        if (!confirm(data.error + '\n\nAdd it anyway?')) return;
+        _mixedGuideConfirmed.add(id);
+        return pushBridgeOutputToDvr(endpoint, label, id, name, stdCount, gnCount, btn, true);
+      }
+      if (r.status === 409 && data.requires_confirm && !force) {
+        return pushBridgeOutputToDvr(endpoint, label, id, name, stdCount, gnCount, btn, true);
+      }
+      if (r.status === 504 || (r.status === 502 && /could not connect|timed out/i.test(data.error || ''))) {
+        alert('Could not reach Channels DVR.\n\nGo to Settings → Channels DVR and use the Test Connection button to verify your server URL is correct and reachable.');
+      } else if (r.status === 502 && data.error) {
+        alert('Channels DVR rejected the request:\n\n' + data.error);
+      } else {
+        alert('Failed: ' + (data.error || `HTTP ${r.status}`));
+      }
+      return;
+    }
+    btn.textContent = data.stream_limit ? `✓ Added (limit ${data.stream_limit})` : '✓ Added!';
+    btn.style.background = 'var(--success-bg-2)';
+    btn.style.color = 'var(--success-soft)';
+    offerStaleSourceRemoval(id, data);
+    setTimeout(restore, 3000);
+  } catch (e) {
     alert('Error: ' + e.message);
     restore();
   }

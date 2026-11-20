@@ -289,6 +289,8 @@ def feed_m3u(slug):
 @output_bp.route('/feeds/<slug>/m3u/gracenote')
 def feed_m3u_gracenote(slug):
     feed     = Feed.query.filter_by(slug=slug, is_enabled=True).first_or_404()
+    if (blocked := _split_guide_only(feed)):
+        return blocked
     path = _artifact(f'feed-{slug}-gracenote-m3u', ext='m3u')
     if path is None:
         return Response(
@@ -548,6 +550,8 @@ def feed_m3u_prismcast_gracenote(slug):
     if not settings.prismcast_capture_configured():
         return _prismcast_not_configured()
     feed = Feed.query.filter_by(slug=slug, is_enabled=True).first_or_404()
+    if (blocked := _split_guide_only(feed)):
+        return blocked
     path = _artifact(f'feed-{slug}-prismcast-gracenote-m3u', ext='m3u')
     if path is None:
         return Response(
@@ -771,6 +775,8 @@ def feed_m3u_fc_player_ah4c_gracenote(slug):
     if not _ah4c_bridge_ready():
         return _fc_player_ah4c_not_configured()
     feed = Feed.query.filter_by(slug=slug, is_enabled=True).first_or_404()
+    if (blocked := _split_guide_only(feed)):
+        return blocked
     path = _artifact(f'feed-{slug}-fc-player-ah4c-gracenote-m3u', ext='m3u')
     if path is None:
         return Response(
@@ -794,6 +800,8 @@ def feed_m3u_fc_player_gracenote(slug):
     if not _fc_player_bridge_ready():
         return _fc_player_not_configured()
     feed = Feed.query.filter_by(slug=slug, is_enabled=True).first_or_404()
+    if (blocked := _split_guide_only(feed)):
+        return blocked
     path = _artifact(f'feed-{slug}-fc-player-gracenote-m3u', ext='m3u')
     if path is None:
         return Response(
@@ -807,6 +815,20 @@ def feed_m3u_fc_player_gracenote(slug):
         mimetype='application/x-mpegurl',
         download_name=f'{slug}-fc-player-gracenote.m3u',
     )
+
+
+def _split_guide_only(feed):
+    """Gracenote playlists are only built for feeds in split guide mode (a mixed
+    feed's DVR sources use its mixed playlists), so for a mixed feed say so rather
+    than serve a leftover file or warm forever."""
+    if (feed.guide_mode or 'split') == 'mixed':
+        return Response(
+            f'Feed {feed.slug} uses one mixed playlist, so it has no separate Gracenote playlist. '
+            'Use its mixed playlist instead.\n',
+            status=404,
+            mimetype='text/plain',
+        )
+    return None
 
 
 def _feed_bridge_mixed_artifact(slug: str, key: str, label: str):

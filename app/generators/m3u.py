@@ -994,6 +994,21 @@ def _auto_play_url(ch, base_url: str) -> str:
     channel_id = _url_quote(ch.source_channel_id, safe="")
     return f'{base_url}/play/auto/{source_name}/{channel_id}.m3u8'
 
+def _auto_capture_play_url(ch, base_url: str) -> str:
+    # /play/auto-capture/... is _auto_play_url's twin for the built-in capture
+    # add-on: decided at tune time, a DRM channel goes to /play/capture/<id>.m3u8
+    # and anything else straight to its stream (play_auto_capture in play.py).
+    source_name = ch.source.name
+    if source_name == 'cspan':
+        return _channel_play_url(ch, base_url)
+    channel_id = _url_quote(ch.source_channel_id, safe="")
+    return f'{base_url}/play/auto-capture/{source_name}/{channel_id}.m3u8'
+
+
+def _capture_play_url(ch, base_url: str) -> str:
+    return f'{base_url}/play/capture/{ch.id}.m3u8'
+
+
 def _ah4c_play_url(ch, ah4c_base_url: str) -> str:
     # ah4c's own /play/tuner/<channel> — <channel> is the same "source:channel_id"
     # key fc_player_bridge already uses (trigger_channel's channel_key), which the
@@ -1216,26 +1231,88 @@ def _fc_player_bridge_channels(filters: dict) -> list:
     return channels
 
 
+def _capture_bridge_channels(filters: dict) -> list:
+    """A feed's channels for the built-in capture add-on, both guide types: the
+    bridge-only channels Chrome can play (_prismcast_capturable), minus sources
+    whose license servers refuse Linux Chrome (capture.INCOMPATIBLE_SOURCES) and
+    any malformed gracenote_id (same rule as _fc_player_bridge_channels)."""
+    from .. import capture
+    channels, seen = [], set()
+    for ch in _build_channel_query(_drm_bridge_query_filters(filters), activity='drm_bridge').all():
+        if ch.id in seen or not _prismcast_capturable(ch):
+            continue
+        if ch.source and ch.source.name in capture.INCOMPATIBLE_SOURCES:
+            continue
+        if _has_gracenote_claim(ch) and not _parse_gracenote_id(ch):
+            continue
+        channels.append(ch)
+        seen.add(ch.id)
+    return channels
+
+
+def generate_capture_m3u(filters: dict = None, base_url: str = None, *,
+                         gracenote: bool | None = False, **number_kwargs) -> str:
+    """Bridge-only playlist for the built-in capture add-on (app/capture): the
+    PrismCast playlist's channels and guide partition, with each DRM entry at
+    /play/capture/<id>.m3u8 and the sources Linux Chrome can't play left out.
+    gracenote False/True/None as in generate_prismcast_m3u."""
+    from .. import capture
+    base = (base_url or '').rstrip('/')
+    return generate_prismcast_m3u(
+        filters, base_url=base_url, prismcast_url='', gracenote=gracenote,
+        bridge_url_for=lambda ch: _capture_play_url(ch, base),
+        exclude_sources=capture.INCOMPATIBLE_SOURCES, **number_kwargs)
+
+
+_COMBINED_BRIDGES = {
+    # via: (bridge channel selector, per-channel play URL)
+    'ah4c': (_fc_player_bridge_channels, _auto_play_url),
+    'capture': (_capture_bridge_channels, _auto_capture_play_url),
+}
+
+
+def combined_channel_count(filters: dict, via: str = 'ah4c') -> int:
+    """How many channels generate_combined_m3u emits for these filters."""
+    filters = filters or {}
+    select, _url = _COMBINED_BRIDGES[via]
+    bridge_ids = {ch.id for ch in select(filters)}
+    standard = [ch for ch in _selected_channels(filters, gracenote='mixed') if ch.id not in bridge_ids]
+    return len(standard) + len(bridge_ids)
+
+
 def combined_ah4c_channel_count(filters: dict) -> int:
     """How many channels generate_combined_ah4c_m3u emits for these filters."""
-    filters = filters or {}
-    return len(_selected_channels(filters, gracenote='mixed')) + len(_fc_player_bridge_channels(filters))
+    return combined_channel_count(filters, 'ah4c')
 
 
 def generate_combined_ah4c_m3u(filters: dict = None, base_url: str = None, *,
                                feed_chnum_start: int = None, namespace_start: int = None,
                                feed_id: int = None) -> str:
+    """The whole feed in one playlist with its bridge channels through ah4c; see
+    generate_combined_m3u."""
+    return generate_combined_m3u(filters, base_url, via='ah4c', feed_chnum_start=feed_chnum_start,
+                                 namespace_start=namespace_start, feed_id=feed_id)
+
+
+def generate_combined_m3u(filters: dict = None, base_url: str = None, *, via: str = 'ah4c',
+                          feed_chnum_start: int = None, namespace_start: int = None,
+                          feed_id: int = None) -> str:
     """
     One playlist for a whole feed: the mixed-guide standard channels plus the
-    FastChannels Player bridge channels, so Channels DVR needs a single Custom
-    Source. Every entry is a /play/auto/... URL (_auto_play_url), which sends a
-    bridge channel through ah4c and anything else to its stream when the DVR
-    tunes — so a channel keeps its URL if it starts or stops needing the bridge.
+    bridge channels, so Channels DVR needs a single Custom Source. Every entry is
+    an "auto" URL decided when the DVR tunes — a bridge channel goes through the
+    bridge, anything else straight to its stream — so a channel keeps its URL if
+    it starts or stops needing the bridge.
 
-    Only ah4c makes this safe. A source has one stream limit, so it can't cap
-    the bridge channels without capping the free ones too; ah4c tracks its own
-    tuners and refuses a tune (HTTP 500) when they are all busy, where the
-    fixed-encoder path would switch the one device out from under a recording.
+      via='ah4c'    — FastChannels Player bridge channels, /play/auto/... (_auto_play_url)
+      via='capture' — built-in capture add-on channels, /play/auto-capture/...
+                      (_auto_capture_play_url)
+
+    Only a bridge that refuses tunes when full makes this safe. A source has one
+    stream limit, so it can't cap the bridge channels without capping the free
+    ones too. ah4c tracks its own tuners and answers HTTP 500 when they are all
+    busy; the capture route answers 503 once its tuners are all in use. The
+    fixed-encoder path would switch its one device out from under a recording.
 
     The source has to be registered as MPEG-TS: Channels DVR rejects ah4c's
     transport stream in an HLS-type source ("Detected MPEG-TS instead of HLS
@@ -1251,7 +1328,8 @@ def generate_combined_ah4c_m3u(filters: dict = None, base_url: str = None, *,
     _s = AppSettings.get()
     _image_proxy = _s.image_proxy_enabled if _s.image_proxy_enabled is not None else True
 
-    bridge_channels = _fc_player_bridge_channels(filters)
+    select_bridge, play_url = _COMBINED_BRIDGES[via]
+    bridge_channels = select_bridge(filters)
     bridge_ids = {ch.id for ch in bridge_channels}
     channels = [ch for ch in _selected_channels(filters, gracenote='mixed') if ch.id not in bridge_ids]
     channels += bridge_channels
@@ -1264,7 +1342,7 @@ def generate_combined_ah4c_m3u(filters: dict = None, base_url: str = None, *,
     )
     if feed_chnum_start is None and namespace_start is None:
         for w in warnings:
-            log.warning('chnum overlap (combined ah4c): %s', w)
+            log.warning('chnum overlap (combined %s): %s', via, w)
     else:
         _sort_by_assigned_chnum(channels, chnum_map)
 
@@ -1301,7 +1379,7 @@ def generate_combined_ah4c_m3u(filters: dict = None, base_url: str = None, *,
             attrs.append(f'tvc-guide-categories="{guide_cat}"')
         _append_experimental_stream_attrs(attrs, _s)
         lines.append(f'#EXTINF:-1 {" ".join(attrs)},{_sanitize(display_name)}')
-        lines.append(_auto_play_url(ch, base_url))
+        lines.append(play_url(ch, base_url))
 
     return '\n'.join(lines)
 

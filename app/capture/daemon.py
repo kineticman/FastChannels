@@ -679,7 +679,7 @@ class CaptureService:
             idle = next((t for t in self.tuners if t.state == 'idle'), None)
             if idle is None:
                 if any(t.state == 'starting' for t in self.tuners):
-                    return 503, {'error': 'capture tuners are still starting', 'retry_after': 5}, None
+                    return 503, {'error': 'capture tuners are still starting', 'retry_after': 5, 'reason': 'starting'}, None
                 if all(t.state == 'error' for t in self.tuners):
                     return 503, {'error': 'capture tuner failed to start: ' + self.tuners[0].error}, None
                 now = time.monotonic()
@@ -687,7 +687,7 @@ class CaptureService:
                              if x.state in ('tuning', 'live') and now - x.last_touch > PREEMPT_IDLE_SECONDS]
                 if allow_preempt and abandoned:
                     return 0, {}, max(abandoned, key=lambda x: now - x.last_touch)
-                return 503, {'error': f'all {len(self.tuners)} capture tuner(s) are busy', 'retry_after': 10}, None
+                return 503, {'error': f'all {len(self.tuners)} capture tuner(s) are busy', 'retry_after': 10, 'reason': 'busy'}, None
             s = Session(channel_id, idle)
             idle.state, idle.session = 'busy', s
             self.sessions[s.id] = s

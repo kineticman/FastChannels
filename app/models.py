@@ -436,7 +436,9 @@ class Feed(db.Model):
             # Convenience URLs for the client / admin UI
             'm3u_url':        f'{base_url}/feeds/{self.slug}/m3u',
             'epg_url':        f'{base_url}/feeds/{self.slug}/epg.xml',
-            'gracenote_url':  f'{base_url}/feeds/{self.slug}/m3u/gracenote',
+            # Split guide mode only: a mixed feed has no separate Gracenote playlist.
+            'gracenote_url':  (f'{base_url}/feeds/{self.slug}/m3u/gracenote'
+                               if (self.guide_mode or 'split') != 'mixed' else None),
             'mixed_url':      f'{base_url}/feeds/{self.slug}/m3u/mixed',
             'native_m3u_url': f'{base_url}/feeds/{self.slug}/native/m3u' if native_enabled else None,
             'native_epg_url': f'{base_url}/feeds/{self.slug}/native/epg.xml' if native_enabled else None,

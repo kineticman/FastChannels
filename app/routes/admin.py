@@ -417,6 +417,15 @@ def _feed_split_counts(feed: Feed) -> dict[str, int]:
     bridge_trusted_count = len(bridge_trusted)
     bridge_trusted_gn = sum(1 for ch in bridge_trusted if _has_gracenote_claim(ch))
 
+    # Built-in capture: what generate_capture_m3u carries (Chrome-playable bridge
+    # channels, minus the sources that refuse Linux Chrome).
+    from .. import capture as _capture
+    from ..generators.m3u import _prismcast_capturable
+    capture_channels = [ch for ch in bridged_channels
+                        if _prismcast_capturable(ch)
+                        and not (ch.source and ch.source.name in _capture.INCOMPATIBLE_SOURCES)]
+    capture_gn = sum(1 for ch in capture_channels if _has_gracenote_claim(ch))
+
     return {
         'standard_count': std_count,
         'gracenote_count': gn_count,
@@ -426,6 +435,8 @@ def _feed_split_counts(feed: Feed) -> dict[str, int]:
         'prismcast_gracenote_count': bridged_gn,
         'drm_bridge_count': bridge_trusted_count - bridge_trusted_gn,
         'drm_bridge_gracenote_count': bridge_trusted_gn,
+        'capture_count': len(capture_channels) - capture_gn,
+        'capture_gracenote_count': capture_gn,
     }
 
 
@@ -1872,12 +1883,24 @@ def feeds():
                            prismcast_enabled=app_settings.prismcast_capture_configured(),
                            fc_player_enabled=_fc_player_bridge.hdmi_bridge_active(app_settings),
                            fc_player_ah4c_configured=_fc_player_bridge.ah4c_bridge_active(app_settings),
+                           capture_enabled=bool(app_settings.bridge_enabled) and _capture_is_active(),
+                           capture_tuners=_capture_tuner_count(),
                            native_output_enabled=bool(app_settings.native_output_enabled),
                            feed_summary=feed_summary,
                            feed_split_counts=feed_split_counts,
                            feed_chnum_placeholder=feed_chnum_placeholder,
                            source_counts=source_counts,
                            default_chnum_from_env=default_feed and default_feed.chnum_start is None and app_settings.env_global_chnum_start() is not None)
+
+
+def _capture_is_active() -> bool:
+    from .. import capture
+    return capture.is_active()
+
+
+def _capture_tuner_count() -> int:
+    from .. import capture
+    return capture.read_config().get('max_tuners', 1)
 
 
 def _drm_bridge_recoverable_count() -> int:

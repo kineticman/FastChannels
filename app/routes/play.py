@@ -3918,6 +3918,43 @@ def play_auto(source_name: str, channel_id: str):
     return redirect(target, 302)
 
 
+@play_bp.route('/play/auto-capture/<source_name>/<channel_id>.m3u8')
+def play_auto_capture(source_name: str, channel_id: str):
+    """
+    play_auto's twin for the built-in capture add-on's single playlist
+    (generate_combined_m3u via='capture'):
+      - normal channel -> identical to /play/<source>/<id>.m3u8
+      - DRM channel    -> 302 to /play/capture/<id>.m3u8, which starts or joins a
+        capture and answers 503 when every capture tuner is in use.
+    """
+    channel = (
+        Channel.query
+        .join(Source)
+        .filter(Source.name == source_name, Channel.source_channel_id == channel_id)
+        .first()
+    )
+    if not channel:
+        abort(404)
+    if _channel_is_retired(channel):
+        return _gone_response()
+
+    from .. import capture
+    from ..generators.m3u import _needs_prismcast_bridge, _prismcast_capturable
+    if not (_needs_prismcast_bridge(channel) and _prismcast_capturable(channel)):
+        return play(source_name, channel_id)
+    if source_name in capture.INCOMPATIBLE_SOURCES:
+        return Response('This channel needs a bridge, and its provider refuses Built-in Capture.\n',
+                        status=422, mimetype='text/plain')
+    if not capture.is_active():
+        logger.error('[play-auto-capture] %s/%s needs the bridge but Built-in Capture is off',
+                     source_name, channel_id)
+        return Response('This channel needs a bridge, and Built-in Capture is not installed or is turned off.\n',
+                        status=503, mimetype='text/plain')
+    logger.info('[play-auto-capture] request_id=%s ip=%s source=%s channel_id=%s channel_name=%s -> capture',
+                getattr(g, 'request_id', '-'), _client_ip(), source_name, channel_id, channel.name)
+    return redirect(f'/play/capture/{channel.id}.m3u8', 302)
+
+
 @play_bp.route('/play/fc-player/<source_name>/<channel_id>.m3u')
 def play_fc_player_bridge_vlc(source_name: str, channel_id: str):
     """.m3u sibling of play_fc_player_bridge, same purpose as play_vlc: hand VLC (or

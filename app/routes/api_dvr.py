@@ -47,7 +47,7 @@ def _dvr_get_source(dvr_url: str, name: str, timeout: int = 15) -> dict:
 
 
 def _dvr_put_source(dvr_url: str, name: str, dvr_type: str, url: str, xmltv_url: str = '',
-                    *, mixed: bool = False, timeout: int = 30):
+                    *, mixed: bool = False, timeout: int = 30, limit: int | None = None):
     """Create or update a custom M3U source.
 
     PUT replaces the source's whole settings object, so start from what the
@@ -60,6 +60,9 @@ def _dvr_put_source(dvr_url: str, name: str, dvr_type: str, url: str, xmltv_url:
     tvc-guide-stationid and XMLTV-mapped channels. A source created before
     Channels DVR 2026.08.14 has no guide_preference and is treated as XMLTV
     only, so it has to be sent explicitly.
+
+    limit sets the source's stream limit, but only when creating it: a limit the
+    user changed in Channels DVR is theirs to keep.
     """
     existing = _dvr_get_source(dvr_url, name, timeout=timeout)
     payload = dict(existing)
@@ -74,6 +77,8 @@ def _dvr_put_source(dvr_url: str, name: str, dvr_type: str, url: str, xmltv_url:
         payload.pop('xmltv_refresh', None)
     if mixed:
         payload['guide_preference'] = 'gracenote'
+    if limit and not existing:
+        payload['limit'] = str(limit)
     source_url = f"{dvr_url}/providers/m3u/sources/{_dvr_source_key(name)}"
     resp = _req.put(source_url, json=payload, timeout=timeout, verify=False)
     # The DVR loads a new source's playlist straight away, but an existing one
@@ -154,7 +159,26 @@ def _feed_gracenote_source_names(feed: Feed) -> dict[str, str]:
         f'FastChannels {feed.name} PrismCast Gracenote':             f'{base}/prismcast/gracenote',
         f'FastChannels {feed.name} Android Bridge Gracenote':        f'{base}/fc-player/gracenote',
         f'FastChannels {feed.name} Android Bridge Gracenote (ah4c)': f'{base}/fc-player/ah4c/gracenote',
+        f'FastChannels {feed.name} Built-in Capture Gracenote':      f'{base}/capture/gracenote',
     }
+
+
+def _feed_combined_capture_redundant_sources(feed: Feed) -> dict[str, tuple[str, ...]]:
+    """DVR sources the single capture playlist (generate_combined_m3u via='capture')
+    makes redundant: the feed's Gracenote half plus its separate capture sources."""
+    base = f'/feeds/{feed.slug}/m3u'
+    return {
+        f'FastChannels {feed.name} Gracenote':                  (f'{base}/gracenote',),
+        f'FastChannels {feed.name} Built-in Capture':           (f'{base}/capture', f'{base}/capture/mixed'),
+        f'FastChannels {feed.name} Built-in Capture Gracenote': (f'{base}/capture/gracenote',),
+    }
+
+
+# The single-playlist pushes: (main-source playlist path suffix, redundant-source map).
+_COMBINED_PUSHES = (
+    ('combined/ah4c', lambda feed: _feed_combined_ah4c_redundant_sources(feed)),
+    ('combined/capture', lambda feed: _feed_combined_capture_redundant_sources(feed)),
+)
 
 
 def _feed_combined_ah4c_redundant_sources(feed: Feed) -> dict[str, tuple[str, ...]]:
@@ -203,7 +227,7 @@ def _stale_gracenote_source(dvr_url: str, feed: Feed, name: str) -> list[str]:
 
 def _ensure_feed_dvr_artifacts(feed: Feed, base_url: str, *, has_gracenote: bool,
                                prismcast: bool = False, fc_player: bool = False,
-                               ah4c_url: str | None = None,
+                               capture: bool = False, ah4c_url: str | None = None,
                                force_refresh: bool = False, mixed: bool = False) -> None:
     """Ensure feed artifacts exist before handing URLs to Channels DVR.
 
@@ -217,6 +241,9 @@ def _ensure_feed_dvr_artifacts(feed: Feed, base_url: str, *, has_gracenote: bool
     if prismcast:
         std_key = f'feed-{feed.slug}-prismcast-m3u'
         gn_key  = f'feed-{feed.slug}-prismcast-gracenote-m3u'
+    elif capture:
+        std_key = f'feed-{feed.slug}-capture-m3u'
+        gn_key  = f'feed-{feed.slug}-capture-gracenote-m3u'
     elif fc_player:
         std_key = f'feed-{feed.slug}-fc-player-m3u'
         gn_key  = f'feed-{feed.slug}-fc-player-gracenote-m3u'
@@ -237,6 +264,7 @@ def _ensure_feed_dvr_artifacts(feed: Feed, base_url: str, *, has_gracenote: bool
             generate_gracenote_m3u,
             generate_m3u,
             generate_prismcast_m3u,
+            generate_capture_m3u,
             generate_fc_player_m3u,
             feed_number_kwargs,
             feed_to_query_filters,
@@ -263,6 +291,9 @@ def _ensure_feed_dvr_artifacts(feed: Feed, base_url: str, *, has_gracenote: bool
                 key, writer = f'feed-{feed.slug}-prismcast-mixed-m3u', lambda fp: fp.write(generate_prismcast_m3u(
                     filters, base_url=base_url, prismcast_url=prismcast_url,
                     inner_base_url=prismcast_inner, gracenote=None, **std_kw))
+            elif capture:
+                key, writer = f'feed-{feed.slug}-capture-mixed-m3u', lambda fp: fp.write(generate_capture_m3u(
+                    filters, base_url=base_url, gracenote=None, **std_kw))
             elif fc_player and ah4c_url:
                 key, writer = f'feed-{feed.slug}-fc-player-ah4c-mixed-m3u', lambda fp: fp.write(generate_fc_player_m3u(
                     filters, base_url=base_url, ah4c_base_url=ah4c_url, gracenote=None, **std_kw))
@@ -301,6 +332,18 @@ def _ensure_feed_dvr_artifacts(feed: Feed, base_url: str, *, has_gracenote: bool
                         gracenote=True,
                         **gn_kw,
                     )),
+                    ext='m3u',
+                )
+        elif capture:
+            write_artifact(
+                std_key,
+                lambda fp: fp.write(generate_capture_m3u(filters, base_url=base_url, **std_kw)),
+                ext='m3u',
+            )
+            if has_gracenote:
+                write_artifact(
+                    gn_key,
+                    lambda fp: fp.write(generate_capture_m3u(filters, base_url=base_url, gracenote=True, **gn_kw)),
                     ext='m3u',
                 )
         elif fc_player:
@@ -922,6 +965,166 @@ def push_feed_combined_ah4c_to_dvr(feed_id):
                     'stale_sources': _stale_sources(dvr_url, _feed_combined_ah4c_redundant_sources(feed))})
 
 
+def _dvr_error_response(exc):
+    if isinstance(exc, _req.exceptions.ConnectionError):
+        return jsonify({'error': 'Could not connect to Channels DVR.'}), 502
+    if isinstance(exc, _req.exceptions.Timeout):
+        return jsonify({'error': 'Channels DVR timed out.'}), 504
+    resp = exc.response
+    return jsonify({'error': f'DVR {resp.status_code}: {resp.text[:300]}'}), 502
+
+
+def _capture_push_preflight(feed: Feed):
+    """(dvr_url, None) when a capture push can go ahead, else (None, response)."""
+    from .. import capture
+    settings = AppSettings.get()
+    dvr_url = (settings.effective_channels_dvr_url() or '').strip()
+    if not dvr_url:
+        return None, (jsonify({'error': 'Channels DVR URL is not configured in Settings.'}), 400)
+    if not (settings.bridge_enabled and capture.is_active()):
+        return None, (jsonify({'error': 'Built-in Capture is not installed or is turned off. '
+                                        'Turn it on from the Bridge page.'}), 400)
+    return dvr_url, None
+
+
+@dvr_bp.route('/feeds/<int:feed_id>/push-capture-to-dvr', methods=['POST'])
+def push_feed_capture_to_dvr(feed_id):
+    """Register this feed's Built-in Capture output in Channels DVR: one mixed
+    source, or a standard + Gracenote pair in split guide mode. A new source gets
+    the capture tuner count as its stream limit, so Channels DVR stops at what the
+    add-on can actually play."""
+    from .. import capture
+    feed = Feed.query.get_or_404(feed_id)
+    dvr_url, blocked = _capture_push_preflight(feed)
+    if blocked:
+        return blocked
+
+    split = _feed_split_counts(feed)
+    std_count = split.get('capture_count', 0)
+    gn_count = split.get('capture_gracenote_count', 0)
+    if std_count == 0 and gn_count == 0:
+        return jsonify({'error': 'This feed has no channels Built-in Capture can play.'}), 400
+
+    mixed = (feed.guide_mode or 'split') == 'mixed'
+    if mixed and (blocked := _mixed_guide_unsupported(dvr_url)):
+        return blocked
+    largest = (std_count + gn_count) if mixed else max(std_count, gn_count)
+    force = bool((request.get_json(silent=True) or {}).get('force'))
+    if largest > _CHANNELS_DVR_RECOMMENDED_MAX and not force:
+        return jsonify({
+            'error': f'This Built-in Capture output has {largest} channels in one source. Channels DVR usually works best at 750 or fewer.',
+            'requires_confirm': True,
+            'channel_count': largest,
+            'recommended_max': _CHANNELS_DVR_RECOMMENDED_MAX,
+        }), 409
+
+    base = public_base_url()
+    try:
+        _ensure_feed_dvr_artifacts(feed, base, has_gracenote=gn_count > 0, capture=True,
+                                   force_refresh=True, mixed=mixed)
+    except TimeoutError:
+        return jsonify({'error': 'Timed out building the capture playlist. Try again in a moment.'}), 503
+
+    tuners = capture.read_config().get('max_tuners', 1)
+    std_name = f"FastChannels {feed.name} Built-in Capture"
+    gn_name = f"FastChannels {feed.name} Built-in Capture Gracenote"
+    epg = f"{base}/feeds/{feed.slug}/epg.xml"
+    added = []
+    try:
+        if mixed:
+            r = _dvr_put_source(dvr_url, std_name, 'HLS', f"{base}/feeds/{feed.slug}/m3u/capture/mixed",
+                                epg, mixed=True, limit=tuners)
+            r.raise_for_status()
+            return jsonify({'ok': True, 'sources_added': [std_name], 'mixed': True, 'stream_limit': tuners,
+                            'stale_sources': _stale_gracenote_source(dvr_url, feed, gn_name)})
+        if gn_count:
+            r = _dvr_put_source(dvr_url, gn_name, 'HLS', f"{base}/feeds/{feed.slug}/m3u/capture/gracenote",
+                                limit=tuners)
+            r.raise_for_status()
+            added.append(gn_name)
+        if std_count:
+            r = _dvr_put_source(dvr_url, std_name, 'HLS', f"{base}/feeds/{feed.slug}/m3u/capture",
+                                epg, limit=tuners)
+            r.raise_for_status()
+            added.append(std_name)
+    except (_req.exceptions.ConnectionError, _req.exceptions.Timeout, _req.exceptions.HTTPError) as exc:
+        return _dvr_error_response(exc)
+    return jsonify({'ok': True, 'sources_added': added, 'stream_limit': tuners})
+
+
+def _feed_has_raw_ts(filters: dict) -> bool:
+    """Whether any of the feed's standard channels is a raw MPEG-TS stream (e.g. an
+    HDHomeRun tuner). Channels DVR rejects those in an HLS-type source."""
+    from ..generators.m3u import _selected_channels
+    return any((ch.stream_type or '').lower() == 'mpegts'
+               for ch in _selected_channels(filters, gracenote='mixed'))
+
+
+@dvr_bp.route('/feeds/<int:feed_id>/push-combined-capture-to-dvr', methods=['POST'])
+def push_feed_combined_capture_to_dvr(feed_id):
+    """Register the whole feed as ONE Channels DVR source: mixed-guide standard
+    channels plus the DRM channels through Built-in Capture, routed at tune time
+    (generate_combined_m3u via='capture'). Takes the feed's main source name, so it
+    replaces the regular push in place, and reports the sources it makes redundant.
+    No stream limit: the capture route refuses a tune itself when its tuners are full."""
+    from ..generators.m3u import combined_channel_count, feed_number_kwargs, feed_to_query_filters, generate_combined_m3u
+    from ..generators.xmltv import feed_xml_artifact_key, write_xmltv
+    from ..xml_cache import write_artifact, write_xml_artifact
+
+    feed = Feed.query.get_or_404(feed_id)
+    dvr_url, blocked = _capture_push_preflight(feed)
+    if blocked:
+        return blocked
+    if (feed.guide_mode or 'split') != 'mixed':
+        return jsonify({'error': 'The single playlist needs this feed in mixed guide mode. '
+                                 'Switch Guide Mode to "One mixed playlist" first.'}), 409
+    if (blocked := _mixed_guide_unsupported(dvr_url)):
+        return blocked
+
+    base = public_base_url()
+    filters = feed_to_query_filters(feed.filters or {})
+    channel_count = combined_channel_count(filters, 'capture')
+    if channel_count == 0:
+        return jsonify({'error': 'This feed has no eligible channels to add to Channels DVR.'}), 400
+    force = bool((request.get_json(silent=True) or {}).get('force'))
+    if channel_count > _CHANNELS_DVR_RECOMMENDED_MAX and not force:
+        return jsonify({
+            'error': f'This feed has {channel_count} channels in one source. Channels DVR usually works best at 750 or fewer.',
+            'requires_confirm': True,
+            'channel_count': channel_count,
+            'recommended_max': _CHANNELS_DVR_RECOMMENDED_MAX,
+        }), 409
+
+    std_kw = feed_number_kwargs(feed)
+    xml_key = feed_xml_artifact_key(feed)
+    write_xml_artifact(
+        xml_key,
+        lambda fp: write_xmltv(fp, {} if xml_key == 'master' else filters,
+                               base_url=base, feed_name=None if xml_key == 'master' else feed.name),
+    )
+    write_artifact(
+        f'feed-{feed.slug}-combined-capture-m3u',
+        lambda fp: fp.write(generate_combined_m3u(filters, base_url=base, via='capture', **std_kw)),
+        ext='m3u',
+    )
+
+    name = f"FastChannels {feed.name}"
+    # Capture output is HLS, so HLS unless the feed has raw-TS channels, which an
+    # HLS-type source rejects (an MPEG-TS-type source plays HLS too).
+    dvr_type = 'MPEG-TS' if _feed_has_raw_ts(filters) else 'HLS'
+    try:
+        r = _dvr_put_source(dvr_url, name, dvr_type,
+                            f"{base}/feeds/{feed.slug}/m3u/combined/capture",
+                            f"{base}/feeds/{feed.slug}/epg.xml", mixed=True)
+        r.raise_for_status()
+    except (_req.exceptions.ConnectionError, _req.exceptions.Timeout, _req.exceptions.HTTPError) as exc:
+        return _dvr_error_response(exc)
+
+    return jsonify({'ok': True, 'sources_added': [name], 'mixed': True, 'channel_count': channel_count,
+                    'stream_type': dvr_type,
+                    'stale_sources': _stale_sources(dvr_url, _feed_combined_capture_redundant_sources(feed))})
+
+
 @dvr_bp.route('/feeds/<int:feed_id>/remove-dvr-gracenote-source', methods=['POST'])
 def remove_feed_dvr_gracenote_source(feed_id):
     """Delete a leftover source of this feed from Channels DVR: a split-mode
@@ -942,20 +1145,22 @@ def remove_feed_dvr_gracenote_source(feed_id):
 
     name = ((request.get_json(silent=True) or {}).get('name') or '').strip()
     path = _feed_gracenote_source_names(feed).get(name)
-    combined_only = False
+    needs_combined = []  # main-source paths that would make `name` redundant
     if not path:
-        # The separate ah4c bridge source is only redundant while the feed's
-        # main DVR source is the single ah4c playlist.
-        path = _feed_combined_ah4c_redundant_sources(feed).get(name)
-        combined_only = True
+        # A separate bridge source is only redundant while the feed's main DVR
+        # source is the single playlist that absorbed it (ah4c or capture).
+        for combined_path, redundant in _COMBINED_PUSHES:
+            if name in (candidates := redundant(feed)):
+                path = path or candidates[name]
+                needs_combined.append(f'/feeds/{feed.slug}/m3u/{combined_path}')
     if not path:
         return jsonify({'error': 'Not a Gracenote source of this feed.'}), 400
 
     try:
-        if combined_only and not _dvr_source_points_at(
-                dvr_url, f'FastChannels {feed.name}', f'/feeds/{feed.slug}/m3u/combined/ah4c'):
+        if needs_combined and not any(
+                _dvr_source_points_at(dvr_url, f'FastChannels {feed.name}', p) for p in needs_combined):
             return jsonify({'error': f'"{name}" is still needed: this feed\'s main Channels DVR source '
-                                     'is not the single ah4c playlist. Nothing removed.'}), 409
+                                     'is not a single playlist that includes it. Nothing removed.'}), 409
         if not _dvr_source_points_at(dvr_url, name, path):
             return jsonify({'error': f'"{name}" is not in Channels DVR, or no longer points at this feed. Nothing removed.'}), 409
         r = _req.delete(f"{dvr_url}/providers/m3u/sources/{_dvr_source_key(name)}", timeout=30, verify=False)

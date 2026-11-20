@@ -1857,8 +1857,9 @@ def _refresh_xml_artifacts(only_keys: set[str] | None = None) -> None:
     those artifacts — the on-request path — with no idle check or sweep.
     """
     started_at = time.monotonic()
-    from app.generators.m3u import generate_gracenote_m3u, generate_m3u, generate_native_m3u, generate_mixed_m3u, generate_combined_ah4c_m3u, generate_prismcast_m3u, generate_fc_player_m3u, feed_number_kwargs, feed_to_query_filters, _MASTER_GRACENOTE_START
+    from app.generators.m3u import generate_gracenote_m3u, generate_m3u, generate_native_m3u, generate_mixed_m3u, generate_combined_ah4c_m3u, generate_combined_m3u, generate_prismcast_m3u, generate_capture_m3u, generate_fc_player_m3u, feed_number_kwargs, feed_to_query_filters, _MASTER_GRACENOTE_START
     from app import fc_player_bridge as _fc_player_bridge
+    from app import capture as _capture
     from app.generators.xmltv import feed_xml_artifact_key, write_xmltv
 
     for attempt in range(2):
@@ -1884,6 +1885,8 @@ def _refresh_xml_artifacts(only_keys: set[str] | None = None) -> None:
         fc_player_ready = _fc_player_bridge.hdmi_bridge_active(_settings)
         ah4c_url = ((_settings.effective_fc_player_bridge_ah4c_url() or '').strip().rstrip('/')
                     if _fc_player_bridge.ah4c_bridge_active(_settings) else '')
+        # Built-in capture add-on: installed, switched on, and Bridge mode on.
+        capture_ready = bool(_settings.bridge_enabled) and _capture.is_active()
         m3u_artifacts: list[tuple[str, Callable]] = [
             ('master-m3u', lambda fp: fp.write(generate_m3u({}, base_url=base_url))),
             # EXPERIMENTAL: mixed Gracenote/XMLTV single-source playlist — see
@@ -1900,6 +1903,11 @@ def _refresh_xml_artifacts(only_keys: set[str] | None = None) -> None:
             m3u_artifacts.append((
                 'master-fc-player-m3u',
                 lambda fp: fp.write(generate_fc_player_m3u({}, base_url=base_url)),
+            ))
+        if capture_ready:
+            m3u_artifacts.append((
+                'master-capture-m3u',
+                lambda fp: fp.write(generate_capture_m3u({}, base_url=base_url)),
             ))
         if ah4c_url:
             m3u_artifacts.append((
@@ -1923,6 +1931,12 @@ def _refresh_xml_artifacts(only_keys: set[str] | None = None) -> None:
             m3u_artifacts.append((
                 'master-fc-player-gracenote-m3u',
                 lambda fp: fp.write(generate_fc_player_m3u(
+                    {}, base_url=base_url, namespace_start=default_gn_start, gracenote=True)),
+            ))
+        if capture_ready:
+            m3u_artifacts.append((
+                'master-capture-gracenote-m3u',
+                lambda fp: fp.write(generate_capture_m3u(
                     {}, base_url=base_url, namespace_start=default_gn_start, gracenote=True)),
             ))
         if ah4c_url:
@@ -2003,6 +2017,13 @@ def _refresh_xml_artifacts(only_keys: set[str] | None = None) -> None:
                         generate_fc_player_m3u(filters, base_url=base_url, **std_kw)
                     ),
                 ))
+            if capture_ready:
+                m3u_artifacts.append((
+                    f'feed-{feed.slug}-capture-m3u',
+                    lambda fp, filters=filters, std_kw=std_kw: fp.write(
+                        generate_capture_m3u(filters, base_url=base_url, **std_kw)
+                    ),
+                ))
             if ah4c_url:
                 m3u_artifacts.append((
                     f'feed-{feed.slug}-fc-player-ah4c-m3u',
@@ -2037,6 +2058,20 @@ def _refresh_xml_artifacts(only_keys: set[str] | None = None) -> None:
                             generate_combined_ah4c_m3u(filters, base_url=base_url, **std_kw)
                         ),
                     ))
+                if capture_ready:
+                    m3u_artifacts.append((
+                        f'feed-{feed.slug}-capture-mixed-m3u',
+                        lambda fp, filters=filters, std_kw=std_kw: fp.write(
+                            generate_capture_m3u(filters, base_url=base_url, gracenote=None, **std_kw)
+                        ),
+                    ))
+                    # Whole feed in one playlist, DRM channels via capture.
+                    m3u_artifacts.append((
+                        f'feed-{feed.slug}-combined-capture-m3u',
+                        lambda fp, filters=filters, std_kw=std_kw: fp.write(
+                            generate_combined_m3u(filters, base_url=base_url, via='capture', **std_kw)
+                        ),
+                    ))
                 if ah4c_url:
                     m3u_artifacts.append((
                         f'feed-{feed.slug}-fc-player-ah4c-mixed-m3u',
@@ -2045,36 +2080,46 @@ def _refresh_xml_artifacts(only_keys: set[str] | None = None) -> None:
                                                    ah4c_base_url=ah4c_url, **std_kw)
                         ),
                     ))
-            gn_kw = feed_number_kwargs(feed)
-            m3u_artifacts.append((
-                f'feed-{feed.slug}-gracenote-m3u',
-                lambda fp, filters=filters, gn_kw=gn_kw: fp.write(
-                    generate_gracenote_m3u(filters, base_url=base_url, **gn_kw)
-                ),
-            ))
-            if prismcast_ready:
+            # Gracenote halves only exist for split guide mode: a mixed-mode feed's
+            # DVR sources use the mixed playlists, so building these is wasted work.
+            if (feed.guide_mode or 'split') != 'mixed':
+                gn_kw = feed_number_kwargs(feed)
                 m3u_artifacts.append((
-                    f'feed-{feed.slug}-prismcast-gracenote-m3u',
+                    f'feed-{feed.slug}-gracenote-m3u',
                     lambda fp, filters=filters, gn_kw=gn_kw: fp.write(
-                        generate_prismcast_m3u(
-                            filters, base_url=base_url, prismcast_url=prismcast_url,
-                            inner_base_url=prismcast_inner, gracenote=True, **gn_kw)
+                        generate_gracenote_m3u(filters, base_url=base_url, **gn_kw)
                     ),
                 ))
-            if fc_player_ready:
-                m3u_artifacts.append((
-                    f'feed-{feed.slug}-fc-player-gracenote-m3u',
-                    lambda fp, filters=filters, gn_kw=gn_kw: fp.write(
-                        generate_fc_player_m3u(filters, base_url=base_url, gracenote=True, **gn_kw)
-                    ),
-                ))
-            if ah4c_url:
-                m3u_artifacts.append((
-                    f'feed-{feed.slug}-fc-player-ah4c-gracenote-m3u',
-                    lambda fp, filters=filters, gn_kw=gn_kw: fp.write(
-                        generate_fc_player_m3u(filters, base_url=base_url, gracenote=True, ah4c_base_url=ah4c_url, **gn_kw)
-                    ),
-                ))
+                if prismcast_ready:
+                    m3u_artifacts.append((
+                        f'feed-{feed.slug}-prismcast-gracenote-m3u',
+                        lambda fp, filters=filters, gn_kw=gn_kw: fp.write(
+                            generate_prismcast_m3u(
+                                filters, base_url=base_url, prismcast_url=prismcast_url,
+                                inner_base_url=prismcast_inner, gracenote=True, **gn_kw)
+                        ),
+                    ))
+                if fc_player_ready:
+                    m3u_artifacts.append((
+                        f'feed-{feed.slug}-fc-player-gracenote-m3u',
+                        lambda fp, filters=filters, gn_kw=gn_kw: fp.write(
+                            generate_fc_player_m3u(filters, base_url=base_url, gracenote=True, **gn_kw)
+                        ),
+                    ))
+                if capture_ready:
+                    m3u_artifacts.append((
+                        f'feed-{feed.slug}-capture-gracenote-m3u',
+                        lambda fp, filters=filters, gn_kw=gn_kw: fp.write(
+                            generate_capture_m3u(filters, base_url=base_url, gracenote=True, **gn_kw)
+                        ),
+                    ))
+                if ah4c_url:
+                    m3u_artifacts.append((
+                        f'feed-{feed.slug}-fc-player-ah4c-gracenote-m3u',
+                        lambda fp, filters=filters, gn_kw=gn_kw: fp.write(
+                            generate_fc_player_m3u(filters, base_url=base_url, gracenote=True, ah4c_base_url=ah4c_url, **gn_kw)
+                        ),
+                    ))
 
         # Every key the routes can serve right now, idle or not.
         live_keys = {k for k, _w in xml_artifacts} | {k for k, _w in m3u_artifacts}
