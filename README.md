@@ -223,6 +223,16 @@ recording from retuning it — and to fall back to PrismCast when it's busy — 
 limit on the source in Channels DVR; see
 [Stream limits and PrismCast fallback](docs/fc-player-setup.md#stream-limits-and-prismcast-fallback).
 
+### Built-in Capture (beta)
+
+No Android device or capture hardware? **Built-in Capture** plays DRM channels in a copy
+of Google Chrome inside the FastChannels container and records them into a normal HLS
+channel. Turn it on from the **Bridge** page; FastChannels downloads Chrome from Google
+the first time. It needs a 64-bit Intel/AMD Linux server and uses roughly one to two CPU
+cores per channel playing (less with an Intel or AMD GPU passed in). CNN, HBO Max and
+Fubo don't work with it, and Amazon plays in SD. Full guide:
+**[docs/builtin-capture.md](docs/builtin-capture.md)**.
+
 ## Configuration
 
 Source credentials and options are configured on the **Sources** page — click into any source card to expand its settings. Changes take effect on the next scrape.

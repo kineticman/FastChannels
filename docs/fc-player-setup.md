@@ -542,6 +542,9 @@ Things to get right:
   Single-port HDMI Capture can play has nowhere to roll over to and gets "tuner
   unavailable" while the card is busy.
 
+No PrismCast? [Built-in Capture](builtin-capture.md) is the other hardware-free
+option, running inside FastChannels itself.
+
 ## Troubleshooting
 
 ### Tuner Unreachable
