@@ -122,6 +122,12 @@ RUN echo "fc-player APK refresh token: ${FC_PLAYER_APK_REFRESH}" \
 ENV REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt \
     SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
 
+# Git ref the admin UI's documentation links open on GitHub (docs_url in
+# app/__init__.py). The publish workflow passes the ref it builds (main or a vX.Y.Z
+# tag, so a release links to its own docs); local builds run development.
+ARG FC_DOCS_REF=development
+ENV FC_DOCS_REF=${FC_DOCS_REF}
+
 EXPOSE 5523
 
 ENTRYPOINT ["/app/entrypoint.sh"]

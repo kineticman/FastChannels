@@ -29,19 +29,19 @@
   {% set panel = {
     'capture':   {'title': 'Built-in Capture', 'badge': 'Beta',
                   'about': 'Plays DRM channels in a browser built into FastChannels. Nothing else to run.',
-                  'links': []},
+                  'links': [('Setup guide', docs_url('builtin-capture.md'))]},
     'prismcast': {'title': 'PrismCast', 'badge': '',
                   'about': 'Uses your PrismCast server to play and capture DRM channels in a browser.',
                   'links': [('PrismCast', 'https://github.com/hjdhjd/prismcast')]},
     'hdmi':      {'title': 'Single-port HDMI Capture', 'badge': '',
                   'about': 'An Android TV device plays the channel and one HDMI capture input records it. One channel at a time.',
-                  'links': [('Setup guide', 'https://github.com/kineticman/FastChannels/blob/development/docs/fc-player-setup.md#1-set-up-and-test-single-port-hdmi-capture')]},
+                  'links': [('Setup guide', docs_url('fc-player-setup.md#1-set-up-and-test-single-port-hdmi-capture'))]},
     'ah4c':      {'title': 'ah4c Capture', 'badge': '',
                   'about': 'Several channels at once: ah4c picks an Android TV device and encoder for each one.',
-                  'links': [('Setup guide', 'https://github.com/kineticman/FastChannels/blob/development/docs/fc-player-setup.md#ah4c-capture-multi-tuner'), ('ah4c', 'https://github.com/sullrich/ah4c')]},
+                  'links': [('Setup guide', docs_url('fc-player-setup.md#ah4c-capture-multi-tuner')), ('ah4c', 'https://github.com/sullrich/ah4c')]},
     'external':  {'title': 'External tuners', 'badge': '',
                   'about': 'For tuners like APITuner that run their own Android TV devices and capture.',
-                  'links': [('External tuner API', 'https://github.com/kineticman/FastChannels/blob/development/docs/external-tuner-api.md'), ('APITuner', 'https://github.com/matthewfkoch/APITuner')]},
+                  'links': [('External tuner API', docs_url('external-tuner-api.md')), ('APITuner', 'https://github.com/matthewfkoch/APITuner')]},
   } %}
   {% set include_for = {
     'capture': 'admin/bridge/capture.html', 'prismcast': 'admin/settings/prismcast.html',

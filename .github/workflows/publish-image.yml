@@ -75,5 +75,6 @@ jobs:
           build-args: |
             YTDLP_REFRESH=${{ github.sha }}
             FC_PLAYER_APK_REFRESH=${{ github.run_id }}
+            FC_DOCS_REF=${{ github.ref_name }}
           cache-from: type=gha
           cache-to: type=gha,mode=max

@@ -126,6 +126,14 @@ def create_app(config_class=Config):
         app.config['SECRET_KEY'] = _stored_secret_key() or secrets.token_hex(32)
     _ensure_sqlite_parent_dir(app.config.get("SQLALCHEMY_DATABASE_URI"))
 
+    docs_ref = (os.environ.get('FC_DOCS_REF') or 'development').strip()
+
+    def docs_url(path: str) -> str:
+        """GitHub link to a file under docs/, on the branch or release tag this
+        image was built from (FC_DOCS_REF, set in the Dockerfile and the publish
+        workflow), so links never need editing when code moves to main."""
+        return f'https://github.com/kineticman/FastChannels/blob/{docs_ref}/docs/{path}'
+
     @app.context_processor
     def inject_version():
         from .lite import channels_for_ui, ui_context
@@ -141,6 +149,7 @@ def create_app(config_class=Config):
         return {
             'ui': ui_context(),
             'app_version': VERSION,
+            'docs_url': docs_url,
             'app_timezone_name': settings.effective_timezone_name(),
             'pending_review_count': pending_review_count,
             'update_status': get_version_status(
