@@ -174,14 +174,16 @@
                 {%- elif key == 'hdmi' %}<input type="checkbox" id="fc-player-hdmi-enabled" {% if m.enabled %}checked{% endif %} onchange="saveFcPlayerHdmiToggle()">
                 {%- elif key == 'external' %}<input type="checkbox" id="external-player-enabled" {% if m.enabled %}checked{% endif %} {% if m.locked %}disabled title="Turned on by {{ external_player_env_name }}"{% endif %} onchange="saveExternalPlayerToggle()">
                 {%- elif key == 'prismcast' %}<input type="checkbox" id="prismcast-enabled" {% if m.enabled %}checked{% endif %} onchange="savePrismcastToggle()">
-                {%- elif key == 'capture' %}<input type="checkbox" id="capture-method-toggle" {% if m.enabled %}checked{% endif %} onchange="captureMethodToggle(this)">
+                {%- elif key == 'capture' %}<input type="checkbox" id="capture-method-toggle" {% if m.enabled %}checked{% endif %} {% if m.unsupported and not m.enabled %}disabled title="Needs a 64-bit Intel or AMD server"{% endif %} onchange="captureMethodToggle(this)">
                 {%- endif %}
                 <span class="toggle-slider"></span>
               </label>
             </div>
           </div>
 
-          {% if m.paused %}
+          {% if m.unsupported and not m.enabled %}
+          <div class="bridge-note">Not available on this server: Built-in Capture needs a 64-bit Intel or AMD (x86_64) server, because Google only makes Chrome for Linux there.</div>
+          {% elif m.paused %}
           <div class="bridge-note">Paused because hardware capture is off. <button class="btn btn-secondary btn-sm" onclick="resumeHardwareCapture()">Resume</button></div>
           {% elif m.enabled and st == 'setup' and m.missing %}
           <div class="bridge-note">Still needs {{ m.missing }}.</div>

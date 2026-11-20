@@ -51,7 +51,9 @@ Then choose:
   memory above, so start with 1 or 2.
 - **Quality:** *720p 60 fps* is the default and the best fit for sports and
   news. *720p 30 fps* is lighter on a small server. The 1080p options need a
-  fast CPU or GPU encoding.
+  fast CPU: Chrome decoding a 1080p channel takes about two cores on its own,
+  even with GPU encoding. On a 4-core mini PC (Intel N95), keep 1080p to one
+  tuner; three 1080p tuners overloaded it and slowed FastChannels itself.
 - **Encoder:** leave it on *Auto*. It uses your GPU when FastChannels can see
   one, and the CPU otherwise.
 

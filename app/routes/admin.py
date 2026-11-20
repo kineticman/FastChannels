@@ -2008,6 +2008,9 @@ def _builtin_capture_method(_state) -> dict:
         # first time is what starts the download.
         'enabled': install != 'not_installed' and bool(enabled),
         'installed': install == 'installed',
+        # Google Chrome for Linux is x86_64 only: on ARM the switch is shown disabled
+        # with the reason instead of offering a download the daemon would refuse.
+        'unsupported': not capture.supported_platform(),
     }
 
 
