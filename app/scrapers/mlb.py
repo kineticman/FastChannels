@@ -14,12 +14,14 @@ media gateway's initSession:
   account as MLBTVMLBNADOBEPASS), MLB+ and MLB.TV all grant it. FastChannels
   never talks to the provider. MLB says the link can expire; the fix is
   re-linking at mlb.com/commerce/mvpd/mlb-network.
-- Team networks (SNY, SportsNet LA, Detroit SportsNet): MLB streams these
+- Team networks (SNY, SportsNet LA, Detroit SportsNet, MASN): MLB streams these
   24/7 to in-market TV-provider subscribers who link the provider at
   mlb.com/commerce/mvpd/<network>. Same path as MLB Network: an entitlement
   (SNY_121, SNLA_119, DSN), a <NET>_LIVE content collection, then
-  initPlaybackSession. Codes and collections are from EPlusTV's MLB handler,
-  which carries them; not yet verified here (issue #100).
+  initPlaybackSession. Codes are from EPlusTV's MLB handler; SNY_121 was
+  confirmed on a real account (issue #100). The gateway's ContentGroupCategory
+  enum (introspection is open) lists every live collection: MLBN, SNY, SNLA,
+  DSN, MASN, MASN_ONE and MILB_AFFILIATES (empty off season).
 - Games: MLB.TV's featured list (a public CMS feed) carries the live
   "ad hoc" game streams, tagged with the game's gamePk. On 2026-11-15 an
   account with MLB Network through a provider (no MLB.TV) played those
@@ -72,6 +74,9 @@ MLBN_LOGO = 'https://a.espncdn.com/watchespn/images/web/network_logos/channel_lo
 # listings (show, episode, synopsis, talent, live/premiere flags, show art) in its
 # Next.js data stream. The Gracenote guide cache (app/guide_cache.py) is the fallback.
 MLBN_SCHEDULE_URL = 'https://www.mlb.com/network/modules/schedule/full'
+# The same airings as plain JSON (what the MLB app reads; EPlusTV uses it). Tried
+# first; the page above is the fallback.
+MLBN_SCHEDULE_JSON_URL = 'https://mlbn.mlbstatic.com/schedule.json'
 MLBN_SCHEDULE_CACHE_KEY = 'mlbn_schedule'
 _MLBN_SCHEDULE_TTL = 6 * 3600
 _MLBN_IMAGE_FORMAT = 'w_800,h_450,c_fill,g_auto,q_auto,f_jpg'
@@ -92,7 +97,15 @@ TEAM_NETWORKS = {
     'dsn': {'name': 'Detroit SportsNet', 'entitlement': 'DSN', 'collection': 'DSN_LIVE', 'gracenote': '136329',
             'logo': 'https://tmsimg.fancybits.co/assets/s136329_ll_h15_aa.png?w=360&h=270',
             'link': 'https://www.mlb.com/commerce/mvpd/dsn',
-            'description': 'Detroit SportsNet: the Tigers and Detroit sports.'},
+            # Tigers games stay on MLB.TV proper; this feed carries Red Wings games (per EPlusTV).
+            'description': 'Detroit SportsNet: Red Wings games and Detroit sports.'},
+    # Entitlement code not seen yet (assumed MASN or MASN_<n>, like SNY_121). MASN_ONE_LIVE
+    # is MASN alone; MASN_LIVE also lists a MASN2 feed, left out: Gracenote has retired
+    # both MASN2 stations, so it would have no guide.
+    'masn': {'name': 'MASN', 'entitlement': 'MASN', 'collection': 'MASN_ONE_LIVE', 'gracenote': '59607',
+             'logo': 'https://tmsimg.fancybits.co/assets/GNLZZGG002QC98G.png?w=360&h=270',
+             'link': None,  # mlb.com has no /commerce/mvpd/masn page
+             'description': 'MASN: the Orioles and Mid-Atlantic sports.'},
 }
 NETWORK_SCHEME = 'mlb://network/'
 SNY_SCHEDULE_URL = 'https://production-api.sny.tv/production/api/cms/schedule'
@@ -429,6 +442,26 @@ _SCHEDULE_FIELDS = ('startdate', 'starttime', 'enddate', 'endtime', 'utcDate', '
                     'episodenumber', 'matid', 'airingid')
 
 
+def _trim_airings(objs) -> list[dict]:
+    """Schedule entries trimmed to the fields the guide uses, deduplicated by
+    start, oldest first."""
+    airings: dict[str, dict] = {}
+    for obj in objs:
+        if not isinstance(obj, dict) or not obj.get('utcDate'):
+            continue
+        item = {k: obj.get(k) for k in _SCHEDULE_FIELDS}
+        item['image'] = ((obj.get('thumbnail') or {}).get('templateUrl')
+                         or (obj.get('heroThumbnail') or {}).get('templateUrl'))
+        airings.setdefault(obj['utcDate'], item)
+    return [airings[k] for k in sorted(airings)]
+
+
+def mlbn_schedule_json(data) -> list[dict]:
+    """The airings in schedule.json ({"shows": [...]} or a bare list)."""
+    shows = data.get('shows') if isinstance(data, dict) else data
+    return _trim_airings(shows or [])
+
+
 def mlbn_schedule(html: str) -> list[dict]:
     """The airings in the schedule page's Next.js data stream, oldest first, trimmed
     to the fields the guide uses. Empty when the page's shape has changed."""
@@ -440,19 +473,13 @@ def mlbn_schedule(html: str) -> list[dict]:
             continue
     blob = ''.join(chunks)
     decoder = json.JSONDecoder()
-    airings: dict[str, dict] = {}
+    objs = []
     for m in re.finditer(r'\{"station":', blob):
         try:
-            obj, _ = decoder.raw_decode(blob, m.start())
+            objs.append(decoder.raw_decode(blob, m.start())[0])
         except ValueError:
             continue
-        if not obj.get('utcDate'):
-            continue
-        item = {k: obj.get(k) for k in _SCHEDULE_FIELDS}
-        item['image'] = ((obj.get('thumbnail') or {}).get('templateUrl')
-                         or (obj.get('heroThumbnail') or {}).get('templateUrl'))
-        airings.setdefault(obj['utcDate'], item)
-    return [airings[k] for k in sorted(airings)]
+    return _trim_airings(objs)
 
 
 def _airing_end(item: dict) -> datetime | None:
@@ -743,6 +770,10 @@ class MLBScraper(BaseScraper):
         except Exception as exc:  # noqa: BLE001
             logger.warning('[mlb] initSession failed: %s', exc)
             return
+        before = self.config.get('entitlements')
+        if before is not None and sorted(before) != sorted(info['entitlements']):
+            logger.info('[mlb] entitlements changed: %s -> %s', ', '.join(before) or 'none',
+                        ', '.join(info['entitlements']) or 'none')
         self._entitlements = info['entitlements']
         self._update_config('entitlements', info['entitlements'])
         self._update_config('entitlements_at', int(time.time()))
@@ -890,17 +921,25 @@ class MLBScraper(BaseScraper):
         cached = self.cache.get(MLBN_SCHEDULE_CACHE_KEY) or {}
         if time.time() - float(cached.get('fetched_at') or 0) < _MLBN_SCHEDULE_TTL and cached.get('airings'):
             return cached['airings']
+        ua = ('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) '
+              'Chrome/130.0 Safari/537.36')
+        airings = []
         try:
-            r = self.session.get(MLBN_SCHEDULE_URL, timeout=30, headers={
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) '
-                              'Chrome/130.0 Safari/537.36'})
+            r = self.session.get(MLBN_SCHEDULE_JSON_URL, timeout=30, headers={'User-Agent': ua})
             r.raise_for_status()
-            airings = mlbn_schedule(r.text)
+            airings = mlbn_schedule_json(r.json())
         except Exception as exc:  # noqa: BLE001
-            logger.warning('[mlb] MLB Network schedule unavailable: %s', exc)
-            return cached.get('airings') or []
+            logger.info('[mlb] MLB Network schedule.json unavailable, trying the page: %s', exc)
         if not airings:
-            logger.warning('[mlb] MLB Network schedule page had no listings (page changed?)')
+            try:
+                r = self.session.get(MLBN_SCHEDULE_URL, timeout=30, headers={'User-Agent': ua})
+                r.raise_for_status()
+                airings = mlbn_schedule(r.text)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning('[mlb] MLB Network schedule unavailable: %s', exc)
+                return cached.get('airings') or []
+        if not airings:
+            logger.warning('[mlb] MLB Network schedule had no listings (format changed?)')
             return cached.get('airings') or []
         self._update_cache(MLBN_SCHEDULE_CACHE_KEY, {'fetched_at': int(time.time()), 'airings': airings})
         return airings
@@ -943,9 +982,10 @@ class MLBScraper(BaseScraper):
             net = TEAM_NETWORKS.get(net_id)
             if not net:
                 raise ValueError(f'Unsupported MLB stream URL: {raw_url}')
+            fix = (f"Link your TV provider at {net['link']}" if net.get('link')
+                   else f"Link your TV provider for {net['name']} in the MLB app")
             if not has_entitlement(session['entitlements'], net['entitlement']):
-                raise TVENotAuthorizedError(
-                    f"MLB: this account has no {net['name']} access. Link your TV provider at {net['link']}")
+                raise TVENotAuthorizedError(f"MLB: this account has no {net['name']} access. {fix}")
             media_ids = live_media_ids(access, net['collection'], prefer='in-market', timeout=_PLAY_TIMEOUT)
             if not media_ids:
                 raise RuntimeError(f"MLB: {net['name']} has no live feed right now")
@@ -956,8 +996,8 @@ class MLBScraper(BaseScraper):
                 except TVENotAuthorizedError as exc:
                     refused = exc
             raise TVENotAuthorizedError(
-                f"MLB: {net['name']} isn't playable on this account (not linked, or outside its market). "
-                f"Link your TV provider at {net['link']}") from refused
+                f"MLB: {net['name']} isn't playable on this account (not linked, or outside its market). {fix}"
+            ) from refused
         if media_id is None:
             if 'MLBN' not in session['entitlements']:
                 raise TVENotAuthorizedError(
