@@ -545,10 +545,12 @@ def get_source_config(source_id):
     if source.name == 'nsn':
         extra['nsn'] = _nsn_filter_info(source, saved)
     if source.name == 'mlb':
-        from ..scrapers.mlb import RELINK_URL
+        from ..scrapers.mlb import RELINK_URL, TEAM_NETWORKS, team_networks_on
         extra['mlb'] = {'signed_in': bool(saved.get('refresh_token')),
                         'email': saved.get('email'),
                         'entitlements': saved.get('entitlements') or [],
+                        'team_networks': [TEAM_NETWORKS[c]['name']
+                                          for c in team_networks_on(saved.get('entitlements') or [])],
                         'entitlements_at': saved.get('entitlements_at'),
                         'relink_url': RELINK_URL,
                         'signin_error': saved.get('signin_error')}

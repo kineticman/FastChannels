@@ -1,4 +1,4 @@
-"""MLB (source mlb) — MLB Network and live MLB.TV games with an MLB account.
+"""MLB (source mlb) — MLB Network, team networks and live MLB.TV games with an MLB account.
 
 Scoped 2026-11-10/15 (dev/mlb/PLAN.md; HARs dev/hitlist/hars/mlb2 for MLB
 Network, dev/mlb/mlb2 for a live Mexican Pacific League game).
@@ -14,6 +14,12 @@ media gateway's initSession:
   account as MLBTVMLBNADOBEPASS), MLB+ and MLB.TV all grant it. FastChannels
   never talks to the provider. MLB says the link can expire; the fix is
   re-linking at mlb.com/commerce/mvpd/mlb-network.
+- Team networks (SNY, SportsNet LA, Detroit SportsNet): MLB streams these
+  24/7 to in-market TV-provider subscribers who link the provider at
+  mlb.com/commerce/mvpd/<network>. Same path as MLB Network: an entitlement
+  (SNY_121, SNLA_119, DSN), a <NET>_LIVE content collection, then
+  initPlaybackSession. Codes and collections are from EPlusTV's MLB handler,
+  which carries them; not yet verified here (issue #100).
 - Games: MLB.TV's featured list (a public CMS feed) carries the live
   "ad hoc" game streams, tagged with the game's gamePk. On 2026-11-15 an
   account with MLB Network through a provider (no MLB.TV) played those
@@ -70,6 +76,27 @@ MLBN_SCHEDULE_CACHE_KEY = 'mlbn_schedule'
 _MLBN_SCHEDULE_TTL = 6 * 3600
 _MLBN_IMAGE_FORMAT = 'w_800,h_450,c_fill,g_auto,q_auto,f_jpg'
 _ET = ZoneInfo('America/New_York')
+
+# Team networks, keyed by channel id. A channel appears when the account has the
+# entitlement (the code or the code plus a suffix, e.g. SNY_121); its guide is the
+# Gracenote station's, with SNY's own schedule as the fallback.
+TEAM_NETWORKS = {
+    'sny': {'name': 'SNY', 'entitlement': 'SNY', 'collection': 'SNY_LIVE', 'gracenote': '49603',
+            'logo': 'https://tmsimg.fancybits.co/assets/s49603_ll_h9_aa.png?w=360&h=270',
+            'link': 'https://www.mlb.com/commerce/mvpd/sny',
+            'description': 'SportsNet New York: the Mets, Jets and New York sports, 24/7.'},
+    'snla': {'name': 'Spectrum SportsNet LA', 'entitlement': 'SNLA', 'collection': 'SNLA_LIVE', 'gracenote': '87024',
+             'logo': 'https://tmsimg.fancybits.co/assets/s87024_ll_h15_aa.png?w=360&h=270',
+             'link': 'https://www.mlb.com/commerce/mvpd/getdodgers',
+             'description': 'Spectrum SportsNet LA: the Dodgers, 24/7.'},
+    'dsn': {'name': 'Detroit SportsNet', 'entitlement': 'DSN', 'collection': 'DSN_LIVE', 'gracenote': '136329',
+            'logo': 'https://tmsimg.fancybits.co/assets/s136329_ll_h15_aa.png?w=360&h=270',
+            'link': 'https://www.mlb.com/commerce/mvpd/dsn',
+            'description': 'Detroit SportsNet: the Tigers and Detroit sports.'},
+}
+NETWORK_SCHEME = 'mlb://network/'
+SNY_SCHEDULE_URL = 'https://production-api.sny.tv/production/api/cms/schedule'
+SNY_SCHEDULE_CACHE_KEY = 'sny_schedule'
 
 GAME_SCHEME = 'mlb://game/'
 GAME_CHANNEL_PREFIX = 'game:'
@@ -317,7 +344,8 @@ def _gateway(access: str, query: str, variables: dict, timeout=20) -> dict:
     r.raise_for_status()
     data = r.json() or {}
     errors = data.get('errors') or []
-    if errors and not data.get('data'):
+    # A refused mutation still answers {"data": {"initPlaybackSession": null}}.
+    if errors and not any((data.get('data') or {}).values()):
         msg = '; '.join(e.get('message') or '' for e in errors)
         if 'unauthori' in msg.lower():
             raise GatewayUnauthorized(msg)
@@ -338,16 +366,60 @@ def init_session(access: str, device_id: str, timeout=20) -> dict:
             'zip_code': (sess.get('location') or {}).get('zipCode')}
 
 
-def mlbn_media_id(access: str, timeout=20) -> str | None:
-    """MLB Network's live mediaId: the MLBN-A feed when it's on."""
-    data = _gateway(access, _CONTENT_COLLECTIONS, {'categories': ['MLBN_LIVE'], 'includeRestricted': True,
+def live_media_ids(access: str, collection: str, prefer: str | None = None, timeout=20) -> list[str]:
+    """The live mediaIds in a linear channel's content collection (MLBN_LIVE,
+    SNY_LIVE, ...): feeds whose state is ON, those whose assetTrackingKey
+    contains `prefer` first. Team networks list an in-market and an
+    out-of-market feed (sny-in-market-…, sny-out-market-…)."""
+    data = _gateway(access, _CONTENT_COLLECTIONS, {'categories': [collection], 'includeRestricted': True,
                                                    'includeSpoilers': True, 'limit': 25, 'skip': 0},
                     timeout=timeout)
     items = [x for col in (data.get('data') or {}).get('contentCollections') or []
              for x in col.get('contents') or []
              if x.get('mediaId') and ((x.get('mediaState') or {}).get('state') or '').upper() == 'ON']
-    items.sort(key=lambda x: not (x.get('assetTrackingKey') or '').lower().startswith('mlbn-a'))
-    return items[0]['mediaId'] if items else None
+    if prefer:
+        items.sort(key=lambda x: prefer not in (x.get('assetTrackingKey') or '').lower())
+    return [x['mediaId'] for x in items]
+
+
+def mlbn_media_id(access: str, timeout=20) -> str | None:
+    """MLB Network's live mediaId: the MLBN-A feed when it's on."""
+    ids = live_media_ids(access, 'MLBN_LIVE', prefer='mlbn-a', timeout=timeout)
+    return ids[0] if ids else None
+
+
+def has_entitlement(entitlements, code: str) -> bool:
+    return any(e == code or e.startswith(code + '_') for e in entitlements or [])
+
+
+def team_networks_on(entitlements) -> list[str]:
+    """Channel ids of the team networks these entitlements include."""
+    return [cid for cid, net in TEAM_NETWORKS.items() if has_entitlement(entitlements, net['entitlement'])]
+
+
+def sny_programs(schedule: dict, channel_id: str) -> list[ProgramData]:
+    """SNY's own schedule (day -> rows of [weekday, MM/DD/YYYY, start, end, title],
+    Eastern time). Titles only; the fallback when Gracenote has nothing."""
+    now = datetime.now(timezone.utc)
+    programs = {}
+    for day in (schedule or {}).values():
+        for row in (((day or {}).get('data') or {}).get('rows') or []):
+            try:
+                _, date, start_s, end_s, title = row[:5]
+                start = datetime.strptime(f'{date} {start_s}', '%m/%d/%Y %I:%M %p').replace(tzinfo=_ET)
+                end = datetime.strptime(f'{date} {end_s}', '%m/%d/%Y %I:%M %p').replace(tzinfo=_ET)
+            except (TypeError, ValueError):
+                continue
+            if end <= start:  # runs past midnight
+                end += timedelta(days=1)
+            # Stored in UTC: SQLite drops the zone.
+            start, end = start.astimezone(timezone.utc), end.astimezone(timezone.utc)
+            if end < now - timedelta(hours=1) or not (title or '').strip():
+                continue
+            programs.setdefault(start, ProgramData(
+                source_channel_id=channel_id, title=title.strip(), start_time=start, end_time=end,
+                category='Sports'))
+    return [programs[k] for k in sorted(programs)]
 
 
 # ── MLB Network schedule ─────────────────────────────────────────────────────
@@ -679,11 +751,14 @@ class MLBScraper(BaseScraper):
     def _include_games(self) -> bool:
         return str(self.config.get('include_games', 'false')).strip().lower() in ('1', 'true', 'yes', 'on')
 
-    def _has_mlbn(self) -> bool:
+    def _ents(self) -> list[str]:
         ents = getattr(self, '_entitlements', None)
         if ents is None:
             ents = self.config.get('entitlements') or []
-        return 'MLBN' in ents
+        return ents
+
+    def _has_mlbn(self) -> bool:
+        return 'MLBN' in self._ents()
 
     # ── channels / EPG ──
 
@@ -738,6 +813,12 @@ class MLBScraper(BaseScraper):
                 source_channel_id=MLBN_CHANNEL_ID, name='MLB Network', stream_url='mlb://mlbn',
                 slug='mlb_network', logo_url=MLBN_LOGO, category='Sports', gracenote_id=MLBN_GRACENOTE,
                 description='MLB Network, 24/7 baseball.'))
+        for cid in team_networks_on(self._ents()):
+            net = TEAM_NETWORKS[cid]
+            channels.append(ChannelData(
+                source_channel_id=cid, name=net['name'], stream_url=f'{NETWORK_SCHEME}{cid}',
+                slug=f'mlb_{cid}', logo_url=net['logo'], category='Sports', gracenote_id=net['gracenote'],
+                description=net['description']))
         if not self._include_games():
             return channels
         self._game_items = self._games()
@@ -774,6 +855,15 @@ class MLBScraper(BaseScraper):
                 from ..guide_cache import station_programs
                 mlbn = station_programs(MLBN_CHANNEL_ID, gracenote, 'mlb')
             programs.extend(mlbn)
+        for ch in channels:
+            net = TEAM_NETWORKS.get(ch.source_channel_id)
+            if not net:
+                continue
+            from ..guide_cache import station_programs
+            guide = station_programs(ch.source_channel_id, ch.gracenote_id or net['gracenote'], 'mlb')
+            if not guide and ch.source_channel_id == 'sny':
+                guide = sny_programs(self._sny_schedule(), ch.source_channel_id)
+            programs.extend(guide)
         for pk, game, item, start, end in getattr(self, '_game_items', []):
             cid = f'{GAME_CHANNEL_PREFIX}{pk}'
             if cid not in wanted:
@@ -815,13 +905,29 @@ class MLBScraper(BaseScraper):
         self._update_cache(MLBN_SCHEDULE_CACHE_KEY, {'fetched_at': int(time.time()), 'airings': airings})
         return airings
 
+    def _sny_schedule(self) -> dict:
+        cached = self.cache.get(SNY_SCHEDULE_CACHE_KEY) or {}
+        if time.time() - float(cached.get('fetched_at') or 0) < _MLBN_SCHEDULE_TTL and cached.get('schedule'):
+            return cached['schedule']
+        try:
+            r = self.session.get(SNY_SCHEDULE_URL, timeout=30, headers={'User-Agent': 'Mozilla/5.0'})
+            r.raise_for_status()
+            sched = (r.json() or {}).get('schedule') or {}
+        except Exception as exc:  # noqa: BLE001
+            logger.warning('[mlb] SNY schedule unavailable: %s', exc)
+            return cached.get('schedule') or {}
+        if sched:
+            self._update_cache(SNY_SCHEDULE_CACHE_KEY, {'fetched_at': int(time.time()), 'schedule': sched})
+        return sched or cached.get('schedule') or {}
+
     # ── playback ──
 
     def audit_resolve(self, raw_url: str) -> str:
         return raw_url
 
     def resolve(self, raw_url: str) -> str:
-        if raw_url == 'mlb://mlbn':
+        net_id = raw_url[len(NETWORK_SCHEME):] if raw_url.startswith(NETWORK_SCHEME) else None
+        if raw_url == 'mlb://mlbn' or net_id:
             media_id = None
         else:
             pk, end = parse_game_url(raw_url)
@@ -833,6 +939,25 @@ class MLBScraper(BaseScraper):
             media_id = item['_translationId']
         session = self._init_session(timeout=_PLAY_TIMEOUT)
         access = self._access_token(timeout=_PLAY_TIMEOUT)
+        if net_id:
+            net = TEAM_NETWORKS.get(net_id)
+            if not net:
+                raise ValueError(f'Unsupported MLB stream URL: {raw_url}')
+            if not has_entitlement(session['entitlements'], net['entitlement']):
+                raise TVENotAuthorizedError(
+                    f"MLB: this account has no {net['name']} access. Link your TV provider at {net['link']}")
+            media_ids = live_media_ids(access, net['collection'], prefer='in-market', timeout=_PLAY_TIMEOUT)
+            if not media_ids:
+                raise RuntimeError(f"MLB: {net['name']} has no live feed right now")
+            refused = None
+            for mid in media_ids:  # in market first; the out-of-market feed when that's refused
+                try:
+                    return self._playback_url(access, session, mid)
+                except TVENotAuthorizedError as exc:
+                    refused = exc
+            raise TVENotAuthorizedError(
+                f"MLB: {net['name']} isn't playable on this account (not linked, or outside its market). "
+                f"Link your TV provider at {net['link']}") from refused
         if media_id is None:
             if 'MLBN' not in session['entitlements']:
                 raise TVENotAuthorizedError(
@@ -840,13 +965,16 @@ class MLBScraper(BaseScraper):
             media_id = mlbn_media_id(access, timeout=_PLAY_TIMEOUT)
             if not media_id:
                 raise RuntimeError('MLB: MLB Network has no live feed right now')
+        return self._playback_url(access, session, media_id)
+
+    def _playback_url(self, access: str, session: dict, media_id: str) -> str:
         try:
             data = _gateway(access, _INIT_PLAYBACK, {
                 'adCapabilities': [], 'mediaId': media_id, 'deviceId': session['device_id'],
                 'sessionId': session['session_id'], 'quality': 'PLACEHOLDER', 'playbackCapabilities': {}},
                 timeout=_PLAY_TIMEOUT)
         except RuntimeError as exc:
-            if 'not playable' in str(exc).lower():
+            if 'not playable' in str(exc).lower() or 'not entitled' in str(exc).lower():
                 raise TVENotAuthorizedError(
                     'MLB: this stream isn\'t playable on this account (no access, blacked out, or not live)') from exc
             raise
