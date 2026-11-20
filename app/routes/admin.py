@@ -1,5 +1,6 @@
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
+import os
 import math
 import re
 import unicodedata
@@ -2166,6 +2167,7 @@ def bridge():
             and app_settings.effective_fc_player_bridge_encoder_url()
         ),
         fc_player_ah4c_configured=_fc_player_bridge.ah4c_capture_configured(app_settings),
+        capture_cpu_count=os.cpu_count() or 1,
     )
 
 

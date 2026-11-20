@@ -1,0 +1,173 @@
+  <!-- Built-in capture add-on (beta): app/capture, app/routes/capture.py -->
+  <div class="source-card" id="bridge-card-capture">
+    <div class="source-header" style="cursor:default">
+      <div class="source-title">
+        <div class="source-icon">🎥</div>
+        <div>
+          <div class="source-name">Built-in capture <span class="badge badge-beta">Beta add-on</span></div>
+          <div class="source-meta">Plays DRM channels in Chrome inside FastChannels and captures them. No extra device, container or encoder.</div>
+        </div>
+      </div>
+    </div>
+    <div class="source-body open">
+      <div class="help" style="margin-bottom:1rem">
+        Optional download (about 450 MB on your data volume): Google Chrome straight from Google, plus PulseAudio and FFmpeg.
+        Each tuner uses about 2 CPU cores and 1 GB of memory at 720p, and capture runs at lower priority than the rest of FastChannels.
+        Linux x86_64 only. Picture is software Widevine re-encoded, so for the best quality use FastChannels Player on an Android device.
+      </div>
+
+      <div id="capture-install-row" class="toggle-row" style="margin-bottom:1rem">
+        <div class="toggle-row-text">
+          <div class="toggle-row-label">Add-on: <span id="capture-install-state">checking…</span></div>
+          <div class="toggle-row-help" id="capture-install-detail"></div>
+        </div>
+        <div class="toggle-row-control" style="display:flex;gap:0.5rem;flex-wrap:wrap;justify-content:flex-end">
+          <button class="btn btn-primary" id="capture-btn-install" onclick="captureAction('install')" hidden>Install</button>
+          <button class="btn btn-secondary" id="capture-btn-update" onclick="captureAction('update-chrome')" hidden title="Download the current Google Chrome and reinstall">Update Chrome</button>
+          <button class="btn btn-secondary" id="capture-btn-uninstall" onclick="captureUninstall()" hidden>Uninstall</button>
+        </div>
+      </div>
+
+      <div id="capture-settings" hidden>
+        <div class="toggle-row" style="margin-bottom:1rem">
+          <div class="toggle-row-text">
+            <div class="toggle-row-label">Use built-in capture</div>
+            <div class="toggle-row-help">Starts the tuners and publishes the capture playlist. Bridge mode at the top of this page must also be on.</div>
+            {% if not bridge_enabled %}<div class="help" style="color:var(--warning-soft)">Bridge mode is off, so no DRM channels are marked for capture yet.</div>{% endif %}
+          </div>
+          <div class="toggle-row-control">
+            <label class="toggle-switch">
+              <input type="checkbox" id="capture-enabled" onchange="captureSaveConfig()">
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+        </div>
+        <div class="fields-grid" style="max-width:560px">
+          <div class="field">
+            <label for="capture-tuners">Tuners</label>
+            <select id="capture-tuners" onchange="captureSaveConfig()">
+              <option value="1">1</option><option value="2">2</option><option value="3">3</option><option value="4">4</option>
+            </select>
+            <div class="help">Channels that can be captured at once. This server has {{ capture_cpu_count }} CPU core{{ '' if capture_cpu_count == 1 else 's' }}.</div>
+          </div>
+          <div class="field">
+            <label for="capture-quality">Quality</label>
+            <select id="capture-quality" onchange="captureSaveConfig()">
+              <option value="720p60">720p, 60 fps (recommended)</option>
+              <option value="720p30">720p, 30 fps (lighter)</option>
+              <option value="1080p60">1080p, 60 fps</option>
+              <option value="1080p30">1080p, 30 fps</option>
+            </select>
+            <div class="help">Changes apply when no channel is being captured.</div>
+          </div>
+          <div class="field field-full">
+            <label for="capture-playlist-url">Capture playlist for your DVR</label>
+            <div style="display:flex;gap:0.5rem">
+              <input type="text" id="capture-playlist-url" readonly style="flex:1;font-family:monospace">
+              <button class="btn btn-secondary" onclick="navigator.clipboard.writeText(document.getElementById('capture-playlist-url').value)">Copy</button>
+            </div>
+            <div class="help">Add it as an HLS custom channels source next to your regular playlist; it carries only the DRM channels. Set the source's stream limit to your tuner count. Not offered: <span id="capture-incompatible"></span> (their license servers refuse Linux Chrome). Amazon channels capture in SD only (576p): Amazon licenses HD to hardware players like FastChannels Player, not to Chrome.</div>
+          </div>
+        </div>
+        <div class="help" style="margin-top:0.5rem"><strong>Tuners:</strong> <span id="capture-tuner-status">—</span></div>
+      </div>
+      <div class="field-actions"><span class="save-status" id="capture-status-msg"></span></div>
+    </div>
+  </div>
+  <script>
+  (function () {
+    const $ = (id) => document.getElementById(id);
+    let pollTimer = null;
+    let lastConfig = null;
+
+    function show(id, on) { $(id).hidden = !on; }
+
+    function render(s) {
+      const inst = s.install || {};
+      const state = inst.state || 'not_installed';
+      const action = s.action || '';
+      const labels = {not_installed: 'not installed', installing: 'installing…', installed: 'installed',
+                      failed: 'install failed', uninstalling: 'removing…'};
+      $('capture-install-state').textContent = labels[state] || state;
+      let detail = '';
+      if (!s.platform_supported) detail = 'Not available on this server: Google Chrome for Linux is x86_64 only.';
+      else if (s.service_error) detail = 'Capture service not running: ' + s.service_error;
+      else if (state === 'installed') detail = [inst.chrome_version, inst.widevine ? 'Widevine present' : 'Widevine MISSING',
+                                                inst.cache_mb ? inst.cache_mb + ' MB cached' : ''].filter(Boolean).join(' · ');
+      else detail = inst.message || '';
+      $('capture-install-detail').textContent = detail;
+
+      const busy = Boolean(action) || state === 'installing' || state === 'uninstalling';
+      show('capture-btn-install', s.platform_supported && !busy && (state === 'not_installed' || state === 'failed'));
+      $('capture-btn-install').textContent = state === 'failed' ? 'Reinstall' : 'Install';
+      show('capture-btn-update', !busy && state === 'installed');
+      show('capture-btn-uninstall', !busy && (state === 'installed' || state === 'failed'));
+      show('capture-settings', state === 'installed');
+
+      const cfg = s.config || {};
+      if (JSON.stringify(cfg) !== JSON.stringify(lastConfig)) {
+        lastConfig = cfg;
+        $('capture-enabled').checked = Boolean(cfg.enabled);
+        $('capture-tuners').value = String(cfg.max_tuners || 1);
+        $('capture-quality').value = cfg.quality || '720p60';
+      }
+      if (s.playlist_url) $('capture-playlist-url').value = s.playlist_url;
+      $('capture-incompatible').textContent = (s.incompatible_sources || []).join(', ') || 'none';
+
+      const tuners = s.tuners || [];
+      const sessions = Object.fromEntries((s.sessions || []).map((x) => [x.session, x]));
+      $('capture-tuner-status').textContent = tuners.length
+        ? tuners.map((t) => {
+            const sess = t.session && sessions[t.session];
+            let txt = `#${t.index + 1} ${t.state}`;
+            if (sess) txt += ` (channel ${sess.channel_id}, ${sess.state}${sess.video_size ? ', source ' + sess.video_size : ''})`;
+            if (t.error) txt += ` — ${t.error}`;
+            return txt;
+          }).join(' · ')
+        : (s.pool_error ? 'error — ' + s.pool_error : (cfg.enabled ? 'starting…' : 'off'));
+
+      clearTimeout(pollTimer);
+      pollTimer = setTimeout(refresh, busy || tuners.some((t) => t.state === 'starting') ? 2000 : 10000);
+    }
+
+    async function refresh() {
+      try {
+        const r = await fetch('/api/capture/status', {cache: 'no-store'});
+        render(await r.json());
+      } catch (e) {
+        $('capture-install-detail').textContent = 'Could not reach FastChannels: ' + e;
+        clearTimeout(pollTimer);
+        pollTimer = setTimeout(refresh, 10000);
+      }
+    }
+
+    window.captureAction = async function (action) {
+      $('capture-status-msg').textContent = '';
+      const r = await fetch('/api/capture/' + action, {method: 'POST'});
+      const body = await r.json().catch(() => ({}));
+      if (!r.ok || body.ok === false) $('capture-status-msg').textContent = body.message || ('Failed (HTTP ' + r.status + ')');
+      setTimeout(refresh, 500);
+    };
+
+    window.captureUninstall = function () {
+      if (confirm('Remove the built-in capture add-on? Chrome, its tuner profiles and the cached downloads are deleted.')) {
+        captureAction('uninstall');
+      }
+    };
+
+    window.captureSaveConfig = async function () {
+      const body = {
+        enabled: $('capture-enabled').checked,
+        max_tuners: Number($('capture-tuners').value),
+        quality: $('capture-quality').value,
+      };
+      const r = await fetch('/api/capture/config', {method: 'POST', headers: {'Content-Type': 'application/json'},
+                                                    body: JSON.stringify(body)});
+      $('capture-status-msg').textContent = r.ok ? 'Saved' : 'Save failed';
+      setTimeout(() => { $('capture-status-msg').textContent = ''; }, 2000);
+      setTimeout(refresh, 800);
+    };
+
+    refresh();
+  })();
+  </script>

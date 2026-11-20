@@ -4020,6 +4020,9 @@ def watch(channel_id):
         max_height=max_height,
         live_edge_sync=bool(channel.source and channel.source.name == 'philo'),
         is_fc_player_bridge=info.get('is_fc_player_bridge', False),
+        # Capture add-on (app/capture): unmuted, no overlay, exposes window.__fcCapture.
+        capture_mode=request.args.get('capture') == '1',
+        capture_height=request.args.get('h', type=int) or 0,
     ))
     resp.headers['Cache-Control'] = 'no-store'
     return resp

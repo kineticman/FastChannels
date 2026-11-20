@@ -231,6 +231,9 @@
     const license = String(opts.license || '');
     const maxHeight = Number(opts.maxHeight || 0);
     const liveEdgeSync = Boolean(opts.liveEdgeSync);
+    // Capture add-on: no ABR. Its 30 fps rungs captured at 60 judder, and a
+    // localhost link never needs to step down. See pinBestVariant() below.
+    const pinBest = Boolean(opts.pinBestVariant);
     const onStatus = opts.onStatus || function () {};
     const onError = opts.onError || function (info) { onStatus(info.message); };
     const onDrmEvent = opts.onDrmEvent || function () {};
@@ -300,11 +303,17 @@
             },
           };
         }
-        if (maxHeight > 0) {
-          shakaConfig.restrictions = { maxHeight };
-        }
+      }
+      if (maxHeight > 0 && (license || pinBest)) {
+        shakaConfig.restrictions = { maxHeight };
+      }
+      if (pinBest) {
+        // A huge estimate makes the initial pick the top rung, before
+        // pinBestVariant() settles on the highest frame rate within it.
+        shakaConfig.abr = { enabled: false, defaultBandwidthEstimate: 1e9 };
       }
       player.configure(shakaConfig);
+      if (pinBest) player.addEventListener('trackschanged', () => pinBestVariant(player));
       if (license) {
         player.getNetworkingEngine().registerRequestFilter((reqType, request) => {
           if (reqType === 2 /* LICENSE */) request.uris = [license];
@@ -351,6 +360,7 @@
       return player.load(url, null, mimeType);
     }).then(() => {
       onStatus('Stream loaded.');
+      if (pinBest) pinBestVariant(player);
       if (license) onDrmEvent({ event: 'loaded', ...drmSnapshot(player) });
       seekNearLiveEdge(player, video, {
         liveDelay: 3,
@@ -373,6 +383,23 @@
       console.error('[Shaka] load failed', err);
     });
     return player;
+  }
+
+  // Select the best playable variant and keep it: tallest (within the player's
+  // maxHeight restriction), then highest frame rate, then bitrate. Re-run on
+  // trackschanged, since multi-period streams (ad breaks) bring new variant lists.
+  function pinBestVariant(player) {
+    try {
+      const tracks = player.getVariantTracks().filter((t) => t.allowedByApplication !== false && t.allowedByKeySystem !== false);
+      if (!tracks.length) return;
+      const score = (t) => [t.height || 0, Math.round((t.frameRate || 0) * 100), t.bandwidth || 0];
+      const better = (a, b) => { const x = score(a), y = score(b); for (let i = 0; i < 3; i++) { if (x[i] !== y[i]) return x[i] > y[i]; } return false; };
+      const best = tracks.reduce((a, b) => (better(b, a) ? b : a));
+      const active = tracks.find((t) => t.active);
+      if (!active || active.id !== best.id) player.selectVariantTrack(best, true);
+    } catch (e) {
+      console.warn('[Shaka] pinBestVariant failed', e);
+    }
   }
 
   // Render onError's info into a status element: the message, plus a

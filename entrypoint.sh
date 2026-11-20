@@ -157,6 +157,14 @@ done) &
 done) &
 echo "✅ Worker roles started (scheduler, scraper, fast, maintenance)"
 
+# Built-in capture add-on (app/capture). Idles until someone installs it from the
+# Bridge page; reinstalls its cached packages itself after a container recreate.
+(while true; do
+    python -m app.capture.daemon
+    echo "⚠ Capture service exited (code $?) — restarting in 5s"
+    sleep 5
+done) &
+
 GUNICORN_WORKERS="${GUNICORN_WORKERS:-2}"
 GUNICORN_MAX_REQUESTS="${GUNICORN_MAX_REQUESTS:-250}"
 GUNICORN_MAX_REQUESTS_JITTER="${GUNICORN_MAX_REQUESTS_JITTER:-50}"

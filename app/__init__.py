@@ -237,6 +237,7 @@ def create_app(config_class=Config):
     from .routes.play import play_bp
     from .routes.images import images_bp
     from .routes.external_player import external_player_bp
+    from .routes.capture import capture_bp
 
     app.register_blueprint(output_bp)
     # Split out of a single 6,000+ line api.py (2026-08-25) into per-domain
@@ -257,6 +258,7 @@ def create_app(config_class=Config):
     app.register_blueprint(admin_bp, url_prefix='/admin')
     app.register_blueprint(play_bp)   # /play/<source>/<id>.m3u8
     app.register_blueprint(images_bp) # /images/proxy
+    app.register_blueprint(capture_bp) # built-in capture add-on: /m3u/capture, /play/capture, /api/capture
 
     from flask import redirect, url_for
 

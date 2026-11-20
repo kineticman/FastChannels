@@ -40,6 +40,13 @@ DRM_BRIDGE_TRUSTED_SOURCES = frozenset({
 })
 
 
+def _builtin_capture_serves(source_name: str) -> bool:
+    """Built-in capture add-on (app/capture) installed and on, and this source's
+    license server accepts Linux Chrome."""
+    from . import capture
+    return capture.is_active() and source_name not in capture.INCOMPATIBLE_SOURCES
+
+
 def drm_bridge_mode_for(source_name: str) -> bool:
     """Whether a DRM channel on this source should be kept active + bridged rather than
     disabled — true only when the global Bridge policy is on and at least one enabled
@@ -50,6 +57,8 @@ def drm_bridge_mode_for(source_name: str) -> bool:
     if not bool(settings.bridge_enabled):
         return False
     if settings.prismcast_capture_configured():
+        return True
+    if _builtin_capture_serves(source_name):
         return True
     if source_name not in DRM_BRIDGE_TRUSTED_SOURCES:
         return False
@@ -67,6 +76,8 @@ def active_bridge_label(source_name: str) -> str:
     prismcast = settings.prismcast_capture_configured()
     fc_player = (source_name in DRM_BRIDGE_TRUSTED_SOURCES
                  and fc_player_bridge.hardware_bridge_active(settings))
+    if not prismcast and not fc_player and _builtin_capture_serves(source_name):
+        return 'Built-in capture'
     if prismcast and fc_player:
         return 'PrismCast + FastChannels Player'
     if fc_player:

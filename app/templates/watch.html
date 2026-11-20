@@ -78,10 +78,15 @@
       transition: opacity 0.3s;
     }
     #cc-indicator.show { opacity: 1; }
+    /* Capture add-on (app/capture): the page is the picture, so no chrome at all. */
+    body.capture, body.capture * { cursor: none !important; }
+    body.capture #overlay, body.capture #status, body.capture #cc-indicator { display: none !important; }
   </style>
 </head>
-<body>
-  <video id="player" playsinline autoplay muted></video>
+<body{% if capture_mode %} class="capture"{% endif %}>
+  {#- Capture mode starts unmuted: the capture add-on's Chrome runs with
+      --autoplay-policy=no-user-gesture-required, so no click is needed. -#}
+  <video id="player" playsinline autoplay{% if not capture_mode %} muted{% endif %}></video>
 
   <div id="overlay">
     {% if channel.logo_display_url %}
@@ -115,6 +120,8 @@
     const IS_FC_PLAYER_BRIDGE = {{ is_fc_player_bridge | default(false) | tojson }};
     const FC_PLAYER_SOURCE     = {{ (channel.source.name if channel.source else '') | tojson }};
     const FC_PLAYER_CHANNEL_ID = {{ (channel.source_channel_id or '') | tojson }};
+    const CAPTURE_MODE = {{ capture_mode | default(false) | tojson }};
+    const CAPTURE_HEIGHT = {{ capture_height | default(0) | tojson }};
   </script>
   {#- The default compiled build strips shaka.log entirely (it's a no-op), so it can
       never explain *why* Shaka did something. In debug mode load the debug build,
@@ -198,8 +205,35 @@
       hint.className = 'hint error';
     }
 
+    // Capture add-on handshake: app/capture/daemon.py polls this over the DevTools
+    // protocol to know when video is really playing (start FFmpeg), stalled or
+    // failed (reload / report). Harmless when nobody reads it.
+    window.__fcCapture = { state: 'loading', error: null };
+    function _captureSnapshot() {
+      const q = video.getVideoPlaybackQuality ? video.getVideoPlaybackQuality() : null;
+      const st = window.__fcCapture;
+      st.current_time = Number((video.currentTime || 0).toFixed(3));
+      st.ready_state = video.readyState;
+      st.paused = video.paused;
+      st.video_size = `${video.videoWidth || 0}x${video.videoHeight || 0}`;
+      st.decoded = q ? q.totalVideoFrames : null;
+      st.dropped = q ? q.droppedVideoFrames : null;
+      st.muted = video.muted;
+    }
+    function _captureError(msg) {
+      window.__fcCapture.state = 'error';
+      window.__fcCapture.error = String(msg || 'playback error').slice(0, 300);
+    }
+    video.addEventListener('playing', () => {
+      if (window.__fcCapture.state !== 'error') window.__fcCapture.state = 'playing';
+    });
+    setInterval(_captureSnapshot, 1000);
+
     function onPlayerError(info) {
       const { phase, err } = info;
+      if (phase !== 'event' || (err && err.severity === 2)) {
+        _captureError((info && info.message) || (err && (err.code ? 'Shaka error ' + err.code : err.message)) || phase);
+      }
       emitWatchDebug('player-error', {
         phase,
         code: err && err.code,
@@ -238,7 +272,10 @@
         mode: PLAYBACK_MODE,
         type: STREAM_TYPE,
         license: LICENSE_URL,
-        maxHeight: MAX_HEIGHT,
+        // Capture: don't decode more than the capture keeps (720p capture of a
+        // 1080p30 rung would lose to 720p60), and never let ABR pick a 30 fps rung.
+        maxHeight: (CAPTURE_MODE && CAPTURE_HEIGHT) ? CAPTURE_HEIGHT : MAX_HEIGHT,
+        pinBestVariant: CAPTURE_MODE,
         liveEdgeSync: LIVE_EDGE_SYNC,
         onLiveEdgeSeek: (info) => emitWatchDebug('live-edge-seek', info),
         // fc_player deliberately omits license material, key IDs, and session IDs
@@ -261,6 +298,7 @@
     }
 
     function activateFullscreen() {
+      if (CAPTURE_MODE) return;
       if (PLAYBACK_MODE === 'unsupported' || !PLAY_URL) return;
       if (overlay.classList.contains('hidden')) return;
       emitWatchDebug('activate-fullscreen', { viewport: `${window.innerWidth}x${window.innerHeight}`, screen: `${screen.width}x${screen.height}`, visibility: document.visibilityState, activation: Boolean(navigator.userActivation && navigator.userActivation.isActive) });
@@ -293,7 +331,7 @@
         screen: `${screen.width}x${screen.height}`,
         visibility: document.visibilityState,
       });
-      if (!document.fullscreenElement) overlay.classList.remove('hidden');
+      if (!document.fullscreenElement && !CAPTURE_MODE) overlay.classList.remove('hidden');
     });
     window.addEventListener('resize', () => {
       emitWatchDebug('resize', { viewport: `${window.innerWidth}x${window.innerHeight}`, fullscreen: Boolean(document.fullscreenElement) });
@@ -374,6 +412,9 @@
       }
     });
 
+    if (CAPTURE_MODE && (PLAYBACK_MODE === 'unsupported' || !PLAY_URL)) {
+      _captureError(PLAY_URL ? 'stream type not supported for browser playback' : 'no playable URL for this channel');
+    }
     initPlayer();
 
     // FastChannels Player idle-stop watchdog's other signal (app/fc_player_bridge.py's

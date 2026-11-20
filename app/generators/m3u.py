@@ -1615,7 +1615,8 @@ def _prismcast_bridge_ts_url(ch, base_url: str) -> str:
 def generate_prismcast_m3u(filters: dict = None, base_url: str = None, *,
                            prismcast_url: str, inner_base_url: str = None,
                            feed_chnum_start: int = None, namespace_start: int = None,
-                           feed_id: int = None, gracenote: bool | None = False, ts: bool = False) -> str:
+                           feed_id: int = None, gracenote: bool | None = False, ts: bool = False,
+                           bridge_url_for=None, exclude_sources: frozenset = frozenset()) -> str:
     """
     Bridge-only PrismCast playlist: exactly the DRM channels a normal client can't
     play (browser/EME required), wrapped through PrismCast's `/play?url=` endpoint
@@ -1648,6 +1649,11 @@ def generate_prismcast_m3u(filters: dict = None, base_url: str = None, *,
                       `/play?url=` trigger directly. Non-bridged entries are
                       unaffected — they're already whatever container the direct
                       /play proxy serves.
+    bridge_url_for  — callable(ch) -> URL for DRM-bridged entries, replacing the
+                      PrismCast URL; the built-in capture add-on uses this
+                      (app/routes/capture.py). prismcast_url is then unused.
+    exclude_sources — source names to leave out entirely (sources whose license
+                      servers refuse that capture method).
     """
     filters  = filters or {}
     base_url = (base_url or '').rstrip('/')
@@ -1668,6 +1674,8 @@ def generate_prismcast_m3u(filters: dict = None, base_url: str = None, *,
     _seen = set()
     for ch in _build_channel_query(_drm_bridge_query_filters(filters), activity='drm_bridge').all():
         if ch.id in _seen or not _prismcast_capturable(ch):
+            continue
+        if exclude_sources and ch.source and ch.source.name in exclude_sources:
             continue
         if gracenote and not _parse_gracenote_id(ch):
             continue
@@ -1720,8 +1728,11 @@ def generate_prismcast_m3u(filters: dict = None, base_url: str = None, *,
         _append_experimental_stream_attrs(attrs, _s)
         lines.append(f'#EXTINF:-1 {" ".join(attrs)},{_sanitize(display_name)}')
         if _needs_prismcast_bridge(ch) and _prismcast_capturable(ch):
-            lines.append(_prismcast_bridge_ts_url(ch, base_url) if ts
-                         else _prismcast_bridge_url(ch, prismcast_url, inner_base_url))
+            if bridge_url_for is not None:
+                lines.append(bridge_url_for(ch))
+            else:
+                lines.append(_prismcast_bridge_ts_url(ch, base_url) if ts
+                             else _prismcast_bridge_url(ch, prismcast_url, inner_base_url))
         else:
             # Non-DRM → direct play proxy, same URL the standard M3U emits.
             lines.append(_channel_play_url(ch, base_url))
