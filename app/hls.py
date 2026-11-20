@@ -352,6 +352,10 @@ def rewrite_playlist(text: str, base_url: str, map_url=None) -> str:
     names straight from the CDN.
 
     A master playlist's URL lines are 'playlist'; a media playlist's are 'segment'.
+
+    Blank lines are dropped. HLS ignores them, but Channels DVR's parser
+    (grafov/m3u8) reads one as a segment URI and panics when it follows a header
+    EXT-X-MAP before the first segment, as NCAA's Warner playlists have it.
     """
     from urllib.parse import urljoin
 
@@ -365,7 +369,9 @@ def rewrite_playlist(text: str, base_url: str, map_url=None) -> str:
     out = []
     for line in text.splitlines():
         stripped = line.strip()
-        if stripped and not stripped.startswith('#'):
+        if not stripped:
+            continue
+        if not stripped.startswith('#'):
             line = resolve(stripped, line_kind)
         elif stripped.startswith('#') and 'URI="' in stripped:
             kind = next((k for tag, k in _URI_ATTR_KINDS if stripped.startswith(tag)), None)

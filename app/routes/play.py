@@ -3391,6 +3391,16 @@ def play(source_name: str, channel_id: str):
             302,
         )
 
+    # NCAA 24/7: Warner's variant playlists have a blank line after the header
+    # EXT-X-MAP that panics Channels DVR's parser; the relay drops it.
+    if source_name == 'ncaa' and channel.source_channel_id.startswith('station:'):
+        from urllib.parse import quote as _quote
+        encoded_id = _quote(channel.source_channel_id, safe='')
+        return redirect(
+            f"{request.host_url.rstrip('/')}/play/ncaa/{encoded_id}/proxy.m3u8",
+            302,
+        )
+
     # TBS/TNT/truTV/TCM: their Akamai tokens break in clients that normalize URL
     # escapes, so everything below the master goes through the proxy.
     if source_name == 'warner_tve':

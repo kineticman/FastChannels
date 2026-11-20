@@ -196,6 +196,12 @@ class NCAAScraper(BaseScraper):
     # Games are events (an upcoming one has nothing to audit); audit_candidates
     # leaves them out and the audit checks the 24/7 channels.
     stream_audit_enabled = True
+    # The 24/7 channels' Warner playlists (dacis) have a blank line after the
+    # header EXT-X-MAP, which panics Channels DVR's HLS parser. The play route
+    # sends station channels to proxy.m3u8; the relay serves the dacis playlists
+    # with blank lines dropped, and segments still load from the clips CDN.
+    browser_master_proxy = True
+    browser_relay_hosts = frozenset({'dacis.warnermediacdn.com'})
     config_schema = [
         ConfigField('disabled_game_sports', 'Game sports', field_type='checklist',
                     options=[{'value': s, 'label': s} for s in _FILTER_SPORTS] + [{'value': 'Other', 'label': 'Other sports'}],
