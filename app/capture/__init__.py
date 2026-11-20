@@ -67,7 +67,23 @@ DEFAULT_CONFIG = {
     'enabled': True,
     'max_tuners': 1,
     'quality': '720p60',
+    'encoder': 'auto',      # 'auto' = GPU (VA-API) when /dev/dri works, else x264; 'cpu' = x264 only
 }
+ENCODERS = ('auto', 'cpu')
+
+# VA-API H.264 needs ~1.5x x264-veryfast's bitrate for the same quality (2026-11-19
+# A/B on Intel N95 Quick Sync vs a lossless reference: 6M 41.8 dB, 9M ~44 dB, x264 6M 42.8 dB).
+GPU_BITRATE_FACTOR = 1.5
+
+
+def render_node() -> str | None:
+    """The first DRM render node passed into the container, if any. Docker only
+    exposes one when the compose file maps /dev/dri, so this is the user's opt-in."""
+    try:
+        nodes = sorted(n for n in os.listdir('/dev/dri') if n.startswith('renderD'))
+    except OSError:
+        return None
+    return f'/dev/dri/{nodes[0]}' if nodes else None
 
 MAX_TUNERS_LIMIT = 4
 
@@ -116,6 +132,8 @@ def normalize_config(cfg: dict) -> dict:
     out['max_tuners'] = max(1, min(MAX_TUNERS_LIMIT, tuners))
     quality = cfg.get('quality')
     out['quality'] = quality if quality in QUALITY_PRESETS else out['quality']
+    encoder = cfg.get('encoder')
+    out['encoder'] = encoder if encoder in ENCODERS else out['encoder']
     return out
 
 

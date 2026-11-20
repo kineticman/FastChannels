@@ -15,6 +15,11 @@ services:
     volumes:
       - db_data:/data
       - adb_keys:/root/.android
+    # Optional: Intel/AMD GPU for the Built-in capture add-on's hardware encoder
+    # (Bridge page). Uncomment only if your host has /dev/dri — Docker refuses to
+    # start the container if the device is missing.
+    # devices:
+    #   - /dev/dri:/dev/dri
     restart: unless-stopped
 
 volumes:

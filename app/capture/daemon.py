@@ -37,7 +37,7 @@ import requests
 
 from . import (CHROME_BIN, DAEMON_HOST, DAEMON_PORT, PROFILES_DIR, HOME_DIR,
                INCOMPATIBLE_SOURCES, QUALITY_PRESETS, SESSION_ROOT, WATCH_BASE,
-               read_config, read_status, supported_platform)
+               GPU_BITRATE_FACTOR, read_config, read_status, render_node, supported_platform)
 from . import installer
 
 logger = logging.getLogger('app.capture')
@@ -103,7 +103,7 @@ def _page_state(port: int) -> dict | None:
 # ── process helpers ───────────────────────────────────────────────────────────
 
 def _spawn(cmd: list[str], *, uid: int, gid: int, env: dict, nice: int = 0,
-           stdout=subprocess.DEVNULL, log_name: str = '') -> subprocess.Popen:
+           stdout=subprocess.DEVNULL, log_name: str = '', groups=()) -> subprocess.Popen:
     def _preexec():
         os.setsid()
         if nice:
@@ -111,7 +111,7 @@ def _spawn(cmd: list[str], *, uid: int, gid: int, env: dict, nice: int = 0,
     stderr = subprocess.DEVNULL
     if log_name:
         stderr = open(os.path.join(RUN_DIR, f'{log_name}.log'), 'ab')
-    proc = subprocess.Popen(cmd, env=env, user=uid, group=gid, extra_groups=[],
+    proc = subprocess.Popen(cmd, env=env, user=uid, group=gid, extra_groups=list(groups),
                             stdout=stdout, stderr=stderr, preexec_fn=_preexec, close_fds=True)
     if log_name:
         stderr.close()
@@ -147,6 +147,69 @@ def _base_env(uid_home: str) -> dict:
         'PULSE_SERVER': f'unix:{PULSE_SOCKET}',
         'LANG': 'C.UTF-8',
     }
+
+
+# ── encoder ───────────────────────────────────────────────────────────────────
+
+# What FFmpeg encodes with; decided when the pool starts (detect_encoder) and read
+# by every session. 'vaapi' = GPU H.264 through the render node, else 'x264'.
+ENCODER: dict = {'kind': 'x264', 'reason': 'not checked yet'}
+
+
+def detect_encoder(uid: int, gid: int, setting: str) -> dict:
+    """GPU encoding when the user passed a render node in and it really works for the
+    capture user: test-encode a few frames, first on the low-power fixed-function
+    encoder (Intel VDEnc), then the standard entrypoint (AMD, older Intel). Any
+    failure means x264, with the reason shown on the Bridge page."""
+    if setting == 'cpu':
+        return {'kind': 'x264', 'reason': 'CPU only (set on the Bridge page)'}
+    device = render_node()
+    if not device:
+        return {'kind': 'x264', 'reason': 'no GPU passed to the container (/dev/dri)'}
+    if not installer.gpu_drivers_present():
+        return {'kind': 'x264', 'reason': 'GPU drivers not installed yet (Reinstall the add-on)'}
+    dgid = os.stat(device).st_gid
+    err = ''
+    for low_power in (True, False):
+        cmd = ['ffmpeg', '-hide_banner', '-loglevel', 'verbose', '-nostdin',
+               '-f', 'lavfi', '-i', 'testsrc2=size=1280x720:rate=30', '-frames:v', '10',
+               '-vaapi_device', device, '-vf', 'format=nv12,hwupload', '-c:v', 'h264_vaapi',
+               *(['-low_power', '1'] if low_power else []), '-b:v', '4000k', '-f', 'null', '-']
+        try:
+            proc = subprocess.run(cmd, env=_base_env(HOME_DIR), user=uid, group=gid, extra_groups=[dgid],
+                                  capture_output=True, text=True, timeout=30)
+        except Exception as e:
+            err = str(e)
+            continue
+        if proc.returncode == 0:
+            driver = next((l.split('driver:', 1)[1].strip() for l in proc.stderr.splitlines()
+                           if 'VAAPI driver:' in l or 'VA-API driver:' in l), '')
+            enc = {'kind': 'vaapi', 'device': device, 'gid': dgid, 'low_power': low_power,
+                   'driver': driver or 'VA-API', 'reason': ''}
+            logger.info('[capture] GPU encoding on %s (%s%s)', device, enc['driver'],
+                        ', low-power' if low_power else '')
+            return enc
+        err = (proc.stderr.strip().splitlines() or ['unknown error'])[-1]
+    logger.warning('[capture] GPU encode test failed on %s, using CPU: %s', device, err)
+    return {'kind': 'x264', 'reason': f'GPU encode test failed: {err[:200]}'}
+
+
+def _video_encoder_args(t: 'Tuner', enc: dict) -> tuple[list[str], list[str]]:
+    """(global args before the inputs, video output args) for this tuner's preset."""
+    gop = t.fps * 2
+    gop_args = ['-g', str(gop), '-keyint_min', str(gop)]
+    if enc.get('kind') == 'vaapi':
+        kbps = int(t.kbps * GPU_BITRATE_FACTOR)
+        return (['-vaapi_device', enc['device']],
+                # Colour conversion on the GPU too: CPU-side format=nv12 cost ~2x the CPU.
+                ['-vf', 'hwupload,scale_vaapi=format=nv12', '-c:v', 'h264_vaapi',
+                 *(['-low_power', '1'] if enc.get('low_power') else []),
+                 '-b:v', f'{kbps}k', '-maxrate', f'{kbps}k', '-bufsize', f'{kbps * 2}k', *gop_args])
+    # No -tune zerolatency: it drops B-frames and lookahead (~0.6 dB at the same
+    # bitrate in the 2026-11-19 A/B) and buys nothing with 2 s HLS segments.
+    return ([], ['-c:v', 'libx264', '-preset', 'veryfast', '-pix_fmt', 'yuv420p',
+                 '-b:v', f'{t.kbps}k', '-maxrate', f'{t.kbps}k', '-bufsize', f'{t.kbps * 2}k',
+                 *gop_args, '-sc_threshold', '0'])
 
 
 # ── tuners ────────────────────────────────────────────────────────────────────
@@ -280,6 +343,8 @@ class Session:
         self.ffmpeg: subprocess.Popen | None = None
         self.reloads = 0
         self.video_size = ''
+        self.encoder: dict = {}
+        self.ffmpeg_started = 0.0
         self._stop = threading.Event()
 
     def touch(self) -> None:
@@ -294,6 +359,7 @@ class Session:
         return {'session': self.id, 'channel_id': self.channel_id, 'state': self.state,
                 'error': self.error, 'tuner': self.tuner.index, 'dir': self.dir,
                 'video_size': self.video_size, 'reloads': self.reloads,
+                'encoder': self.encoder.get('kind', ''),
                 'age_s': int(time.time() - self.created),
                 'idle_s': int(time.monotonic() - self.last_touch)}
 
@@ -339,34 +405,47 @@ class Session:
         raise RuntimeError(f'video did not start within {TUNE_TIMEOUT_SECONDS}s '
                            f'(last page state: {(last or {}).get("state", "none")})')
 
-    def _start_ffmpeg(self) -> None:
+    def _start_ffmpeg(self, enc: dict | None = None) -> None:
         t = self.tuner
-        gop = t.fps * 2
+        self.encoder = enc = dict(enc or ENCODER)
+        pre, video = _video_encoder_args(t, enc)
         cmd = [
-            'ffmpeg', '-hide_banner', '-loglevel', 'warning', '-nostdin',
+            'ffmpeg', '-hide_banner', '-loglevel', 'warning', '-nostdin', *pre,
             '-thread_queue_size', '1024', '-f', 'x11grab', '-draw_mouse', '0',
             '-framerate', f'{t.fps * 1000}/1001', '-video_size', f'{t.width}x{t.height}', '-i', f':{t.display}',
             '-thread_queue_size', '1024', '-f', 'pulse', '-i', f'{t.sink}.monitor',
-            '-map', '0:v', '-map', '1:a',
-            # No -tune zerolatency: it drops B-frames and lookahead (~0.6 dB at the same
-            # bitrate in the 2026-11-19 A/B) and buys nothing with 2 s HLS segments.
-            '-c:v', 'libx264', '-preset', 'veryfast', '-pix_fmt', 'yuv420p',
-            '-b:v', f'{t.kbps}k', '-maxrate', f'{t.kbps}k', '-bufsize', f'{t.kbps * 2}k',
-            '-g', str(gop), '-keyint_min', str(gop), '-sc_threshold', '0',
+            '-map', '0:v', '-map', '1:a', *video,
             '-c:a', 'aac', '-b:a', '160k', '-ar', '48000', '-ac', '2',
             '-f', 'hls', '-hls_time', '2', '-hls_list_size', '8',
             '-hls_flags', 'delete_segments+independent_segments+omit_endlist',
             '-hls_segment_filename', os.path.join(self.dir, 'seg_%06d.ts'),
             os.path.join(self.dir, 'index.m3u8'),
         ]
+        self.ffmpeg_started = time.monotonic()
         self.ffmpeg = _spawn(cmd, uid=t.uid, gid=t.gid, env=t.env, nice=NICE_FFMPEG,
-                             log_name=f'ffmpeg{t.index}')
+                             log_name=f'ffmpeg{t.index}',
+                             groups=[enc['gid']] if enc.get('kind') == 'vaapi' else ())
 
     def _watch(self) -> None:
         """Keep the session healthy until it's stopped or goes idle."""
         last_time, last_progress, last_reload = None, time.monotonic(), 0.0
         while not self._stop.wait(5):
             if self.ffmpeg and self.ffmpeg.poll() is not None:
+                if (self.encoder.get('kind') == 'vaapi'
+                        and time.monotonic() - self.ffmpeg_started < 30):
+                    # The pool's test encode passed but the real one died at once:
+                    # stop using the GPU until the next pool start, keep this session.
+                    code = self.ffmpeg.returncode
+                    logger.warning('[capture] GPU encoder exited (code %s) on session %s — '
+                                   'switching to CPU encoding', code, self.id)
+                    ENCODER.clear()
+                    ENCODER.update(kind='x264', reason=f'GPU encoder failed during capture (exit {code}); '
+                                                       f'see {RUN_DIR}/ffmpeg{self.tuner.index}.log')
+                    shutil.rmtree(self.dir, ignore_errors=True)
+                    os.makedirs(self.dir, exist_ok=True)
+                    os.chown(self.dir, self.tuner.uid, self.tuner.gid)
+                    self._start_ffmpeg(dict(ENCODER))
+                    continue
                 raise RuntimeError(f'ffmpeg exited (code {self.ffmpeg.returncode}); '
                                    f'see {RUN_DIR}/ffmpeg{self.tuner.index}.log')
             if not self.tuner.alive():
@@ -453,7 +532,7 @@ class CaptureService:
         cfg = read_config()
         if not cfg['enabled']:
             return None
-        return (cfg['max_tuners'], cfg['quality'])
+        return (cfg['max_tuners'], cfg['quality'], cfg['encoder'])
 
     def reconcile(self) -> None:
         if self.busy_action:
@@ -501,7 +580,7 @@ class CaptureService:
             t.failed_at = time.monotonic()
 
     def start_pool(self, key: tuple) -> None:
-        tuners, quality = key
+        tuners, quality, encoder_setting = key
         try:
             self.uid, self.gid = installer.ensure_capture_user()
             os.makedirs(RUN_DIR, exist_ok=True)
@@ -511,6 +590,9 @@ class CaptureService:
             os.chmod('/tmp/.X11-unix', 0o1777)
             os.makedirs(SESSION_ROOT, exist_ok=True)
             self._start_pulse(tuners)
+            enc = detect_encoder(self.uid, self.gid, encoder_setting)
+            ENCODER.clear()
+            ENCODER.update(enc)
         except Exception as e:
             self.pool_error = f'could not start audio: {e}'
             logger.error('[capture] %s', self.pool_error)
@@ -642,6 +724,7 @@ class CaptureService:
                 'action': self.busy_action,
                 'config': read_config(),
                 'pool_error': self.pool_error,
+                'encoder': {k: v for k, v in ENCODER.items() if k != 'gid'},
                 'tuners': [t.describe() for t in self.tuners],
                 'sessions': [s.describe() for s in self.sessions.values()],
                 'incompatible_sources': sorted(INCOMPATIBLE_SOURCES),

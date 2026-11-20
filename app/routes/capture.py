@@ -8,7 +8,7 @@ Public (DVR clients can't sign in):
 Admin:
     GET  /api/capture/status
     POST /api/capture/install | uninstall | update-chrome
-    POST /api/capture/config             {enabled, max_tuners, quality}
+    POST /api/capture/config             {enabled, max_tuners, quality, encoder}
 
 The playlist route is the session's keep-alive: the daemon stops a capture once
 nobody has fetched its playlist for ~45 s. Segments are served from SESSION_ROOT
@@ -181,7 +181,7 @@ def capture_action(action: str):
     if action == 'config':
         data = request.get_json(silent=True) or {}
         cfg = capture.read_config()
-        cfg.update({k: data[k] for k in ('enabled', 'max_tuners', 'quality') if k in data})
+        cfg.update({k: data[k] for k in ('enabled', 'max_tuners', 'quality', 'encoder') if k in data})
         cfg = capture.write_config(cfg)
         capture.daemon_request('POST', '/reconcile', timeout=3)
         return jsonify({'ok': True, 'config': cfg})

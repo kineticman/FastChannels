@@ -60,6 +60,18 @@
             </select>
             <div class="help">Changes apply when no channel is being captured.</div>
           </div>
+          <div class="field">
+            <label for="capture-encoder">Encoder</label>
+            <select id="capture-encoder" onchange="captureSaveConfig()">
+              <option value="auto">Auto (GPU when available)</option>
+              <option value="cpu">CPU only</option>
+            </select>
+            <div class="help">In use: <span id="capture-encoder-status">—</span></div>
+          </div>
+          <div class="field">
+            <label>GPU encoding</label>
+            <div class="help" style="margin-top:0.25rem">Cuts capture CPU use several times over on Intel (Quick Sync) and AMD. Add <code>devices: ["/dev/dri:/dev/dri"]</code> to the FastChannels service in your compose file and recreate the container; the add-on installs the drivers itself and falls back to CPU if the GPU test fails. NVIDIA isn't supported.</div>
+          </div>
           <div class="field field-full">
             <label for="capture-playlist-url">Capture playlist for your DVR</label>
             <div style="display:flex;gap:0.5rem">
@@ -81,6 +93,7 @@
     let lastConfig = null;
 
     function show(id, on) { $(id).hidden = !on; }
+    function tunersRunning(s) { return (s.tuners || []).some((t) => t.state !== 'stopped' && t.state !== 'error'); }
 
     function render(s) {
       const inst = s.install || {};
@@ -110,8 +123,13 @@
         $('capture-enabled').checked = Boolean(cfg.enabled);
         $('capture-tuners').value = String(cfg.max_tuners || 1);
         $('capture-quality').value = cfg.quality || '720p60';
+        $('capture-encoder').value = cfg.encoder || 'auto';
       }
       if (s.playlist_url) $('capture-playlist-url').value = s.playlist_url;
+      const enc = s.encoder || {};
+      $('capture-encoder-status').textContent = !tunersRunning(s) ? '—'
+        : enc.kind === 'vaapi' ? `GPU (${enc.driver || 'VA-API'}${enc.low_power ? ', low-power' : ''})`
+        : `CPU (x264)${enc.reason ? ' — ' + enc.reason : ''}`;
       $('capture-incompatible').textContent = (s.incompatible_sources || []).join(', ') || 'none';
 
       const tuners = s.tuners || [];
@@ -160,6 +178,7 @@
         enabled: $('capture-enabled').checked,
         max_tuners: Number($('capture-tuners').value),
         quality: $('capture-quality').value,
+        encoder: $('capture-encoder').value,
       };
       const r = await fetch('/api/capture/config', {method: 'POST', headers: {'Content-Type': 'application/json'},
                                                     body: JSON.stringify(body)});

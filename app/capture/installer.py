@@ -20,13 +20,17 @@ import time
 import requests
 
 from . import (ADDON_DIR, CHROME_BIN, DEBS_DIR, HOME_DIR, PROFILES_DIR,
-               read_status, supported_platform, write_status)
+               read_status, render_node, supported_platform, write_status)
 
 logger = logging.getLogger(__name__)
 
 CHROME_DEB_URL = 'https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb'
 CHROME_DEB = os.path.join(DEBS_DIR, 'google-chrome-stable_current_amd64.deb')
 APT_PACKAGES = ('pulseaudio', 'ffmpeg')
+# VA-API drivers for hardware encoding, installed only when a GPU is passed in:
+# Intel (iHD, Broadwell and newer) and AMD (Mesa radeonsi; tiny, since Chrome's
+# dependencies already bring Mesa's gallium libraries). NVIDIA has no VA-API encoder.
+GPU_PACKAGES = ('intel-media-va-driver', 'mesa-va-drivers')
 CAPTURE_USER = 'fccapture'
 
 _APT_ENV = dict(os.environ, DEBIAN_FRONTEND='noninteractive')
@@ -63,9 +67,22 @@ def widevine_present() -> bool:
     return os.path.exists('/opt/google/chrome/WidevineCdm/manifest.json')
 
 
+def _deb_installed(pkg: str) -> bool:
+    out = subprocess.run(['dpkg-query', '-W', '-f=${Status}', pkg], capture_output=True, text=True).stdout
+    return 'install ok installed' in out
+
+
+def gpu_drivers_present() -> bool:
+    return all(_deb_installed(p) for p in GPU_PACKAGES)
+
+
 def packages_present() -> bool:
-    return (os.path.exists(CHROME_BIN) and shutil.which('pulseaudio') is not None
+    """Everything the add-on needs in this container layer. With a GPU passed in,
+    that includes the VA-API drivers, so adding /dev/dri to an existing install
+    gets them on the next boot through the same reinstall path."""
+    base = (os.path.exists(CHROME_BIN) and shutil.which('pulseaudio') is not None
             and shutil.which('ffmpeg') is not None and shutil.which('Xvfb') is not None)
+    return base and (render_node() is None or gpu_drivers_present())
 
 
 def ensure_capture_user() -> tuple[int, int]:
@@ -123,8 +140,9 @@ def _apt_install(progress) -> None:
     progress('Updating package lists')
     _run(['apt-get', 'update', '-q'], timeout=300)
     progress('Installing Chrome, PulseAudio and FFmpeg')
+    gpu = GPU_PACKAGES if render_node() else ()
     _run(['apt-get', 'install', '-y', '-q', '--no-install-recommends', '-o', cache,
-          *APT_PACKAGES, CHROME_DEB], timeout=1800)
+          *APT_PACKAGES, *gpu, CHROME_DEB], timeout=1800)
     # Keep the cache (that's the point of DEBS_DIR) but drop the package lists from
     # the container layer, like the Dockerfile does.
     shutil.rmtree('/var/lib/apt/lists', ignore_errors=True)
