@@ -1899,6 +1899,10 @@ def _bridge_methods(settings) -> list[dict]:
 
     `state` walks the setup chain: 'off' (untouched) → 'setup' (started, still
     missing something) → 'ready' (usable, but global Bridge mode is off) → 'live'.
+    `enabled` is the method's own on/off switch (the tile toggle); a method that is
+    switched off has its settings card collapsed. `paused` marks a Player method
+    switched on while the shared hardware-capture flag is off (a state the old
+    page's master toggle could leave behind).
     """
     player_on = bool(settings.fc_player_bridge_enabled)
     adb = settings.effective_fc_player_bridge_adb_address()
@@ -1922,19 +1926,19 @@ def _bridge_methods(settings) -> list[dict]:
             'label': 'ah4c Capture',
             'state': _state(bool(settings.fc_player_bridge_ah4c_enabled or ah4c_url),
                             _fc_player_bridge.ah4c_capture_configured(settings)),
-            'missing': _missing([('hardware capture toggle', player_on),
-                                 ('ah4c Capture toggle', settings.fc_player_bridge_ah4c_enabled),
-                                 ('ah4c server URL', ah4c_url)]),
+            'missing': _missing([('ah4c server URL', ah4c_url)]),
+            'enabled': bool(settings.fc_player_bridge_ah4c_enabled),
+            'paused': bool(settings.fc_player_bridge_ah4c_enabled) and not player_on,
         },
         {
             'key': 'hdmi',
             'label': 'Single-port HDMI Capture',
             'state': _state(bool(settings.fc_player_bridge_hdmi_enabled or encoder_url),
                             _fc_player_bridge.hdmi_capture_configured(settings)),
-            'missing': _missing([('hardware capture toggle', player_on),
-                                 ('Single-port HDMI Capture toggle', settings.fc_player_bridge_hdmi_enabled),
-                                 ('device IP', adb),
+            'missing': _missing([('device IP', adb),
                                  ('capture stream URL', encoder_url)]),
+            'enabled': bool(settings.fc_player_bridge_hdmi_enabled),
+            'paused': bool(settings.fc_player_bridge_hdmi_enabled) and not player_on,
         },
         {
             'key': 'external',
@@ -1944,14 +1948,16 @@ def _bridge_methods(settings) -> list[dict]:
             'state': _state(_fc_player_bridge.external_player_configured(settings),
                             _fc_player_bridge.external_player_configured(settings)),
             'missing': '',
+            'enabled': _fc_player_bridge.external_player_configured(settings),
+            'locked': bool(_fc_player_bridge.external_player_token_from_env()),
         },
         {
             'key': 'prismcast',
             'label': 'PrismCast Capture',
             'state': _state(bool(settings.prismcast_enabled or prismcast_url),
                             bool(settings.prismcast_enabled and prismcast_url)),
-            'missing': _missing([('PrismCast Capture toggle', settings.prismcast_enabled),
-                                 ('server URL', prismcast_url)]),
+            'missing': _missing([('server URL', prismcast_url)]),
+            'enabled': bool(settings.prismcast_enabled),
         },
         _builtin_capture_method(_state),
     ]
@@ -1966,16 +1972,18 @@ def _builtin_capture_method(_state) -> dict:
     enabled = capture.read_config().get('enabled', False)
     missing = []
     if install == 'installing':
-        missing.append('install to finish')
+        missing.append('the download to finish')
     elif install == 'failed':
-        missing.append('a successful install (Reinstall)')
-    elif install == 'installed' and not enabled:
-        missing.append('Use built-in capture toggle')
+        missing.append('a successful install (Reinstall below)')
     return {
         'key': 'capture',
         'label': 'Built-in Capture',
         'state': _state(install != 'not_installed', install == 'installed' and enabled),
         'missing': ', '.join(missing),
+        # On = installed (or installing/failed) and switched on. Switching it on the
+        # first time is what starts the download.
+        'enabled': install != 'not_installed' and bool(enabled),
+        'installed': install == 'installed',
     }
 
 

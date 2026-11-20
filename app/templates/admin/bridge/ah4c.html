@@ -1,23 +1,16 @@
 <!-- ah4c Capture (multi-tuner) card -->
 <div class="source-card" id="bridge-card-ah4c">
-  <div class="source-header" style="cursor:default">
+  <div class="source-header" data-collapsible style="cursor:pointer">
     <div class="source-title">
       <div class="source-icon">📡</div>
       <div>
-        <div class="source-name">ah4c Capture</div>
+        <div class="source-name">ah4c Capture{% if not methods_by_key.ah4c.enabled %} <span class="bridge-card-off">Off</span>{% endif %}</div>
         <div class="source-meta">Let ah4c allocate a tuner, FastChannels Player device, and encoder for each concurrent tune</div>
       </div>
     </div>
   </div>
-  <div class="source-body open">
+  <div class="source-body{% if methods_by_key.ah4c.enabled %} open{% endif %}">
     <div class="help" style="margin-bottom:12px">Use ah4c when several channels may run at once or each Fire TV/Android TV has its own encoder. ah4c selects the assigned <code>TUNERn_IP</code>; the exported scripts forward that device address to FastChannels for every tune.</div>
-    <div class="toggle-row">
-      <div class="toggle-row-text">
-        <div class="toggle-row-label">Enable ah4c Capture</div>
-        <div class="toggle-row-help">Publishes a separate ah4c Capture M3U on the Feeds page. Each tune uses ah4c’s assigned tuner instead of the Single-port HDMI Capture stream. Turning this on also turns on hardware capture above.</div>
-      </div>
-      <div class="toggle-row-control"><label class="toggle-switch"><input type="checkbox" id="fc-player-ah4c-enabled" {% if fc_player_ah4c_enabled %}checked{% endif %} onchange="saveFcPlayerAh4cToggle()"><span class="toggle-slider"></span></label></div>
-    </div>
     <div class="fields-grid" style="max-width:480px;margin-top:12px">
       <div class="field field-full">
         <label for="fc-player-ah4c-url">ah4c server URL</label>

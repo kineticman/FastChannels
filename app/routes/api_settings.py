@@ -409,6 +409,14 @@ def app_settings():
                 and not row.fc_player_bridge_enabled):
             row.fc_player_bridge_enabled = True
             bridge_mode_changed = True
+        # ...and the reverse: with both switched off nothing uses the Player through
+        # adb, so the shared flag goes off too. The Bridge page has no separate master
+        # switch any more; the method toggles are the whole story.
+        if (('fc_player_hdmi_enabled' in data or 'fc_player_ah4c_enabled' in data)
+                and not row.fc_player_bridge_hdmi_enabled and not row.fc_player_bridge_ah4c_enabled
+                and row.fc_player_bridge_enabled):
+            row.fc_player_bridge_enabled = False
+            bridge_mode_changed = True
         bridge_mode_changed |= hardware_capture_was_active != fc_player_bridge.hardware_bridge_active(row)
         bridge_mode_changed |= prismcast_was_active != row.prismcast_capture_configured()
         if bridge_mode_changed:

@@ -1,15 +1,15 @@
   <!-- Built-in capture add-on (beta): app/capture, app/routes/capture.py -->
   <div class="source-card" id="bridge-card-capture">
-    <div class="source-header" style="cursor:default">
+    <div class="source-header" data-collapsible style="cursor:pointer">
       <div class="source-title">
         <div class="source-icon">🎥</div>
         <div>
-          <div class="source-name">Built-in capture <span class="badge badge-beta">Beta</span></div>
+          <div class="source-name">Built-in capture <span class="badge badge-beta">Beta</span>{% if not methods_by_key.capture.enabled %} <span class="bridge-card-off">Off</span>{% endif %}</div>
           <div class="source-meta">Plays DRM channels in a browser built into FastChannels. Nothing else to set up.</div>
         </div>
       </div>
     </div>
-    <div class="source-body open">
+    <div class="source-body{% if methods_by_key.capture.enabled %} open{% endif %}">
       <div class="help" id="capture-intro" style="margin-bottom:1rem" hidden>
         Downloads about 250 MB (Google Chrome and a few helpers). Each channel playing uses one or two CPU cores.
       </div>
@@ -27,18 +27,7 @@
       </div>
 
       <div id="capture-settings" hidden>
-        <div class="toggle-row" style="margin-bottom:1rem">
-          <div class="toggle-row-text">
-            <div class="toggle-row-label">Use built-in capture</div>
-            {% if not bridge_enabled %}<div class="toggle-row-help" style="color:var(--warning-soft)">Bridge mode (top of this page) needs to be on too.</div>{% endif %}
-          </div>
-          <div class="toggle-row-control">
-            <label class="toggle-switch">
-              <input type="checkbox" id="capture-enabled" onchange="captureSaveConfig()">
-              <span class="toggle-slider"></span>
-            </label>
-          </div>
-        </div>
+        {% if not bridge_enabled %}<div class="help" style="color:var(--warning-soft);margin-bottom:0.75rem">Bridge mode (top of this page) needs to be on too.</div>{% endif %}
         <div class="fields-grid" style="max-width:560px">
           <div class="field">
             <label for="capture-tuners">Tuners</label>
@@ -121,7 +110,6 @@
       const cfg = s.config || {};
       if (JSON.stringify(cfg) !== JSON.stringify(lastConfig)) {
         lastConfig = cfg;
-        $('capture-enabled').checked = Boolean(cfg.enabled);
         $('capture-tuners').value = String(cfg.max_tuners || 1);
         $('capture-quality').value = cfg.quality || '720p60';
         $('capture-encoder').value = cfg.encoder || 'auto';
@@ -172,6 +160,28 @@
       setTimeout(refresh, 500);
     };
 
+    // The Methods tile switch. Off -> on the first time downloads the add-on;
+    // afterwards it just starts/stops the tuners. The page reloads so the tile and
+    // this card's collapsed state follow.
+    window.captureMethodToggle = async function (box) {
+      const on = box.checked;
+      let status = {};
+      try { status = await (await fetch('/api/capture/status', {cache: 'no-store'})).json(); } catch (e) {}
+      const installed = (status.install || {}).state === 'installed';
+      if (on && !installed && (status.install || {}).state !== 'installing') {
+        if (!confirm('Turn on Built-in Capture? This downloads about 250 MB (Google Chrome and a few helpers).')) {
+          box.checked = false;
+          return;
+        }
+      }
+      const cfg = Object.assign({}, status.config || {}, {enabled: on});
+      await fetch('/api/capture/config', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(cfg)});
+      if (on && !installed && (status.install || {}).state !== 'installing') {
+        await fetch('/api/capture/install', {method: 'POST'});
+      }
+      setTimeout(() => location.reload(), 600);
+    };
+
     window.captureUninstall = function () {
       if (confirm('Remove the built-in capture add-on? Chrome, its tuner profiles and the cached downloads are deleted.')) {
         captureAction('uninstall');
@@ -180,7 +190,7 @@
 
     window.captureSaveConfig = async function () {
       const body = {
-        enabled: $('capture-enabled').checked,
+        enabled: lastConfig ? Boolean(lastConfig.enabled) : true,
         max_tuners: Number($('capture-tuners').value),
         quality: $('capture-quality').value,
         encoder: $('capture-encoder').value,

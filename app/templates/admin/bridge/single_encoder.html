@@ -1,23 +1,16 @@
 <!-- Single-port HDMI Capture / FastChannels Player companion card -->
 <div class="source-card" id="bridge-card-single-encoder">
-  <div class="source-header" style="cursor:default">
+  <div class="source-header" data-collapsible style="cursor:pointer">
     <div class="source-title">
       <div class="source-icon">📲</div>
       <div>
-        <div class="source-name">Single-port HDMI Capture</div>
+        <div class="source-name">Single-port HDMI Capture{% if not methods_by_key.hdmi.enabled %} <span class="bridge-card-off">Off</span>{% endif %}</div>
         <div class="source-meta">Single stream — one FastChannels Player device captured through one fixed HDMI encoder</div>
       </div>
     </div>
   </div>
-  <div class="source-body open">
+  <div class="source-body{% if methods_by_key.hdmi.enabled %} open{% endif %}">
     <div class="help" style="color:var(--warning-soft)">Best for one concurrent stream. The FastChannels Player companion app runs on a Fire TV or Android TV device; its HDMI output is captured back into your DVR through a fixed encoder URL.</div>
-    <div class="toggle-row" style="margin-top:12px">
-      <div class="toggle-row-text">
-        <div class="toggle-row-label">Enable Single-port HDMI Capture</div>
-        <div class="toggle-row-help">Publishes the Single-port HDMI Capture M3U on the Feeds page once the device IP and capture stream URL below are saved. Turning this on also turns on hardware capture above.</div>
-      </div>
-      <div class="toggle-row-control"><label class="toggle-switch"><input type="checkbox" id="fc-player-hdmi-enabled" {% if fc_player_hdmi_enabled %}checked{% endif %} onchange="saveFcPlayerHdmiToggle()"><span class="toggle-slider"></span></label></div>
-    </div>
     <div class="fields-grid" style="max-width:480px;margin-top:12px">
       <div class="field field-full">
         <label for="fc-player-ip">Single-port HDMI Capture device IP</label>

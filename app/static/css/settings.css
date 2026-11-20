@@ -624,6 +624,24 @@
       color: var(--warning-soft);
       border-color: color-mix(in srgb, var(--warning-soft) 45%, var(--border));
     }
+    /* Methods tiles: grouped, each with its own on/off switch. */
+    .bridge-method-group-label {
+      margin: 0.2rem 0 0.5rem; color: var(--text-muted); font-size: 0.78rem; font-weight: 600;
+    }
+    .bridge-method-group-label + .bridge-method-grid { margin-top: 0; }
+    .bridge-method-head .toggle-switch { flex-shrink: 0; margin-top: -0.1rem; }
+    .bridge-method-disabled { background: transparent; }
+    .bridge-method-disabled .bridge-method-title { color: var(--text-soft); }
+    .bridge-method-disabled p { color: var(--text-muted); }
+    .bridge-method p .bridge-state { margin-right: 0.35rem; }
+    .bridge-method p .btn-sm { padding: 0.15rem 0.55rem; font-size: 0.74rem; margin-left: 0.35rem; }
+    /* Settings cards for methods that are off: collapsed, marked, still clickable. */
+    .bridge-card-off {
+      display: inline-block; margin-left: 0.4rem; padding: 0.05rem 0.45rem; vertical-align: 0.1em;
+      border: 1px solid var(--border); border-radius: 999px;
+      color: var(--text-muted); font-size: 0.68rem; font-weight: 600;
+    }
+    .bridge-method-cards .source-header[data-collapsible]:has(+ .source-body:not(.open)) { opacity: 0.8; }
     .bridge-method-cards { display: grid; gap: 1.5rem; margin-bottom: 1.5rem; }
     .bridge-method-cards .source-card { margin: 0; scroll-margin-top: 4.5rem; }
     .bridge-cov-wrap { overflow-x: auto; }

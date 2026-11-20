@@ -1,29 +1,16 @@
   <!-- External tuners (APITuner and similar): /api/external-player/v1 -->
   <div class="source-card" id="bridge-card-external">
-    <div class="source-header" style="cursor:default">
+    <div class="source-header" data-collapsible style="cursor:pointer">
       <div class="source-title">
         <div class="source-icon">🔌</div>
         <div>
-          <div class="source-name">External tuners <span class="badge badge-beta">APITuner and others</span></div>
+          <div class="source-name">External tuners <span class="badge badge-beta">APITuner and others</span>{% if not methods_by_key.external.enabled %} <span class="bridge-card-off">Off</span>{% endif %}</div>
           <div class="source-meta">Let a tuner that controls its own devices and HDMI encoder use FastChannels Player</div>
         </div>
       </div>
     </div>
-    <div class="source-body open">
-      <div class="toggle-row" style="margin-bottom:1rem">
-        <div class="toggle-row-text">
-          <div class="toggle-row-label">Allow external tuners</div>
-          <div class="toggle-row-help">The tuner gets the bridge channel list, the details to start FastChannels Player for a channel, and the guide. It starts the Player and captures the picture itself; FastChannels never connects to its devices. Bridge mode above must also be on.</div>
-          {% if external_player_enabled and not bridge_enabled %}<div class="help" style="color:var(--warning-soft)">Turn on Bridge mode at the top of this page, or DRM channels won't be marked for the tuner.</div>{% endif %}
-        </div>
-        <div class="toggle-row-control">
-          <label class="toggle-switch" {% if external_player_token_from_env %}title="Turned on by {{ external_player_env_name }}"{% endif %}>
-            <input type="checkbox" id="external-player-enabled" {% if external_player_enabled %}checked{% endif %}
-                   {% if external_player_token_from_env %}disabled{% endif %} onchange="saveExternalPlayerToggle()">
-            <span class="toggle-slider"></span>
-          </label>
-        </div>
-      </div>
+    <div class="source-body{% if methods_by_key.external.enabled %} open{% endif %}">
+      {% if external_player_enabled and not bridge_enabled %}<div class="help" style="color:var(--warning-soft);margin-bottom:0.75rem">Turn on Bridge mode at the top of this page, or DRM channels won't be marked for the tuner.</div>{% endif %}
       {% if external_player_enabled %}
       <div class="fields-grid" style="max-width:560px">
         <div class="field field-full">
