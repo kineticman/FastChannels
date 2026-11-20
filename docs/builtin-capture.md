@@ -78,7 +78,10 @@ section has a **Built-in** tab with two ways to add it:
 
 Feeds in *Separate standard + Gracenote playlists* mode get two Built-in
 playlists (standard and Gracenote), like their regular ones; the button adds
-both.
+both, each with the tuner count as its limit. Channels DVR counts the two
+separately, so between them they can ask for more streams than you have tuners
+(FastChannels turns the extras away). *One mixed playlist* mode avoids that with
+a single source.
 
 **Adding it by hand:** copy the URLs from the Built-in tab and add them as a
 custom channels source with stream format **HLS**, the feed's EPG URL as the

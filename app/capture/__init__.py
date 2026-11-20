@@ -206,8 +206,16 @@ def is_installed() -> bool:
 
 
 def is_active() -> bool:
-    """Installed and switched on: the capture playlist and /play/capture routes serve."""
-    return is_installed() and read_config().get('enabled', False)
+    """Switched on and installed, or being (re)installed: the capture playlists and
+    /play/capture routes serve, and DRM channels count it as a bridge.
+
+    'installing' counts so an Update Chrome or the reinstall after a container
+    update doesn't read as the add-on going away: that would re-run DRM bridge
+    eligibility and, where Built-in Capture is the only method, disable every DRM
+    channel for a minute. Tunes during it get "tuners are starting".
+    """
+    return (read_status().get('state') in ('installed', 'installing')
+            and read_config().get('enabled', False))
 
 
 def daemon_request(method: str, path: str, *, timeout: float = 5.0, **kwargs):
