@@ -266,6 +266,12 @@ def _video_encoder_args(t: 'Tuner', enc: dict) -> tuple[list[str], list[str]]:
     """(global args before the inputs, video output args) for this tuner's preset."""
     gop = t.fps * 2
     gop_args = ['-g', str(gop), '-keyint_min', str(gop)]
+    # x11grab tags its frames as RGB, and the GPU encoders carry that into the
+    # H.264 VUI (matrix "gbr"). Channels DVR copies that value into a
+    # `-colorspace gbr` transcode option, which FFmpeg's parser rejects, so every
+    # remote/transcoded play failed. Tag what we actually emit: BT.709 limited.
+    color_args = ['-colorspace', 'bt709', '-color_primaries', 'bt709',
+                  '-color_trc', 'bt709', '-color_range', 'tv']
     if enc.get('kind') == 'nvenc':
         # x11grab's bgr0 goes straight in: NVENC converts on the GPU. Same bitrate
         # headroom as VA-API until someone measures NVENC against x264 (experimental).
@@ -273,19 +279,20 @@ def _video_encoder_args(t: 'Tuner', enc: dict) -> tuple[list[str], list[str]]:
         return ([], ['-c:v', 'h264_nvenc', '-preset', 'p5', '-tune', 'hq', '-profile:v', 'high',
                      '-rc', 'vbr', '-spatial-aq', '1',
                      '-b:v', f'{kbps}k', '-maxrate', f'{kbps}k', '-bufsize', f'{kbps * 2}k',
-                     '-forced-idr', '1', *gop_args])
+                     '-forced-idr', '1', *gop_args, *color_args])
     if enc.get('kind') == 'vaapi':
         kbps = int(t.kbps * GPU_BITRATE_FACTOR)
         return (['-vaapi_device', enc['device']],
                 # Colour conversion on the GPU too: CPU-side format=nv12 cost ~2x the CPU.
-                ['-vf', 'hwupload,scale_vaapi=format=nv12', '-c:v', 'h264_vaapi',
-                 *(['-low_power', '1'] if enc.get('low_power') else []),
-                 '-b:v', f'{kbps}k', '-maxrate', f'{kbps}k', '-bufsize', f'{kbps * 2}k', *gop_args])
+                ['-vf', 'hwupload,scale_vaapi=format=nv12:out_color_matrix=bt709:out_range=tv',
+                 '-c:v', 'h264_vaapi', *(['-low_power', '1'] if enc.get('low_power') else []),
+                 '-b:v', f'{kbps}k', '-maxrate', f'{kbps}k', '-bufsize', f'{kbps * 2}k',
+                 *gop_args, *color_args])
     # No -tune zerolatency: it drops B-frames and lookahead (~0.6 dB at the same
     # bitrate in the 2026-11-19 A/B) and buys nothing with 2 s HLS segments.
     return ([], ['-c:v', 'libx264', '-preset', 'veryfast', '-pix_fmt', 'yuv420p',
                  '-b:v', f'{t.kbps}k', '-maxrate', f'{t.kbps}k', '-bufsize', f'{t.kbps * 2}k',
-                 *gop_args, '-sc_threshold', '0'])
+                 *gop_args, '-sc_threshold', '0', *color_args])
 
 
 # ── tuners ────────────────────────────────────────────────────────────────────
