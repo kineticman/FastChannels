@@ -12,6 +12,8 @@ services:
     # start the container if the device is missing.
     # devices:
     #   - /dev/dri:/dev/dri
+    # NVIDIA instead (experimental, needs the NVIDIA Container Toolkit): see
+    # docs/builtin-capture.md for the runtime/environment lines.
     restart: unless-stopped
 
 volumes:

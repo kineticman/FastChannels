@@ -157,48 +157,122 @@ def _base_env(uid_home: str) -> dict:
 ENCODER: dict = {'kind': 'x264', 'reason': 'not checked yet'}
 
 
+def nvidia_present() -> bool:
+    """An NVIDIA GPU handed to the container by the NVIDIA Container Toolkit
+    (runtime: nvidia / --gpus), which creates /dev/nvidiactl and mounts the host
+    driver's libraries (libnvidia-encode needs NVIDIA_DRIVER_CAPABILITIES to
+    include 'video')."""
+    return os.path.exists('/dev/nvidiactl') or (os.environ.get('NVIDIA_VISIBLE_DEVICES') or 'void') not in ('void', 'none', '')
+
+
+def _nvidia_gids() -> list[int]:
+    # /dev/nvidia* are normally world-writable; pass their group in case a host isn't.
+    gids = set()
+    for dev in ('/dev/nvidiactl', '/dev/nvidia0', '/dev/nvidia-uvm'):
+        try:
+            gids.add(os.stat(dev).st_gid)
+        except OSError:
+            pass
+    return sorted(gids)
+
+
+def _try_encoder(uid: int, gid: int, groups: list[int], video_args: list[str]) -> tuple[bool, str]:
+    """Test-encode a few frames as the capture user. (ok, ffmpeg's stderr)."""
+    cmd = ['ffmpeg', '-hide_banner', '-loglevel', 'verbose', '-nostdin',
+           '-f', 'lavfi', '-i', 'testsrc2=size=1280x720:rate=30', '-frames:v', '10',
+           *video_args, '-f', 'null', '-']
+    try:
+        proc = subprocess.run(cmd, env=_base_env(HOME_DIR), user=uid, group=gid, extra_groups=groups,
+                              capture_output=True, text=True, timeout=30)
+    except Exception as e:
+        return False, str(e)
+    return proc.returncode == 0, proc.stderr
+
+
+def _last_line(stderr: str) -> str:
+    return ((stderr or '').strip().splitlines() or ['unknown error'])[-1][:200]
+
+
+def _nvenc_reason(stderr: str) -> str:
+    """Why the NVENC test failed, in words a user can act on. FFmpeg's last line is
+    a generic "Conversion failed!"; the cause is earlier."""
+    lines = (stderr or '').splitlines()
+    if any('Cannot load lib' in l for l in lines):
+        return ("NVIDIA driver libraries aren't available in the container (is the NVIDIA "
+                "Container Toolkit set up, with NVIDIA_DRIVER_CAPABILITIES including compute,video?)")
+    for key in ('No capable devices', 'OpenEncodeSessionEx', 'not supported', 'out of memory', 'Error'):
+        hit = next((l.strip() for l in lines if key in l), None)
+        if hit:
+            return hit[:200]
+    return _last_line(stderr)
+
+
 def detect_encoder(uid: int, gid: int, setting: str) -> dict:
-    """GPU encoding when the user passed a render node in and it really works for the
-    capture user: test-encode a few frames, first on the low-power fixed-function
-    encoder (Intel VDEnc), then the standard entrypoint (AMD, older Intel). Any
-    failure means x264, with the reason shown on the Bridge page."""
+    """GPU encoding when a GPU was passed into the container and it really works for
+    the capture user, else x264 with the reason shown on the Bridge page:
+
+      1. Intel/AMD through VA-API (/dev/dri): the low-power fixed-function encoder
+         (Intel VDEnc) first, then the standard entrypoint (AMD, older Intel).
+      2. NVIDIA through NVENC (NVIDIA Container Toolkit). EXPERIMENTAL: written
+         without NVIDIA hardware to test on, so it's only trusted after the same
+         test encode, and an early failure in a real session falls back to x264.
+    """
     if setting == 'cpu':
         return {'kind': 'x264', 'reason': 'CPU only (set on the Bridge page)'}
+    reasons = []
     device = render_node()
-    if not device:
-        return {'kind': 'x264', 'reason': 'no GPU passed to the container (/dev/dri)'}
-    if not installer.gpu_drivers_present():
-        return {'kind': 'x264', 'reason': 'GPU drivers not installed yet (Reinstall the add-on)'}
-    dgid = os.stat(device).st_gid
-    err = ''
-    for low_power in (True, False):
-        cmd = ['ffmpeg', '-hide_banner', '-loglevel', 'verbose', '-nostdin',
-               '-f', 'lavfi', '-i', 'testsrc2=size=1280x720:rate=30', '-frames:v', '10',
-               '-vaapi_device', device, '-vf', 'format=nv12,hwupload', '-c:v', 'h264_vaapi',
-               *(['-low_power', '1'] if low_power else []), '-b:v', '4000k', '-f', 'null', '-']
-        try:
-            proc = subprocess.run(cmd, env=_base_env(HOME_DIR), user=uid, group=gid, extra_groups=[dgid],
-                                  capture_output=True, text=True, timeout=30)
-        except Exception as e:
-            err = str(e)
-            continue
-        if proc.returncode == 0:
-            driver = next((l.split('driver:', 1)[1].strip() for l in proc.stderr.splitlines()
-                           if 'VAAPI driver:' in l or 'VA-API driver:' in l), '')
-            enc = {'kind': 'vaapi', 'device': device, 'gid': dgid, 'low_power': low_power,
-                   'driver': driver or 'VA-API', 'reason': ''}
-            logger.info('[capture] GPU encoding on %s (%s%s)', device, enc['driver'],
-                        ', low-power' if low_power else '')
-            return enc
-        err = (proc.stderr.strip().splitlines() or ['unknown error'])[-1]
-    logger.warning('[capture] GPU encode test failed on %s, using CPU: %s', device, err)
-    return {'kind': 'x264', 'reason': f'GPU encode test failed: {err[:200]}'}
+    if device and not installer.gpu_drivers_present():
+        reasons.append('GPU drivers not installed yet (Reinstall the add-on)')
+    elif device:
+        dgid = os.stat(device).st_gid
+        for low_power in (True, False):
+            ok, err = _try_encoder(uid, gid, [dgid], [
+                '-vaapi_device', device, '-vf', 'format=nv12,hwupload', '-c:v', 'h264_vaapi',
+                *(['-low_power', '1'] if low_power else []), '-b:v', '4000k'])
+            if ok:
+                driver = next((l.split('driver:', 1)[1].strip() for l in err.splitlines()
+                               if 'VAAPI driver:' in l or 'VA-API driver:' in l), '')
+                enc = {'kind': 'vaapi', 'device': device, 'gid': dgid, 'low_power': low_power,
+                       'driver': driver or 'VA-API', 'reason': ''}
+                logger.info('[capture] GPU encoding on %s (%s%s)', device, enc['driver'],
+                            ', low-power' if low_power else '')
+                return enc
+        reasons.append(f'GPU encode test failed: {_last_line(err)}')
+        logger.warning('[capture] VA-API encode test failed on %s: %s', device, _last_line(err))
+    if nvidia_present():
+        groups = _nvidia_gids()
+        ok, err = _try_encoder(uid, gid, groups, ['-pix_fmt', 'bgr0', '-c:v', 'h264_nvenc', '-b:v', '4000k'])
+        if ok:
+            logger.info('[capture] GPU encoding on NVIDIA (NVENC, experimental)')
+            return {'kind': 'nvenc', 'driver': 'NVIDIA NVENC', 'groups': groups, 'reason': ''}
+        reasons.append(f'NVIDIA encode test failed: {_nvenc_reason(err)}')
+        logger.warning('[capture] NVENC encode test failed, using CPU: %s', _nvenc_reason(err))
+    if not reasons:
+        reasons.append('no GPU passed to the container')
+    return {'kind': 'x264', 'reason': '; '.join(reasons)}
+
+
+def _encoder_groups(enc: dict) -> list[int]:
+    """Supplementary groups the capture user needs for this encoder's device nodes."""
+    if enc.get('kind') == 'vaapi':
+        return [enc['gid']]
+    if enc.get('kind') == 'nvenc':
+        return list(enc.get('groups') or [])
+    return []
 
 
 def _video_encoder_args(t: 'Tuner', enc: dict) -> tuple[list[str], list[str]]:
     """(global args before the inputs, video output args) for this tuner's preset."""
     gop = t.fps * 2
     gop_args = ['-g', str(gop), '-keyint_min', str(gop)]
+    if enc.get('kind') == 'nvenc':
+        # x11grab's bgr0 goes straight in: NVENC converts on the GPU. Same bitrate
+        # headroom as VA-API until someone measures NVENC against x264 (experimental).
+        kbps = int(t.kbps * GPU_BITRATE_FACTOR)
+        return ([], ['-c:v', 'h264_nvenc', '-preset', 'p5', '-tune', 'hq', '-profile:v', 'high',
+                     '-rc', 'vbr', '-spatial-aq', '1',
+                     '-b:v', f'{kbps}k', '-maxrate', f'{kbps}k', '-bufsize', f'{kbps * 2}k',
+                     '-forced-idr', '1', *gop_args])
     if enc.get('kind') == 'vaapi':
         kbps = int(t.kbps * GPU_BITRATE_FACTOR)
         return (['-vaapi_device', enc['device']],
@@ -434,14 +508,14 @@ class Session:
         self.ffmpeg_started = time.monotonic()
         self.ffmpeg = _spawn(cmd, uid=t.uid, gid=t.gid, env=t.env, nice=NICE_FFMPEG,
                              log_name=f'ffmpeg{t.index}',
-                             groups=[enc['gid']] if enc.get('kind') == 'vaapi' else ())
+                             groups=_encoder_groups(enc))
 
     def _watch(self) -> None:
         """Keep the session healthy until it's stopped or goes idle."""
         last_time, last_progress, last_reload = None, time.monotonic(), 0.0
         while not self._stop.wait(5):
             if self.ffmpeg and self.ffmpeg.poll() is not None:
-                if (self.encoder.get('kind') == 'vaapi'
+                if (self.encoder.get('kind') in ('vaapi', 'nvenc')
                         and time.monotonic() - self.ffmpeg_started < 30):
                     # The pool's test encode passed but the real one died at once:
                     # stop using the GPU until the next pool start, keep this session.
@@ -734,7 +808,7 @@ class CaptureService:
                 'action': self.busy_action,
                 'config': read_config(),
                 'pool_error': self.pool_error,
-                'encoder': {k: v for k, v in ENCODER.items() if k != 'gid'},
+                'encoder': {k: v for k, v in ENCODER.items() if k not in ('gid', 'groups')},
                 'tuners': [t.describe() for t in self.tuners],
                 'sessions': [s.describe() for s in self.sessions.values()],
                 'incompatible_sources': sorted(INCOMPATIBLE_SOURCES),

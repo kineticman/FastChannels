@@ -123,7 +123,32 @@ in the default compose file; it's there as a commented-out example.
 After the restart, FastChannels installs the GPU drivers itself, tests the GPU,
 and the panel's **Encoder** line says *Using your GPU (Intel)* or *(AMD)*. If
 the test fails, it says *Using CPU (GPU didn't work)* and carries on with the
-CPU. NVIDIA GPUs aren't supported.
+CPU.
+
+### NVIDIA (experimental)
+
+NVIDIA cards encode through NVENC. This is new and hasn't been tested on real
+NVIDIA hardware yet, so please report how it goes. It's safe to try: if the
+encoder test fails, Built-in Capture carries on with the CPU.
+
+1. Install the NVIDIA driver and the
+   [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html)
+   on the server (the same setup Plex or Jellyfin use for NVIDIA).
+2. Add this to the FastChannels service in your compose file and recreate the
+   container:
+
+   ```yaml
+       runtime: nvidia
+       environment:
+         - NVIDIA_VISIBLE_DEVICES=all
+         - NVIDIA_DRIVER_CAPABILITIES=compute,video,utility
+   ```
+
+   `video` is the part that matters: it's what makes the encoder available
+   inside the container.
+3. The **Encoder** line should then say *Using your GPU (NVIDIA)*. If it says
+   the NVIDIA encode test failed, the Logs page has the reason (look for
+   `[capture]` lines).
 
 ## What works
 

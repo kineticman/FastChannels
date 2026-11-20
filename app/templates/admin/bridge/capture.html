@@ -45,11 +45,16 @@
           </div>
           <div class="field field-full" id="capture-gpu-tip" hidden>
             <details class="help">
-              <summary>Use much less CPU by giving FastChannels your GPU (Intel or AMD). How?</summary>
-              <div style="margin-top:0.4rem">Add this to the FastChannels service in your compose file, then recreate the container:
+              <summary>Use much less CPU by giving FastChannels your GPU. How?</summary>
+              <div style="margin-top:0.4rem"><strong>Intel or AMD:</strong> add this to the FastChannels service in your compose file, then recreate the container:
                 <pre style="margin:0.4rem 0">devices:
   - /dev/dri:/dev/dri</pre>
                 Only if your server has <code>/dev/dri</code>; otherwise Docker won't start the container.</div>
+              <div style="margin-top:0.6rem"><strong>NVIDIA</strong> (experimental): install the NVIDIA Container Toolkit on the server, then add:
+                <pre style="margin:0.4rem 0">runtime: nvidia
+environment:
+  - NVIDIA_VISIBLE_DEVICES=all
+  - NVIDIA_DRIVER_CAPABILITIES=compute,video,utility</pre></div>
             </details>
           </div>
           <div class="field field-full">
@@ -101,12 +106,16 @@
         $('capture-encoder').value = cfg.encoder || 'auto';
       }
       const enc = s.encoder || {};
-      const vendor = /intel/i.test(enc.driver || '') ? 'Intel' : /amd|radeon/i.test(enc.driver || '') ? 'AMD' : '';
-      const gpuFailed = enc.kind !== 'vaapi' && /failed/i.test(enc.reason || '');
+      const vendor = /intel/i.test(enc.driver || '') ? 'Intel' : /amd|radeon/i.test(enc.driver || '') ? 'AMD'
+        : /nvidia/i.test(enc.driver || '') ? 'NVIDIA' : '';
+      const onGpu = enc.kind === 'vaapi' || enc.kind === 'nvenc';
+      const gpuFailed = !onGpu && /failed/i.test(enc.reason || '');
       $('capture-encoder-status').textContent = !tunersRunning(s) ? ''
-        : enc.kind === 'vaapi' ? `Using your GPU${vendor ? ' (' + vendor + ')' : ''}`
+        : onGpu ? `Using your GPU${vendor ? ' (' + vendor + ')' : ''}`
         : gpuFailed ? 'Using CPU (GPU didn\'t work)' : 'Using CPU';
-      show('capture-gpu-tip', tunersRunning(s) && enc.kind !== 'vaapi' && !gpuFailed && (cfg.encoder || 'auto') === 'auto');
+      // The full reason (e.g. which driver piece is missing) on hover.
+      $('capture-encoder-status').title = onGpu ? '' : (enc.reason || '');
+      show('capture-gpu-tip', tunersRunning(s) && !onGpu && !gpuFailed && (cfg.encoder || 'auto') === 'auto');
 
       const tuners = s.tuners || [];
       const sessions = Object.fromEntries((s.sessions || []).map((x) => [x.session, x]));
