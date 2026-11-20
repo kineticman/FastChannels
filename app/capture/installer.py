@@ -128,18 +128,19 @@ def _download_chrome(progress) -> None:
             for chunk in r.iter_content(1024 * 1024):
                 fp.write(chunk)
                 done += len(chunk)
-                if total and time.monotonic() - last > 2:
+                if total and time.monotonic() - last > 1:
                     last = time.monotonic()
-                    progress(f'Downloading Google Chrome ({done * 100 // total}%)')
+                    pct = done * 100 // total
+                    progress(f'Downloading Google Chrome ({pct}%)', 'download', pct)
     os.replace(tmp, CHROME_DEB)
 
 
 def _apt_install(progress) -> None:
     os.makedirs(os.path.join(DEBS_DIR, 'partial'), exist_ok=True)
     cache = f'Dir::Cache::archives={DEBS_DIR}'
-    progress('Updating package lists')
+    progress('Updating package lists', 'packages')
     _run(['apt-get', 'update', '-q'], timeout=300)
-    progress('Installing Chrome, PulseAudio and FFmpeg')
+    progress('Installing Chrome, PulseAudio and FFmpeg', 'packages')
     gpu = GPU_PACKAGES if render_node() else ()
     _run(['apt-get', 'install', '-y', '-q', '--no-install-recommends', '-o', cache,
           *APT_PACKAGES, *gpu, CHROME_DEB], timeout=1800)
@@ -152,9 +153,11 @@ def _apt_install(progress) -> None:
 def install(*, refresh_chrome: bool = False) -> None:
     """Full install (or Chrome update with refresh_chrome). Writes status.json as it
     goes; never raises."""
-    def progress(msg):
-        logger.info('[capture-install] %s', msg)
-        write_status('installing', msg)
+    def progress(msg, step='download', pct=None):
+        # step + pct drive the Bridge panel's progress steps; msg is the plain text.
+        if pct is None:
+            logger.info('[capture-install] %s', msg)
+        write_status('installing', msg, step=step, pct=pct)
 
     if not supported_platform():
         write_status('failed', 'Google Chrome for Linux is only available on amd64 (x86_64).')
@@ -162,7 +165,7 @@ def install(*, refresh_chrome: bool = False) -> None:
     try:
         os.makedirs(ADDON_DIR, exist_ok=True)
         if refresh_chrome or not os.path.exists(CHROME_DEB):
-            progress('Downloading Google Chrome')
+            progress('Downloading Google Chrome', 'download', 0)
             _download_chrome(progress)
         _apt_install(progress)
         if not packages_present():
@@ -188,7 +191,8 @@ def reinstall() -> bool:
     write_status('installing', 'Reinstalling after a container update')
     try:
         try:
-            _apt_install(lambda m: write_status('installing', f'Reinstalling: {m}'))
+            _apt_install(lambda m, step='packages', pct=None:
+                         write_status('installing', f'Reinstalling: {m}', step=step, pct=pct))
         except Exception as e:
             # No network at boot: fall back to dpkg over the cached .debs whose
             # package isn't installed at all (never downgrade a base-image package).

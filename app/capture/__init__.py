@@ -101,6 +101,27 @@ def render_node() -> str | None:
 MAX_TUNERS_LIMIT = 4
 
 
+_PCI_VENDORS = {'0x8086': 'Intel', '0x1002': 'AMD', '0x10de': 'NVIDIA'}
+
+
+def gpu_info() -> dict:
+    """Which GPU the container can see, before anything is installed or tested:
+    {'vendor': 'Intel'|'AMD'|'NVIDIA'|'', 'via': 'dri'|'nvidia'|''}. Only a hint
+    for the Bridge panel; the daemon's test encode decides what's actually used."""
+    node = render_node()
+    if node:
+        try:
+            with open(f'/sys/class/drm/{os.path.basename(node)}/device/vendor') as fp:
+                vendor = _PCI_VENDORS.get(fp.read().strip().lower(), '')
+        except OSError:
+            vendor = ''
+        if vendor != 'NVIDIA':
+            return {'vendor': vendor or 'GPU', 'via': 'dri'}
+    if os.path.exists('/dev/nvidiactl') or (os.environ.get('NVIDIA_VISIBLE_DEVICES') or 'void') not in ('void', 'none', ''):
+        return {'vendor': 'NVIDIA', 'via': 'nvidia'}
+    return {'vendor': '', 'via': ''}
+
+
 def supported_platform() -> bool:
     return platform.machine().lower() in ('x86_64', 'amd64')
 

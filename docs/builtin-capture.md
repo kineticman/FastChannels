@@ -36,9 +36,12 @@ would on a desktop, and FastChannels only records the picture and sound.
 ## Turn it on
 
 1. Open **Bridge** and pick **Built-in Capture** in the list on the left.
-2. Turn on its switch. The first time, FastChannels asks before downloading,
-   then installs in the background (a minute or two). The panel shows
-   *Installing…* and then *Installed*.
+2. Turn on its switch. The first time, the panel asks before downloading and
+   says whether it found a GPU to encode with. If it didn't, it shows the
+   compose change to make ([below](#use-your-gpu)); you can do that before or
+   after installing. Click **Install** and the panel shows each step (download,
+   install, start the tuners), then refreshes itself when it's ready, usually
+   within a minute or two. You can leave the page while it runs.
 3. Turn on **Bridge mode** at the top of the page if it isn't on already.
    Without it, DRM channels stay disabled no matter which methods are on.
 4. Make sure your DRM sources have had a **Stream Audit** (Sources page). The

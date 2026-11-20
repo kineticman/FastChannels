@@ -81,6 +81,7 @@ _SUCCESS_SUPPRESS_PATTERNS = (
     '/play/amazon_prime_free/license', # Amazon DRM license — fires per key rotation
     'GET /api/settings/fc-player/devices HTTP',  # Bridge devices card list, on page load
     'GET /api/settings/fc-player/ah4c-activity HTTP',  # Bridge activity card polls every 15s while visible
+    'GET /api/capture/status HTTP',  # Built-in Capture panel polls every 10s (1.5s while installing)
     'POST /api/settings/fc-player/devices/probe',  # read-only adb probe, one per device per page load
     'GET /api/custom-channels/preview-manifest?url=',  # HLS preview refreshes the manifest during playback
     'GET /api/custom-channels/preview-segment?url=',  # HLS preview fetches a segment every few seconds

@@ -1,8 +1,47 @@
   <!-- Built-in capture add-on (beta): app/capture, app/routes/capture.py -->
+  {%- set capture_gpu_howto %}
+              <div style="margin-top:0.4rem"><strong>Intel or AMD:</strong> add this to the FastChannels service in your compose file, then recreate the container:
+                <pre style="margin:0.4rem 0">devices:
+  - /dev/dri:/dev/dri</pre>
+                Only if your server has <code>/dev/dri</code>; otherwise Docker won't start the container.</div>
+              <div style="margin-top:0.6rem"><strong>NVIDIA</strong> (experimental): install the NVIDIA Container Toolkit on the server, then add:
+                <pre style="margin:0.4rem 0">runtime: nvidia
+environment:
+  - NVIDIA_VISIBLE_DEVICES=all
+  - NVIDIA_DRIVER_CAPABILITIES=compute,video,utility</pre></div>
+  {%- endset %}
   <div class="source-card bridge-panel-card" id="bridge-card-capture">
     <div class="source-body open">
       <div class="help" id="capture-intro" style="margin-bottom:1rem" hidden>
-        Downloads about 250 MB (Google Chrome and a few helpers). Each channel playing uses one or two CPU cores.
+        Downloads about 250 MB (Google Chrome and a few helpers). Each channel playing uses one or two CPU cores,
+        less when FastChannels can use your GPU (Intel or AMD; NVIDIA is experimental).
+      </div>
+
+      <div class="capture-flow" id="capture-confirm" hidden>
+        <h3 class="capture-flow-title">Install Built-in Capture?</h3>
+        <p>FastChannels downloads Google Chrome and a few helpers (about 250 MB) and sets them up. It takes a minute or two.</p>
+        <p class="capture-gpu-line" id="capture-gpu-confirm"></p>
+        <details class="help" id="capture-gpu-confirm-howto" hidden>
+          <summary>How to give FastChannels your GPU (you can do this now or later)</summary>
+          {{ capture_gpu_howto }}
+        </details>
+        <div class="bridge-capture-actions" style="margin-top:0.9rem">
+          <button class="btn btn-primary" onclick="captureConfirmInstall()">Install</button>
+          <button class="btn btn-secondary" onclick="captureCancelInstall()">Cancel</button>
+        </div>
+      </div>
+
+      <div class="capture-flow" id="capture-progress" hidden>
+        <h3 class="capture-flow-title" id="capture-progress-title">Installing Built-in Capture</h3>
+        <div class="capture-bar" role="progressbar" aria-label="Install progress" aria-valuemin="0" aria-valuemax="100" id="capture-bar">
+          <span id="capture-bar-fill"></span>
+        </div>
+        <ol class="capture-steps">
+          <li data-step="download">Download Google Chrome <span class="capture-step-note" id="capture-step-pct"></span></li>
+          <li data-step="packages">Install Chrome and its helpers</li>
+          <li data-step="tuners">Start the tuners</li>
+        </ol>
+        <p class="help" id="capture-progress-foot">You can leave this page; the install keeps going.</p>
       </div>
 
       <div id="capture-install-row" class="bridge-capture-status">
@@ -11,7 +50,7 @@
           <div class="toggle-row-help" id="capture-install-detail"></div>
         </div>
         <div class="bridge-capture-actions">
-          <button class="btn btn-primary" id="capture-btn-install" onclick="captureAction('install')" hidden>Install</button>
+          <button class="btn btn-primary" id="capture-btn-install" onclick="captureInstallClicked()" hidden>Install</button>
           <button class="btn btn-secondary" id="capture-btn-update" onclick="captureAction('update-chrome')" hidden title="Download the current Google Chrome and reinstall">Update Chrome</button>
           <button class="btn btn-secondary" id="capture-btn-uninstall" onclick="captureUninstall()" hidden>Uninstall</button>
         </div>
@@ -46,15 +85,7 @@
           <div class="field field-full" id="capture-gpu-tip" hidden>
             <details class="help">
               <summary>Use much less CPU by giving FastChannels your GPU. How?</summary>
-              <div style="margin-top:0.4rem"><strong>Intel or AMD:</strong> add this to the FastChannels service in your compose file, then recreate the container:
-                <pre style="margin:0.4rem 0">devices:
-  - /dev/dri:/dev/dri</pre>
-                Only if your server has <code>/dev/dri</code>; otherwise Docker won't start the container.</div>
-              <div style="margin-top:0.6rem"><strong>NVIDIA</strong> (experimental): install the NVIDIA Container Toolkit on the server, then add:
-                <pre style="margin:0.4rem 0">runtime: nvidia
-environment:
-  - NVIDIA_VISIBLE_DEVICES=all
-  - NVIDIA_DRIVER_CAPABILITIES=compute,video,utility</pre></div>
+              {{ capture_gpu_howto }}
             </details>
           </div>
           <div class="field field-full">
@@ -72,11 +103,70 @@ environment:
     const $ = (id) => document.getElementById(id);
     let pollTimer = null;
     let lastConfig = null;
+    let lastStatus = {};
+    let confirming = false;     // the in-panel "Install?" step is showing
+    let watchedBusy = '';       // 'install' | 'uninstall' once this page has seen one run
+    let stepStarted = {};       // step -> time first seen, for the estimate within a step
+    let tunerWaitStart = 0;
 
     function show(id, on) { $(id).hidden = !on; }
     function tunersRunning(s) { return (s.tuners || []).some((t) => t.state !== 'stopped' && t.state !== 'error'); }
 
+    function gpuConfirmText(gpu) {
+      const v = (gpu || {}).vendor || '';
+      if (v === 'NVIDIA') return 'Found an NVIDIA GPU. NVIDIA encoding is experimental: FastChannels tries it and uses the CPU if it doesn\'t work.';
+      if (v) return `Found your ${v === 'GPU' ? '' : v + ' '}GPU. It will do the video encoding, so each channel uses much less CPU.`;
+      return 'No GPU passed to FastChannels, so video will be encoded on the CPU. If your server has one, your compose file needs a small change:';
+    }
+
+    // Progress steps while installing, then "Start the tuners", then a reload so
+    // the rail, header pill and switch catch up.
+    function renderProgress(s, state) {
+      const inst = s.install || {};
+      const now = Date.now();
+      let step = inst.step || (state === 'installing' ? 'packages' : '');
+      let pct = 0;
+      if (state === 'installed') {
+        step = 'tuners';
+        const tuners = s.tuners || [];
+        const ready = tuners.filter((t) => t.state === 'idle' || t.state === 'busy').length;
+        if (!tunerWaitStart) tunerWaitStart = now;
+        const settled = !(s.config || {}).enabled || (tuners.length && tuners.every((t) => t.state !== 'starting'))
+          || now - tunerWaitStart > 90000;
+        pct = 90 + (tuners.length ? 10 * ready / tuners.length : 0);
+        if (settled) {
+          step = 'done';
+          pct = 100;
+        }
+      } else if (step === 'download') {
+        pct = 5 + 0.45 * (inst.pct || 0);
+      } else {
+        if (!stepStarted.packages) stepStarted.packages = now;
+        // apt reports no progress: ease from 55% toward 88% over roughly a minute.
+        const secs = (now - stepStarted.packages) / 1000;
+        pct = 55 + 33 * (1 - Math.exp(-secs / 45));
+      }
+      const order = ['download', 'packages', 'tuners', 'done'];
+      document.querySelectorAll('#capture-progress .capture-steps li').forEach((li) => {
+        const i = order.indexOf(li.dataset.step), cur = order.indexOf(step);
+        li.classList.toggle('is-done', i < cur);
+        li.classList.toggle('is-current', i === cur);
+      });
+      $('capture-step-pct').textContent = step === 'download' && inst.pct != null ? `${inst.pct}%` : '';
+      $('capture-bar-fill').style.width = Math.round(pct) + '%';
+      $('capture-bar').setAttribute('aria-valuenow', String(Math.round(pct)));
+      const act = s.action || '';
+      $('capture-progress-title').textContent = step === 'done' ? 'Built-in Capture is ready'
+        : act === 'update-chrome' ? 'Updating Google Chrome'
+        : act === 'reinstall' || /^Reinstalling/.test(inst.message || '') ? 'Setting Built-in Capture up again after an update'
+        : 'Installing Built-in Capture';
+      $('capture-progress-foot').textContent = step === 'done' ? 'Refreshing the page…'
+        : 'You can leave this page; the install keeps going.';
+      return step === 'done';
+    }
+
     function render(s) {
+      lastStatus = s;
       const inst = s.install || {};
       const state = inst.state || 'not_installed';
       const action = s.action || '';
@@ -89,7 +179,26 @@ environment:
       else if (state === 'installed') detail = inst.widevine === false ? 'Chrome is missing its DRM module. Try Update Chrome.' : '';
       else if (state === 'installing' || state === 'failed') detail = inst.message || '';
       $('capture-install-detail').textContent = detail;
-      show('capture-intro', s.platform_supported && state === 'not_installed');
+      show('capture-intro', s.platform_supported && state === 'not_installed' && !confirming);
+
+      // Install confirm / progress take over the top of the panel.
+      if (state === 'installing' || action === 'install' || action === 'update-chrome' || action === 'reinstall') watchedBusy = 'install';
+      if (state === 'uninstalling' || action === 'uninstall') watchedBusy = 'uninstall';
+      const inProgress = watchedBusy === 'install' && state !== 'failed' && state !== 'not_installed';
+      $('capture-gpu-confirm').textContent = gpuConfirmText(s.gpu);
+      show('capture-gpu-confirm-howto', !(s.gpu || {}).vendor);
+      show('capture-confirm', confirming && !inProgress);
+      show('capture-progress', inProgress);
+      show('capture-install-row', !inProgress && !confirming);
+      if (inProgress && renderProgress(s, state)) {
+        clearTimeout(pollTimer);
+        setTimeout(() => location.reload(), 1500);
+        return;
+      }
+      if (watchedBusy === 'uninstall' && !action && state === 'not_installed') {
+        location.reload();
+        return;
+      }
 
       const busy = Boolean(action) || state === 'installing' || state === 'uninstalling';
       show('capture-btn-install', s.platform_supported && !busy && (state === 'not_installed' || state === 'failed'));
@@ -131,7 +240,7 @@ environment:
         : (s.pool_error ? 'Tuners couldn\'t start: ' + s.pool_error : (cfg.enabled ? 'Tuners starting…' : ''));
 
       clearTimeout(pollTimer);
-      pollTimer = setTimeout(refresh, busy || tuners.some((t) => t.state === 'starting') ? 2000 : 10000);
+      pollTimer = setTimeout(refresh, busy || inProgress || tuners.some((t) => t.state === 'starting') ? 1500 : 10000);
     }
 
     async function refresh() {
@@ -153,30 +262,71 @@ environment:
       setTimeout(refresh, 500);
     };
 
-    // The Methods tile switch. Off -> on the first time downloads the add-on;
-    // afterwards it just starts/stops the tuners. The page reloads so the tile and
-    // this card's collapsed state follow.
+    function askToInstall() {
+      confirming = true;
+      render(lastStatus);
+      $('capture-confirm').scrollIntoView({block: 'nearest', behavior: 'smooth'});
+    }
+
+    window.captureConfirmInstall = async function () {
+      confirming = false;
+      watchedBusy = 'install';
+      stepStarted = {};
+      tunerWaitStart = 0;
+      const cfg = Object.assign({}, lastStatus.config || {}, {enabled: true});
+      await fetch('/api/capture/config', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(cfg)});
+      const r = await fetch('/api/capture/install', {method: 'POST'});
+      const body = await r.json().catch(() => ({}));
+      if (!r.ok || body.ok === false) {
+        watchedBusy = '';
+        $('capture-status-msg').textContent = body.message || ('Install failed (HTTP ' + r.status + ')');
+      }
+      const box = $('capture-method-toggle');
+      if (box) box.checked = true;
+      refresh();
+    };
+
+    window.captureCancelInstall = function () {
+      confirming = false;
+      const box = $('capture-method-toggle');
+      if (box) box.checked = false;
+      render(lastStatus);
+    };
+
+    window.captureInstallClicked = function () {
+      // A failed install retries straight away; a first install asks first.
+      if ((lastStatus.install || {}).state === 'failed') {
+        watchedBusy = 'install';
+        stepStarted = {};
+        tunerWaitStart = 0;
+        captureAction('install');
+      } else {
+        askToInstall();
+      }
+    };
+
+    // The panel-header switch. Off -> on the first time asks in the panel, then
+    // installs with progress; afterwards it just starts/stops the tuners and the page
+    // reloads so the rail and header follow.
     window.captureMethodToggle = async function (box) {
       const on = box.checked;
-      let status = {};
-      try { status = await (await fetch('/api/capture/status', {cache: 'no-store'})).json(); } catch (e) {}
-      const installed = (status.install || {}).state === 'installed';
-      if (on && !installed && (status.install || {}).state !== 'installing') {
-        if (!confirm('Turn on Built-in Capture? This downloads about 250 MB (Google Chrome and a few helpers).')) {
-          box.checked = false;
-          return;
-        }
+      const st = (lastStatus.install || {}).state || 'not_installed';
+      if (on && st !== 'installed' && st !== 'installing') {
+        askToInstall();
+        return;
       }
-      const cfg = Object.assign({}, status.config || {}, {enabled: on});
+      if (!on && confirming) {
+        captureCancelInstall();
+        return;
+      }
+      const cfg = Object.assign({}, lastStatus.config || {}, {enabled: on});
       await fetch('/api/capture/config', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(cfg)});
-      if (on && !installed && (status.install || {}).state !== 'installing') {
-        await fetch('/api/capture/install', {method: 'POST'});
-      }
       setTimeout(() => location.reload(), 600);
     };
 
     window.captureUninstall = function () {
       if (confirm('Remove the built-in capture add-on? Chrome, its tuner profiles and the cached downloads are deleted.')) {
+        watchedBusy = 'uninstall';
         captureAction('uninstall');
       }
     };

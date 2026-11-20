@@ -614,6 +614,7 @@
       margin-bottom: 1.25rem; padding-bottom: 1rem; border-bottom: 1px solid var(--border);
     }
     .bridge-capture-status .toggle-row-label { margin: 0; }
+    .bridge-capture-status[hidden] { display: none; }
     .bridge-capture-actions { display: flex; gap: 0.5rem; flex-wrap: wrap; }
     .bridge-works h3 { margin: 0 0 0.55rem; font-size: 0.9rem; font-weight: 600; color: var(--text-soft); }
     .bridge-chips { display: flex; flex-wrap: wrap; gap: 0.4rem; margin: 0 0 0.6rem; padding: 0; list-style: none; }
@@ -929,4 +930,31 @@
       .field-actions { flex-wrap: wrap; justify-content: flex-start; }
       .save-status { min-width: 0; text-align: left; }
       .bridge-live-test-next { align-items: flex-start; flex-direction: column; }
+    }
+
+    /* Built-in Capture: in-panel install confirm and progress */
+    .capture-flow {
+      margin-bottom: 1.25rem; padding: 1rem 1.1rem; border: 1px solid var(--border); border-radius: 10px;
+      font-size: 0.86rem; color: var(--text-soft);
+    }
+    .capture-flow p { margin: 0 0 0.5rem; }
+    .capture-flow-title { margin: 0 0 0.6rem; font-size: 1rem; font-weight: 600; color: var(--text); }
+    .capture-gpu-line { color: var(--text); }
+    .capture-bar { height: 6px; margin: 0.2rem 0 0.9rem; border-radius: 3px; background: var(--border); overflow: hidden; }
+    .capture-bar > span { display: block; width: 0; height: 100%; border-radius: 3px; background: var(--accent); transition: width 0.8s ease; }
+    .capture-steps { margin: 0 0 0.7rem; padding: 0; list-style: none; display: grid; gap: 0.4rem; }
+    .capture-steps li { position: relative; padding-left: 1.6rem; color: var(--text-subtle, var(--text-soft)); }
+    .capture-steps li::before {
+      content: ''; position: absolute; left: 0.15rem; top: 0.25em; width: 0.8rem; height: 0.8rem;
+      border: 2px solid var(--border); border-radius: 50%; box-sizing: border-box;
+    }
+    .capture-steps li.is-current { color: var(--text); font-weight: 600; }
+    .capture-steps li.is-current::before { border-color: var(--accent); border-right-color: transparent; animation: capture-spin 0.9s linear infinite; }
+    .capture-steps li.is-done { color: var(--text-soft); }
+    .capture-steps li.is-done::before { content: '✓'; border: 0; color: var(--success-soft); font-size: 0.85rem; line-height: 0.8rem; top: 0.2em; }
+    .capture-step-note { font-weight: 400; color: var(--text-soft); margin-left: 0.3rem; }
+    @keyframes capture-spin { to { transform: rotate(360deg); } }
+    @media (prefers-reduced-motion: reduce) {
+      .capture-bar > span { transition: none; }
+      .capture-steps li.is-current::before { animation: none; border-right-color: var(--accent); }
     }

@@ -306,8 +306,10 @@ def capture_status():
             'config': capture.read_config(),
             'service_error': health.get('error') or f'capture service returned HTTP {code}',
             'tuners': [], 'sessions': [],
+            'gpu': capture.gpu_info(),
         })
     health['incompatible_names'] = _source_names(capture.INCOMPATIBLE_SOURCES)
+    health['gpu'] = capture.gpu_info()
     return jsonify(health)
 
 
