@@ -3942,7 +3942,7 @@ def play_auto_capture(source_name: str, channel_id: str):
     from ..generators.m3u import _needs_prismcast_bridge, _prismcast_capturable
     if not (_needs_prismcast_bridge(channel) and _prismcast_capturable(channel)):
         return play(source_name, channel_id)
-    if source_name in capture.INCOMPATIBLE_SOURCES:
+    if source_name in capture.INCOMPATIBLE_SOURCES or channel.id in capture.restricted_channel_ids():
         return Response('This channel needs a bridge, and its provider refuses Built-in Capture.\n',
                         status=422, mimetype='text/plain')
     if not capture.is_active():

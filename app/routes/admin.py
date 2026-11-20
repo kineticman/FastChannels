@@ -421,8 +421,9 @@ def _feed_split_counts(feed: Feed) -> dict[str, int]:
     # channels, minus the sources that refuse Linux Chrome).
     from .. import capture as _capture
     from ..generators.m3u import _prismcast_capturable
+    restricted = _capture.restricted_channel_ids()
     capture_channels = [ch for ch in bridged_channels
-                        if _prismcast_capturable(ch)
+                        if _prismcast_capturable(ch) and ch.id not in restricted
                         and not (ch.source and ch.source.name in _capture.INCOMPATIBLE_SOURCES)]
     capture_gn = sum(1 for ch in capture_channels if _has_gracenote_claim(ch))
 

@@ -126,15 +126,20 @@ Built-in Capture works with the same DRM sources as PrismCast. Verified so far:
 Paramount+, Sling, DirecTV Stream, Spectrum, ESPN, NBCUniversal TV Everywhere,
 Disney TV Everywhere, PBS, SportsNet Pittsburgh, Amazon Sports, Amazon Prime
 Free Channels, Philo, The Roku Channel, Versant (USA, E!, Syfy, CNBC and the
-rest), ViX, Tennis Channel and Vidaa. Other DRM sources should work the same way
-but haven't been tried yet.
+rest), ViX, Tennis Channel, Fubo and Vidaa. Other DRM sources should work the
+same way but haven't been tried yet.
+
+A few single channels only allow hardware players such as FastChannels Player,
+even when the rest of their source works (on Fubo, for example, ABC News Live).
+The first time one of them is tuned it fails with a message saying so, and
+Built-in Capture leaves it out of its playlists from then on. It's checked again
+after 30 days in case the provider changes its rules.
 
 Not available:
 
 - **CNN TV Everywhere**: its license server refuses Chrome on Linux.
 - **HBO Max**: uses the same license system as CNN, so it's left out too
   (not yet confirmed during a live event).
-- **Fubo**: its license server only gives playable keys to hardware players.
 - **DAZN**: its license server refuses Chrome on Linux ("Device not allowed to
   receive a license").
 

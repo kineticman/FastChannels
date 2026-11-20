@@ -37,7 +37,8 @@ import requests
 
 from . import (CHROME_BIN, DAEMON_HOST, DAEMON_PORT, PROFILES_DIR, HOME_DIR,
                INCOMPATIBLE_SOURCES, QUALITY_PRESETS, SESSION_ROOT, WATCH_BASE,
-               GPU_BITRATE_FACTOR, read_config, read_status, render_node, supported_platform)
+               GPU_BITRATE_FACTOR, is_restricted_error, mark_restricted, read_config, read_status,
+               render_node, supported_platform)
 from . import installer
 
 logger = logging.getLogger('app.capture')
@@ -382,6 +383,15 @@ class Session:
             if not self._stop.is_set():
                 self.state, self.error = 'failed', str(e)[:300]
                 logger.warning('[capture] session %s channel %s failed: %s', self.id, self.channel_id, self.error)
+                if is_restricted_error(str(e)):
+                    # Deterministic: the license server only lets hardware players show
+                    # this channel. Remember it so the capture playlists skip it.
+                    try:
+                        mark_restricted(self.channel_id, 'license keys restricted to hardware players')
+                        logger.info('[capture] channel %s marked restricted (hardware players only)',
+                                    self.channel_id)
+                    except Exception:
+                        logger.exception('[capture] could not record restricted channel %s', self.channel_id)
         finally:
             self._teardown()
 

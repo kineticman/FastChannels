@@ -1237,9 +1237,10 @@ def _capture_bridge_channels(filters: dict) -> list:
     whose license servers refuse Linux Chrome (capture.INCOMPATIBLE_SOURCES) and
     any malformed gracenote_id (same rule as _fc_player_bridge_channels)."""
     from .. import capture
+    restricted = capture.restricted_channel_ids()
     channels, seen = [], set()
     for ch in _build_channel_query(_drm_bridge_query_filters(filters), activity='drm_bridge').all():
-        if ch.id in seen or not _prismcast_capturable(ch):
+        if ch.id in seen or not _prismcast_capturable(ch) or ch.id in restricted:
             continue
         if ch.source and ch.source.name in capture.INCOMPATIBLE_SOURCES:
             continue
@@ -1261,7 +1262,8 @@ def generate_capture_m3u(filters: dict = None, base_url: str = None, *,
     return generate_prismcast_m3u(
         filters, base_url=base_url, prismcast_url='', gracenote=gracenote,
         bridge_url_for=lambda ch: _capture_play_url(ch, base),
-        exclude_sources=capture.INCOMPATIBLE_SOURCES, **number_kwargs)
+        exclude_sources=capture.INCOMPATIBLE_SOURCES,
+        exclude_channel_ids=capture.restricted_channel_ids(), **number_kwargs)
 
 
 _COMBINED_BRIDGES = {
@@ -1694,7 +1696,8 @@ def generate_prismcast_m3u(filters: dict = None, base_url: str = None, *,
                            prismcast_url: str, inner_base_url: str = None,
                            feed_chnum_start: int = None, namespace_start: int = None,
                            feed_id: int = None, gracenote: bool | None = False, ts: bool = False,
-                           bridge_url_for=None, exclude_sources: frozenset = frozenset()) -> str:
+                           bridge_url_for=None, exclude_sources: frozenset = frozenset(),
+                           exclude_channel_ids: frozenset = frozenset()) -> str:
     """
     Bridge-only PrismCast playlist: exactly the DRM channels a normal client can't
     play (browser/EME required), wrapped through PrismCast's `/play?url=` endpoint
@@ -1732,6 +1735,8 @@ def generate_prismcast_m3u(filters: dict = None, base_url: str = None, *,
                       (app/routes/capture.py). prismcast_url is then unused.
     exclude_sources — source names to leave out entirely (sources whose license
                       servers refuse that capture method).
+    exclude_channel_ids — single channels to leave out (capture's output-restricted
+                      channels, capture.restricted_channel_ids()).
     """
     filters  = filters or {}
     base_url = (base_url or '').rstrip('/')
@@ -1754,6 +1759,8 @@ def generate_prismcast_m3u(filters: dict = None, base_url: str = None, *,
         if ch.id in _seen or not _prismcast_capturable(ch):
             continue
         if exclude_sources and ch.source and ch.source.name in exclude_sources:
+            continue
+        if exclude_channel_ids and ch.id in exclude_channel_ids:
             continue
         if gracenote and not _parse_gracenote_id(ch):
             continue

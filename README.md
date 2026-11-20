@@ -229,8 +229,8 @@ No Android device or capture hardware? **Built-in Capture** plays DRM channels i
 of Google Chrome inside the FastChannels container and records them into a normal HLS
 channel. Turn it on from the **Bridge** page; FastChannels downloads Chrome from Google
 the first time. It needs a 64-bit Intel/AMD Linux server and uses roughly one to two CPU
-cores per channel playing (less with an Intel or AMD GPU passed in). CNN, HBO Max, Fubo
-and DAZN don't work with it, and Amazon plays in SD. Full guide:
+cores per channel playing (less with an Intel or AMD GPU passed in). CNN, HBO Max and DAZN
+don't work with it, and Amazon plays in SD. Full guide:
 **[docs/builtin-capture.md](docs/builtin-capture.md)**.
 
 ## Configuration

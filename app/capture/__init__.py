@@ -32,6 +32,7 @@ import time
 ADDON_DIR = os.environ.get('FC_CAPTURE_DIR', '/data/addons/capture')
 CONFIG_PATH = os.path.join(ADDON_DIR, 'config.json')
 STATUS_PATH = os.path.join(ADDON_DIR, 'status.json')
+RESTRICTED_PATH = os.path.join(ADDON_DIR, 'restricted.json')
 DEBS_DIR = os.path.join(ADDON_DIR, 'debs')
 PROFILES_DIR = os.path.join(ADDON_DIR, 'profiles')
 HOME_DIR = os.path.join(ADDON_DIR, 'home')
@@ -49,14 +50,21 @@ CHROME_BIN = '/usr/bin/google-chrome-stable'
 
 # Sources whose license servers refuse Linux Chrome, found in the 2026-11-19 spike:
 #   cnn_tve — HTTP 400 vmp_platform_not_verified (Warner Bros. Discovery enforces VMP)
-#   fubo    — license granted, but every key is output-restricted for software Widevine
 #   dazn_tve — HTTP 403 code 10802 "Device not allowed to receive a license" (2026-11-20,
 #              YES National and Unbeaten)
 # hbomax shares CNN's WBD license stack, so it's excluded until someone shows otherwise.
 # 2026-11-20: couldn't confirm either way: HBO Max events refuse playback before their
 # window opens ("access.denied.before.playable.windows"), so retry during a live event.
 # Also verified working that day: philo, roku, versant_tve, vix, tennis_tve.
-INCOMPATIBLE_SOURCES = frozenset({'cnn_tve', 'fubo', 'hbomax', 'dazn_tve'})
+INCOMPATIBLE_SOURCES = frozenset({'cnn_tve', 'hbomax', 'dazn_tve'})
+
+# Single channels whose license keys come back 'output-restricted' (the content owner
+# requires a hardware-protected player), within an otherwise working source. Fubo was
+# first excluded wholesale on one such channel (ABC News Live); 18 of 18 random Fubo
+# channels then played (2026-11-20). The daemon records these as it meets them
+# (mark_restricted) and capture playlists skip them; entries expire so a policy change
+# is picked up again.
+RESTRICTED_TTL_SECONDS = 30 * 24 * 3600
 
 QUALITY_PRESETS = {
     # name: (width, height, fps, video kbps). fps is captured as NTSC (x1000/1001)
@@ -159,6 +167,38 @@ def write_status(state: str, message: str = '', **extra) -> dict:
     status.update(extra)
     _write_json(STATUS_PATH, status)
     return status
+
+
+def restricted_channels() -> dict[int, dict]:
+    """{channel_id: {reason, at}} for channels recorded as output-restricted within
+    RESTRICTED_TTL_SECONDS."""
+    now = time.time()
+    out = {}
+    for key, entry in _read_json(RESTRICTED_PATH).items():
+        try:
+            if isinstance(entry, dict) and now - float(entry.get('at', 0)) < RESTRICTED_TTL_SECONDS:
+                out[int(key)] = entry
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
+def restricted_channel_ids() -> frozenset:
+    return frozenset(restricted_channels())
+
+
+def mark_restricted(channel_id: int, reason: str) -> None:
+    """Record a channel whose keys the license server restricts to hardware players.
+    Written only by the capture daemon (one process), so no lock is needed."""
+    entries = {str(k): v for k, v in restricted_channels().items()}
+    entries[str(int(channel_id))] = {'reason': reason[:200], 'at': int(time.time())}
+    _write_json(RESTRICTED_PATH, entries)
+
+
+def is_restricted_error(message: str) -> bool:
+    """A page error meaning this channel's keys are restricted for software Widevine
+    (Shaka 4012 with output-restricted key status), as opposed to a transient failure."""
+    return 'output-restricted' in (message or '')
 
 
 def is_installed() -> bool:

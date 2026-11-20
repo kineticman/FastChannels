@@ -198,6 +198,9 @@ def capture_playlist(channel_id: int):
     channel = Channel.query.get_or_404(channel_id)
     if channel.source and channel.source.name in capture.INCOMPATIBLE_SOURCES:
         return _text(f'{channel.source.display_name} refuses Linux Chrome; it cannot be captured.', 422)
+    if channel.id in capture.restricted_channel_ids():
+        return _text(f'{channel.name} is only allowed on hardware players (its license keys are '
+                     'restricted), so Built-in Capture skips it. Use FastChannels Player for it.', 422)
 
     deadline = time.monotonic() + _TUNE_WAIT_SECONDS
     started = time.monotonic()
