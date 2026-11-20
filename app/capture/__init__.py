@@ -80,8 +80,13 @@ DEFAULT_CONFIG = {
     'enabled': True,
     'max_tuners': 1,
     'quality': '720p60',
-    'encoder': 'auto',      # 'auto' = GPU (VA-API) when /dev/dri works, else x264; 'cpu' = x264 only
+    'encoder': 'auto',      # 'auto' = GPU (VA-API/NVENC) when it works, else x264; 'cpu' = x264 only
+    # Warm: each tuner's Chrome stays open between tunes (~0.6 GB each, ~2 s to
+    # playing). Cold: Chrome closes after COLD_IDLE_SECONDS without a tune and the
+    # next tune starts it first.
+    'keep_warm': True,
 }
+COLD_IDLE_SECONDS = int(os.environ.get('FC_CAPTURE_COLD_IDLE_SECONDS', '300'))  # env: testing only
 ENCODERS = ('auto', 'cpu')
 
 # VA-API H.264 needs ~1.5x x264-veryfast's bitrate for the same quality (2026-11-19
@@ -168,6 +173,7 @@ def normalize_config(cfg: dict) -> dict:
     out['quality'] = quality if quality in QUALITY_PRESETS else out['quality']
     encoder = cfg.get('encoder')
     out['encoder'] = encoder if encoder in ENCODERS else out['encoder']
+    out['keep_warm'] = bool(cfg.get('keep_warm', out['keep_warm']))
     return out
 
 

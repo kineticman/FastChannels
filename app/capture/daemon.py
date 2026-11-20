@@ -29,6 +29,7 @@ import secrets
 import shutil
 import signal
 import subprocess
+import sys
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -38,7 +39,7 @@ import requests
 from . import (CHROME_BIN, DAEMON_HOST, DAEMON_PORT, PROFILES_DIR, HOME_DIR,
                INCOMPATIBLE_SOURCES, QUALITY_PRESETS, SESSION_ROOT, WATCH_BASE,
                GPU_BITRATE_FACTOR, is_restricted_error, mark_restricted, read_config, read_status,
-               render_node, supported_platform)
+               render_node, supported_platform, COLD_IDLE_SECONDS)
 from . import installer
 
 logger = logging.getLogger('app.capture')
@@ -301,8 +302,9 @@ class Tuner:
         self.profile = os.path.join(PROFILES_DIR, f't{index}')
         self.xvfb: subprocess.Popen | None = None
         self.chrome: subprocess.Popen | None = None
-        self.state = 'stopped'      # stopped | starting | idle | busy | error
+        self.state = 'stopped'      # stopped | starting | idle | busy | error | asleep
         self.error = ''
+        self.idle_since = time.monotonic()   # for cold mode (keep_warm off)
         self.session: 'Session | None' = None
 
     @property
@@ -376,6 +378,7 @@ class Tuner:
         # Widevine registers asynchronously after launch; a /watch load before that
         # fails Shaka's support check ("browser-unsupported").
         time.sleep(WIDEVINE_SETTLE_SECONDS)
+        self.idle_since = time.monotonic()
         self.state = 'idle'
         logger.info('[capture] tuner %d ready (:%d, %s)', self.index, self.display, self.quality)
 
@@ -388,6 +391,13 @@ class Tuner:
         _kill(self.xvfb)
         self.chrome = self.xvfb = None
         self.state = 'stopped'
+
+    def sleep(self) -> None:
+        """Cold mode: close Chrome and the screen; the next tune starts them."""
+        _kill(self.chrome)
+        _kill(self.xvfb)
+        self.chrome = self.xvfb = None
+        self.state = 'asleep'
 
     def blank(self) -> None:
         try:
@@ -627,8 +637,10 @@ class CaptureService:
             return
         desired = self._desired_pool()
         with self.lock:
-            if desired == self.pool_key and all(t.alive() or t.state in ('starting', 'error') for t in self.tuners):
+            if desired == self.pool_key and all(t.alive() or t.state in ('starting', 'error', 'asleep')
+                                                for t in self.tuners):
                 self._restart_dead_tuners()
+                self._apply_warmth()
                 return
             if self.sessions and desired is not None and self.pool_key is not None:
                 # Settings changed while someone is watching: apply when the pool is idle.
@@ -652,6 +664,22 @@ class CaptureService:
                     t.session.stop()
                 t.stop()
                 threading.Thread(target=self._start_tuner, args=(t,), daemon=True).start()
+
+    def _apply_warmth(self) -> None:
+        """keep_warm off: close tuners idle for COLD_IDLE_SECONDS. On: start any that
+        cold mode closed (the setting was switched back)."""
+        keep_warm = read_config().get('keep_warm', True)
+        now = time.monotonic()
+        for t in self.tuners:
+            if keep_warm and t.state == 'asleep':
+                logger.info('[capture] keeping tuners warm again: starting tuner %d', t.index)
+                t.state = 'starting'
+                threading.Thread(target=self._start_tuner, args=(t,), daemon=True).start()
+            elif (not keep_warm and t.state == 'idle' and t.session is None
+                  and now - t.idle_since > COLD_IDLE_SECONDS):
+                logger.info('[capture] tuner %d idle %d min — closing Chrome until the next tune',
+                            t.index, int((now - t.idle_since) // 60))
+                t.sleep()
 
     def _start_tuner(self, t: Tuner) -> None:
         try:
@@ -682,10 +710,17 @@ class CaptureService:
             logger.error('[capture] %s', self.pool_error)
             self.pool_key = key
             return
+        keep_warm = read_config().get('keep_warm', True)
         with self.lock:
             self.pool_error = ''
             self.tuners = [Tuner(i, quality, self.uid, self.gid) for i in range(tuners)]
             self.pool_key = key
+        if not keep_warm:
+            # Cold: nothing runs until the first tune.
+            for t in self.tuners:
+                t.state = 'asleep'
+            logger.info('[capture] %d tuner(s) at %s, started on demand (keep warm is off)', tuners, quality)
+            return
         for t in self.tuners:
             threading.Thread(target=self._start_tuner, args=(t,), daemon=True).start()
         logger.info('[capture] starting %d tuner(s) at %s', tuners, quality)
@@ -762,6 +797,11 @@ class CaptureService:
                 return 503, {'error': f'capture unavailable: {why}'}, None
             idle = next((t for t in self.tuners if t.state == 'idle'), None)
             if idle is None:
+                asleep = next((t for t in self.tuners if t.state == 'asleep'), None)
+                if asleep is not None and not any(t.state == 'starting' for t in self.tuners):
+                    logger.info('[capture] waking tuner %d for channel %s', asleep.index, channel_id)
+                    asleep.state = 'starting'
+                    threading.Thread(target=self._start_tuner, args=(asleep,), daemon=True).start()
                 if any(t.state == 'starting' for t in self.tuners):
                     return 503, {'error': 'capture tuners are still starting', 'retry_after': 5, 'reason': 'starting'}, None
                 if all(t.state == 'error' for t in self.tuners):
@@ -787,6 +827,7 @@ class CaptureService:
                     s.tuner.session = None
                     if s.tuner.state == 'busy':
                         s.tuner.state = 'idle'
+                        s.tuner.idle_since = time.monotonic()
 
     def reap(self) -> None:
         now = time.monotonic()
@@ -812,7 +853,52 @@ class CaptureService:
                 'tuners': [t.describe() for t in self.tuners],
                 'sessions': [s.describe() for s in self.sessions.values()],
                 'incompatible_sources': sorted(INCOMPATIBLE_SOURCES),
+                'memory': capture_memory(self.uid, self.gid) if self.tuners else None,
             }
+
+
+# Real memory (PSS: shared pages split between processes; RSS would count Chrome's
+# shared memory once per process, ~2x too high). Only the processes' own user may
+# read their smaps here (Docker drops CAP_SYS_PTRACE), so it runs as fccapture.
+_MEM_READER = r'''
+import os
+tot = n = 0
+uid = os.getuid()
+for pid in os.listdir('/proc'):
+    if not pid.isdigit():
+        continue
+    try:
+        if os.stat('/proc/' + pid).st_uid != uid:
+            continue
+        with open('/proc/%s/smaps_rollup' % pid) as fp:
+            for line in fp:
+                if line.startswith('Pss:'):
+                    tot += int(line.split()[1]) * 1024
+                    n += 1
+                    break
+    except OSError:
+        pass
+print(tot, n)
+'''
+_mem_cache = {'at': 0.0, 'value': None}
+
+
+def capture_memory(uid: int | None, gid: int | None) -> dict | None:
+    """{'bytes', 'processes'} for everything running as the capture user, cached 30 s."""
+    if uid is None:
+        return None
+    now = time.monotonic()
+    if now - _mem_cache['at'] < 30:
+        return _mem_cache['value']
+    value = None
+    try:
+        out = subprocess.run([sys.executable, '-I', '-c', _MEM_READER], user=uid, group=gid,
+                             capture_output=True, text=True, timeout=10).stdout.split()
+        value = {'bytes': int(out[0]), 'processes': int(out[1])}
+    except Exception as e:
+        logger.debug('[capture] memory read failed: %s', e)
+    _mem_cache.update(at=now, value=value)
+    return value
 
 
 SERVICE = CaptureService()

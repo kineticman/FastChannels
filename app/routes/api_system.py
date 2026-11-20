@@ -321,6 +321,10 @@ def _disk_stats() -> dict:
         'chromium_bytes':  _du_bytes('/root/.cache/ms-playwright'),
         'python_bytes':    _du_bytes(sysconfig.get_paths()['purelib']),
         'data_bytes':      _du_bytes('/data'),
+        # Built-in Capture add-on: Chrome lives in the container layer, its
+        # profiles and download cache on /data. None when not installed.
+        'capture_chrome_bytes': _du_bytes('/opt/google/chrome'),
+        'capture_data_bytes':   _du_bytes('/data/addons/capture'),
     }
     try:
         usage = shutil.disk_usage('/data')
@@ -394,7 +398,37 @@ def system_stats():
         'disk': _disk_stats(),
         'cpu': _cpu_stats(),
         'memory': _memory_stats(),
+        'capture': _capture_stats(),
     })
+
+
+def _capture_stats() -> dict | None:
+    """Built-in Capture add-on, when installed: tuner states, real memory (PSS of
+    everything running as the capture user), and settings that change both."""
+    from .. import capture
+    if capture.read_status().get('state') != 'installed':
+        return None
+    code, health = capture.daemon_request('GET', '/health', timeout=3)
+    if code != 200:
+        return {'running': False}
+    states = {}
+    for t in health.get('tuners') or []:
+        states[t.get('state')] = states.get(t.get('state'), 0) + 1
+    cfg = health.get('config') or {}
+    enc = health.get('encoder') or {}
+    driver = enc.get('driver') or ''
+    vendor = next((v for k, v in (('intel', 'Intel'), ('amd', 'AMD'), ('radeon', 'AMD'), ('nvidia', 'NVIDIA'))
+                   if k in driver.lower()), '')
+    return {
+        'running': True,
+        'enabled': bool(cfg.get('enabled')),
+        'tuners': states,
+        'max_tuners': cfg.get('max_tuners'),
+        'quality': cfg.get('quality'),
+        'keep_warm': cfg.get('keep_warm', True),
+        'encoder': (f'GPU ({vendor})' if vendor else 'GPU') if enc.get('kind') in ('vaapi', 'nvenc') else 'CPU',
+        'memory_bytes': (health.get('memory') or {}).get('bytes'),
+    }
 
 
 @system_bp.route('/localnow/cities')

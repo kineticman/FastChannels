@@ -29,7 +29,9 @@ would on a desktop, and FastChannels only records the picture and sound.
   | Intel N95 mini PC (4 cores) | about 2.5 cores per channel | about 1.2 cores |
   | AMD Ryzen 7 7735HS (8 cores / 16 threads) | about 1.2 cores | about 0.7 cores |
 
-  Each channel also uses about 1 GB of memory. Capture runs at a lower
+  Each tuner also uses memory: about 0.8 GB while playing at 720p, and about
+  0.6 GB while waiting for a channel (see *Between channels* below to free
+  that). **Settings → System** shows what Built-in Capture is using right now. Capture runs at a lower
   priority than the rest of FastChannels, so scrapes and the admin pages stay
   responsive while it works.
 
@@ -59,6 +61,11 @@ Then choose:
   tuner; three 1080p tuners overloaded it and slowed FastChannels itself.
 - **Encoder:** leave it on *Auto*. It uses your GPU when FastChannels can see
   one, and the CPU otherwise.
+- **Between channels:** *Keep Chrome ready* (the default) leaves each tuner's
+  Chrome open, so a channel starts in about 10 seconds; each tuner keeps about
+  0.6 GB of memory in use, even when nothing is playing. *Close Chrome when
+  idle* frees that memory after 5 minutes with nothing playing, and the next
+  channel takes about 8 seconds longer to start while Chrome opens.
 
 Changes to tuners, quality or encoder wait until nothing is playing, so they
 never cut off someone who's watching.

@@ -2903,6 +2903,25 @@ function _stat(label, value, cls = '') {
   return `<div class="stat-row"><span class="stat-label">${label}</span><span class="stat-value ${cls}">${value}</span></div>`;
 }
 
+function _captureStatsSection(c) {
+  if (!c) return '';
+  if (!c.running) {
+    return `<div><div class="stats-section-label">Built-in Capture</div>${_stat('Status', 'Not running', 'warn')}</div>`;
+  }
+  const t = c.tuners || {};
+  const parts = [['busy', 'playing'], ['idle', 'ready'], ['starting', 'starting'], ['asleep', 'closed'], ['error', 'problem']]
+    .filter(([k]) => t[k]).map(([k, w]) => `${t[k]} ${w}`);
+  return `
+        <div>
+          <div class="stats-section-label">Built-in Capture</div>
+          ${_stat('Tuners', c.enabled ? (parts.join(', ') || 'none') : 'Turned off', t.error ? 'warn' : '')}
+          ${_stat('Memory (part of process memory)', c.memory_bytes != null ? _fmt_bytes(c.memory_bytes) : (c.enabled ? 'Unavailable' : '0 B'))}
+          ${_stat('Between channels', c.keep_warm === false ? 'Chrome closes when idle' : 'Chrome kept ready', 'muted')}
+          ${_stat('Quality', (c.quality || '').replace('p', 'p ') + ' fps', 'muted')}
+          ${_stat('Encoder', c.encoder, 'muted')}
+        </div>`;
+}
+
 async function loadSystemStats() {
   const body = document.getElementById('system-stats-body');
   try {
@@ -2946,7 +2965,9 @@ async function loadSystemStats() {
           ${disk.camoufox_bytes != null ? _stat('&nbsp;&nbsp;Camoufox (browser sign-ins)', _fmt_bytes(disk.camoufox_bytes), 'muted') : ''}
           ${disk.chromium_bytes != null ? _stat('&nbsp;&nbsp;Chromium (headless)', _fmt_bytes(disk.chromium_bytes), 'muted') : ''}
           ${disk.python_bytes != null ? _stat('&nbsp;&nbsp;Python packages', _fmt_bytes(disk.python_bytes), 'muted') : ''}
+          ${disk.capture_chrome_bytes != null ? _stat('&nbsp;&nbsp;Chrome (Built-in Capture)', _fmt_bytes(disk.capture_chrome_bytes), 'muted') : ''}
           ${_stat('Data volume (/data)', disk.data_bytes != null ? _fmt_bytes(disk.data_bytes) : 'Unavailable')}
+          ${disk.capture_data_bytes != null ? _stat('&nbsp;&nbsp;Built-in Capture', _fmt_bytes(disk.capture_data_bytes), 'muted') : ''}
           ${disk.data_disk_free_bytes != null ? _stat('Free on /data disk', `${_fmt_bytes(disk.data_disk_free_bytes)} of ${_fmt_bytes(disk.data_disk_total_bytes)}`, disk.data_disk_free_bytes < 5368709120 ? 'warn' : 'muted') : ''}
         </div>
         <div>
@@ -2969,6 +2990,7 @@ async function loadSystemStats() {
           ${_stat('Background workers', proc.background_worker_count != null ? proc.background_worker_count.toLocaleString() : 'Unavailable')}
           ${_stat('Background RSS avg', proc.background_worker_rss_avg_bytes ? _fmt_bytes(proc.background_worker_rss_avg_bytes) : 'Unavailable')}
         </div>
+        ${_captureStatsSection(d.capture)}
       </div>
       <div class="stats-uptime">Uptime: ${_fmt_uptime(d.uptime_seconds)}</div>`;
   } catch(e) {

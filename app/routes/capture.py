@@ -325,7 +325,7 @@ def capture_action(action: str):
         data = request.get_json(silent=True) or {}
         was_active = capture.is_active()
         cfg = capture.read_config()
-        cfg.update({k: data[k] for k in ('enabled', 'max_tuners', 'quality', 'encoder') if k in data})
+        cfg.update({k: data[k] for k in ('enabled', 'max_tuners', 'quality', 'encoder', 'keep_warm') if k in data})
         cfg = capture.write_config(cfg)
         capture.daemon_request('POST', '/reconcile', timeout=3)
         if capture.is_active() != was_active:
