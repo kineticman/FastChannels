@@ -125,12 +125,14 @@ CPU. NVIDIA GPUs aren't supported.
 Built-in Capture works with the same DRM sources as PrismCast. Verified so far:
 Paramount+, Sling, DirecTV Stream, Spectrum, ESPN, NBCUniversal TV Everywhere,
 Disney TV Everywhere, PBS, SportsNet Pittsburgh, Amazon Sports, Amazon Prime
-Free Channels and Vidaa.
+Free Channels, Philo, The Roku Channel and Vidaa. Other DRM sources should work
+the same way but haven't been tried yet.
 
 Not available:
 
-- **CNN TV Everywhere** and **HBO Max**: their license servers refuse Chrome on
-  Linux.
+- **CNN TV Everywhere**: its license server refuses Chrome on Linux.
+- **HBO Max**: uses the same license system as CNN, so it's left out too
+  (not yet confirmed during a live event).
 - **Fubo**: its license server only gives playable keys to hardware players.
 
 **Amazon** channels play in SD (576p). Amazon gives HD only to hardware players

@@ -51,6 +51,9 @@ CHROME_BIN = '/usr/bin/google-chrome-stable'
 #   cnn_tve — HTTP 400 vmp_platform_not_verified (Warner Bros. Discovery enforces VMP)
 #   fubo    — license granted, but every key is output-restricted for software Widevine
 # hbomax shares CNN's WBD license stack, so it's excluded until someone shows otherwise.
+# 2026-11-20: couldn't confirm either way: HBO Max events refuse playback before their
+# window opens ("access.denied.before.playable.windows"), so retry during a live event.
+# Also verified working that day: philo, roku.
 INCOMPATIBLE_SOURCES = frozenset({'cnn_tve', 'fubo', 'hbomax'})
 
 QUALITY_PRESETS = {
