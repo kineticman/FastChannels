@@ -11,56 +11,60 @@
   <link rel="stylesheet" href="{{ url_for('static', filename='css/settings.css') }}">
   {% include 'admin/_theme_head.html' %}
 </head>
-<body>
+{#- Same layout as Settings (settings.js drives the rail): a method per panel. -#}
+<body class="settings-page bridge-page">
 
   {% set active_page = 'bridge' %}
   {% include 'admin/_nav.html' %}
 
-  {% set live_methods = bridge_methods|selectattr('state', 'equalto', 'live')|list %}
-  {% set usable_methods = bridge_methods|rejectattr('state', 'equalto', 'off')|rejectattr('state', 'equalto', 'setup')|list %}
-  {% set method_copy = {
-    'ah4c': {
-      'kicker': 'Best for multi-tuner setups',
-      'blurb': 'Several channels at once: ah4c gives each one its own Android TV device and encoder.',
-      'links': [('ah4c Capture setup guide', 'https://github.com/kineticman/FastChannels/blob/development/docs/fc-player-setup.md#ah4c-capture-multi-tuner'), ('ah4c documentation', 'https://github.com/sullrich/ah4c')],
-    },
-    'hdmi': {
-      'kicker': 'Single stream',
-      'blurb': 'One Android TV device and one HDMI capture input. One channel at a time.',
-      'links': [('Single-port HDMI Capture setup guide', 'https://github.com/kineticman/FastChannels/blob/development/docs/fc-player-setup.md#1-set-up-and-test-single-port-hdmi-capture')],
-    },
-    'external': {
-      'kicker': 'APITuner and other tuners',
-      'blurb': 'For tuners like APITuner that run their own Android TV devices and capture.',
-      'links': [('External tuner API', 'https://github.com/kineticman/FastChannels/blob/development/docs/external-tuner-api.md'), ('APITuner', 'https://github.com/matthewfkoch/APITuner')],
-    },
-    'prismcast': {
-      'kicker': 'Browser capture',
-      'blurb': 'Uses a separate PrismCast app to play and capture DRM channels in a browser.',
-      'links': [('PrismCast documentation', 'https://github.com/hjdhjd/prismcast')],
-    },
-    'capture': {
-      'kicker': 'Beta · nothing else to run',
-      'blurb': 'Plays DRM channels in a browser built into FastChannels. No extra device, encoder or container.',
-      'links': [],
-    },
-  } %}
-  {% set method_anchor = {'ah4c': 'bridge-card-ah4c', 'hdmi': 'bridge-card-single-encoder', 'external': 'bridge-card-external', 'prismcast': 'bridge-card-prismcast', 'capture': 'bridge-card-capture'} %}
-  {% set state_labels = {'live': 'Working', 'ready': 'Ready', 'setup': 'Needs setup', 'off': 'Needs setup'} %}
   {% set methods_by_key = {} %}
   {% for m in bridge_methods %}{% set _ = methods_by_key.update({m.key: m}) %}{% endfor %}
+  {% set live_methods = bridge_methods|selectattr('state', 'equalto', 'live')|list %}
+  {% set usable_methods = bridge_methods|selectattr('enabled')|rejectattr('state', 'in', ['off', 'setup'])|list %}
+  {% set any_player_method = methods_by_key.hdmi.enabled or methods_by_key.ah4c.enabled %}
   {% set method_groups = [
     ('No extra hardware', ['capture', 'prismcast']),
-    ('With an Android TV device (best picture)', ['hdmi', 'ah4c', 'external']),
+    ('With an Android TV device', ['hdmi', 'ah4c', 'external']),
   ] %}
-  {% set any_player_method = methods_by_key.hdmi.enabled or methods_by_key.ah4c.enabled %}
-  {% set cov_labels = {'prismcast': 'PrismCast', 'capture': 'Built-in', 'hdmi': 'HDMI', 'ah4c': 'ah4c', 'external': 'External'} %}
-  {% set cov_on = ['prismcast', 'capture', 'hdmi', 'ah4c', 'external']|select('in', bridge_methods|selectattr('enabled')|map(attribute='key')|list)|list %}
-  {% set cov_keys = cov_on if cov_on else ['prismcast', 'capture', 'hdmi', 'ah4c', 'external'] %}
+  {% set panel = {
+    'capture':   {'title': 'Built-in Capture', 'badge': 'Beta',
+                  'about': 'Plays DRM channels in a browser built into FastChannels. Nothing else to run.',
+                  'links': []},
+    'prismcast': {'title': 'PrismCast', 'badge': '',
+                  'about': 'Uses your PrismCast server to play and capture DRM channels in a browser.',
+                  'links': [('PrismCast', 'https://github.com/hjdhjd/prismcast')]},
+    'hdmi':      {'title': 'Single-port HDMI Capture', 'badge': '',
+                  'about': 'An Android TV device plays the channel and one HDMI capture input records it. One channel at a time.',
+                  'links': [('Setup guide', 'https://github.com/kineticman/FastChannels/blob/development/docs/fc-player-setup.md#1-set-up-and-test-single-port-hdmi-capture')]},
+    'ah4c':      {'title': 'ah4c Capture', 'badge': '',
+                  'about': 'Several channels at once: ah4c picks an Android TV device and encoder for each one.',
+                  'links': [('Setup guide', 'https://github.com/kineticman/FastChannels/blob/development/docs/fc-player-setup.md#ah4c-capture-multi-tuner'), ('ah4c', 'https://github.com/sullrich/ah4c')]},
+    'external':  {'title': 'External tuners', 'badge': '',
+                  'about': 'For tuners like APITuner that run their own Android TV devices and capture.',
+                  'links': [('External tuner API', 'https://github.com/kineticman/FastChannels/blob/development/docs/external-tuner-api.md'), ('APITuner', 'https://github.com/matthewfkoch/APITuner')]},
+  } %}
+  {% set include_for = {
+    'capture': 'admin/bridge/capture.html', 'prismcast': 'admin/settings/prismcast.html',
+    'hdmi': 'admin/bridge/single_encoder.html', 'ah4c': 'admin/bridge/ah4c.html',
+    'external': 'admin/bridge/external.html',
+  } %}
+
+  {%- macro status(m) -%}
+    {%- if not m.enabled -%}off
+    {%- elif m.paused -%}paused
+    {%- elif m.state == 'live' -%}working
+    {%- elif m.state == 'ready' -%}waiting
+    {%- else -%}setup{%- endif -%}
+  {%- endmacro %}
+  {% set status_text = {'off': 'Off', 'paused': 'Paused', 'working': 'Working',
+                        'waiting': 'Waiting for Bridge mode', 'setup': 'Needs setup'} %}
+
   {% set step_method = usable_methods|length > 0 %}
   {% set step_source = bridge_coverage.enabled|length > 0 %}
   {% set step_audit = bridge_coverage.ready_channels > 0 %}
   {% set setup_done = step_method and bridge_enabled and step_source and step_audit %}
+  {% set rail_order = ['capture', 'prismcast', 'hdmi', 'ah4c', 'external'] %}
+  {% set default_panel = (rail_order|select('in', bridge_methods|selectattr('enabled')|map(attribute='key')|list)|list + ['capture'])|first %}
 
   <div class="page">
     {% if ui.lite and not ui.show_bridge %}
@@ -68,219 +72,175 @@
       Advanced feature: <a href="/admin/settings#interface-card">turn on advanced mode</a> to see it in the menu.
     </div></div>
     {% endif %}
-    <h1>Bridge</h1>
-    <p class="subtitle">Keep DRM channels available by routing them through a compatible playback and capture path.</p>
 
-    <!-- Status strip: master switch, what is live, healthcheck -->
-    <div class="source-card" id="settings-card-bridge-mode" style="margin-bottom:1.5rem">
-      <div class="source-body open bridge-card-body">
-        <div class="bridge-status">
-          <label class="toggle-switch" title="On: DRM-capable channels stay active when a configured method supports their source. Off: they follow the normal disabled-DRM behavior, even if a method is configured.">
-            <input type="checkbox" id="bridge-enabled" {% if bridge_enabled %}checked{% endif %} onchange="saveBridgeMode()">
-            <span class="toggle-slider"></span>
-          </label>
-          <div class="bridge-status-text">
-            <div class="bridge-status-title">Bridge mode is {{ 'on' if bridge_enabled else 'off' }} <span class="save-status" id="bridge-mode-status"></span></div>
-            <div class="bridge-status-facts">
-              {% if live_methods %}
-              <span><strong>{{ live_methods|map(attribute='label')|join(' · ') }}</strong> live</span>
-              <span><strong>{{ bridge_coverage.ready_channels }}</strong> channel{{ '' if bridge_coverage.ready_channels == 1 else 's' }} bridged across <strong>{{ bridge_coverage.ready_sources }}</strong> source{{ '' if bridge_coverage.ready_sources == 1 else 's' }}</span>
-              {% elif bridge_enabled %}
-              <span>No method is configured yet, so DRM channels still follow the normal disabled-DRM behavior.</span>
-              {% elif usable_methods %}
-              <span>{{ usable_methods|map(attribute='label')|join(' · ') }} {{ 'is' if usable_methods|length == 1 else 'are' }} configured and waiting on this switch.</span>
-              {% else %}
-              <span>DRM channels follow the normal disabled-DRM behavior.</span>
-              {% endif %}
-            </div>
-          </div>
-          <div class="bridge-healthcheck-actions">
-            <button class="btn btn-secondary" id="bridge-healthcheck-copy" onclick="copyBridgeHealthcheck()" disabled>Copy forum report</button>
-            <button class="btn btn-primary" id="bridge-healthcheck-run" onclick="runBridgeHealthcheck()" title="Checks Bridge mode, the FastChannels Player device, Single-port HDMI Capture and ah4c tuners without tuning a channel or changing a device.">Run healthcheck</button>
-          </div>
-        </div>
-        {% if usable_methods and not bridge_enabled and drm_bridge_recoverable_count %}
-        <div class="help" style="color:var(--accent-soft);margin-top:0.75rem">💡 {{ drm_bridge_recoverable_count }} DRM channel{{ 's' if drm_bridge_recoverable_count != 1 else '' }} {{ 'is' if drm_bridge_recoverable_count == 1 else 'are' }} currently disabled. Turn on Bridge mode to recover {{ 'it' if drm_bridge_recoverable_count == 1 else 'them' }}.</div>
+    <header class="bridge-head">
+      <div>
+        <h1>Bridge</h1>
+        <p class="subtitle">Play DRM channels in your DVR through a capture method.</p>
+      </div>
+      <label class="bridge-master" title="On: DRM channels stay available through the methods you've turned on. Off: they're disabled, as they would be without Bridge.">
+        <span>Bridge mode</span>
+        <span class="toggle-switch">
+          <input type="checkbox" id="bridge-enabled" {% if bridge_enabled %}checked{% endif %} onchange="saveBridgeMode()">
+          <span class="toggle-slider"></span>
+        </span>
+      </label>
+    </header>
+
+    <div class="bridge-summary" id="settings-card-bridge-mode">
+      <p>
+        {% if bridge_enabled and live_methods %}
+        <strong>{{ '{:,}'.format(bridge_coverage.ready_channels) }}</strong> DRM channel{{ '' if bridge_coverage.ready_channels == 1 else 's' }} ready across {{ bridge_coverage.ready_sources }} source{{ '' if bridge_coverage.ready_sources == 1 else 's' }}.
+        {% elif bridge_enabled %}
+        Bridge mode is on, but no method is working yet. Turn one on below.
+        {% elif usable_methods %}
+        Bridge mode is off, so your methods aren't in use.{% if drm_bridge_recoverable_count %} Turn it on to bring back {{ '{:,}'.format(drm_bridge_recoverable_count) }} DRM channel{{ '' if drm_bridge_recoverable_count == 1 else 's' }}.{% endif %}
+        {% else %}
+        Bridge mode is off. DRM channels are disabled until you set up a method and turn it on.
         {% endif %}
-        <div id="bridge-healthcheck-results" class="bridge-healthcheck-results" hidden aria-live="polite"></div>
-        <div id="bridge-live-test-picker" class="bridge-live-test-picker" hidden></div>
+        <span class="save-status" id="bridge-mode-status"></span>
+      </p>
+      <div class="bridge-summary-actions">
+        <button class="btn btn-secondary" id="bridge-healthcheck-copy" onclick="copyBridgeHealthcheck()" disabled hidden>Copy report</button>
+        <button class="btn btn-secondary" id="bridge-healthcheck-run" onclick="runBridgeHealthcheck()" title="Checks Bridge mode, your Android TV devices, HDMI capture and ah4c without tuning a channel.">Run check</button>
       </div>
     </div>
+    <div id="bridge-healthcheck-results" class="bridge-healthcheck-results" hidden aria-live="polite"></div>
+    <div id="bridge-live-test-picker" class="bridge-live-test-picker" hidden></div>
 
     {% if not setup_done %}
-    <!-- First-run checklist: disappears once the chain is complete -->
-    <div class="source-card" style="margin-bottom:1.5rem">
-      <div class="source-body open bridge-card-body">
-        <div class="source-name" style="font-size:1rem">Getting started</div>
-        <ol class="bridge-steps">
-          <li class="{{ 'done' if step_method }}"><span class="bridge-step-mark"></span><div><strong>Turn on a method</strong> under <a href="#bridge-methods">Methods</a> and fill in its settings.</div></li>
-          <li class="{{ 'done' if bridge_enabled }}"><span class="bridge-step-mark"></span><div><strong>Turn on Bridge mode</strong> with the switch above.</div></li>
-          <li class="{{ 'done' if step_source }}"><span class="bridge-step-mark"></span><div><strong>Enable a DRM-capable source.</strong> See <a href="#bridge-coverage">Coverage</a> for the ones each method supports, then add it on <a href="/admin/sources">Sources</a>.</div></li>
-          <li class="{{ 'done' if step_audit }}"><span class="bridge-step-mark"></span><div><strong>Run a Stream Audit</strong> on each source you want bridged. The audit detects DRM and marks eligible channels for bridge output; without it, existing channels still look like ordinary or disabled streams.</div></li>
-          <li><span class="bridge-step-mark"></span><div><strong>Add the bridge M3U to your DVR</strong> from <a href="/admin/feeds">Feeds</a>, alongside your regular feed.</div></li>
-        </ol>
-      </div>
-    </div>
+    <ol class="bridge-start" aria-label="Getting started">
+      <li class="{{ 'done' if step_method }}"><strong>Turn on a method</strong> and fill in its settings.</li>
+      <li class="{{ 'done' if bridge_enabled }}"><strong>Turn on Bridge mode</strong> at the top.</li>
+      <li class="{{ 'done' if step_source }}"><strong>Turn on a DRM source</strong> on <a href="/admin/sources">Sources</a>.</li>
+      <li class="{{ 'done' if step_audit }}"><strong>Run its Stream Audit</strong> to find the DRM channels.</li>
+      <li><strong>Add the bridge playlist</strong> from <a href="/admin/feeds">Feeds</a> to your DVR.</li>
+    </ol>
     {% endif %}
 
-    <!-- Methods: one tile per method with its on/off switch; a method that's off has
-         its settings card below collapsed. -->
-    <h2 class="bridge-section-title" id="bridge-methods">Methods</h2>
-    {% for group_label, keys in method_groups %}
-    <div class="bridge-method-group-label">{{ group_label }}</div>
-    <div class="bridge-method-grid">
-      {% for key in keys %}
-      {% set method = methods_by_key[key] %}
-      {% set copy = method_copy[key] %}
-      <article class="bridge-method {{ ('bridge-method-' ~ method.state) if method.enabled else 'bridge-method-disabled' }}">
-        <div class="bridge-method-head">
-          <div class="bridge-method-title">{{ method.label }}</div>
-          <label class="toggle-switch" title="Turn {{ method.label }} {{ 'off' if method.enabled else 'on' }}">
-            {%- if key == 'ah4c' %}<input type="checkbox" id="fc-player-ah4c-enabled" {% if method.enabled %}checked{% endif %} onchange="saveFcPlayerAh4cToggle()">
-            {%- elif key == 'hdmi' %}<input type="checkbox" id="fc-player-hdmi-enabled" {% if method.enabled %}checked{% endif %} onchange="saveFcPlayerHdmiToggle()">
-            {%- elif key == 'external' %}<input type="checkbox" id="external-player-enabled" {% if method.enabled %}checked{% endif %} {% if method.locked %}disabled title="Turned on by {{ external_player_env_name }}"{% endif %} onchange="saveExternalPlayerToggle()">
-            {%- elif key == 'prismcast' %}<input type="checkbox" id="prismcast-enabled" {% if method.enabled %}checked{% endif %} onchange="savePrismcastToggle()">
-            {%- elif key == 'capture' %}<input type="checkbox" id="capture-method-toggle" {% if method.enabled %}checked{% endif %} onchange="captureMethodToggle(this)">
-            {%- endif %}
-            <span class="toggle-slider"></span>
-          </label>
+    <div class="settings-layout">
+      <aside class="settings-sidebar">
+        <nav class="settings-section-nav bridge-nav" aria-label="Bridge methods">
+          {% for group_label, keys in method_groups %}
+          <div class="bridge-nav-group">{{ group_label }}</div>
+          {% for key in keys %}
+          {% set m = methods_by_key[key] %}
+          {% set st = status(m) %}
+          <a href="#settings-section-{{ key }}" class="bridge-nav-{{ st }}">
+            <span>{{ panel[key].title }}</span>
+            <small><i class="bridge-dot" aria-hidden="true"></i>{{ status_text[st] }}</small>
+          </a>
+          {% endfor %}
+          {% if loop.last %}
+          <a href="#settings-section-devices" class="bridge-nav-plain">
+            <span>Your devices</span>
+            <small>{{ 'Fire TV and Android TV' if any_player_method else 'Used by HDMI and ah4c' }}</small>
+          </a>
+          {% endif %}
+          {% endfor %}
+        </nav>
+        <div class="settings-mobile-nav" hidden>
+          <label for="settings-section-picker">Method</label>
+          <select id="settings-section-picker">
+            {% for group_label, keys in method_groups %}
+            <optgroup label="{{ group_label }}">
+              {% for key in keys %}<option value="settings-section-{{ key }}">{{ panel[key].title }} ({{ status_text[status(methods_by_key[key])]|lower }})</option>{% endfor %}
+              {% if loop.last %}<option value="settings-section-devices">Your devices</option>{% endif %}
+            </optgroup>
+            {% endfor %}
+          </select>
         </div>
-        <div class="bridge-method-kicker">{{ copy.kicker }}</div>
-        {% if not method.enabled %}
-        <p>{{ copy.blurb }}</p>
-        {% elif method.paused %}
-        <p><span class="bridge-state bridge-state-setup">Paused</span> Hardware capture is off. <button class="btn btn-secondary btn-sm" onclick="resumeHardwareCapture()">Resume</button></p>
-        {% else %}
-        <p><span class="bridge-state bridge-state-{{ method.state }}">{{ state_labels[method.state] }}</span>
-          {% if method.state in ('setup', 'off') and method.missing %} Still needs {{ method.missing }}.
-          {% elif method.state == 'ready' %} Turn on Bridge mode above to use it.
-          {% endif %}</p>
-        {% endif %}
-        {% for text, href in copy.links %}
-        <a href="{{ href }}" target="_blank" rel="noopener">{{ text }} ↗</a>
-        {% endfor %}
-        {% if method.enabled %}
-        <a class="btn btn-secondary bridge-method-jump" href="#{{ method_anchor[key] }}">Settings ↓</a>
-        {% endif %}
-      </article>
-      {% endfor %}
-    </div>
-    {% endfor %}
+      </aside>
 
-    <!-- Coverage: every bridge-capable source against every method -->
-    <h2 class="bridge-section-title" id="bridge-coverage">Coverage</h2>
-    <div class="source-card" style="margin-bottom:1.5rem">
-      <div class="source-body open bridge-card-body">
-        {% macro cell(state) -%}
-          {%- if state == 'live' -%}<span class="bridge-dot bridge-dot-live" title="Supported, and this method is live">●</span>
-          {%- elif state == 'idle' -%}<span class="bridge-dot bridge-dot-idle" title="Supported, but this method is not live here">○</span>
-          {%- elif state == 'supported' -%}<span class="bridge-dot bridge-dot-idle" title="Supported">○</span>
-          {%- else -%}<span class="bridge-dot bridge-dot-na" title="Not verified for this method">–</span>
-          {%- endif -%}
-        {%- endmacro %}
-        {% macro head() %}
-        <thead>
-          <tr>
-            <th scope="col" class="bridge-cov-source">Source</th>
-            {% for k in cov_keys %}<th scope="col" class="bridge-cov-method">{{ cov_labels[k] }}</th>{% endfor %}
-            <th scope="col" class="bridge-cov-count">Channels</th>
-            <th scope="col" class="bridge-cov-next">Next step</th>
-          </tr>
-        </thead>
-        {% endmacro %}
-        {% if bridge_coverage.enabled %}
-        <div class="bridge-cov-wrap">
-          <table class="bridge-cov">
-            {{ head() }}
-            <tbody>
-              {% for row in bridge_coverage.enabled %}
-              {% set any_live = 'live' in row.cells.values() %}
-              <tr>
-                <th scope="row" class="bridge-cov-source">{{ row.display_name }}</th>
-                {% for k in cov_keys %}<td class="bridge-cov-method">{{ cell(row.cells[k]) }}</td>{% endfor %}
-                {% if row.candidate_count %}
-                <td class="bridge-cov-count" title="{{ row.candidate_count }} of {{ row.channel_count }} channels need a bridge"><span class="bridge-cov-ready">{{ '{:,}'.format(row.candidate_count) }} ready</span></td>
-                {% elif row.channel_count %}
-                <td class="bridge-cov-count"><span class="bridge-cov-warn">Needs audit</span></td>
-                {% else %}
-                <td class="bridge-cov-count"><span class="bridge-cov-of">No channels yet</span></td>
-                {% endif %}
-                <td class="bridge-cov-next">
-                  {% if not any_live %}<a href="#bridge-methods">{{ 'Turn on Bridge mode' if usable_methods and not bridge_enabled else 'Set up a method' }} ↑</a>
-                  {% elif not row.channel_count %}<a href="/admin/sources">Scrape source →</a>
-                  {% elif not row.candidate_count %}<a href="/admin/sources">Run audit →</a>
-                  {% else %}<span class="bridge-cov-of">—</span>{% endif %}
-                </td>
-              </tr>
-              {% endfor %}
-            </tbody>
-          </table>
-        </div>
-        {% else %}
-        <div class="help">No DRM-capable sources are enabled on this server yet. Enable one on <a href="/admin/sources">Sources</a>, then return here.</div>
-        {% endif %}
-        {% if bridge_coverage.other %}
-        <details class="bridge-cov-other">
-          <summary>{{ bridge_coverage.other|length }} more supported source{{ '' if bridge_coverage.other|length == 1 else 's' }} you haven't enabled</summary>
-          <div class="bridge-cov-wrap">
-            <table class="bridge-cov">
-              {{ head() }}
-              <tbody>
-                {% for row in bridge_coverage.other %}
-                <tr>
-                  <th scope="row" class="bridge-cov-source">{{ row.display_name }}</th>
-                  {% for k in cov_keys %}<td class="bridge-cov-method">{{ cell(row.cells[k]) }}</td>{% endfor %}
-                  <td class="bridge-cov-count"><span class="bridge-cov-of">—</span></td>
-                  <td class="bridge-cov-next"><a href="/admin/sources">Enable source →</a></td>
-                </tr>
-                {% endfor %}
-              </tbody>
-            </table>
+      <div class="settings-content">
+        {#- The panel shown with no #hash is the first in the page, so the default
+            (first method that's on) is rendered first: no hash, no load-time jump. -#}
+        {% for key in [default_panel] + rail_order|reject('equalto', default_panel)|list %}
+        {% set m = methods_by_key[key] %}
+        {% set st = status(m) %}
+        <section class="settings-section bridge-panel" id="settings-section-{{ key }}" aria-labelledby="bridge-title-{{ key }}">
+          <div class="bridge-panel-head">
+            <div class="bridge-panel-title">
+              <h2 id="bridge-title-{{ key }}" tabindex="-1">{{ panel[key].title }}{% if panel[key].badge %} <span class="badge badge-beta">{{ panel[key].badge }}</span>{% endif %}</h2>
+              <p>{{ panel[key].about }}</p>
+              {% if panel[key].links %}
+              <p class="bridge-panel-links">{% for text, href in panel[key].links %}<a href="{{ href }}" target="_blank" rel="noopener">{{ text }}</a>{% endfor %}</p>
+              {% endif %}
+            </div>
+            <div class="bridge-panel-switch">
+              <span class="bridge-pill bridge-pill-{{ st }}">{{ status_text[st] }}</span>
+              <label class="toggle-switch" title="Turn {{ panel[key].title }} {{ 'off' if m.enabled else 'on' }}">
+                {%- if key == 'ah4c' %}<input type="checkbox" id="fc-player-ah4c-enabled" {% if m.enabled %}checked{% endif %} onchange="saveFcPlayerAh4cToggle()">
+                {%- elif key == 'hdmi' %}<input type="checkbox" id="fc-player-hdmi-enabled" {% if m.enabled %}checked{% endif %} onchange="saveFcPlayerHdmiToggle()">
+                {%- elif key == 'external' %}<input type="checkbox" id="external-player-enabled" {% if m.enabled %}checked{% endif %} {% if m.locked %}disabled title="Turned on by {{ external_player_env_name }}"{% endif %} onchange="saveExternalPlayerToggle()">
+                {%- elif key == 'prismcast' %}<input type="checkbox" id="prismcast-enabled" {% if m.enabled %}checked{% endif %} onchange="savePrismcastToggle()">
+                {%- elif key == 'capture' %}<input type="checkbox" id="capture-method-toggle" {% if m.enabled %}checked{% endif %} onchange="captureMethodToggle(this)">
+                {%- endif %}
+                <span class="toggle-slider"></span>
+              </label>
+            </div>
           </div>
-        </details>
-        {% endif %}
-        <div class="help bridge-cov-legend">
-          <span><span class="bridge-dot bridge-dot-live">●</span> working</span>
-          <span><span class="bridge-dot bridge-dot-idle">○</span> supported, not set up</span>
-          <span><span class="bridge-dot bridge-dot-na">–</span> not available</span>
-        </div>
-        <div class="help">Bridge playlists are on <a href="/admin/feeds">Feeds</a>. Add them next to your regular playlist.</div>
+
+          {% if m.paused %}
+          <div class="bridge-note">Paused because hardware capture is off. <button class="btn btn-secondary btn-sm" onclick="resumeHardwareCapture()">Resume</button></div>
+          {% elif m.enabled and st == 'setup' and m.missing %}
+          <div class="bridge-note">Still needs {{ m.missing }}.</div>
+          {% elif st == 'waiting' %}
+          <div class="bridge-note">Ready. Turn on Bridge mode at the top to start using it.</div>
+          {% endif %}
+
+          {% include include_for[key] %}
+
+          {% if key != 'external' or m.enabled %}
+          {% set rows = bridge_coverage.enabled %}
+          <div class="bridge-works">
+            <h3>Works with</h3>
+            {% if rows %}
+            <ul class="bridge-chips">
+              {% for row in rows %}
+              {% set cell = row.cells[key] %}
+              {% if cell == 'na' %}
+              <li class="bridge-chip is-na" title="Not available with {{ panel[key].title }}">{{ row.display_name }}</li>
+              {% elif row.candidate_count %}
+              <li class="bridge-chip is-ready" title="{{ row.candidate_count }} DRM channel{{ '' if row.candidate_count == 1 else 's' }} ready">{{ row.display_name }} <b>{{ '{:,}'.format(row.candidate_count) }}</b></li>
+              {% elif row.channel_count %}
+              <li class="bridge-chip is-audit"><a href="/admin/sources" title="Run this source's Stream Audit to find its DRM channels">{{ row.display_name }} <b>needs audit</b></a></li>
+              {% else %}
+              <li class="bridge-chip" title="No channels yet">{{ row.display_name }}</li>
+              {% endif %}
+              {% endfor %}
+            </ul>
+            {% else %}
+            <p class="help">None of your sources use DRM yet. Turn one on in <a href="/admin/sources">Sources</a>.</p>
+            {% endif %}
+            {% set more = bridge_coverage.other|rejectattr('cells.' ~ key, 'equalto', 'na')|list %}
+            {% if more %}
+            <p class="help">Also works with {{ more|map(attribute='display_name')|join(', ') }} if you turn {{ 'it' if more|length == 1 else 'them' }} on in <a href="/admin/sources">Sources</a>.</p>
+            {% endif %}
+          </div>
+          {% endif %}
+        </section>
+        {% endfor %}
+
+        <section class="settings-section bridge-panel" id="settings-section-devices" aria-labelledby="bridge-title-devices">
+          <div class="bridge-panel-head">
+            <div class="bridge-panel-title">
+              <h2 id="bridge-title-devices" tabindex="-1">Your devices</h2>
+              <p>Fire TV and Android TV devices running FastChannels Player, used by HDMI Capture and ah4c.</p>
+            </div>
+          </div>
+          {% include 'admin/bridge/devices.html' %}
+        </section>
       </div>
     </div>
-
-    <!-- Settings: a card per method, expanded when the method is on (click a
-         collapsed header to look inside anyway). -->
-    <h2 class="bridge-section-title">Settings</h2>
-    <div class="bridge-method-cards">
-      {% include 'admin/bridge/capture.html' %}
-      {% include 'admin/settings/prismcast.html' %}
-      {% include 'admin/bridge/devices.html' %}
-      {% include 'admin/bridge/single_encoder.html' %}
-      {% include 'admin/bridge/ah4c.html' %}
-      {% include 'admin/bridge/external.html' %}
-    </div>
-    <script>
-      // Collapsed settings cards open on a header click, so settings stay reachable
-      // while a method is off.
-      document.querySelectorAll('.bridge-method-cards .source-header[data-collapsible]').forEach((h) => {
-        h.addEventListener('click', (e) => {
-          if (e.target.closest('a, button, input, label, select')) return;
-          h.parentElement.querySelector(':scope > .source-body').classList.toggle('open');
-        });
-      });
-      // Jumping to a card from its tile opens it.
-      document.querySelectorAll('.bridge-method-jump').forEach((a) => a.addEventListener('click', () => {
-        const card = document.querySelector(a.getAttribute('href'));
-        const body = card && card.querySelector(':scope > .source-body');
-        if (body) body.classList.add('open');
-      }));
-      async function resumeHardwareCapture() {
-        if (await saveSettings({ fc_player_enabled: true }, 'bridge-mode-status')) setTimeout(() => location.reload(), 500);
-      }
-    </script>
   </div>
 
   {% include 'admin/bridge_modals.html' %}
+  <script>
+    async function resumeHardwareCapture() {
+      if (await saveSettings({ fc_player_enabled: true }, 'bridge-mode-status')) setTimeout(() => location.reload(), 500);
+    }
+  </script>
   <script src="{{ url_for('static', filename='js/admin_theme.js') }}"></script>
   <script>window.FC_SETTINGS_BOOTSTRAP = {};</script>
   <script src="{{ url_for('static', filename='js/settings.js') }}"></script>

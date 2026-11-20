@@ -66,19 +66,56 @@ function initSettingsSectionNav() {
     if (moveFocus) {
       const heading = section.querySelector('h2');
       heading.focus({ preventScroll: true });
-      (target || section).scrollIntoView({ block: 'start' });
+      if (staticPanels && (!target || target === section)) {
+        // Bridge: swap panels in place. Only scroll if the reader is below the top
+        // of the panels, and then just far enough to show the new panel's top.
+        const layout = section.closest('.settings-layout');
+        const offset = (adminNav?.offsetHeight || 0) + 16;
+        const top = layout ? layout.getBoundingClientRect().top - offset : 0;
+        if (top < 0) window.scrollBy({ top, behavior: 'auto' });
+      } else {
+        (target || section).scrollIntoView({ block: 'start' });
+      }
     }
   };
+  // Bridge keeps its header still while switching methods: no native jump to the
+  // hash target (the section element), on clicks or on load.
+  const staticPanels = document.body.classList.contains('bridge-page');
+  const goTo = (hash) => {
+    if (window.location.hash !== hash) history.pushState(null, '', hash);
+    showSection(true);
+  };
   links.forEach((link) => {
-    link.addEventListener('click', () => {
-      if (window.location.hash === link.hash) showSection(true);
+    link.addEventListener('click', (event) => {
+      if (staticPanels) {
+        event.preventDefault();
+        goTo(link.hash);
+      } else if (window.location.hash === link.hash) {
+        showSection(true);
+      }
     });
   });
-  picker?.addEventListener('change', () => { window.location.hash = picker.value; });
+  picker?.addEventListener('change', () => {
+    if (staticPanels) goTo(`#${picker.value}`);
+    else window.location.hash = picker.value;
+  });
   document.querySelector('.settings-mobile-nav').hidden = false;
   document.body.classList.add('settings-navigation-ready');
   showSection();
+  if (staticPanels) {
+    const hashTarget = document.getElementById(window.location.hash.slice(1));
+    if (!hashTarget || hashTarget.classList.contains('settings-section')) {
+      if ('scrollRestoration' in history) history.scrollRestoration = 'manual';
+      window.scrollTo(0, 0);
+      // Chrome applies its own #fragment jump when the page finishes loading.
+      window.addEventListener('load', () => {
+        window.scrollTo(0, 0);
+        setTimeout(() => window.scrollTo(0, 0), 60);
+      }, { once: true });
+    }
+  }
   window.addEventListener('hashchange', () => showSection(true));
+  window.addEventListener('popstate', () => showSection(true));
 }
 
 function refreshSetupStatuses() {
@@ -2349,7 +2386,7 @@ async function runBridgeHealthcheck() {
       && checks.some(check => check.name === 'Single-port HDMI Capture payload' && check.status === 'ok');
     html += `<div class="bridge-live-test-next ${readyForLiveTest ? '' : 'not-ready'}"><div><strong>Final confirmation: Live bridge test</strong><div class="help">${readyForLiveTest ? 'Tune one real bridge channel and verify the Player → Single-port HDMI Capture path. This interrupts the configured device.' : 'Available after the FastChannels Player device and Single-port HDMI Capture payload checks pass.'}</div></div><button class="btn btn-secondary" id="bridge-live-test-open" onclick="openBridgeLiveTest()" ${readyForLiveTest ? '' : 'disabled'}>Live bridge test…</button></div>`;
     results.innerHTML = html;
-    if (copy && _lastBridgeHealthcheckReport) copy.disabled = false;
+    if (copy && _lastBridgeHealthcheckReport) { copy.disabled = false; copy.hidden = false; }
   } catch (error) {
     results.innerHTML = `<div class="bridge-healthcheck-row"><span class="bridge-healthcheck-icon fail">✗</span><div><div class="bridge-healthcheck-name">Healthcheck could not run</div><div class="bridge-healthcheck-detail">${_bridgeHealthcheckEsc(error.message || error)}</div></div></div>`;
   } finally {

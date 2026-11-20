@@ -461,50 +461,6 @@
     .fc-device-msg.error { color: var(--danger); }
     .fc-device-actions { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-top: auto; }
     .fc-device-actions .btn-sm { padding: 0.3rem 0.65rem; font-size: 0.76rem; }
-
-    .bridge-method-grid {
-      display: grid;
-      grid-template-columns: repeat(3, minmax(0, 1fr));
-      gap: 0.8rem;
-      margin-top: 1rem;
-    }
-    .bridge-method {
-      padding: 0.85rem;
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      background: var(--surface-2, var(--surface));
-    }
-    .bridge-method-recommended {
-      border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
-    }
-    .bridge-method-title {
-      color: var(--text);
-      font-weight: 600;
-      font-size: 0.9rem;
-      line-height: 1.35;
-    }
-    .bridge-method-kicker {
-      margin-top: 0.15rem;
-      color: var(--accent-soft);
-      font-size: 0.75rem;
-      font-weight: 600;
-      line-height: 1.35;
-    }
-    .bridge-method p {
-      margin: 0.45rem 0 0.65rem;
-      color: var(--text-soft);
-      font-size: 0.8rem;
-      line-height: 1.45;
-    }
-    .bridge-method a {
-      display: block;
-      width: fit-content;
-      color: var(--accent-soft);
-      font-size: 0.8rem;
-      line-height: 1.5;
-      text-decoration: none;
-    }
-    .bridge-method a:hover { text-decoration: underline; }
     .bridge-method-config {
       margin-top: 1.25rem;
       padding-top: 1rem;
@@ -549,9 +505,7 @@
       text-decoration: none;
     }
     .bridge-source-chip:hover { border-color: var(--accent); }
-    @media (max-width: 720px) {
-      .bridge-method-grid { grid-template-columns: 1fr; }
-    }
+    
     .bridge-source-chip-static {
       display: inline-block;
       padding: 0.35rem 0.55rem;
@@ -564,124 +518,128 @@
     }
 
     /* ── Bridge page: status strip, method tiles, coverage ── */
-    .bridge-section-title {
-      margin: 0 0 0.6rem;
-      color: var(--text-soft);
-      font-size: 0.78rem;
-      font-weight: 700;
-      letter-spacing: 0.06em;
-      text-transform: uppercase;
-      scroll-margin-top: 4.5rem;
-    }
+
     /* These cards have no .source-header, so the body supplies its own top padding. */
-    .bridge-card-body.source-body { padding-top: 1.1rem; }
-    .bridge-status { display: flex; align-items: center; gap: 1rem; }
-    .bridge-status-text { flex: 1; min-width: 0; }
-    .bridge-status-title { color: var(--text); font-size: 1rem; font-weight: 650; }
-    .bridge-status-title .save-status { font-size: 0.8rem; font-weight: 400; margin-left: 0.5rem; }
-    .bridge-status-facts {
-      display: flex; flex-wrap: wrap; gap: 0.15rem 1.1rem;
-      margin-top: 0.2rem; color: var(--text-soft); font-size: 0.83rem; line-height: 1.45;
+
+    /* ── Bridge page (Settings layout: a method per panel) ─────────────────── */
+    .bridge-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 1.5rem; }
+    /* Panels differ a lot in height; a floor keeps a short one from shrinking the
+       page and dragging the header up while switching. */
+    .bridge-page .settings-content { min-height: calc(100vh - var(--settings-header-height, 80px)); }
+    .bridge-page .bridge-head .subtitle { margin-bottom: 1.1rem; }
+    .bridge-master {
+      display: inline-flex; align-items: center; gap: 0.7rem; margin-top: 0.35rem; flex-shrink: 0;
+      padding: 0.5rem 0.6rem 0.5rem 0.9rem; border: 1px solid var(--border); border-radius: 999px;
+      background: var(--surface); color: var(--text); font-size: 0.86rem; font-weight: 600; cursor: pointer;
     }
-    .bridge-status-facts strong { color: var(--text); font-weight: 600; }
-    .bridge-steps { list-style: none; margin: 0.8rem 0 0; padding: 0; display: grid; gap: 0.6rem; }
-    .bridge-steps li {
-      display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 0.65rem;
-      color: var(--text-soft); font-size: 0.85rem; line-height: 1.5;
+    .bridge-master:has(input:checked) { border-color: color-mix(in srgb, var(--success-soft) 45%, var(--border)); }
+    .bridge-summary {
+      display: flex; align-items: center; justify-content: space-between; gap: 1rem; flex-wrap: wrap;
+      margin-bottom: 1.75rem; padding: 0.8rem 1rem; border: 1px solid var(--border); border-radius: 8px;
+      background: var(--surface); color: var(--text-soft); font-size: 0.86rem; line-height: 1.5;
     }
-    .bridge-steps li strong { color: var(--text); }
-    .bridge-steps a { color: var(--accent-soft); text-decoration: none; }
-    .bridge-steps a:hover { text-decoration: underline; }
-    .bridge-step-mark {
-      width: 1.05rem; height: 1.05rem; margin-top: 0.12rem;
-      border: 1.5px solid var(--text-muted); border-radius: 50%;
-      display: grid; place-items: center; font-size: 0.68rem; line-height: 1;
+    .bridge-summary strong { color: var(--text); font-size: 0.95rem; }
+    .bridge-summary-actions { display: flex; gap: 0.5rem; }
+    .bridge-page .bridge-healthcheck-results { margin: -1rem 0 1.75rem; }
+    .bridge-start {
+      display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 0.6rem;
+      margin: -0.75rem 0 1.75rem; padding: 0; list-style: none; counter-reset: step;
     }
-    .bridge-steps li.done { color: var(--text-muted); }
-    .bridge-steps li.done strong { color: var(--text-soft); }
-    .bridge-steps li.done .bridge-step-mark {
-      border-color: var(--success-soft); color: var(--success-soft);
+    .bridge-start li {
+      counter-increment: step; position: relative; padding: 0.7rem 0.8rem 0.7rem 2.4rem;
+      border: 1px dashed var(--border); border-radius: 8px; color: var(--text-muted); font-size: 0.78rem; line-height: 1.45;
     }
-    .bridge-steps li.done .bridge-step-mark::before { content: '✓'; }
-    .bridge-method-grid { margin: 0 0 1.5rem; }
-    .bridge-method { display: flex; flex-direction: column; }
-    .bridge-method-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 0.5rem; }
-    .bridge-method-live { border-color: color-mix(in srgb, var(--success-soft) 45%, var(--border)); }
-    .bridge-method a.bridge-method-jump {
-      margin-top: auto; align-self: flex-start; color: var(--text); font-size: 0.85rem;
+    .bridge-start li::before {
+      content: counter(step); position: absolute; left: 0.75rem; top: 0.7rem;
+      width: 1.2rem; height: 1.2rem; border: 1px solid var(--border); border-radius: 50%;
+      display: grid; place-items: center; font-size: 0.68rem; font-weight: 700; color: var(--text-soft);
     }
-    .bridge-method a.bridge-method-jump:hover { text-decoration: none; }
-    .bridge-method a:has(+ .bridge-method-jump) { margin-bottom: 0.7rem; }
-    .bridge-state {
-      flex-shrink: 0; padding: 0.1rem 0.45rem; border: 1px solid var(--border); border-radius: 999px;
-      color: var(--text-muted); font-size: 0.68rem; font-weight: 600; white-space: nowrap;
+    .bridge-start li strong { display: block; color: var(--text); font-weight: 600; }
+    .bridge-start li.done { border-style: solid; opacity: 0.6; }
+    .bridge-start li.done::before { content: '✓'; color: var(--success-soft); border-color: var(--success-soft); }
+
+    /* Rail: methods grouped, each with its live status. */
+    .bridge-nav .bridge-nav-group {
+      margin: 0.9rem 0 0.2rem 0.85rem; color: var(--text-muted); font-size: 0.72rem; font-weight: 600;
     }
-    .bridge-state-live {
-      color: var(--success-soft);
-      border-color: color-mix(in srgb, var(--success-soft) 45%, var(--border));
+    .bridge-nav .bridge-nav-group:first-child { margin-top: 0; }
+    .bridge-nav a small { display: flex; align-items: center; gap: 0.4rem; }
+    .bridge-dot { width: 0.45rem; height: 0.45rem; border-radius: 50%; background: var(--text-muted); opacity: 0.5; flex-shrink: 0; }
+    .bridge-nav-working .bridge-dot { background: var(--success-soft); opacity: 1; }
+    .bridge-nav-working small { color: var(--success-soft); }
+    .bridge-nav-setup .bridge-dot, .bridge-nav-waiting .bridge-dot, .bridge-nav-paused .bridge-dot { background: var(--warning-soft); opacity: 1; }
+    .bridge-nav-setup small, .bridge-nav-waiting small, .bridge-nav-paused small { color: var(--warning-soft); }
+    .bridge-nav-off span { color: var(--text-muted); }
+    .bridge-nav-plain { margin-top: 0.6rem; border-top: 1px solid var(--border) !important; border-radius: 0 0 8px 8px !important; }
+
+    /* Panel: header with the method's switch, then its settings, then sources. */
+    .bridge-panel-head {
+      display: flex; align-items: flex-start; justify-content: space-between; gap: 1.25rem; margin-bottom: 1.1rem;
     }
-    .bridge-state-ready, .bridge-state-setup {
-      color: var(--warning-soft);
-      border-color: color-mix(in srgb, var(--warning-soft) 45%, var(--border));
+    .bridge-panel-title h2 { margin: 0 0 0.35rem; font-size: 1.3rem; font-weight: 650; }
+    .bridge-panel-title h2:focus { outline: none; }
+    .bridge-panel-title h2 .badge { vertical-align: 0.2em; }
+    .bridge-panel-title p { max-width: 72ch; color: var(--text-muted); font-size: 0.86rem; line-height: 1.5; }
+    .bridge-panel-links { display: flex; gap: 1rem; margin-top: 0.35rem; }
+    .bridge-panel-links a { color: var(--accent-soft); font-size: 0.8rem; text-decoration: none; }
+    .bridge-panel-links a::after { content: ' ↗'; font-size: 0.75em; opacity: 0.7; }
+    .bridge-panel-links a:hover { text-decoration: underline; }
+    .bridge-panel-switch { display: flex; align-items: center; gap: 0.75rem; flex-shrink: 0; padding-top: 0.2rem; }
+    .bridge-pill {
+      padding: 0.2rem 0.6rem; border: 1px solid var(--border); border-radius: 999px;
+      color: var(--text-muted); font-size: 0.72rem; font-weight: 600; white-space: nowrap;
     }
-    /* Methods tiles: grouped, each with its own on/off switch. */
-    .bridge-method-group-label {
-      margin: 0.2rem 0 0.5rem; color: var(--text-muted); font-size: 0.78rem; font-weight: 600;
+    .bridge-pill-working { color: var(--success-soft); border-color: var(--success-border, color-mix(in srgb, var(--success-soft) 45%, var(--border))); }
+    .bridge-pill-setup, .bridge-pill-waiting, .bridge-pill-paused { color: var(--warning-soft); border-color: var(--warning-border); background: var(--warning-bg); }
+    .bridge-note {
+      display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; margin-bottom: 1rem; padding: 0.65rem 0.85rem;
+      border: 1px solid var(--warning-border); border-radius: 8px; background: var(--warning-bg);
+      color: var(--warning-soft); font-size: 0.82rem;
     }
-    .bridge-method-group-label + .bridge-method-grid { margin-top: 0; }
-    .bridge-method-head .toggle-switch { flex-shrink: 0; margin-top: -0.1rem; }
-    .bridge-method-disabled { background: transparent; }
-    .bridge-method-disabled .bridge-method-title { color: var(--text-soft); }
-    .bridge-method-disabled p { color: var(--text-muted); }
-    .bridge-method p .bridge-state { margin-right: 0.35rem; }
-    .bridge-method p .btn-sm { padding: 0.15rem 0.55rem; font-size: 0.74rem; margin-left: 0.35rem; }
-    /* Settings cards for methods that are off: collapsed, marked, still clickable. */
-    .bridge-card-off {
-      display: inline-block; margin-left: 0.4rem; padding: 0.05rem 0.45rem; vertical-align: 0.1em;
-      border: 1px solid var(--border); border-radius: 999px;
-      color: var(--text-muted); font-size: 0.68rem; font-weight: 600;
+    .bridge-note .btn-sm { padding: 0.25rem 0.7rem; font-size: 0.78rem; }
+    .bridge-page .bridge-panel-card { margin-bottom: 1.25rem; }
+    .bridge-panel-card > .source-body { padding-top: 1.2rem; }
+    .bridge-subhead { margin: 0 0 0.3rem; font-size: 0.95rem; font-weight: 600; color: var(--text); }
+    .bridge-panel-card > .source-body > :first-child { margin-top: 0; }
+    .bridge-page .field select, .bridge-page .toggle-row-control select {
+      width: 100%; appearance: none; -webkit-appearance: none; cursor: pointer;
+      padding: 0.55rem 2rem 0.55rem 0.75rem; border: 1px solid var(--surface-5); border-radius: 6px;
+      background: var(--accent-bg-deep) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%238b98a9' stroke-width='1.5'/%3E%3C/svg%3E") no-repeat right 0.75rem center;
+      color: var(--text); font: inherit; font-size: 0.9rem;
     }
-    .bridge-method-cards .source-header[data-collapsible]:has(+ .source-body:not(.open)) { opacity: 0.8; }
-    .bridge-method-cards { display: grid; gap: 1.5rem; margin-bottom: 1.5rem; }
-    .bridge-method-cards .source-card { margin: 0; scroll-margin-top: 4.5rem; }
-    .bridge-cov-wrap { overflow-x: auto; }
+    .bridge-page .toggle-row-control select { width: auto; min-width: 11rem; }
+    .bridge-page .field select:focus, .bridge-page .toggle-row-control select:focus { border-color: var(--focus-accent); outline: none; }
+    .bridge-capture-status {
+      display: flex; align-items: center; justify-content: space-between; gap: 1rem; flex-wrap: wrap;
+      margin-bottom: 1.25rem; padding-bottom: 1rem; border-bottom: 1px solid var(--border);
+    }
+    .bridge-capture-status .toggle-row-label { margin: 0; }
+    .bridge-capture-actions { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+    .bridge-works h3 { margin: 0 0 0.55rem; font-size: 0.9rem; font-weight: 600; color: var(--text-soft); }
+    .bridge-chips { display: flex; flex-wrap: wrap; gap: 0.4rem; margin: 0 0 0.6rem; padding: 0; list-style: none; }
+    .bridge-chip {
+      display: inline-flex; align-items: center; gap: 0.4rem; padding: 0.3rem 0.65rem;
+      border: 1px solid var(--border); border-radius: 6px; color: var(--text-soft); font-size: 0.78rem;
+    }
+    .bridge-chip b { font-weight: 600; font-variant-numeric: tabular-nums; }
+    .bridge-chip.is-ready b { color: var(--success-soft); }
+    .bridge-chip.is-audit { border-color: var(--warning-border); }
+    .bridge-chip.is-audit a { color: inherit; text-decoration: none; display: inline-flex; gap: 0.4rem; }
+    .bridge-chip.is-audit b { color: var(--warning-soft); font-weight: 500; }
+    .bridge-chip.is-na { color: var(--text-muted); border-style: dashed; text-decoration: line-through; text-decoration-color: color-mix(in srgb, var(--text-muted) 60%, transparent); }
+    @media (max-width: 760px) {
+      .bridge-head { flex-direction: column; gap: 0; }
+      .bridge-master { margin: 0 0 1rem; }
+      .bridge-panel-head { flex-direction: column; gap: 0.75rem; }
+    }
+
+
+
     /* Fixed layout so the collapsed "also supported" table lines up with the main one. */
     /* Widths by column role, not position, so adding a method column can't shift them.
        The source column takes whatever is left. */
-    .bridge-cov { width: 100%; min-width: 860px; table-layout: fixed; border-collapse: collapse; font-size: 0.84rem; }
-    .bridge-cov .bridge-cov-count { width: 7.5rem; }
-    .bridge-cov .bridge-cov-next { width: 9.5rem; }
-    .bridge-cov th, .bridge-cov td {
-      padding: 0.5rem 0.6rem; border-bottom: 1px solid var(--border);
-      text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-    }
-    .bridge-cov thead th {
-      color: var(--text-muted); font-size: 0.72rem; font-weight: 600;
-    }
-    .bridge-cov tbody th { color: var(--text); font-weight: 600; white-space: normal; }
-    .bridge-dot { font-size: 1.05rem; line-height: 1; }
-    .bridge-cov-legend .bridge-dot { font-size: inherit; }
-    .bridge-cov tbody tr:last-child th, .bridge-cov tbody tr:last-child td { border-bottom: 0; }
-    .bridge-cov .bridge-cov-method { width: 5.5rem; text-align: center; }
-    .bridge-cov a { color: var(--accent-soft); text-decoration: none; }
-    .bridge-cov a:hover { text-decoration: underline; }
-    .bridge-cov-ready { color: var(--success-soft); font-weight: 600; }
-    .bridge-cov-warn { color: var(--warning-soft); font-weight: 600; }
-    .bridge-cov-of { color: var(--text-muted); }
-    .bridge-dot-live { color: var(--success-soft); }
-    .bridge-dot-idle { color: var(--text-soft); }
-    .bridge-dot-na { color: var(--text-muted); opacity: 0.6; }
-    .bridge-cov-other { margin-top: 0.9rem; padding-top: 0.8rem; border-top: 1px solid var(--border); }
-    .bridge-cov-other summary {
-      cursor: pointer; color: var(--text-soft); font-size: 0.84rem; font-weight: 600;
-    }
-    .bridge-cov-other .bridge-cov-wrap { margin-top: 0.5rem; }
-    .bridge-cov-other thead { display: none; }
-    .bridge-cov-legend { display: flex; flex-wrap: wrap; gap: 0.2rem 1.1rem; margin-top: 0.9rem; }
-    @media (max-width: 720px) {
-      .bridge-status { flex-wrap: wrap; }
-      .bridge-status-text { flex-basis: calc(100% - 4.5rem); }
-    }
+
+    
 
     .advanced-box {
       margin-top: 1rem;
@@ -937,7 +895,7 @@
     .needs-config-banner li.item-configured a { color: var(--success-soft); }
 
     /* ── Bridge healthcheck results ── */
-    .bridge-healthcheck-actions { display: flex; gap: 0.5rem; flex-wrap: wrap; flex-shrink: 0; }
+
     .bridge-healthcheck-results { margin-top: 0.75rem; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
     .bridge-live-test-picker { margin-top: 0.75rem; padding: 0.85rem; border: 1px solid color-mix(in srgb, var(--warning-soft) 35%, var(--border)); border-radius: 8px; background: var(--surface-2); }
     .bridge-live-test-picker label { display: block; margin-top: 0.7rem; font-size: 0.84rem; font-weight: 650; }

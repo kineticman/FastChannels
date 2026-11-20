@@ -1,22 +1,12 @@
   <!-- External tuners (APITuner and similar): /api/external-player/v1 -->
-  <div class="source-card" id="bridge-card-external">
-    <div class="source-header" data-collapsible style="cursor:pointer">
-      <div class="source-title">
-        <div class="source-icon">🔌</div>
-        <div>
-          <div class="source-name">External tuners <span class="badge badge-beta">APITuner and others</span>{% if not methods_by_key.external.enabled %} <span class="bridge-card-off">Off</span>{% endif %}</div>
-          <div class="source-meta">Let a tuner that controls its own devices and HDMI encoder use FastChannels Player</div>
-        </div>
-      </div>
-    </div>
-    <div class="source-body{% if methods_by_key.external.enabled %} open{% endif %}">
-      {% if external_player_enabled and not bridge_enabled %}<div class="help" style="color:var(--warning-soft);margin-bottom:0.75rem">Turn on Bridge mode at the top of this page, or DRM channels won't be marked for the tuner.</div>{% endif %}
+  <div class="source-card bridge-panel-card" id="bridge-card-external">
+    <div class="source-body open">
       {% if external_player_enabled %}
       <div class="fields-grid" style="max-width:560px">
         <div class="field field-full">
-          <label for="external-player-url">FastChannels URL for the tuner</label>
+          <label for="external-player-url">FastChannels address for the tuner</label>
           <input type="text" id="external-player-url" readonly value="{{ ah4c_scripts_default_url }}">
-          <div class="help">Use an address the tuner's Android devices can reach too: FastChannels builds the stream and license URLs from the address the tuner calls it at.</div>
+          <div class="help">Use an address the tuner's Android devices can reach too.</div>
         </div>
         <div class="field field-full">
           <label for="external-player-token">Token</label>
@@ -25,9 +15,9 @@
             <button class="btn btn-secondary" id="external-player-token-copy" onclick="copyExternalPlayerToken()">Copy</button>
           </div>
           {% if external_player_token_from_env %}
-          <div class="help">Set by <code>{{ external_player_env_name }}</code> in your container configuration. Change it there.</div>
+          <div class="help">Set by <code>{{ external_player_env_name }}</code> in your container settings. Change it there.</div>
           {% else %}
-          <div class="help">Paste this into the tuner (in APITuner it's the FastChannels token). It's a key to the channel list; the streams themselves are served at FastChannels' normal playback URLs.</div>
+          <div class="help">Paste this into the tuner. In APITuner it's the FastChannels token.</div>
           {% endif %}
         </div>
       </div>
@@ -38,8 +28,8 @@
         {% endif %}
       </div>
       {% else %}
-      <div class="field-actions"><span class="save-status" id="external-player-status"></span></div>
+      <p class="help">Turn this on to get the address and token your tuner needs.</p>
+      <div class="field-actions" style="border:0;padding:0;margin:0"><span class="save-status" id="external-player-status"></span></div>
       {% endif %}
-      <div class="help" style="margin-top:0.75rem">Building a connector? See the <a href="https://github.com/kineticman/FastChannels/blob/development/docs/external-tuner-api.md" target="_blank" rel="noopener">external tuner API</a>.</div>
     </div>
   </div>

@@ -1,26 +1,17 @@
 <!-- FastChannels Player devices: every known Fire TV / Android TV stick -->
-<div class="source-card" id="bridge-card-devices">
-  <div class="source-header" data-collapsible style="cursor:pointer">
-    <div class="source-title">
-      <div class="source-icon">📺</div>
-      <div>
-        <div class="source-name">Your Android TV devices{% if not any_player_method %} <span class="bridge-card-off">Used by HDMI and ah4c</span>{% endif %}</div>
-        <div class="source-meta">Fire TV / Android TV devices running FastChannels Player: status and one-click updates</div>
-      </div>
-    </div>
-  </div>
-  <div class="source-body{% if any_player_method %} open{% endif %}">
+<div class="source-card bridge-panel-card" id="bridge-card-devices">
+  <div class="source-body open">
     <div class="toggle-row">
       <div class="toggle-row-text">
         <div class="toggle-row-label">Show captions when available</div>
-        <div class="toggle-row-help">Renders an English subtitle/CC track when available. Takes effect on the next tune.</div>
+        <div class="toggle-row-help">Shows English captions when the channel has them. Applies from the next tune.</div>
       </div>
       <div class="toggle-row-control"><label class="toggle-switch"><input type="checkbox" id="fc-player-captions-enabled" {% if fc_player_captions_enabled %}checked{% endif %} onchange="saveFcPlayerCaptionsToggle()"><span class="toggle-slider"></span></label></div>
     </div>
     <div class="toggle-row" style="margin-top:12px">
       <div class="toggle-row-text">
-        <div class="toggle-row-label">Bridge audio</div>
-        <div class="toggle-row-help">Auto passes Dolby through when the HDMI device accepts it. If a capture card clicks or drops out, try Stereo or Decode to PCM. Takes effect on the next tune; needs FastChannels Player 5.2.13+.</div>
+        <div class="toggle-row-label">Audio</div>
+        <div class="toggle-row-help">Auto passes Dolby through. If your capture card clicks or drops audio, try Stereo or Decode to PCM.</div>
       </div>
       <div class="toggle-row-control">
         <select id="fc-player-audio-mode" onchange="saveFcPlayerAudioMode()">
@@ -57,6 +48,6 @@
     </div>
     <div class="save-status" id="fc-devices-status" style="display:block;margin-top:0.6rem"></div>
     <div class="fc-devices-grid" id="fc-devices-list" aria-live="polite"></div>
-    <div class="help" style="margin-top:10px">Devices are listed from the Single-port HDMI Capture IP, ah4c's tuner list, anything added here, and any device FastChannels has tuned. Updates install the player bundled with this FastChannels version over ADB.</div>
+    <div class="help" style="margin-top:10px">Devices from HDMI Capture, ah4c, and any you add here. Update installs the FastChannels Player that comes with this version.</div>
   </div>
 </div>

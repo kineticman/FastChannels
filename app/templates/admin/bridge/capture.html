@@ -1,25 +1,16 @@
   <!-- Built-in capture add-on (beta): app/capture, app/routes/capture.py -->
-  <div class="source-card" id="bridge-card-capture">
-    <div class="source-header" data-collapsible style="cursor:pointer">
-      <div class="source-title">
-        <div class="source-icon">🎥</div>
-        <div>
-          <div class="source-name">Built-in capture <span class="badge badge-beta">Beta</span>{% if not methods_by_key.capture.enabled %} <span class="bridge-card-off">Off</span>{% endif %}</div>
-          <div class="source-meta">Plays DRM channels in a browser built into FastChannels. Nothing else to set up.</div>
-        </div>
-      </div>
-    </div>
-    <div class="source-body{% if methods_by_key.capture.enabled %} open{% endif %}">
+  <div class="source-card bridge-panel-card" id="bridge-card-capture">
+    <div class="source-body open">
       <div class="help" id="capture-intro" style="margin-bottom:1rem" hidden>
         Downloads about 250 MB (Google Chrome and a few helpers). Each channel playing uses one or two CPU cores.
       </div>
 
-      <div id="capture-install-row" class="toggle-row" style="margin-bottom:1rem">
-        <div class="toggle-row-text">
+      <div id="capture-install-row" class="bridge-capture-status">
+        <div>
           <div class="toggle-row-label"><span id="capture-install-state">Checking…</span></div>
           <div class="toggle-row-help" id="capture-install-detail"></div>
         </div>
-        <div class="toggle-row-control" style="display:flex;gap:0.5rem;flex-wrap:wrap;justify-content:flex-end">
+        <div class="bridge-capture-actions">
           <button class="btn btn-primary" id="capture-btn-install" onclick="captureAction('install')" hidden>Install</button>
           <button class="btn btn-secondary" id="capture-btn-update" onclick="captureAction('update-chrome')" hidden title="Download the current Google Chrome and reinstall">Update Chrome</button>
           <button class="btn btn-secondary" id="capture-btn-uninstall" onclick="captureUninstall()" hidden>Uninstall</button>
@@ -27,7 +18,6 @@
       </div>
 
       <div id="capture-settings" hidden>
-        {% if not bridge_enabled %}<div class="help" style="color:var(--warning-soft);margin-bottom:0.75rem">Bridge mode (top of this page) needs to be on too.</div>{% endif %}
         <div class="fields-grid" style="max-width:560px">
           <div class="field">
             <label for="capture-tuners">Tuners</label>
@@ -73,7 +63,7 @@
         </div>
         <div class="help" style="margin-top:0.5rem" id="capture-tuner-status"></div>
       </div>
-      <div class="field-actions"><span class="save-status" id="capture-status-msg"></span></div>
+      <span class="save-status" id="capture-status-msg"></span>
     </div>
   </div>
   <script>
