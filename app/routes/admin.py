@@ -1953,7 +1953,30 @@ def _bridge_methods(settings) -> list[dict]:
             'missing': _missing([('PrismCast Capture toggle', settings.prismcast_enabled),
                                  ('server URL', prismcast_url)]),
         },
+        _builtin_capture_method(_state),
     ]
+
+
+def _builtin_capture_method(_state) -> dict:
+    """Tile for the built-in capture add-on (app/capture). Its install state lives in
+    /data/addons/capture, not AppSettings: not installed = off; installing, failed or
+    switched off = needs setup; installed and on = ready/live like the others."""
+    from .. import capture
+    install = capture.read_status().get('state', 'not_installed')
+    enabled = capture.read_config().get('enabled', False)
+    missing = []
+    if install == 'installing':
+        missing.append('install to finish')
+    elif install == 'failed':
+        missing.append('a successful install (Reinstall)')
+    elif install == 'installed' and not enabled:
+        missing.append('Use built-in capture toggle')
+    return {
+        'key': 'capture',
+        'label': 'Built-in Capture',
+        'state': _state(install != 'not_installed', install == 'installed' and enabled),
+        'missing': ', '.join(missing),
+    }
 
 
 def _bridge_coverage(methods: list[dict]) -> dict:
@@ -1978,10 +2001,17 @@ def _bridge_coverage(methods: list[dict]) -> dict:
         cls = scrapers.get(name)
         return (getattr(cls, 'display_name', None) or name) if cls else name
 
+    from .. import capture as _capture
+
     def _cells(name: str, enabled: bool) -> dict:
         cells = {}
-        for key in ('prismcast', 'hdmi', 'ah4c', 'external'):
-            if key != 'prismcast' and name not in DRM_BRIDGE_TRUSTED_SOURCES:
+        for key in ('prismcast', 'capture', 'hdmi', 'ah4c', 'external'):
+            # Built-in capture is PrismCast's approach inside FC, minus the sources
+            # whose license servers refuse Linux Chrome; the Player methods need the
+            # per-source verified list.
+            if key == 'capture' and name in _capture.INCOMPATIBLE_SOURCES:
+                cells[key] = 'na'
+            elif key in ('hdmi', 'ah4c', 'external') and name not in DRM_BRIDGE_TRUSTED_SOURCES:
                 cells[key] = 'na'
             elif not enabled:
                 cells[key] = 'supported'

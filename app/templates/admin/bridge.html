@@ -39,8 +39,13 @@
       'blurb': 'Choose this for hardware-free Chrome capture. PrismCast plays DRM in a browser and captures it in software, avoiding a dedicated device and HDMI encoder.',
       'links': [('PrismCast documentation', 'https://github.com/hjdhjd/prismcast')],
     },
+    'capture': {
+      'kicker': 'Beta · nothing else to run',
+      'blurb': 'Plays DRM channels in a browser built into FastChannels. No extra device, encoder or container.',
+      'links': [],
+    },
   } %}
-  {% set method_anchor = {'ah4c': 'bridge-card-ah4c', 'hdmi': 'bridge-card-single-encoder', 'external': 'bridge-card-external', 'prismcast': 'bridge-card-prismcast'} %}
+  {% set method_anchor = {'ah4c': 'bridge-card-ah4c', 'hdmi': 'bridge-card-single-encoder', 'external': 'bridge-card-external', 'prismcast': 'bridge-card-prismcast', 'capture': 'bridge-card-capture'} %}
   {% set state_labels = {'live': 'Live', 'ready': 'Ready', 'setup': 'Needs setup', 'off': 'Not set up'} %}
   {% set step_method = usable_methods|length > 0 %}
   {% set step_source = bridge_coverage.enabled|length > 0 %}
@@ -150,13 +155,14 @@
         {% macro head() %}
         <thead>
           <tr>
-            <th scope="col">Source</th>
+            <th scope="col" class="bridge-cov-source">Source</th>
             <th scope="col" class="bridge-cov-method">PrismCast</th>
+            <th scope="col" class="bridge-cov-method">Built-in</th>
             <th scope="col" class="bridge-cov-method">HDMI</th>
             <th scope="col" class="bridge-cov-method">ah4c</th>
             <th scope="col" class="bridge-cov-method">External</th>
-            <th scope="col">Channels</th>
-            <th scope="col">Next step</th>
+            <th scope="col" class="bridge-cov-count">Channels</th>
+            <th scope="col" class="bridge-cov-next">Next step</th>
           </tr>
         </thead>
         {% endmacro %}
@@ -168,19 +174,20 @@
               {% for row in bridge_coverage.enabled %}
               {% set any_live = 'live' in row.cells.values() %}
               <tr>
-                <th scope="row">{{ row.display_name }}</th>
+                <th scope="row" class="bridge-cov-source">{{ row.display_name }}</th>
                 <td class="bridge-cov-method">{{ cell(row.cells.prismcast) }}</td>
+                <td class="bridge-cov-method">{{ cell(row.cells.capture) }}</td>
                 <td class="bridge-cov-method">{{ cell(row.cells.hdmi) }}</td>
                 <td class="bridge-cov-method">{{ cell(row.cells.ah4c) }}</td>
                 <td class="bridge-cov-method">{{ cell(row.cells.external) }}</td>
                 {% if row.candidate_count %}
-                <td><span class="bridge-cov-ready">{{ row.candidate_count }} ready</span> <span class="bridge-cov-of">of {{ row.channel_count }}</span></td>
+                <td class="bridge-cov-count" title="{{ row.candidate_count }} of {{ row.channel_count }} channels need a bridge"><span class="bridge-cov-ready">{{ '{:,}'.format(row.candidate_count) }} ready</span></td>
                 {% elif row.channel_count %}
-                <td><span class="bridge-cov-warn">audit needed</span> <span class="bridge-cov-of">of {{ row.channel_count }}</span></td>
+                <td class="bridge-cov-count"><span class="bridge-cov-warn">Needs audit</span></td>
                 {% else %}
-                <td><span class="bridge-cov-of">no channels yet</span></td>
+                <td class="bridge-cov-count"><span class="bridge-cov-of">No channels yet</span></td>
                 {% endif %}
-                <td>
+                <td class="bridge-cov-next">
                   {% if not any_live %}<a href="#bridge-methods">{{ 'Turn on Bridge mode' if usable_methods and not bridge_enabled else 'Set up a method' }} ↑</a>
                   {% elif not row.channel_count %}<a href="/admin/sources">Scrape source →</a>
                   {% elif not row.candidate_count %}<a href="/admin/sources">Run audit →</a>
@@ -196,20 +203,21 @@
         {% endif %}
         {% if bridge_coverage.other %}
         <details class="bridge-cov-other">
-          <summary>Also supported — {{ bridge_coverage.other|length }} source{{ '' if bridge_coverage.other|length == 1 else 's' }} not enabled on this server</summary>
+          <summary>{{ bridge_coverage.other|length }} more supported source{{ '' if bridge_coverage.other|length == 1 else 's' }} you haven't enabled</summary>
           <div class="bridge-cov-wrap">
             <table class="bridge-cov">
               {{ head() }}
               <tbody>
                 {% for row in bridge_coverage.other %}
                 <tr>
-                  <th scope="row">{{ row.display_name }}</th>
+                  <th scope="row" class="bridge-cov-source">{{ row.display_name }}</th>
                   <td class="bridge-cov-method">{{ cell(row.cells.prismcast) }}</td>
+                  <td class="bridge-cov-method">{{ cell(row.cells.capture) }}</td>
                   <td class="bridge-cov-method">{{ cell(row.cells.hdmi) }}</td>
                   <td class="bridge-cov-method">{{ cell(row.cells.ah4c) }}</td>
                   <td class="bridge-cov-method">{{ cell(row.cells.external) }}</td>
-                  <td><span class="bridge-cov-of">—</span></td>
-                  <td><a href="/admin/sources">Enable source →</a></td>
+                  <td class="bridge-cov-count"><span class="bridge-cov-of">—</span></td>
+                  <td class="bridge-cov-next"><a href="/admin/sources">Enable source →</a></td>
                 </tr>
                 {% endfor %}
               </tbody>
@@ -218,11 +226,11 @@
         </details>
         {% endif %}
         <div class="help bridge-cov-legend">
-          <span><span class="bridge-dot bridge-dot-live">●</span> supported and live</span>
-          <span><span class="bridge-dot bridge-dot-idle">○</span> supported, not live here</span>
-          <span><span class="bridge-dot bridge-dot-na">–</span> not verified for this method</span>
+          <span><span class="bridge-dot bridge-dot-live">●</span> working</span>
+          <span><span class="bridge-dot bridge-dot-idle">○</span> supported, not set up</span>
+          <span><span class="bridge-dot bridge-dot-na">–</span> not available</span>
         </div>
-        <div class="help">PrismCast's browser capture works for any source exposing DRM license handling. Single-port HDMI Capture, ah4c Capture and external tuners use FastChannels Player's native bridge, which is re-tested one source at a time. Each live method's bridge playlist is on <a href="/admin/feeds">Feeds</a>; import it alongside your regular feed, which excludes bridge-only DRM channels.</div>
+        <div class="help">Bridge playlists are on <a href="/admin/feeds">Feeds</a>. Add them next to your regular playlist.</div>
       </div>
     </div>
 

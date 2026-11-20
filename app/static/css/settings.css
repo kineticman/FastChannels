@@ -628,9 +628,11 @@
     .bridge-method-cards .source-card { margin: 0; scroll-margin-top: 4.5rem; }
     .bridge-cov-wrap { overflow-x: auto; }
     /* Fixed layout so the collapsed "also supported" table lines up with the main one. */
-    .bridge-cov { width: 100%; min-width: 720px; table-layout: fixed; border-collapse: collapse; font-size: 0.84rem; }
-    .bridge-cov th:nth-child(5), .bridge-cov td:nth-child(5) { width: 11.5rem; }
-    .bridge-cov th:nth-child(6), .bridge-cov td:nth-child(6) { width: 11rem; }
+    /* Widths by column role, not position, so adding a method column can't shift them.
+       The source column takes whatever is left. */
+    .bridge-cov { width: 100%; min-width: 860px; table-layout: fixed; border-collapse: collapse; font-size: 0.84rem; }
+    .bridge-cov .bridge-cov-count { width: 7.5rem; }
+    .bridge-cov .bridge-cov-next { width: 9.5rem; }
     .bridge-cov th, .bridge-cov td {
       padding: 0.5rem 0.6rem; border-bottom: 1px solid var(--border);
       text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
@@ -642,7 +644,7 @@
     .bridge-dot { font-size: 1.05rem; line-height: 1; }
     .bridge-cov-legend .bridge-dot { font-size: inherit; }
     .bridge-cov tbody tr:last-child th, .bridge-cov tbody tr:last-child td { border-bottom: 0; }
-    .bridge-cov .bridge-cov-method { width: 5rem; text-align: center; }
+    .bridge-cov .bridge-cov-method { width: 5.5rem; text-align: center; }
     .bridge-cov a { color: var(--accent-soft); text-decoration: none; }
     .bridge-cov a:hover { text-decoration: underline; }
     .bridge-cov-ready { color: var(--success-soft); font-weight: 600; }

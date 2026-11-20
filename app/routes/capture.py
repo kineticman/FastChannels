@@ -173,7 +173,14 @@ def capture_status():
             'tuners': [], 'sessions': [],
         })
     health['playlist_url'] = f'{public_base_url()}/m3u/capture'
+    health['incompatible_names'] = _source_names(capture.INCOMPATIBLE_SOURCES)
     return jsonify(health)
+
+
+def _source_names(names) -> list[str]:
+    from ..scrapers import registry
+    scrapers = registry.get_all()
+    return sorted((getattr(scrapers.get(n), 'display_name', None) or n) for n in names)
 
 
 @capture_bp.post('/api/capture/<action>')
