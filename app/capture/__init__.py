@@ -50,11 +50,13 @@ CHROME_BIN = '/usr/bin/google-chrome-stable'
 # Sources whose license servers refuse Linux Chrome, found in the 2026-11-19 spike:
 #   cnn_tve — HTTP 400 vmp_platform_not_verified (Warner Bros. Discovery enforces VMP)
 #   fubo    — license granted, but every key is output-restricted for software Widevine
+#   dazn_tve — HTTP 403 code 10802 "Device not allowed to receive a license" (2026-11-20,
+#              YES National and Unbeaten)
 # hbomax shares CNN's WBD license stack, so it's excluded until someone shows otherwise.
 # 2026-11-20: couldn't confirm either way: HBO Max events refuse playback before their
 # window opens ("access.denied.before.playable.windows"), so retry during a live event.
-# Also verified working that day: philo, roku.
-INCOMPATIBLE_SOURCES = frozenset({'cnn_tve', 'fubo', 'hbomax'})
+# Also verified working that day: philo, roku, versant_tve, vix, tennis_tve.
+INCOMPATIBLE_SOURCES = frozenset({'cnn_tve', 'fubo', 'hbomax', 'dazn_tve'})
 
 QUALITY_PRESETS = {
     # name: (width, height, fps, video kbps). fps is captured as NTSC (x1000/1001)
