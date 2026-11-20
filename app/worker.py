@@ -1585,6 +1585,12 @@ def run_stream_audit(source_name: str, scope: str = 'linear'):
         _audit_progress(0, 0, phase='done')
         logger.info('[audit] %s: done — total=%d checked=%d flagged=%d bridged=%d dead=%d vod=%d not_authorized=%d errors=%d skipped_403=%d',
                     source_name, total, checked, flagged, bridged, dead, vod, not_authorized, errors, skipped_403)
+        # The audit decides which channels are bridge-only, so the playlists (regular
+        # and every bridge output) change with it: rebuild now rather than at the next
+        # scheduled refresh, or a user copying a playlist right after auditing gets the
+        # old channel set. Dedup-safe.
+        if checked:
+            _enqueue_xml_refresh_job()
         if aborted_reason:
             logger.warning('[audit] %s: aborted after %d/%d channels — %s', source_name, scanned, total, aborted_reason)
 
