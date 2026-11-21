@@ -280,6 +280,20 @@ def _detect_wsl_vaapi(uid: int, gid: int, device: str) -> tuple[dict | None, str
     if installer.mesa_va_major() < WSL_MESA_MIN_MAJOR:
         return None, (f'Windows GPU needs Mesa {WSL_MESA_MIN_MAJOR} or newer, found '
                       f'{installer.mesa_va_major() or "none"} (Reinstall the add-on)')
+    # Docker Desktop creates the passed-in DRM nodes as root:root 0600 (no render
+    # group like Linux hosts have), so the capture user can't open them: "No VA
+    # display found". /dev/dxg is already 0666. The node is the container's own
+    # copy on its /dev tmpfs, so handing it to the capture user's group changes
+    # nothing on the host. The daemon runs as root.
+    try:
+        st = os.stat(device)
+        if not st.st_mode & 0o060:
+            os.chown(device, -1, gid)
+            os.chmod(device, (st.st_mode & 0o7777) | 0o060)
+            logger.info('[capture] gave the capture user access to %s (was %o, root only)',
+                        device, st.st_mode & 0o777)
+    except OSError as e:
+        logger.warning('[capture] could not open up %s for the capture user: %s', device, e)
     gids = sorted({os.stat(p).st_gid for p in (device, '/dev/dxg')})
     err = ''
     for upload in ('gpu', 'cpu'):
