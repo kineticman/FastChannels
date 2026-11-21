@@ -1885,7 +1885,6 @@ def feeds():
                            fc_player_enabled=_fc_player_bridge.hdmi_bridge_active(app_settings),
                            fc_player_ah4c_configured=_fc_player_bridge.ah4c_bridge_active(app_settings),
                            capture_enabled=bool(app_settings.bridge_enabled) and _capture_is_active(),
-                           capture_tuners=_capture_tuner_count(),
                            native_output_enabled=bool(app_settings.native_output_enabled),
                            feed_summary=feed_summary,
                            feed_split_counts=feed_split_counts,
@@ -1897,11 +1896,6 @@ def feeds():
 def _capture_is_active() -> bool:
     from .. import capture
     return capture.is_active()
-
-
-def _capture_tuner_count() -> int:
-    from .. import capture
-    return capture.read_config().get('max_tuners', 2)
 
 
 def _drm_bridge_recoverable_count() -> int:

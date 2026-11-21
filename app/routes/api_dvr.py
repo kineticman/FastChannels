@@ -47,7 +47,7 @@ def _dvr_get_source(dvr_url: str, name: str, timeout: int = 15) -> dict:
 
 
 def _dvr_put_source(dvr_url: str, name: str, dvr_type: str, url: str, xmltv_url: str = '',
-                    *, mixed: bool = False, timeout: int = 30, limit: int | None = None):
+                    *, mixed: bool = False, timeout: int = 30):
     """Create or update a custom M3U source.
 
     PUT replaces the source's whole settings object, so start from what the
@@ -60,9 +60,6 @@ def _dvr_put_source(dvr_url: str, name: str, dvr_type: str, url: str, xmltv_url:
     tvc-guide-stationid and XMLTV-mapped channels. A source created before
     Channels DVR 2026.08.14 has no guide_preference and is treated as XMLTV
     only, so it has to be sent explicitly.
-
-    limit sets the source's stream limit, but only when creating it: a limit the
-    user changed in Channels DVR is theirs to keep.
     """
     existing = _dvr_get_source(dvr_url, name, timeout=timeout)
     payload = dict(existing)
@@ -77,8 +74,6 @@ def _dvr_put_source(dvr_url: str, name: str, dvr_type: str, url: str, xmltv_url:
         payload.pop('xmltv_refresh', None)
     if mixed:
         payload['guide_preference'] = 'gracenote'
-    if limit and not existing:
-        payload['limit'] = str(limit)
     source_url = f"{dvr_url}/providers/m3u/sources/{_dvr_source_key(name)}"
     resp = _req.put(source_url, json=payload, timeout=timeout, verify=False)
     # The DVR loads a new source's playlist straight away, but an existing one
@@ -990,9 +985,9 @@ def _capture_push_preflight(feed: Feed):
 @dvr_bp.route('/feeds/<int:feed_id>/push-capture-to-dvr', methods=['POST'])
 def push_feed_capture_to_dvr(feed_id):
     """Register this feed's Built-in Capture output in Channels DVR: one mixed
-    source, or a standard + Gracenote pair in split guide mode. A new source gets
-    the capture tuner count as its stream limit, so Channels DVR stops at what the
-    add-on can actually play."""
+    source, or a standard + Gracenote pair in split guide mode. No stream limit is
+    set: when every tuner is busy the capture route turns the tune away itself, and
+    anyone who wants Channels DVR to stop sooner sets the limit there."""
     from .. import capture
     feed = Feed.query.get_or_404(feed_id)
     dvr_url, blocked = _capture_push_preflight(feed)
@@ -1025,7 +1020,6 @@ def push_feed_capture_to_dvr(feed_id):
     except TimeoutError:
         return jsonify({'error': 'Timed out building the capture playlist. Try again in a moment.'}), 503
 
-    tuners = capture.read_config().get('max_tuners', 2)
     std_name = f"FastChannels {feed.name} Built-in Capture"
     gn_name = f"FastChannels {feed.name} Built-in Capture Gracenote"
     epg = f"{base}/feeds/{feed.slug}/epg.xml"
@@ -1033,23 +1027,22 @@ def push_feed_capture_to_dvr(feed_id):
     try:
         if mixed:
             r = _dvr_put_source(dvr_url, std_name, 'HLS', f"{base}/feeds/{feed.slug}/m3u/capture/mixed",
-                                epg, mixed=True, limit=tuners)
+                                epg, mixed=True)
             r.raise_for_status()
-            return jsonify({'ok': True, 'sources_added': [std_name], 'mixed': True, 'stream_limit': tuners,
+            return jsonify({'ok': True, 'sources_added': [std_name], 'mixed': True,
                             'stale_sources': _stale_gracenote_source(dvr_url, feed, gn_name)})
         if gn_count:
-            r = _dvr_put_source(dvr_url, gn_name, 'HLS', f"{base}/feeds/{feed.slug}/m3u/capture/gracenote",
-                                limit=tuners)
+            r = _dvr_put_source(dvr_url, gn_name, 'HLS', f"{base}/feeds/{feed.slug}/m3u/capture/gracenote")
             r.raise_for_status()
             added.append(gn_name)
         if std_count:
             r = _dvr_put_source(dvr_url, std_name, 'HLS', f"{base}/feeds/{feed.slug}/m3u/capture",
-                                epg, limit=tuners)
+                                epg)
             r.raise_for_status()
             added.append(std_name)
     except (_req.exceptions.ConnectionError, _req.exceptions.Timeout, _req.exceptions.HTTPError) as exc:
         return _dvr_error_response(exc)
-    return jsonify({'ok': True, 'sources_added': added, 'stream_limit': tuners})
+    return jsonify({'ok': True, 'sources_added': added})
 
 
 def _feed_has_raw_ts(filters: dict) -> bool:
