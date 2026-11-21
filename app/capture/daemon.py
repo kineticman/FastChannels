@@ -55,6 +55,7 @@ SESSION_IDLE_SECONDS = 45
 TUNER_RETRY_SECONDS = 30
 PREEMPT_IDLE_SECONDS = 6   # unpolled this long + another channel wants the tuner = client is gone
 STALL_RELOAD_SECONDS = 20
+GPU_STALL_SECONDS = 15      # GPU ffmpeg alive but no frame out this long = driver hang
 FAILED_SESSION_TTL = 60
 NICE_CHROME = 5
 NICE_FFMPEG = 10
@@ -283,9 +284,18 @@ def _video_encoder_args(t: 'Tuner', enc: dict) -> tuple[list[str], list[str]]:
                      '-forced-idr', '1', *gop_args, *color_args])
     if enc.get('kind') == 'vaapi':
         kbps = int(t.kbps * GPU_BITRATE_FACTOR)
+        vf = 'hwupload,scale_vaapi=format=nv12:out_color_matrix=bt709:out_range=tv'
+        if t.height >= 1080 and t.fps == 60:
+            # radeonsi (Mesa 25.0, Radeon 680M) hangs on the first frame at 1080p59.94
+            # whenever the SPS carries a colour description: any primaries/trc/matrix,
+            # BT.709 or BT.601. 1080p30, 1080p at exactly 60 and 900p are fine. Tag the
+            # range only, and strip x11grab's RGB matrix so "gbr" can't come back;
+            # players treat an untagged HD stream as BT.709, which is what we emit.
+            vf += ',setparams=colorspace=unknown:color_primaries=unknown:color_trc=unknown:range=tv'
+            color_args = ['-color_range', 'tv']
         return (['-vaapi_device', enc['device']],
                 # Colour conversion on the GPU too: CPU-side format=nv12 cost ~2x the CPU.
-                ['-vf', 'hwupload,scale_vaapi=format=nv12:out_color_matrix=bt709:out_range=tv',
+                ['-vf', vf,
                  '-c:v', 'h264_vaapi', *(['-low_power', '1'] if enc.get('low_power') else []),
                  '-b:v', f'{kbps}k', '-maxrate', f'{kbps}k', '-bufsize', f'{kbps * 2}k',
                  *gop_args, *color_args])
@@ -445,6 +455,7 @@ class Session:
         self._page_samples: deque = deque(maxlen=4)
         self._page_last: dict = {}
         self._last_reload_at = 0.0
+        self._encoder_proven = False
 
     def touch(self) -> None:
         self.last_touch = time.monotonic()
@@ -635,6 +646,7 @@ class Session:
         ]
         self.ffmpeg_started = time.monotonic()
         self._ff_samples.clear()
+        self._encoder_proven = False
         self.ffmpeg = _spawn(cmd, uid=t.uid, gid=t.gid, env=t.env, nice=NICE_FFMPEG,
                              log_name=f'ffmpeg{t.index}', stdout=subprocess.PIPE,
                              groups=_encoder_groups(enc))
@@ -644,24 +656,24 @@ class Session:
         """Keep the session healthy until it's stopped or goes idle."""
         last_time, last_progress, last_reload = None, time.monotonic(), 0.0
         while not self._stop.wait(5):
+            on_gpu = self.encoder.get('kind') in ('vaapi', 'nvenc')
             if self.ffmpeg and self.ffmpeg.poll() is not None:
-                if (self.encoder.get('kind') in ('vaapi', 'nvenc')
-                        and time.monotonic() - self.ffmpeg_started < 30):
+                if on_gpu and time.monotonic() - self.ffmpeg_started < 30:
                     # The pool's test encode passed but the real one died at once:
                     # stop using the GPU until the next pool start, keep this session.
-                    code = self.ffmpeg.returncode
-                    logger.warning('[capture] GPU encoder exited (code %s) on session %s — '
-                                   'switching to CPU encoding', code, self.id)
-                    ENCODER.clear()
-                    ENCODER.update(kind='x264', reason=f'GPU encoder failed during capture (exit {code}); '
-                                                       f'see {RUN_DIR}/ffmpeg{self.tuner.index}.log')
-                    shutil.rmtree(self.dir, ignore_errors=True)
-                    os.makedirs(self.dir, exist_ok=True)
-                    os.chown(self.dir, self.tuner.uid, self.tuner.gid)
-                    self._start_ffmpeg(dict(ENCODER))
+                    self._fall_back_to_cpu(f'GPU encoder failed during capture (exit {self.ffmpeg.returncode})')
                     continue
                 raise RuntimeError(f'ffmpeg exited (code {self.ffmpeg.returncode}); '
                                    f'see {RUN_DIR}/ffmpeg{self.tuner.index}.log')
+            if (on_gpu and not self._encoder_proven
+                    and time.monotonic() - self.ffmpeg_started > GPU_STALL_SECONDS):
+                if any(x['frame'] > 0 for x in self._ff_samples):
+                    self._encoder_proven = True
+                else:
+                    # Alive but no frame out: a GPU driver hang (radeonsi at 1080p59.94
+                    # with a colour description sat at 100% CPU forever, 2026-11-21).
+                    self._fall_back_to_cpu(f'GPU encoder produced no video in {GPU_STALL_SECONDS}s')
+                    continue
             if not self.tuner.alive():
                 raise RuntimeError('tuner browser exited')
             try:
@@ -686,6 +698,18 @@ class Session:
                     _navigate(self.tuner.cdp_port, self.watch_url)
                 except Exception as e:
                     logger.warning('[capture] reload failed: %s', e)
+
+    def _fall_back_to_cpu(self, why: str) -> None:
+        """Switch every new capture to x264 until the next pool start and restart
+        this session's ffmpeg on it, keeping the session (and its tuner) alive."""
+        logger.warning('[capture] %s on session %s — switching to CPU encoding', why, self.id)
+        _kill(self.ffmpeg)
+        ENCODER.clear()
+        ENCODER.update(kind='x264', reason=f'{why}; see {RUN_DIR}/ffmpeg{self.tuner.index}.log')
+        shutil.rmtree(self.dir, ignore_errors=True)
+        os.makedirs(self.dir, exist_ok=True)
+        os.chown(self.dir, self.tuner.uid, self.tuner.gid)
+        self._start_ffmpeg(dict(ENCODER))
 
     def stop(self) -> None:
         self._stop.set()
