@@ -417,6 +417,7 @@ class DaznTVEScraper(BaseScraper):
                    'x-brand': 'DAZN'}
         if user:
             headers['x-daznid'] = user
+        headers.update(_client_platform_headers())
         return challenge, headers
 
     @classmethod
@@ -440,6 +441,41 @@ class DaznTVEScraper(BaseScraper):
         from ..tve.signin_notice import mark_signin_needed
         mark_signin_needed(NETWORK_KEY, message)
         return TVEAuthError(message)
+
+
+# The license server compares the platform in the request's user agent with the platform the
+# Widevine CDM reports inside the challenge (client_info platform_name), and answers 403 code
+# 10802 "Device not allowed to receive a license" when they differ. Hardware Android players
+# aren't held to it, but a desktop browser is: our own requests present a Mac, so a Linux or
+# Windows Chrome was always refused. Found 2026-11-21 by replaying a Linux Chrome challenge:
+# Linux user agent + sec-ch-ua-platform "Linux" -> 200; Mac or Windows -> 10802. The Chrome
+# version stays pinned (the bot filter wants it to match the impersonated TLS handshake).
+_PLATFORM_UA = {
+    'Linux': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+    'Windows': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+}
+
+
+def _client_platform_headers() -> dict:
+    """User-Agent + sec-ch-ua-platform matching the desktop browser that is asking for the
+    license, or {} (keep the default Mac identity) for anything else: Android players,
+    mobile, ChromeOS, or a call with no request."""
+    try:
+        from flask import has_request_context, request
+        if not has_request_context():
+            return {}
+        ua = request.headers.get('User-Agent', '')
+    except Exception:  # noqa: BLE001
+        return {}
+    if not ua or any(t in ua for t in ('Android', 'Mobile', 'CrOS')):
+        return {}
+    if 'Windows NT' in ua:
+        plat = 'Windows'
+    elif 'Linux' in ua and 'X11' in ua:
+        plat = 'Linux'
+    else:
+        return {}
+    return {'User-Agent': _PLATFORM_UA[plat], 'sec-ch-ua-platform': f'"{plat}"'}
 
 
 def _airing(source_channel_id: str, item: dict | None) -> ProgramData | None:
