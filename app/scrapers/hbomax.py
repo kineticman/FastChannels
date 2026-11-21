@@ -324,6 +324,12 @@ class HBOMaxScraper(BaseScraper):
             if 'anonymous' in _err(r) or r.status_code == 401:
                 logger.warning('[hbomax] session rejected (HTTP %s); re-auth needed', r.status_code)
                 raise self._sign_in_needed()
+            if 'before.playable' in _err(r):
+                # Not an entitlement problem: the event's playback window hasn't
+                # opened yet. It plays once the window opens.
+                raise RuntimeError(
+                    f'HBO Max: event is not playable yet (its playback window has not opened): '
+                    f'HTTP {r.status_code} {_err(r)}')
             raise RuntimeError(f'HBO Max: not entitled for this event: HTTP {r.status_code} {_err(r)}')
         body = _json(r)
         url = (body.get('manifest') or {}).get('url')

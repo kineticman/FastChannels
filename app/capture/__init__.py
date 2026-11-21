@@ -52,9 +52,11 @@ CHROME_BIN = '/usr/bin/google-chrome-stable'
 #   cnn_tve — HTTP 400 vmp_platform_not_verified (Warner Bros. Discovery enforces VMP)
 #   dazn_tve — HTTP 403 code 10802 "Device not allowed to receive a license" (2026-11-20,
 #              YES National and Unbeaten)
-# hbomax shares CNN's WBD license stack, so it's excluded until someone shows otherwise.
-# 2026-11-20: couldn't confirm either way: HBO Max events refuse playback before their
-# window opens ("access.denied.before.playable.windows"), so retry during a live event.
+# hbomax shares CNN's WBD license stack. Confirmed 2026-11-21 on a live TNT event: Linux
+# Chrome gets HTTP 400 vmp_platform_not_verified on the license POST (capture session
+# fails with Shaka 6007) while FastChannels Player on Fire TV gets 200 and plays.
+# (The 2026-11-20 spike was inconclusive only because HBO Max events refuse playback
+# before their window opens: "access.denied.before.playable.windows".)
 # Also verified working that day: philo, roku, versant_tve, vix, tennis_tve.
 INCOMPATIBLE_SOURCES = frozenset({'cnn_tve', 'hbomax', 'dazn_tve'})
 
