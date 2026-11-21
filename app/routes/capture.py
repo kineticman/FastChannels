@@ -11,6 +11,7 @@ Admin:
     GET  /api/capture/status
     POST /api/capture/install | uninstall | update-chrome
     POST /api/capture/config             {enabled, max_tuners, quality, encoder}
+    POST /api/capture/sessions/<id>/stop end a capture (a client still watching retunes)
 
 The playlist route is the session's keep-alive: the daemon stops a capture once
 nobody has fetched its playlist for ~45 s. Segments are served from SESSION_ROOT
@@ -310,7 +311,25 @@ def capture_status():
         })
     health['incompatible_names'] = _source_names(capture.INCOMPATIBLE_SOURCES)
     health['gpu'] = capture.gpu_info()
+    health['channel_names'] = _channel_names(
+        {x.get('channel_id') for x in health.get('sessions') or [] if x.get('channel_id')})
     return jsonify(health)
+
+
+def _channel_names(ids) -> dict:
+    if not ids:
+        return {}
+    from ..models import Channel
+    rows = Channel.query.with_entities(Channel.id, Channel.name).filter(Channel.id.in_(ids)).all()
+    return {str(cid): name for cid, name in rows}
+
+
+@capture_bp.post('/api/capture/sessions/<session_id>/stop')
+def capture_stop_session(session_id: str):
+    if not session_id.isalnum():
+        abort(404)
+    code, body = capture.daemon_request('POST', f'/sessions/{session_id}/stop', timeout=5)
+    return jsonify(body), (200 if code == 200 else 404)
 
 
 def _source_names(names) -> list[str]:

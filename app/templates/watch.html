@@ -219,6 +219,15 @@
       st.decoded = q ? q.totalVideoFrames : null;
       st.dropped = q ? q.droppedVideoFrames : null;
       st.muted = video.muted;
+      if (CAPTURE_MODE) {
+        try {
+          const b = video.buffered;
+          st.buffer_s = b && b.length ? Number((b.end(b.length - 1) - video.currentTime).toFixed(1)) : null;
+          const tr = _shaka && _shaka.getVariantTracks ? _shaka.getVariantTracks().find((t) => t.active) : null;
+          st.source = tr ? { width: tr.width, height: tr.height, fps: tr.frameRate ? Number(tr.frameRate.toFixed(2)) : null,
+                             kbps: tr.bandwidth ? Math.round(tr.bandwidth / 1000) : null } : null;
+        } catch (e) { /* stats are best-effort */ }
+      }
     }
     function _captureError(msg) {
       window.__fcCapture.state = 'error';

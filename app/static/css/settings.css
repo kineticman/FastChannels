@@ -953,6 +953,36 @@
     .capture-steps li.is-done { color: var(--text-soft); }
     .capture-steps li.is-done::before { content: '✓'; border: 0; color: var(--success-soft); font-size: 0.85rem; line-height: 0.8rem; top: 0.2em; }
     .capture-step-note { font-weight: 400; color: var(--text-soft); margin-left: 0.3rem; }
+
+    /* Built-in Capture: Now playing */
+    .capture-now { margin-top: 1.25rem; padding-top: 1rem; border-top: 1px solid var(--border); }
+    .capture-now[hidden] { display: none; }
+    .capture-now-head { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin-bottom: 0.5rem; }
+    .capture-now-head h3 { margin: 0; font-size: 0.9rem; font-weight: 600; color: var(--text-soft); }
+    .capture-details-toggle { display: inline-flex; align-items: center; gap: 0.4rem; font-size: 0.8rem; color: var(--text-soft); cursor: pointer; }
+    .capture-now-list { margin: 0; padding: 0; list-style: none; display: grid; gap: 0.45rem; }
+    .capture-now-row { padding: 0.55rem 0.75rem; border: 1px solid var(--border); border-radius: 8px; font-size: 0.86rem; }
+    .capture-now-main { display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; min-height: 1.8rem; }
+    .capture-now-tuner { min-width: 4.2rem; color: var(--text-soft); }
+    .capture-now-idle { color: var(--text-soft); }
+    .capture-now-what { flex: 1 1 12rem; min-width: 0; color: var(--text); overflow-wrap: anywhere; }
+    .capture-now-age { color: var(--text-soft); }
+    .capture-now-stop { padding: 0.25rem 0.65rem; font-size: 0.76rem; }
+    .capture-health {
+      display: inline-flex; align-items: center; gap: 0.35rem; padding: 0.15rem 0.55rem; border-radius: 999px;
+      font-size: 0.76rem; border: 1px solid var(--border); color: var(--text-soft);
+    }
+    .capture-health::before { content: ''; width: 0.45rem; height: 0.45rem; border-radius: 50%; background: currentColor; }
+    .capture-health.is-smooth { color: var(--success); border-color: var(--success-bg-2); }
+    .capture-health.is-choppy { color: var(--warning); border-color: var(--warning-bg-2); }
+    .capture-health.is-buffering { color: var(--warning-soft); border-color: var(--warning-bg-2); }
+    .capture-now-details {
+      display: grid; grid-template-columns: max-content 1fr; gap: 0.25rem 0.9rem;
+      margin: 0.55rem 0 0.1rem; padding-top: 0.5rem; border-top: 1px dashed var(--border);
+      font-size: 0.8rem; font-variant-numeric: tabular-nums;
+    }
+    .capture-now-details dt { color: var(--text-soft); }
+    .capture-now-details dd { margin: 0; color: var(--text-subtle); overflow-wrap: anywhere; }
     @keyframes capture-spin { to { transform: rotate(360deg); } }
     @media (prefers-reduced-motion: reduce) {
       .capture-bar > span { transition: none; }

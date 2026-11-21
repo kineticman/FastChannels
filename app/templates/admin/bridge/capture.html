@@ -101,6 +101,13 @@ environment:
             <div class="help" style="margin-top:0.25rem">Each feed has its Built-in Capture playlist on <a href="/admin/feeds">Feeds</a>, in the feed's Bridge-only section. Its <strong>Add Built-in to Channels DVR</strong> button sets everything up, including the stream limit.</div>
           </div>
         </div>
+        <div class="capture-now" id="capture-now" hidden>
+          <div class="capture-now-head">
+            <h3>Now playing</h3>
+            <label class="capture-details-toggle"><input type="checkbox" id="capture-details" onchange="captureDetailsToggled(this)"> Show details</label>
+          </div>
+          <ul class="capture-now-list" id="capture-now-list"></ul>
+        </div>
         <div class="help" style="margin-top:0.5rem" id="capture-tuner-status"></div>
       </div>
       <span class="save-status" id="capture-status-msg"></span>
@@ -239,22 +246,107 @@ environment:
       show('capture-gpu-tip', tunersRunning(s) && !onGpu && !gpuFailed && (cfg.encoder || 'auto') === 'auto');
 
       const tuners = s.tuners || [];
-      const sessions = Object.fromEntries((s.sessions || []).map((x) => [x.session, x]));
-      const word = {idle: 'ready', starting: 'starting', busy: 'playing', error: 'problem', stopped: 'off',
-                    asleep: 'closed until needed'};
-      $('capture-tuner-status').textContent = tuners.length
-        ? tuners.map((t) => {
-            const sess = t.session && sessions[t.session];
-            let txt = `Tuner ${t.index + 1}: ${word[t.state] || t.state}`;
-            if (sess && sess.state === 'tuning') txt = `Tuner ${t.index + 1}: tuning`;
-            if (t.state === 'error' && t.error) txt += ` (${t.error})`;
-            return txt;
-          }).join(' · ')
+      renderNowPlaying(s, enc, onGpu);
+      $('capture-tuner-status').textContent = tuners.length ? ''
         : (s.pool_error ? 'Tuners couldn\'t start: ' + s.pool_error : (cfg.enabled ? 'Tuners starting…' : ''));
+      const playing = (s.sessions || []).some((x) => x.state === 'tuning' || x.state === 'live');
 
       clearTimeout(pollTimer);
-      pollTimer = setTimeout(refresh, busy || inProgress || tuners.some((t) => t.state === 'starting') ? 1500 : 10000);
+      pollTimer = setTimeout(refresh, busy || inProgress || tuners.some((t) => t.state === 'starting') ? 1500
+        : playing ? 5000 : 10000);
     }
+
+    // ---- Now playing: one row per tuner, plain words; "Show details" adds the numbers.
+    let showDetails = false;
+    try { showDetails = localStorage.getItem('fc.capture.details') === '1'; } catch (e) { /* private mode */ }
+    $('capture-details').checked = showDetails;
+    window.captureDetailsToggled = function (box) {
+      showDetails = box.checked;
+      try { localStorage.setItem('fc.capture.details', showDetails ? '1' : '0'); } catch (e) { /* ignore */ }
+      render(lastStatus);
+    };
+
+    function el(tag, cls, text) {
+      const n = document.createElement(tag);
+      if (cls) n.className = cls;
+      if (text != null) n.textContent = text;
+      return n;
+    }
+    function duration(secs) {
+      if (secs < 60) return 'just started';
+      const m = Math.floor(secs / 60), h = Math.floor(m / 60);
+      return h ? `${h} hr ${m % 60} min` : `${m} min`;
+    }
+    const num = (v, d = 1) => (v == null ? '—' : Number(v).toFixed(d).replace(/\.0+$/, ''));
+    const mbps = (kbps) => (kbps == null ? '—' : (kbps / 1000).toFixed(1) + ' Mbps');
+
+    function detailRows(sess, enc, onGpu) {
+      const st = sess.stats || {};
+      const src = st.source;
+      const rows = [];
+      rows.push(['Source', src ? `${src.width}×${src.height} · ${num(src.fps, 2)} fps · ${mbps(src.kbps)}` : 'not reported']);
+      rows.push(['Chrome', `${num(st.decoded_fps)} fps decoded · ${num(st.dropped_per_min)} dropped/min`
+                 + (st.buffer_s != null ? ` · ${num(st.buffer_s)} s buffered` : '')]);
+      rows.push(['Capture', `${num(st.capture_fps)} of ${num(st.target_fps)} fps · ${num(st.dup_pct)}% repeated frames`]);
+      rows.push(['Encoder', `${onGpu ? 'GPU (' + (enc.kind === 'nvenc' ? 'NVENC' : 'VA-API') + ')' : 'CPU (x264)'}`
+                 + ` · ${mbps(st.out_kbps)}` + (st.speed ? ` · ${st.speed}x speed` : '')]);
+      rows.push(['Session', `${sess.reloads || 0} page reload${sess.reloads === 1 ? '' : 's'} · player last asked ${sess.idle_s}s ago`]);
+      if (st.why) rows.push(['Why', st.why]);
+      return rows;
+    }
+
+    function renderNowPlaying(s, enc, onGpu) {
+      const tuners = s.tuners || [];
+      const sessions = Object.fromEntries((s.sessions || []).map((x) => [x.session, x]));
+      const names = s.channel_names || {};
+      const list = $('capture-now-list');
+      show('capture-now', tuners.length > 0);
+      list.textContent = '';
+      const idleWord = {idle: 'Ready', starting: 'Starting…', stopped: 'Off', asleep: 'Closed until needed', error: 'Problem'};
+      tuners.forEach((t) => {
+        const li = el('li', 'capture-now-row');
+        const main = el('div', 'capture-now-main');
+        main.appendChild(el('span', 'capture-now-tuner', `Tuner ${t.index + 1}`));
+        const sess = t.session && sessions[t.session];
+        if (!sess || (sess.state !== 'tuning' && sess.state !== 'live')) {
+          let txt = idleWord[t.state] || t.state;
+          if (t.state === 'error' && t.error) txt += ': ' + t.error;
+          main.appendChild(el('span', 'capture-now-idle', txt));
+          li.appendChild(main);
+          list.appendChild(li);
+          return;
+        }
+        const st = sess.stats || {};
+        const name = names[String(sess.channel_id)] || `Channel ${sess.channel_id}`;
+        const what = el('span', 'capture-now-what');
+        what.appendChild(el('strong', null, name));
+        if (sess.state === 'live') what.appendChild(el('span', 'capture-now-age', ' · ' + duration(sess.live_s || 0)));
+        main.appendChild(what);
+        const health = sess.state === 'tuning' ? 'tuning' : (st.health || 'starting');
+        const label = {tuning: 'Tuning…', starting: 'Checking…', smooth: 'Smooth', choppy: 'Choppy', buffering: 'Buffering'}[health] || health;
+        const pill = el('span', 'capture-health is-' + health, label);
+        if (st.why) pill.title = st.why;
+        main.appendChild(pill);
+        const stop = el('button', 'btn btn-secondary btn-sm capture-now-stop', 'Stop');
+        stop.type = 'button';
+        stop.title = 'End this capture. A player that is still watching will start it again.';
+        stop.onclick = () => captureStopSession(sess.session, stop);
+        main.appendChild(stop);
+        li.appendChild(main);
+        if (showDetails && sess.state === 'live') {
+          const dl = el('dl', 'capture-now-details');
+          detailRows(sess, enc, onGpu).forEach(([k, v]) => { dl.appendChild(el('dt', null, k)); dl.appendChild(el('dd', null, v)); });
+          li.appendChild(dl);
+        }
+        list.appendChild(li);
+      });
+    }
+
+    window.captureStopSession = async function (sid, btn) {
+      btn.disabled = true;
+      await fetch(`/api/capture/sessions/${encodeURIComponent(sid)}/stop`, {method: 'POST'}).catch(() => null);
+      setTimeout(refresh, 800);
+    };
 
     async function refresh() {
       try {

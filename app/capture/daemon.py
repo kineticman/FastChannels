@@ -32,6 +32,7 @@ import subprocess
 import sys
 import threading
 import time
+from collections import deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import requests
@@ -438,6 +439,12 @@ class Session:
         self.encoder: dict = {}
         self.ffmpeg_started = 0.0
         self._stop = threading.Event()
+        # Health samples for the Bridge page: ffmpeg -progress blocks (every 2 s)
+        # and the page's frame counters (every _watch poll, 5 s).
+        self._ff_samples: deque = deque(maxlen=8)
+        self._page_samples: deque = deque(maxlen=4)
+        self._page_last: dict = {}
+        self._last_reload_at = 0.0
 
     def touch(self) -> None:
         self.last_touch = time.monotonic()
@@ -453,7 +460,104 @@ class Session:
                 'video_size': self.video_size, 'reloads': self.reloads,
                 'encoder': self.encoder.get('kind', ''),
                 'age_s': int(time.time() - self.created),
-                'idle_s': int(time.monotonic() - self.last_touch)}
+                'live_s': int(time.time() - self.live_at) if self.live_at else 0,
+                'idle_s': int(time.monotonic() - self.last_touch),
+                'stats': self.stats()}
+
+    def stats(self) -> dict:
+        """Is the picture smooth? Two independent views, each a rate over the last
+        ~15 s: what the page decodes (upstream / Chrome) and how many real frames
+        ffmpeg grabs (the capture itself; duplicates mean the grab fell behind)."""
+        target = self.tuner.fps * 1000 / 1001
+        out = {'target_fps': round(target, 2), 'health': 'starting', 'why': ''}
+        page = self._page_last
+        out['source'] = page.get('source')
+        out['buffer_s'] = page.get('buffer_s')
+        ff = list(self._ff_samples)
+        if len(ff) >= 2 and ff[-1]['t'] > ff[0]['t']:
+            a, b = ff[0], ff[-1]
+            dt = b['t'] - a['t']
+            out['capture_fps'] = round(((b['frame'] - b['dup']) - (a['frame'] - a['dup'])) / dt, 1)
+            out['dup_pct'] = round(100 * (b['dup'] - a['dup']) / max(1, b['frame'] - a['frame']), 1)
+            out['out_kbps'] = b.get('kbps') or self._segment_kbps()
+            out['speed'] = b.get('speed')
+        pg = list(self._page_samples)
+        if len(pg) >= 2 and pg[-1]['t'] > pg[0]['t']:
+            a, b = pg[0], pg[-1]
+            dt = b['t'] - a['t']
+            if a['decoded'] is not None and b['decoded'] is not None and b['decoded'] >= a['decoded']:
+                out['decoded_fps'] = round((b['decoded'] - a['decoded']) / dt, 1)
+                out['dropped_per_min'] = round(60 * max(0, (b['dropped'] or 0) - (a['dropped'] or 0)) / dt, 1)
+            prev = pg[-2]['ct']
+            out['advancing'] = b['ct'] is not None and prev is not None and b['ct'] > prev
+        out['reloads'] = self.reloads
+        if self.state != 'live' or 'capture_fps' not in out or 'decoded_fps' not in out:
+            return out
+        src_fps = (out['source'] or {}).get('fps') or 0
+        expect_decode = min(src_fps or target, target)
+        if not out['advancing'] or time.monotonic() - self._last_reload_at < 30:
+            out['health'], out['why'] = 'buffering', 'video paused or reloading'
+        elif out['capture_fps'] < 0.9 * target:
+            out['health'], out['why'] = 'choppy', 'capture is missing frames'
+        elif out['decoded_fps'] < 0.9 * expect_decode or out['dropped_per_min'] > 60:
+            out['health'], out['why'] = 'choppy', 'Chrome is not keeping up with the video'
+        else:
+            out['health'] = 'smooth'
+        return out
+
+    def _segment_kbps(self) -> int | None:
+        """Output bitrate from the newest HLS segments (the hls muxer reports N/A)."""
+        try:
+            with open(os.path.join(self.dir, 'index.m3u8')) as fp:
+                lines = fp.read().splitlines()
+            secs = size = 0.0
+            pairs = [(lines[i], lines[i + 1]) for i in range(len(lines) - 1) if lines[i].startswith('#EXTINF:')]
+            for inf, name in pairs[-4:]:
+                size += os.path.getsize(os.path.join(self.dir, name.strip()))
+                secs += float(inf[8:].split(',')[0])
+            return round(size * 8 / secs / 1000) if secs else None
+        except (OSError, ValueError):
+            return None
+
+    def _read_progress(self, proc: subprocess.Popen) -> None:
+        """Drain ffmpeg -progress key=value blocks from stdout into samples."""
+        block: dict = {}
+        try:
+            for raw in proc.stdout:
+                line = raw.decode('utf-8', 'replace').strip()
+                if '=' not in line:
+                    continue
+                k, v = line.split('=', 1)
+                if k != 'progress':
+                    block[k] = v
+                    continue
+                try:
+                    kbps = block.get('bitrate', '').replace('kbits/s', '').strip()
+                    self._ff_samples.append({
+                        't': time.monotonic(),
+                        'frame': int(block.get('frame') or 0),
+                        'dup': int(block.get('dup_frames') or 0),
+                        'drop': int(block.get('drop_frames') or 0),
+                        'kbps': round(float(kbps)) if kbps and kbps != 'N/A' else None,
+                        'speed': (block.get('speed') or '').strip().rstrip('x') or None,
+                    })
+                except ValueError:
+                    pass
+                block = {}
+        except (OSError, ValueError):
+            pass
+        finally:
+            try:
+                proc.stdout.close()
+            except OSError:
+                pass
+
+    def _note_page(self, st: dict) -> None:
+        if not st:
+            return
+        self._page_last = st
+        self._page_samples.append({'t': time.monotonic(), 'decoded': st.get('decoded'),
+                                   'dropped': st.get('dropped'), 'ct': st.get('current_time')})
 
     # run in its own thread
     def run(self) -> None:
@@ -523,15 +627,18 @@ class Session:
             '-thread_queue_size', '1024', '-isync', '0', '-f', 'pulse', '-i', f'{t.sink}.monitor',
             '-map', '0:v', '-map', '1:a', *video,
             '-c:a', 'aac', '-b:a', '160k', '-ar', '48000', '-ac', '2',
+            '-progress', 'pipe:1', '-stats_period', '2',
             '-f', 'hls', '-hls_time', '2', '-hls_list_size', '8',
             '-hls_flags', 'delete_segments+independent_segments+omit_endlist',
             '-hls_segment_filename', os.path.join(self.dir, 'seg_%06d.ts'),
             os.path.join(self.dir, 'index.m3u8'),
         ]
         self.ffmpeg_started = time.monotonic()
+        self._ff_samples.clear()
         self.ffmpeg = _spawn(cmd, uid=t.uid, gid=t.gid, env=t.env, nice=NICE_FFMPEG,
-                             log_name=f'ffmpeg{t.index}',
+                             log_name=f'ffmpeg{t.index}', stdout=subprocess.PIPE,
                              groups=_encoder_groups(enc))
+        threading.Thread(target=self._read_progress, args=(self.ffmpeg,), daemon=True).start()
 
     def _watch(self) -> None:
         """Keep the session healthy until it's stopped or goes idle."""
@@ -561,6 +668,7 @@ class Session:
                 st = _page_state(self.tuner.cdp_port) or {}
             except Exception:
                 st = {}
+            self._note_page(st)
             ct = st.get('current_time')
             now = time.monotonic()
             if ct is not None and ct != last_time:
@@ -568,7 +676,8 @@ class Session:
             stalled = now - last_progress > STALL_RELOAD_SECONDS
             if (st.get('state') == 'error' or stalled) and now - last_reload > 60:
                 self.reloads += 1
-                last_reload = last_progress = now
+                last_reload = last_progress = self._last_reload_at = now
+                self._page_samples.clear()
                 logger.warning('[capture] session %s channel %s %s — reloading page (reload #%d)',
                                self.id, self.channel_id,
                                'page error: ' + str(st.get('error')) if st.get('state') == 'error' else 'video stalled',
@@ -842,6 +951,15 @@ class CaptureService:
                         s.tuner.state = 'idle'
                         s.tuner.idle_since = time.monotonic()
 
+    def stop_session(self, session_id: str) -> bool:
+        with self.lock:
+            s = self.sessions.get(session_id)
+        if not s or s.state not in ('tuning', 'live'):
+            return False
+        logger.info('[capture] session %s channel %s stopped from the Bridge page', s.id, s.channel_id)
+        s.stop()
+        return True
+
     def reap(self) -> None:
         now = time.monotonic()
         with self.lock:
@@ -951,6 +1069,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(400, {'error': 'channel_id required'})
             code, body = SERVICE.open_session(channel_id)
             return self._json(code, body)
+        if self.path.startswith('/sessions/') and self.path.endswith('/stop'):
+            sid = self.path[len('/sessions/'):-len('/stop')]
+            ok = SERVICE.stop_session(sid)
+            return self._json(200 if ok else 404, {'ok': ok})
         if self.path in ('/install', '/uninstall', '/update-chrome'):
             ok, msg = SERVICE.start_action(self.path.strip('/'))
             return self._json(202 if ok else 409, {'ok': ok, 'message': msg})
