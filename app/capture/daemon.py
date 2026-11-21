@@ -40,7 +40,8 @@ import requests
 from . import (CHROME_BIN, DAEMON_HOST, DAEMON_PORT, PROFILES_DIR, HOME_DIR,
                INCOMPATIBLE_SOURCES, QUALITY_PRESETS, SESSION_ROOT, WATCH_BASE,
                GPU_BITRATE_FACTOR, is_restricted_error, mark_restricted, read_config, read_status,
-               render_node, supported_platform, COLD_IDLE_SECONDS)
+               render_node, supported_platform, COLD_IDLE_SECONDS,
+               WSL_MESA_MIN_MAJOR, WSL_VAAPI_ENV, wsl_gpu, wsl_libs_present)
 from . import installer
 
 logger = logging.getLogger('app.capture')
@@ -179,13 +180,15 @@ def _nvidia_gids() -> list[int]:
     return sorted(gids)
 
 
-def _try_encoder(uid: int, gid: int, groups: list[int], video_args: list[str]) -> tuple[bool, str]:
+def _try_encoder(uid: int, gid: int, groups: list[int], video_args: list[str],
+                 extra_env: dict | None = None) -> tuple[bool, str]:
     """Test-encode a few frames as the capture user. (ok, ffmpeg's stderr)."""
     cmd = ['ffmpeg', '-hide_banner', '-loglevel', 'verbose', '-nostdin',
            '-f', 'lavfi', '-i', 'testsrc2=size=1280x720:rate=30', '-frames:v', '10',
            *video_args, '-f', 'null', '-']
     try:
-        proc = subprocess.run(cmd, env=_base_env(HOME_DIR), user=uid, group=gid, extra_groups=groups,
+        proc = subprocess.run(cmd, env={**_base_env(HOME_DIR), **(extra_env or {})},
+                              user=uid, group=gid, extra_groups=groups,
                               capture_output=True, text=True, timeout=30)
     except Exception as e:
         return False, str(e)
@@ -216,6 +219,8 @@ def detect_encoder(uid: int, gid: int, setting: str) -> dict:
 
       1. Intel/AMD through VA-API (/dev/dri): the low-power fixed-function encoder
          (Intel VDEnc) first, then the standard entrypoint (AMD, older Intel).
+         On Docker for Windows (/dev/dxg) it's Mesa's d3d12 VA-API driver instead
+         (_detect_wsl_vaapi).
       2. NVIDIA through NVENC (NVIDIA Container Toolkit). EXPERIMENTAL: written
          without NVIDIA hardware to test on, so it's only trusted after the same
          test encode, and an early failure in a real session falls back to x264.
@@ -226,6 +231,11 @@ def detect_encoder(uid: int, gid: int, setting: str) -> dict:
     device = render_node()
     if device and not installer.gpu_drivers_present():
         reasons.append('GPU drivers not installed yet (Reinstall the add-on)')
+    elif device and wsl_gpu():
+        enc, why = _detect_wsl_vaapi(uid, gid, device)
+        if enc:
+            return enc
+        reasons.append(why)
     elif device:
         dgid = os.stat(device).st_gid
         for low_power in (True, False):
@@ -255,10 +265,44 @@ def detect_encoder(uid: int, gid: int, setting: str) -> dict:
     return {'kind': 'x264', 'reason': '; '.join(reasons)}
 
 
+# x11grab delivers bgr0; this is how sessions upload it and convert on the GPU.
+_VAAPI_GPU_CONVERT = 'hwupload,scale_vaapi=format=nv12:out_color_matrix=bt709:out_range=tv'
+
+
+def _detect_wsl_vaapi(uid: int, gid: int, device: str) -> tuple[dict | None, str]:
+    """(encoder, '') when the Windows GPU encodes through Mesa's d3d12 driver, else
+    (None, reason). The test mirrors the session filter chain (bgr0 upload + GPU
+    colour conversion); if d3d12 can't do that, it retries with the conversion on
+    the CPU (format=nv12 before the upload), which costs more CPU but still beats x264."""
+    if not wsl_libs_present():
+        return None, ('Windows GPU found, but /usr/lib/wsl isn\'t mounted into the container '
+                      '(add "- /usr/lib/wsl:/usr/lib/wsl:ro" under volumes)')
+    if installer.mesa_va_major() < WSL_MESA_MIN_MAJOR:
+        return None, (f'Windows GPU needs Mesa {WSL_MESA_MIN_MAJOR} or newer, found '
+                      f'{installer.mesa_va_major() or "none"} (Reinstall the add-on)')
+    gids = sorted({os.stat(p).st_gid for p in (device, '/dev/dxg')})
+    err = ''
+    for upload in ('gpu', 'cpu'):
+        vf = f'format=bgr0,{_VAAPI_GPU_CONVERT}' if upload == 'gpu' else 'format=nv12,hwupload'
+        ok, err = _try_encoder(uid, gid, gids, ['-vaapi_device', device, '-vf', vf,
+                                                '-c:v', 'h264_vaapi', '-b:v', '4000k'],
+                               extra_env=WSL_VAAPI_ENV)
+        if ok:
+            driver = next((l.split('driver:', 1)[1].strip() for l in err.splitlines()
+                           if 'VAAPI driver:' in l or 'VA-API driver:' in l), '')
+            logger.info('[capture] GPU encoding on Windows GPU via D3D12 (%s, %s colour conversion)',
+                        driver or 'Mesa d3d12', upload.upper())
+            return {'kind': 'vaapi', 'device': device, 'gid': gids[0], 'gids': gids,
+                    'low_power': False, 'upload': upload, 'env': dict(WSL_VAAPI_ENV),
+                    'driver': driver or 'Mesa D3D12', 'reason': ''}, ''
+    logger.warning('[capture] D3D12 VA-API encode test failed on %s: %s', device, _last_line(err))
+    return None, f'Windows GPU encode test failed: {_last_line(err)}'
+
+
 def _encoder_groups(enc: dict) -> list[int]:
     """Supplementary groups the capture user needs for this encoder's device nodes."""
     if enc.get('kind') == 'vaapi':
-        return [enc['gid']]
+        return list(enc.get('gids') or [enc['gid']])
     if enc.get('kind') == 'nvenc':
         return list(enc.get('groups') or [])
     return []
@@ -284,7 +328,10 @@ def _video_encoder_args(t: 'Tuner', enc: dict) -> tuple[list[str], list[str]]:
                      '-forced-idr', '1', *gop_args, *color_args])
     if enc.get('kind') == 'vaapi':
         kbps = int(t.kbps * GPU_BITRATE_FACTOR)
-        vf = 'hwupload,scale_vaapi=format=nv12:out_color_matrix=bt709:out_range=tv'
+        vf = _VAAPI_GPU_CONVERT
+        if enc.get('upload') == 'cpu':
+            # D3D12 that can't upload/convert bgr0 itself (see _detect_wsl_vaapi).
+            vf = 'scale=out_color_matrix=bt709:out_range=tv,format=nv12,hwupload'
         if t.height >= 1080 and t.fps == 60:
             # radeonsi (Mesa 25.0, Radeon 680M) hangs on the first frame at 1080p59.94
             # whenever the SPS carries a colour description: any primaries/trc/matrix,
@@ -647,7 +694,9 @@ class Session:
         self.ffmpeg_started = time.monotonic()
         self._ff_samples.clear()
         self._encoder_proven = False
-        self.ffmpeg = _spawn(cmd, uid=t.uid, gid=t.gid, env=t.env, nice=NICE_FFMPEG,
+        # enc['env']: Docker on Windows needs Mesa's d3d12 driver selected for ffmpeg.
+        self.ffmpeg = _spawn(cmd, uid=t.uid, gid=t.gid, env={**t.env, **(enc.get('env') or {})},
+                             nice=NICE_FFMPEG,
                              log_name=f'ffmpeg{t.index}', stdout=subprocess.PIPE,
                              groups=_encoder_groups(enc))
         threading.Thread(target=self._read_progress, args=(self.ffmpeg,), daemon=True).start()
@@ -1004,7 +1053,7 @@ class CaptureService:
                 'action': self.busy_action,
                 'config': read_config(),
                 'pool_error': self.pool_error,
-                'encoder': {k: v for k, v in ENCODER.items() if k not in ('gid', 'groups')},
+                'encoder': {k: v for k, v in ENCODER.items() if k not in ('gid', 'gids', 'groups', 'env')},
                 'tuners': [t.describe() for t in self.tuners],
                 'sessions': [s.describe() for s in self.sessions.values()],
                 'incompatible_sources': sorted(INCOMPATIBLE_SOURCES),

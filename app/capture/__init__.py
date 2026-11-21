@@ -108,6 +108,25 @@ def render_node() -> str | None:
         return None
     return f'/dev/dri/{nodes[0]}' if nodes else None
 
+# Docker on Windows (WSL2) has no real /dev/dri GPU: the render node there is
+# vgem, and the GPU is reached through /dev/dxg plus Microsoft's D3D12 libraries
+# in /usr/lib/wsl/lib, using Mesa's d3d12 VA-API driver. Verified 2026-11-21 on a
+# Ryzen 5 PRO 5650U with Docker Desktop: needs GALLIUM_DRIVER=d3d12 to initialise
+# and Mesa 26 (trixie-backports) to encode; Mesa 25.0.7 segfaults on the first
+# frame. Low-power mode isn't offered.
+WSL_LIB_DIR = '/usr/lib/wsl/lib'
+WSL_VAAPI_ENV = {'GALLIUM_DRIVER': 'd3d12', 'LIBVA_DRIVER_NAME': 'd3d12', 'LD_LIBRARY_PATH': WSL_LIB_DIR}
+WSL_MESA_MIN_MAJOR = 26
+
+
+def wsl_gpu() -> bool:
+    """The container was given the Windows GPU bridge (/dev/dxg)."""
+    return os.path.exists('/dev/dxg')
+
+
+def wsl_libs_present() -> bool:
+    return os.path.exists(os.path.join(WSL_LIB_DIR, 'libd3d12.so'))
+
 MAX_TUNERS_LIMIT = 8
 
 
@@ -116,9 +135,12 @@ _PCI_VENDORS = {'0x8086': 'Intel', '0x1002': 'AMD', '0x10de': 'NVIDIA'}
 
 def gpu_info() -> dict:
     """Which GPU the container can see, before anything is installed or tested:
-    {'vendor': 'Intel'|'AMD'|'NVIDIA'|'', 'via': 'dri'|'nvidia'|''}. Only a hint
-    for the Bridge panel; the daemon's test encode decides what's actually used."""
+    {'vendor': 'Intel'|'AMD'|'NVIDIA'|'', 'via': 'dri'|'wsl'|'nvidia'|''}. Only a
+    hint for the Bridge panel; the daemon's test encode decides what's actually used."""
     node = render_node()
+    if node and wsl_gpu():
+        # Windows hides the vendor behind D3D12 (the node's sysfs device is vgem).
+        return {'vendor': 'GPU', 'via': 'wsl'}
     if node:
         try:
             with open(f'/sys/class/drm/{os.path.basename(node)}/device/vendor') as fp:

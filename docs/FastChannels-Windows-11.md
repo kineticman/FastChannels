@@ -127,6 +127,8 @@ If the name doesn't resolve right after Windows starts, run `wslc restart fastch
 
 **HDHomeRun or Android/HDMI bridges can't find devices.** WSL Containers has no host networking, and `.wslconfig` settings (such as mirrored networking) don't apply to it. Connecting to a device by its IP address should work, but automatic discovery on your network may not. Enter device IP addresses manually where FastChannels asks for them.
 
+**Built-in Capture (Bridge page).** It works on Windows with Docker Desktop (GPU encoding is experimental) but hasn't been tested under WSL Containers. Use Docker Desktop if you plan to use it. See [Built-in Capture on Windows](builtin-capture.md#windows).
+
 **Running low on disk space.** Each upgrade leaves the previous image behind (about 3 GB). List images with `wslc image list`. Old FastChannels images usually show `<none>` as the tag; remove them with `wslc image remove <IMAGE ID>`.
 
 Project: https://github.com/kineticman/FastChannels

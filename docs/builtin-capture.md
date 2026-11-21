@@ -15,9 +15,10 @@ would on a desktop, and FastChannels only records the picture and sound.
 
 ## Before you start
 
-- **A 64-bit Intel or AMD server running Linux.** Google only makes Chrome for
-  Linux on x86_64, so Built-in Capture isn't available on Raspberry Pi, ARM NAS
-  boxes or Apple Silicon.
+- **A 64-bit Intel or AMD server running Linux** (or Windows; see
+  [Windows](#windows)). Google only makes Chrome for Linux on x86_64, so
+  Built-in Capture isn't available on Raspberry Pi, ARM NAS boxes, Apple
+  Silicon or Windows on ARM.
 - **About 250 MB of disk** on your FastChannels data volume. Chrome comes
   straight from Google when you turn the feature on, plus a few helpers
   (PulseAudio and FFmpeg) from Debian. FastChannels doesn't ship Chrome itself.
@@ -162,6 +163,67 @@ encoder test fails, Built-in Capture carries on with the CPU.
 3. The **Encoder** line should then say *Using your GPU (NVIDIA)*. If it says
    the NVIDIA encode test failed, the Logs page has the reason (look for
    `[capture]` lines).
+
+## Windows
+
+Built-in Capture works on Windows with Docker Desktop. It has been tested on a
+Ryzen 5 laptop, where it played DRM channels with picture and sound. Docker on
+Windows runs containers inside a small Linux system, and that's all Built-in
+Capture needs.
+
+- **Use Docker Desktop** rather than
+  [WSL Containers](FastChannels-Windows-11.md). With Docker Desktop you can
+  set how much memory containers get and try an NVIDIA GPU (below). With WSL
+  Containers you can't.
+- **GPU encoding (experimental).** Windows doesn't hand the GPU to containers
+  the way Linux does, so the Intel/AMD setup above doesn't apply. Instead, add
+  this to the FastChannels service and recreate the container:
+
+  ```yaml
+      devices:
+        - /dev/dxg:/dev/dxg
+        - /dev/dri:/dev/dri
+      volumes:
+        - /usr/lib/wsl:/usr/lib/wsl:ro
+  ```
+
+  (Keep your existing `/data` volume line; this adds to it.) FastChannels then
+  installs a newer graphics driver (Mesa 26) and tests the GPU, and the
+  **Encoder** line should say *Using your GPU*. This goes through Microsoft's
+  D3D12 video bridge, which has worked with an AMD Ryzen laptop GPU; Intel and
+  NVIDIA GPUs may work the same way. If the test fails, Built-in Capture
+  carries on with the CPU. Budget about 2–2.5 CPU cores per channel at 720p
+  60 fps without the GPU.
+- **Memory matters most.** Docker Desktop gets half of the PC's memory unless
+  you change it, and each tuner needs about 0.8 GB on top of FastChannels
+  itself. The test PC had 4 GB, so Docker got under 2 GB. It ran out of memory
+  and the picture turned choppy after a minute. Use a PC with at least 8 GB
+  (one tuner) or 16 GB (two). If Docker is short of memory, give it more in
+  `%USERPROFILE%\.wslconfig` and then run `wsl --shutdown`:
+
+  ```ini
+  [wsl2]
+  memory=6GB
+  ```
+
+- **NVIDIA (experimental, untested on Windows):** with a recent NVIDIA driver
+  on Windows, Docker Desktop can pass the GPU through. You don't need to
+  install the NVIDIA Container Toolkit. Add this to the FastChannels service
+  in place of the `runtime: nvidia` lines above:
+
+  ```yaml
+      deploy:
+        resources:
+          reservations:
+            devices:
+              - driver: nvidia
+                count: all
+                capabilities: [gpu]
+      environment:
+        - NVIDIA_DRIVER_CAPABILITIES=compute,video,utility
+  ```
+
+  If the encoder test fails, Built-in Capture carries on with the CPU.
 
 ## What works
 

@@ -4,6 +4,12 @@
                 <pre style="margin:0.4rem 0">devices:
   - /dev/dri:/dev/dri</pre>
                 Only if your server has <code>/dev/dri</code>; otherwise Docker won't start the container.</div>
+              <div style="margin-top:0.6rem"><strong>Docker Desktop on Windows</strong> (experimental): add this instead:
+                <pre style="margin:0.4rem 0">devices:
+  - /dev/dxg:/dev/dxg
+  - /dev/dri:/dev/dri
+volumes:
+  - /usr/lib/wsl:/usr/lib/wsl:ro</pre></div>
               <div style="margin-top:0.6rem"><strong>NVIDIA</strong> (experimental): install the NVIDIA Container Toolkit on the server, then add:
                 <pre style="margin:0.4rem 0">runtime: nvidia
 environment:

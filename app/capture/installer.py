@@ -19,8 +19,8 @@ import time
 
 import requests
 
-from . import (ADDON_DIR, CHROME_BIN, DEBS_DIR, HOME_DIR, PROFILES_DIR,
-               read_status, render_node, supported_platform, write_status)
+from . import (ADDON_DIR, CHROME_BIN, DEBS_DIR, HOME_DIR, PROFILES_DIR, WSL_MESA_MIN_MAJOR,
+               read_status, render_node, supported_platform, write_status, wsl_gpu)
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +31,11 @@ APT_PACKAGES = ('pulseaudio', 'ffmpeg')
 # Intel (iHD, Broadwell and newer) and AMD (Mesa radeonsi; tiny, since Chrome's
 # dependencies already bring Mesa's gallium libraries). NVIDIA has no VA-API encoder.
 GPU_PACKAGES = ('intel-media-va-driver', 'mesa-va-drivers')
+# Docker on Windows: Mesa's d3d12 VA-API driver (in mesa-va-drivers), new enough
+# to encode (see WSL_MESA_MIN_MAJOR); taken from <codename>-backports when the
+# base image's Mesa is older.
+WSL_GPU_PACKAGES = ('mesa-va-drivers', 'libva2')
+BACKPORTS_LIST = '/etc/apt/sources.list.d/fastchannels-capture-backports.list'
 CAPTURE_USER = 'fccapture'
 
 _APT_ENV = dict(os.environ, DEBIAN_FRONTEND='noninteractive')
@@ -72,8 +77,60 @@ def _deb_installed(pkg: str) -> bool:
     return 'install ok installed' in out
 
 
+def _deb_version(pkg: str) -> str:
+    out = subprocess.run(['dpkg-query', '-W', '-f=${Status} ${Version}', pkg],
+                         capture_output=True, text=True).stdout
+    return out.rsplit(' ', 1)[-1] if out.startswith('install ok installed') else ''
+
+
+def mesa_va_major() -> int:
+    """Major version of the installed mesa-va-drivers ('26.1.6-1~bpo13+1' -> 26), 0 if none."""
+    version = _deb_version('mesa-va-drivers').split(':')[-1]
+    try:
+        return int(version.split('.', 1)[0])
+    except ValueError:
+        return 0
+
+
 def gpu_drivers_present() -> bool:
+    # On Windows only presence counts here: a backports failure must not fail the
+    # whole install. The daemon checks the version before trusting the GPU.
+    if wsl_gpu():
+        return _deb_installed('mesa-va-drivers')
     return all(_deb_installed(p) for p in GPU_PACKAGES)
+
+
+def _debian_codename() -> str:
+    try:
+        with open('/etc/os-release') as fp:
+            for line in fp:
+                if line.startswith('VERSION_CODENAME='):
+                    return line.split('=', 1)[1].strip().strip('"')
+    except OSError:
+        pass
+    return ''
+
+
+def _install_wsl_mesa(cache: str) -> None:
+    """Mesa's d3d12 video driver for Docker on Windows. The base image's Mesa
+    (25.0.7 on trixie) initialises but segfaults on the first encoded frame, so
+    take mesa-va-drivers from backports when it's older than WSL_MESA_MIN_MAJOR.
+    A failure here only means CPU encoding: the daemon's test encode decides."""
+    if mesa_va_major() >= WSL_MESA_MIN_MAJOR:
+        return
+    codename = _debian_codename()
+    if not codename:
+        logger.warning('[capture-install] unknown Debian release; no newer Mesa for the Windows GPU')
+        return
+    try:
+        with open(BACKPORTS_LIST, 'w') as fp:
+            fp.write(f'deb http://deb.debian.org/debian {codename}-backports main\n')
+        _run(['apt-get', 'update', '-q'], timeout=300)
+        _run(['apt-get', 'install', '-y', '-q', '--no-install-recommends', '-o', cache,
+              '-t', f'{codename}-backports', *WSL_GPU_PACKAGES], timeout=1200)
+    except Exception as e:
+        logger.warning('[capture-install] newer Mesa for the Windows GPU failed (%s); GPU encoding '
+                       'will likely fall back to the CPU', e)
 
 
 def packages_present() -> bool:
@@ -141,9 +198,13 @@ def _apt_install(progress) -> None:
     progress('Updating package lists', 'packages')
     _run(['apt-get', 'update', '-q'], timeout=300)
     progress('Installing Chrome, PulseAudio and FFmpeg', 'packages')
-    gpu = GPU_PACKAGES if render_node() else ()
+    wsl = bool(render_node()) and wsl_gpu()
+    gpu = WSL_GPU_PACKAGES if wsl else GPU_PACKAGES if render_node() else ()
     _run(['apt-get', 'install', '-y', '-q', '--no-install-recommends', '-o', cache,
           *APT_PACKAGES, *gpu, CHROME_DEB], timeout=1800)
+    if wsl:
+        progress('Installing GPU drivers for Docker on Windows', 'packages')
+        _install_wsl_mesa(cache)
     # Keep the cache (that's the point of DEBS_DIR) but drop the package lists from
     # the container layer, like the Dockerfile does.
     shutil.rmtree('/var/lib/apt/lists', ignore_errors=True)
