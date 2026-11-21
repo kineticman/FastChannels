@@ -340,8 +340,8 @@
           },
         };
         const desktopLinux = /Linux/.test(navigator.userAgent) && !/Android|CrOS/.test(navigator.userAgent);
-        if (desktopLinux && /\/play\/hbomax\//.test(license)) {
-          // HBO Max's license server refuses a request that lists key ids above a software
+        if (desktopLinux && /\/play\/(hbomax|cnn_tve)\//.test(license)) {
+          // HBO Max and CNN (same Warner license stack): the server refuses a request that lists key ids above a software
           // (L3) Chrome CDM's tier: the manifest's PSSH names six keys (audio, SD, 720p and
           // higher) and the whole request fails with vmp_platform_not_verified. HBO's own web
           // player asks only for the audio + SD keys (0100, 0101) on L3, so do the same. Only on
