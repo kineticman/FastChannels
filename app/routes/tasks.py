@@ -352,22 +352,28 @@ def trigger_stream_audit_recheck(source_name: str, channel_ids: list):
 
 
 def trigger_xml_refresh() -> bool:
-    """Returns True if a job was enqueued, False if skipped due to debounce."""
+    """Rebuild the cached XMLTV/M3U artifacts after a change. Returns True if a
+    job was enqueued now.
+
+    Requests within 10 s share one job (SET NX debounce), but a change must never
+    be dropped: a refresh that is already running, or that finished inside the
+    debounce window, may have read the data before this change. Then a catch-up
+    job is queued to run after it. A refresh still waiting in the queue will read
+    the change itself, so nothing more is needed for that one."""
     try:
         q = get_fast_queue()
         job_id = 'xml-refresh'
-        # Atomic debounce: SET NX with 10s TTL prevents the check-then-enqueue
-        # race when many feed requests arrive simultaneously (e.g. DVR polling).
         acquired = q.connection.set(f'lock:{job_id}', '1', nx=True, ex=10)
-        if not acquired:
-            logger.info('XML artifact refresh already queued/running')
+        if job_id in q.get_job_ids():
+            logger.info('XML artifact refresh already queued')
             return False
-        if _job_already_active(q, job_id):
-            logger.info('XML artifact refresh already queued/running')
-            return False
-        q.enqueue('app.worker.run_xml_refresh', job_timeout=1800, job_id=job_id)
-        logger.info('Enqueued XML artifact refresh')
-        return True
+        if acquired and not _job_already_active(q, job_id):
+            q.enqueue('app.worker.run_xml_refresh', job_timeout=1800, job_id=job_id)
+            logger.info('Enqueued XML artifact refresh')
+            return True
+        logger.info('XML artifact refresh running or just ran — queueing a catch-up')
+        trigger_xml_refresh_catchup()
+        return False
     except Exception as e:
         logger.warning(f'RQ unavailable ({e}), falling back to thread for XML refresh')
         import threading
@@ -395,13 +401,21 @@ def trigger_artifact_build(cache_key: str) -> None:
 
 def trigger_xml_refresh_catchup() -> None:
     """Enqueue a catch-up XML refresh using a separate job ID so it queues behind
-    any currently-running xml-refresh job.  Used when a new feed is created while
-    a refresh is already in-flight (which won't include the new feed)."""
+    any currently-running xml-refresh job (trigger_xml_refresh calls this when a
+    change lands while a refresh is in flight or just finished)."""
     try:
         q = get_fast_queue()
         job_id = 'xml-refresh-catchup'
-        if _job_already_active(q, job_id):
+        if job_id in q.get_job_ids():
             logger.info('XML artifact catch-up refresh already queued')
+            return
+        if _job_already_active(q, job_id):
+            # The catch-up itself is running (RQ can't re-queue a running job's id):
+            # put a regular refresh behind it. The fast queue has one worker, so the
+            # regular one isn't running at the same time.
+            if 'xml-refresh' not in q.get_job_ids():
+                q.enqueue('app.worker.run_xml_refresh', job_timeout=1800, job_id='xml-refresh')
+                logger.info('Enqueued XML artifact refresh behind the running catch-up')
             return
         q.enqueue('app.worker.run_xml_refresh', job_timeout=1800, job_id=job_id)
         logger.info('Enqueued XML artifact catch-up refresh')

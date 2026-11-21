@@ -11,7 +11,7 @@ from ..models import AppSettings, Channel, Feed, Source
 from ..folded_sources import output_source_display
 from ..url import public_base_url
 from ..xml_cache import delete_xml_artifact, invalidate_xml_cache
-from .tasks import trigger_xml_refresh, trigger_xml_refresh_catchup
+from .tasks import trigger_xml_refresh
 
 feeds_api_bp = Blueprint('feeds_api', __name__)
 SYSTEM_FEED_SLUGS = {'default'}
@@ -378,10 +378,7 @@ def create_feed():
     if err:
         return err
     invalidate_xml_cache()
-    if not trigger_xml_refresh():
-        # A refresh was already running when the feed was created; it won't include
-        # this new feed.  Queue a catch-up job that will run after it finishes.
-        trigger_xml_refresh_catchup()
+    trigger_xml_refresh()   # queues a catch-up itself if a refresh is in flight
     return jsonify(feed.to_dict(public_base_url())), 201
 
 
