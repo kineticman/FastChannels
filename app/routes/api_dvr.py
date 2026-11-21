@@ -1025,7 +1025,7 @@ def push_feed_capture_to_dvr(feed_id):
     except TimeoutError:
         return jsonify({'error': 'Timed out building the capture playlist. Try again in a moment.'}), 503
 
-    tuners = capture.read_config().get('max_tuners', 1)
+    tuners = capture.read_config().get('max_tuners', 2)
     std_name = f"FastChannels {feed.name} Built-in Capture"
     gn_name = f"FastChannels {feed.name} Built-in Capture Gracenote"
     epg = f"{base}/feeds/{feed.slug}/epg.xml"

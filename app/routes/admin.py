@@ -1901,7 +1901,7 @@ def _capture_is_active() -> bool:
 
 def _capture_tuner_count() -> int:
     from .. import capture
-    return capture.read_config().get('max_tuners', 1)
+    return capture.read_config().get('max_tuners', 2)
 
 
 def _drm_bridge_recoverable_count() -> int:

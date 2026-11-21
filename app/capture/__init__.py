@@ -78,7 +78,7 @@ QUALITY_PRESETS = {
 
 DEFAULT_CONFIG = {
     'enabled': True,
-    'max_tuners': 1,
+    'max_tuners': 2,
     'quality': '720p60',
     'encoder': 'auto',      # 'auto' = GPU (VA-API/NVENC) when it works, else x264; 'cpu' = x264 only
     # Warm: each tuner's Chrome stays open between tunes (~0.6 GB each, ~2 s to
@@ -103,7 +103,7 @@ def render_node() -> str | None:
         return None
     return f'/dev/dri/{nodes[0]}' if nodes else None
 
-MAX_TUNERS_LIMIT = 4
+MAX_TUNERS_LIMIT = 8
 
 
 _PCI_VENDORS = {'0x8086': 'Intel', '0x1002': 'AMD', '0x10de': 'NVIDIA'}

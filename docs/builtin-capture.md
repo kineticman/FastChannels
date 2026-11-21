@@ -52,8 +52,10 @@ would on a desktop, and FastChannels only records the picture and sound.
 
 Then choose:
 
-- **Tuners:** how many channels can play at once. Each one costs the CPU and
-  memory above, so start with 1 or 2.
+- **Tuners:** how many channels can play at once, 2 by default and up to 8.
+  Each one costs the CPU and memory above, so only go higher on a server with
+  room: roughly 2 CPU cores per playing tuner, under 1 with a GPU. Your
+  streaming accounts' own limits on simultaneous streams still apply.
 - **Quality:** *720p 60 fps* is the default and the best fit for sports and
   news. *720p 30 fps* is lighter on a small server. The 1080p options need a
   fast CPU: Chrome decoding a 1080p channel takes about two cores on its own,
