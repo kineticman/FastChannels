@@ -514,7 +514,13 @@ class Session:
             'ffmpeg', '-hide_banner', '-loglevel', 'warning', '-nostdin', *pre,
             '-thread_queue_size', '1024', '-f', 'x11grab', '-draw_mouse', '0',
             '-framerate', f'{t.fps * 1000}/1001', '-video_size', f'{t.width}x{t.height}', '-i', f':{t.display}',
-            '-thread_queue_size', '1024', '-f', 'pulse', '-i', f'{t.sink}.monitor',
+            # -isync 0: ffmpeg zeroes each input's timestamps separately, and x11grab
+            # takes its first frame while probing, before pulse is even opened. If
+            # pulse opens >~100 ms later (busy box mid-tune), the offset sticks and
+            # ffmpeg 7's scheduler starves x11grab for the whole session (4-12 fps
+            # grabbed, the rest duplicated). Both inputs are wallclock-stamped, so
+            # isync lines audio up with video and the offset can't happen.
+            '-thread_queue_size', '1024', '-isync', '0', '-f', 'pulse', '-i', f'{t.sink}.monitor',
             '-map', '0:v', '-map', '1:a', *video,
             '-c:a', 'aac', '-b:a', '160k', '-ar', '48000', '-ac', '2',
             '-f', 'hls', '-hls_time', '2', '-hls_list_size', '8',
