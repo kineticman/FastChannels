@@ -52,13 +52,14 @@ CHROME_BIN = '/usr/bin/google-chrome-stable'
 #   cnn_tve — HTTP 400 vmp_platform_not_verified (Warner Bros. Discovery enforces VMP)
 #   dazn_tve — HTTP 403 code 10802 "Device not allowed to receive a license" (2026-11-20,
 #              YES National and Unbeaten)
-# hbomax shares CNN's WBD license stack. Confirmed 2026-11-21 on a live TNT event: Linux
-# Chrome gets HTTP 400 vmp_platform_not_verified on the license POST (capture session
-# fails with Shaka 6007) while FastChannels Player on Fire TV gets 200 and plays.
-# (The 2026-11-20 spike was inconclusive only because HBO Max events refuse playback
-# before their window opens: "access.denied.before.playable.windows".)
+# hbomax was excluded here until 2026-11-21. Its license server refuses any request that
+# lists key ids above a software (L3) CDM's tier (the manifest's PSSH names six; HBO's own
+# player asks for the two SD/audio ones on Linux Chrome), answering HTTP 400
+# vmp_platform_not_verified. fc_player.js now trims the key list on desktop Linux, so capture
+# works, at SD (576p): that is all a software CDM is allowed. cnn_tve shares the WBD license
+# stack and probably has the same cause, untested.
 # Also verified working that day: philo, roku, versant_tve, vix, tennis_tve.
-INCOMPATIBLE_SOURCES = frozenset({'cnn_tve', 'hbomax', 'dazn_tve'})
+INCOMPATIBLE_SOURCES = frozenset({'cnn_tve', 'dazn_tve'})
 
 # Single channels whose license keys come back 'output-restricted' (the content owner
 # requires a hardware-protected player), within an otherwise working source. Fubo was

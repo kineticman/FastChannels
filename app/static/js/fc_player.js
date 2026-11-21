@@ -217,6 +217,56 @@
   }
 
   /**
+   * Keep only the first two HBO Max key ids (audio 0100, SD video 0101) in a Widevine PSSH box.
+   * Anything that isn't a version-0 Widevine PSSH passes through untouched.
+   */
+  function trimHboKeyIds(initData) {
+    const u = new Uint8Array(initData);
+    const dv = new DataView(u.buffer, u.byteOffset, u.byteLength);
+    const WV = 'edef8ba979d64acea3c827dcd51d21ed';
+    const hex = (a) => Array.from(a).map((b) => b.toString(16).padStart(2, '0')).join('');
+    const varint = (a, i) => { let n = 0, sh = 0, b; do { b = a[i++]; n += (b & 0x7f) * Math.pow(2, sh); sh += 7; } while (b & 0x80); return [n, i]; };
+    const out = [];
+    let i = 0;
+    while (i + 32 <= u.length) {
+      const size = dv.getUint32(i);
+      if (size < 32 || i + size > u.length) break;
+      const box = u.subarray(i, i + size);
+      if (box[8] === 0 && hex(box.subarray(12, 28)) === WV) {
+        const data = box.subarray(32, 32 + dv.getUint32(i + 28));
+        const kept = [];
+        let j = 0;
+        while (j < data.length) {
+          const start = j;
+          let key; [key, j] = varint(data, j);
+          const wire = key & 7, field = key >>> 3;
+          if (wire === 0) { [, j] = varint(data, j); }
+          else if (wire === 2) {
+            let len; [len, j] = varint(data, j);
+            const vs = j; j += len;
+            if (field === 2 && len === 16 && data[vs + 1] > 1) continue; // drop higher-tier key ids
+          } else if (wire === 1) { j += 8; } else if (wire === 5) { j += 4; } else { break; }
+          kept.push(data.subarray(start, j));
+        }
+        const dlen = kept.reduce((n, c) => n + c.length, 0);
+        const nb = new Uint8Array(32 + dlen);
+        nb.set(box.subarray(0, 28), 0);
+        new DataView(nb.buffer).setUint32(0, nb.length);
+        new DataView(nb.buffer).setUint32(28, dlen);
+        let o = 32; kept.forEach((c) => { nb.set(c, o); o += c.length; });
+        out.push(nb);
+      } else {
+        out.push(box);
+      }
+      i += size;
+    }
+    if (!out.length) return u;
+    const total = out.reduce((n, c) => n + c.length, 0);
+    const res = new Uint8Array(total); let o = 0; out.forEach((c) => { res.set(c, o); o += c.length; });
+    return res;
+  }
+
+  /**
    * Load `url` into the `video` element. Returns the shaka.Player instance, or
    * null when playback is handled natively (direct video / native HLS) or cannot
    * proceed (unsupported browser / insecure DRM context).
@@ -289,6 +339,15 @@
             'com.microsoft.playready': license,
           },
         };
+        const desktopLinux = /Linux/.test(navigator.userAgent) && !/Android|CrOS/.test(navigator.userAgent);
+        if (desktopLinux && /\/play\/hbomax\//.test(license)) {
+          // HBO Max's license server refuses a request that lists key ids above a software
+          // (L3) Chrome CDM's tier: the manifest's PSSH names six keys (audio, SD, 720p and
+          // higher) and the whole request fails with vmp_platform_not_verified. HBO's own web
+          // player asks only for the audio + SD keys (0100, 0101) on L3, so do the same. Only on
+          // desktop Linux: Windows/macOS Chrome have a verified CDM and get 720p with all keys.
+          shakaConfig.drm.initDataTransform = (initData) => trimHboKeyIds(initData);
+        }
         if (liveEdgeSync) {
           shakaConfig.streaming = {
             bufferingGoal: 20,
