@@ -134,6 +134,69 @@ Only add it if your server has a `/dev/dri` folder (`ls /dev/dri` on the host).
 If it doesn't, Docker refuses to start the container. That's also why it isn't
 in the default compose file; it's there as a commented-out example.
 
+**Using `docker run`?** Remove the container and run your usual command again
+with `--device /dev/dri:/dev/dri` added (your data is in the `/data` volume, so
+nothing is lost):
+
+```bash
+docker stop fastchannels && docker rm fastchannels
+docker run -d \
+  --name fastchannels \
+  -p 5523:5523 \
+  -v fastchannels_data:/data \
+  -v fastchannels_adb:/root/.android \
+  --device /dev/dri:/dev/dri \
+  --restart unless-stopped \
+  ghcr.io/kineticman/fastchannels:latest
+```
+
+Keep your own `-p` and `-v` values. Compose is easier to keep track of as
+options pile up; see
+[Moving from docker run to Docker Compose](../README.md#moving-from-docker-run-to-docker-compose).
+
+**Using Portainer?**
+
+- *Deployed as a stack* (Stacks in the left menu): open the stack, click
+  **Editor**, add the two `devices:` lines above under `fastchannels:` (line
+  them up with `ports:` and `volumes:`), then click **Update the stack**.
+- *Deployed as a single container* (Containers in the left menu): open the
+  container, click **Duplicate/Edit**, go to **Runtime & Resources** under
+  *Advanced container settings*, click **add device**, enter `/dev/dri` for
+  both the host and the container path, then click **Deploy the container** and
+  confirm replacing it. Your data stays in its volume.
+
+For NVIDIA in Portainer, use a stack and paste the lines from the next section.
+
+### Other platforms
+
+Every setup comes down to the same thing: pass `/dev/dri` into the container
+(Intel/AMD), or use the NVIDIA runtime (NVIDIA). Where to do that:
+
+- **Unraid:** open the FastChannels container's **Edit** page, click
+  **Add another Path, Port, Variable, Label or Device**, choose **Device**, and
+  enter `/dev/dri`. Then click **Apply**. (Or switch to **Advanced View** and add
+  `--device=/dev/dri` to **Extra Parameters**.) For NVIDIA, install the
+  **Nvidia-Driver** plugin first, add `--runtime=nvidia` to **Extra Parameters**,
+  and add two **Variables**: `NVIDIA_VISIBLE_DEVICES` = `all` and
+  `NVIDIA_DRIVER_CAPABILITIES` = `compute,video,utility`.
+- **Proxmox (Docker inside an LXC):** the GPU has to reach the LXC before Docker
+  can pass it on, so there are two steps. First give the LXC the GPU: on Proxmox
+  8.2 or newer, select the LXC, go to **Resources → Add → Device Passthrough**,
+  and add `/dev/dri/renderD128` (and `/dev/dri/card0`). Restart the LXC and
+  check that `ls /dev/dri` inside it lists them. Then add `/dev/dri` to the
+  FastChannels container as in the compose or `docker run` steps above. If the
+  **Encoder** line says *Using CPU (GPU didn't work)*, the device usually
+  reached the LXC without permission to use it; the Logs page has the reason
+  (look for `[capture]` lines).
+- **Synology:** in **Container Manager**, create a **Project** and paste the
+  compose file from the README, with the `devices:` lines added. Only Synology
+  models with an Intel CPU have `/dev/dri`. Models with an ARM CPU (most "j"
+  and many value models) can't run Built-in Capture at all, since Chrome for
+  Linux is Intel/AMD only. Synology's website lists the CPU for each model.
+- **TrueNAS SCALE, CasaOS / ZimaOS, Dockge, Komodo** and other tools that take
+  a compose file: paste the compose file from the README into the tool's custom
+  app or compose editor, with the `devices:` lines added.
+
 After the restart, FastChannels installs the GPU drivers itself, tests the GPU,
 and the panel's **Encoder** line says *Using your GPU (Intel)* or *(AMD)*. If
 the test fails, it says *Using CPU (GPU didn't work)* and carries on with the
@@ -160,6 +223,14 @@ encoder test fails, Built-in Capture carries on with the CPU.
 
    `video` is the part that matters: it's what makes the encoder available
    inside the container.
+
+   With `docker run`, add these flags instead:
+
+   ```bash
+     --runtime=nvidia \
+     -e NVIDIA_VISIBLE_DEVICES=all \
+     -e NVIDIA_DRIVER_CAPABILITIES=compute,video,utility \
+   ```
 3. The **Encoder** line should then say *Using your GPU (NVIDIA)*. If it says
    the NVIDIA encode test failed, the Logs page has the reason (look for
    `[capture]` lines).
@@ -187,7 +258,9 @@ Capture needs.
         - /usr/lib/wsl:/usr/lib/wsl:ro
   ```
 
-  (Keep your existing `/data` volume line; this adds to it.) FastChannels then
+  (Keep your existing `/data` volume line; this adds to it.) With `docker run`,
+  add `--device /dev/dxg --device /dev/dri -v /usr/lib/wsl:/usr/lib/wsl:ro`
+  instead. FastChannels then
   installs a newer graphics driver (Mesa 26) and tests the GPU, and the
   **Encoder** line should say *Using your GPU*. This goes through Microsoft's
   D3D12 video bridge, which has worked with an AMD Ryzen laptop GPU; Intel and
@@ -222,6 +295,8 @@ Capture needs.
       environment:
         - NVIDIA_DRIVER_CAPABILITIES=compute,video,utility
   ```
+
+  With `docker run`: `--gpus all -e NVIDIA_DRIVER_CAPABILITIES=compute,video,utility`.
 
   If the encoder test fails, Built-in Capture carries on with the CPU.
 

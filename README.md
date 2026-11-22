@@ -50,6 +50,10 @@ volumes:
 
 - Deploy the stack.
 - Open `http://<your-server>:5523/admin/`.
+- To change a setting later (for example adding a GPU for
+  [Built-in Capture](docs/builtin-capture.md#use-your-gpu)), open the stack,
+  click **Editor**, make the change and click **Update the stack**. Your data
+  stays in its volumes.
 - On first boot, sources seed automatically and channels begin populating within a few minutes.
 - If you want a specific published version, replace `:latest` with a version tag from the [Releases page](https://github.com/kineticman/FastChannels/releases).
 - Keep the `/data` volume mount so the SQLite database survives container recreation.
@@ -69,11 +73,59 @@ docker run -d \
 
 Then open `http://localhost:5523/admin/`.
 
-If you prefer Docker Compose with the published image:
+We recommend Docker Compose with the published image. Optional settings, such
+as a GPU for Built-in Capture, are a line or two in a file instead of flags you
+have to remember:
 
 ```bash
 docker compose -f docker-compose.ghcr.yml up -d
 ```
+
+### Moving from `docker run` to Docker Compose
+
+A compose file is your `docker run` command written down in a file. Switching
+keeps all your channels, settings and sign-ins, as long as Compose uses the same
+volumes.
+
+1. Make a folder (for example `~/fastchannels`) and create `docker-compose.yml`
+   in it. If you used the `docker run` command above, paste this:
+
+   ```yaml
+   services:
+     fastchannels:
+       image: ghcr.io/kineticman/fastchannels:latest
+       container_name: fastchannels
+       ports:
+         - 5523:5523
+       volumes:
+         - fastchannels_data:/data
+         - fastchannels_adb:/root/.android
+       restart: unless-stopped
+
+   volumes:
+     fastchannels_data:
+       external: true
+     fastchannels_adb:
+       external: true
+   ```
+
+   `external: true` tells Compose to use the volumes `docker run` already
+   created. Without it, Compose makes new, empty ones and FastChannels starts
+   from scratch. If your `-v` lines used different volume names, use yours. If
+   they pointed at a folder on the host (`-v /some/path:/data`), put that path
+   in the `volumes:` list under the service (`- /some/path:/data`) and leave out
+   the `volumes:` section at the bottom. Copy any other `-p`, `-e` or `--device`
+   flags you added the same way.
+2. Remove the old container (your data is in the volumes, not the container),
+   then start it with Compose from that folder:
+
+   ```bash
+   docker stop fastchannels && docker rm fastchannels
+   docker compose up -d
+   ```
+
+3. From then on, update with `docker compose pull && docker compose up -d`
+   from the same folder.
 
 On Windows 11 without Docker Desktop, see [FastChannels on Windows 11](docs/FastChannels-Windows-11.md) (WSL Containers).
 
