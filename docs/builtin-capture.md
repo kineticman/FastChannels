@@ -24,7 +24,7 @@ Optional: [pass in your GPU](#use-your-gpu) to cut CPU use roughly in half.
 
 **On this page:** [Before you start](#before-you-start) ·
 [Turn it on](#turn-it-on) · [Add it to Channels DVR](#add-it-to-channels-dvr) ·
-[Use your GPU](#use-your-gpu) · [Windows](#windows) ·
+[Use your GPU](#use-your-gpu) · [Windows](#windows) · [ARM and Mac](#arm-and-mac) ·
 [What works](#what-works) · [Which method to use](#which-method-to-use) ·
 [Updating and removing](#updating-and-removing) ·
 [Troubleshooting](#troubleshooting)
@@ -32,9 +32,9 @@ Optional: [pass in your GPU](#use-your-gpu) to cut CPU use roughly in half.
 ## Before you start
 
 - **A 64-bit Intel or AMD server running Linux** (or Windows; see
-  [Windows](#windows)). Google only makes Chrome for Linux on x86_64, so
-  Built-in Capture isn't available on Raspberry Pi, ARM NAS boxes, Apple
-  Silicon or Windows on ARM.
+  [Windows](#windows)). ARM machines (Raspberry Pi, ARM NAS boxes, Apple
+  Silicon Macs, Windows on ARM) aren't supported yet, though support may come;
+  see [ARM and Mac](#arm-and-mac).
 - **About 250 MB of disk** on your FastChannels data volume. Chrome comes
   straight from Google when you turn the feature on, plus a few helpers
   (PulseAudio and FFmpeg) from Debian. FastChannels doesn't ship Chrome itself.
@@ -254,8 +254,8 @@ Every setup comes down to the same thing: pass `/dev/dri` into the container
 - **Synology:** in **Container Manager**, create a **Project** and paste the
   compose file from the README, with the `devices:` lines added. Only Synology
   models with an Intel CPU have `/dev/dri`. Models with an ARM CPU (most "j"
-  and many value models) can't run Built-in Capture at all, since Chrome for
-  Linux is Intel/AMD only. Synology's website lists the CPU for each model.
+  and many value models) can't run Built-in Capture yet (see
+  [ARM and Mac](#arm-and-mac)). Synology's website lists the CPU for each model.
 - **TrueNAS SCALE, CasaOS / ZimaOS, Dockge, Komodo** and other tools that take
   a compose file: paste the compose file from the README into the tool's custom
   app or compose editor, with the `devices:` lines added.
@@ -326,6 +326,30 @@ Capture needs.
 
   If the encoder test fails, Built-in Capture carries on with the CPU.
 
+## ARM and Mac
+
+**ARM support may be coming.** Built-in Capture currently runs only on Intel
+and AMD processors. Google now makes Chrome for ARM Linux, including the
+Widevine module that DRM channels need, so Raspberry Pi 5, ARM NAS boxes and
+Apple Silicon Macs (through Docker Desktop) may be able to run it in a future
+version. It hasn't been tested yet: the open questions are whether providers'
+license servers accept it, and how much CPU it takes, since these machines
+would encode without a GPU. Until then, the Built-in Capture switch on an ARM
+server shows as unavailable.
+
+**Apple Silicon Macs today:** use [PrismCast](https://github.com/hjdhjd/prismcast),
+installed natively on the same Mac as FastChannels (not in Docker). It drives
+the Mac's own Chrome and uses the Mac's hardware encoder. On the **Bridge**
+page's PrismCast panel, set **Address PrismCast uses to reach FastChannels** to
+`http://127.0.0.1:5523`: DRM only plays from `127.0.0.1` or HTTPS, so PrismCast
+must run on the same Mac.
+
+**Intel Macs:** Docker Desktop runs an Intel Linux system, so Built-in Capture
+should work, but it hasn't been tested. macOS can't pass the GPU into
+containers, so it encodes on the CPU only (about 2–2.5 cores per channel at
+720p 60 fps). Give Docker Desktop enough memory in **Settings → Resources**:
+about 0.8 GB per tuner on top of FastChannels.
+
 ## What works
 
 Built-in Capture works with the same DRM sources as PrismCast. Verified so far:
@@ -355,8 +379,8 @@ not to Chrome on Linux.
   quality is limited to what Chrome on Linux is allowed (usually up to 1080p,
   SD for Amazon, CNN and HBO Max), and it uses your server's CPU or GPU.
 - **PrismCast** works the same way as Built-in Capture but runs as its own app,
-  which suits setups that already use it or want capture on a different
-  machine.
+  which suits setups that already use it, or a Mac with Apple Silicon, where it
+  runs natively ([ARM and Mac](#arm-and-mac)).
 
 You can turn on more than one. Each has its own playlist, so add the ones you
 want to Channels DVR as separate sources.

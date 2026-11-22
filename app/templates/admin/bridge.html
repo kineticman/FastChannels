@@ -182,7 +182,7 @@
           </div>
 
           {% if m.unsupported and not m.enabled %}
-          <div class="bridge-note">Not available on this server: Built-in Capture needs a 64-bit Intel or AMD (x86_64) server, because Google only makes Chrome for Linux there.</div>
+          <div class="bridge-note">Not available on this server: Built-in Capture needs a 64-bit Intel or AMD (x86_64) server. ARM servers aren't supported yet.</div>
           {% elif m.paused %}
           <div class="bridge-note">Paused because hardware capture is off. <button class="btn btn-secondary btn-sm" onclick="resumeHardwareCapture()">Resume</button></div>
           {% elif m.enabled and st == 'setup' and m.missing %}
