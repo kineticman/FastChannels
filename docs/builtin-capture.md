@@ -9,9 +9,25 @@ It doesn't remove or get around DRM. Chrome decrypts the channel with its own
 Widevine module after the provider's license server approves it, exactly as it
 would on a desktop, and FastChannels only records the picture and sound.
 
-> **Lite mode:** new installs start in Lite mode, which hides the **Bridge** page.
-> Switch to **Advanced** with the **Lite mode / Advanced mode** menu at the top
-> right of the admin UI (or **Settings → Interface**) first.
+## Quick start
+
+1. Check you have a 64-bit Intel or AMD server
+   ([Before you start](#before-you-start)).
+2. In the admin UI, switch to **Advanced** mode (top right) and open **Bridge**.
+3. Pick **Built-in Capture**, turn on its switch, and click **Install**.
+4. Turn on **Bridge mode** at the top of the Bridge page.
+5. Run a **Stream Audit** on your DRM sources (Sources page).
+6. On **Feeds**, open the feed's **Built-in** tab and click
+   **Add Built-in to Channels DVR**.
+
+Optional: [pass in your GPU](#use-your-gpu) to cut CPU use roughly in half.
+
+**On this page:** [Before you start](#before-you-start) ·
+[Turn it on](#turn-it-on) · [Add it to Channels DVR](#add-it-to-channels-dvr) ·
+[Use your GPU](#use-your-gpu) · [Windows](#windows) ·
+[What works](#what-works) · [Which method to use](#which-method-to-use) ·
+[Updating and removing](#updating-and-removing) ·
+[Troubleshooting](#troubleshooting)
 
 ## Before you start
 
@@ -32,16 +48,19 @@ would on a desktop, and FastChannels only records the picture and sound.
 
   Each tuner also uses memory: about 0.8 GB while playing at 720p, and about
   0.6 GB while waiting for a channel (see *Between channels* below to free
-  that). **Settings → System** shows what Built-in Capture is using right now. Capture runs at a lower
-  priority than the rest of FastChannels, so scrapes and the admin pages stay
-  responsive while it works.
+  that). **Settings → System** shows what Built-in Capture is using right now.
+  Capture runs at a lower priority than the rest of FastChannels, so scrapes
+  and the admin pages stay responsive while it works.
 
 ## Turn it on
 
-1. Open **Bridge** and pick **Built-in Capture** in the list on the left.
+1. Open **Bridge** and pick **Built-in Capture** in the list on the left. New
+   installs start in Lite mode, which hides the **Bridge** page: switch to
+   **Advanced** with the **Lite mode / Advanced mode** menu at the top right of
+   the admin UI (or **Settings → Interface**) first.
 2. Turn on its switch. The first time, the panel asks before downloading and
    says whether it found a GPU to encode with. If it didn't, it shows the
-   compose change to make ([below](#use-your-gpu)); you can do that before or
+   change to make ([Use your GPU](#use-your-gpu)); you can do that before or
    after installing. Click **Install** and the panel shows each step (download,
    install, start the tuners), then refreshes itself when it's ready, usually
    within a minute or two. You can leave the page while it runs.
@@ -101,9 +120,9 @@ a single source.
 
 **Adding it by hand:** copy the URLs from the Built-in tab and add them as a
 custom channels source with stream format **HLS**, the feed's EPG URL as the
-XMLTV guide (optionally, a stream limit equal to your number of tuners). Without a feed,
-`/m3u/capture` (with `/epg.xml`) and `/m3u/capture/gracenote` cover every DRM
-channel; both take the same filters as the regular playlist, for example
+XMLTV guide (optionally, a stream limit equal to your number of tuners).
+Without a feed, `/m3u/capture` (with `/epg.xml`) and `/m3u/capture/gracenote`
+cover every DRM channel; both take the same filters as the regular playlist, for example
 `/m3u/capture?source=paramount&source=pbs`.
 
 **What to expect:**
@@ -122,21 +141,33 @@ With an Intel (Quick Sync) or AMD GPU, the video encoding moves off the CPU. On
 the Intel N95 above, that took the encoder from about 180% CPU to about 35% and
 made 720p 60 fps smooth. Picture quality is about the same as CPU encoding.
 
-Docker only lets a container use the GPU if you pass it in. Add this to the
-FastChannels service in your compose file and recreate the container:
+Docker only lets a container use the GPU if you pass it in. Once you do,
+FastChannels installs the GPU drivers itself and tests the GPU, and the panel's
+**Encoder** line says *Using your GPU (Intel)*, *(AMD)* or *(NVIDIA)*. If the
+test fails, it says *Using CPU (GPU didn't work)* and carries on with the CPU,
+so it's safe to try.
+
+On Windows, see [Windows](#windows) instead; the GPU is passed in differently
+there.
+
+### Intel or AMD
+
+First check that your server has a GPU device: run `ls /dev/dri` on the host.
+If the folder doesn't exist, don't add the lines below, because Docker refuses
+to start a container whose device is missing. That's also why this isn't on in
+the default compose file; it's there as a commented-out example.
+
+**Docker Compose:** add this to the FastChannels service and recreate the
+container (`docker compose up -d`):
 
 ```yaml
     devices:
       - /dev/dri:/dev/dri
 ```
 
-Only add it if your server has a `/dev/dri` folder (`ls /dev/dri` on the host).
-If it doesn't, Docker refuses to start the container. That's also why it isn't
-in the default compose file; it's there as a commented-out example.
-
-**Using `docker run`?** Remove the container and run your usual command again
-with `--device /dev/dri:/dev/dri` added (your data is in the `/data` volume, so
-nothing is lost):
+**`docker run`:** remove the container and run your usual command again with
+`--device /dev/dri:/dev/dri` added. Your data is in the `/data` volume, so
+nothing is lost:
 
 ```bash
 docker stop fastchannels && docker rm fastchannels
@@ -154,7 +185,7 @@ Keep your own `-p` and `-v` values. Compose is easier to keep track of as
 options pile up; see
 [Moving from docker run to Docker Compose](../README.md#moving-from-docker-run-to-docker-compose).
 
-**Using Portainer?**
+**Portainer:**
 
 - *Deployed as a stack* (Stacks in the left menu): open the stack, click
   **Editor**, add the two `devices:` lines above under `fastchannels:` (line
@@ -165,7 +196,39 @@ options pile up; see
   both the host and the container path, then click **Deploy the container** and
   confirm replacing it. Your data stays in its volume.
 
-For NVIDIA in Portainer, use a stack and paste the lines from the next section.
+Unraid, Proxmox, Synology and others: see
+[Other platforms](#other-platforms).
+
+### NVIDIA (experimental)
+
+NVIDIA cards encode through NVENC. This is new and hasn't been tested on real
+NVIDIA hardware yet, so please report how it goes.
+
+1. Install the NVIDIA driver and the
+   [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html)
+   on the server (the same setup Plex or Jellyfin use for NVIDIA).
+2. Add this to the FastChannels service in your compose file (in Portainer, the
+   stack's **Editor**) and recreate the container:
+
+   ```yaml
+       runtime: nvidia
+       environment:
+         - NVIDIA_VISIBLE_DEVICES=all
+         - NVIDIA_DRIVER_CAPABILITIES=compute,video,utility
+   ```
+
+   `video` is the part that matters: it's what makes the encoder available
+   inside the container. With `docker run`, add these flags instead:
+
+   ```bash
+     --runtime=nvidia \
+     -e NVIDIA_VISIBLE_DEVICES=all \
+     -e NVIDIA_DRIVER_CAPABILITIES=compute,video,utility \
+   ```
+
+3. The **Encoder** line should then say *Using your GPU (NVIDIA)*. If it says
+   the NVIDIA encode test failed, the Logs page has the reason (look for
+   `[capture]` lines).
 
 ### Other platforms
 
@@ -184,7 +247,7 @@ Every setup comes down to the same thing: pass `/dev/dri` into the container
   8.2 or newer, select the LXC, go to **Resources → Add → Device Passthrough**,
   and add `/dev/dri/renderD128` (and `/dev/dri/card0`). Restart the LXC and
   check that `ls /dev/dri` inside it lists them. Then add `/dev/dri` to the
-  FastChannels container as in the compose or `docker run` steps above. If the
+  FastChannels container as in [Intel or AMD](#intel-or-amd). If the
   **Encoder** line says *Using CPU (GPU didn't work)*, the device usually
   reached the LXC without permission to use it; the Logs page has the reason
   (look for `[capture]` lines).
@@ -196,44 +259,6 @@ Every setup comes down to the same thing: pass `/dev/dri` into the container
 - **TrueNAS SCALE, CasaOS / ZimaOS, Dockge, Komodo** and other tools that take
   a compose file: paste the compose file from the README into the tool's custom
   app or compose editor, with the `devices:` lines added.
-
-After the restart, FastChannels installs the GPU drivers itself, tests the GPU,
-and the panel's **Encoder** line says *Using your GPU (Intel)* or *(AMD)*. If
-the test fails, it says *Using CPU (GPU didn't work)* and carries on with the
-CPU.
-
-### NVIDIA (experimental)
-
-NVIDIA cards encode through NVENC. This is new and hasn't been tested on real
-NVIDIA hardware yet, so please report how it goes. It's safe to try: if the
-encoder test fails, Built-in Capture carries on with the CPU.
-
-1. Install the NVIDIA driver and the
-   [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html)
-   on the server (the same setup Plex or Jellyfin use for NVIDIA).
-2. Add this to the FastChannels service in your compose file and recreate the
-   container:
-
-   ```yaml
-       runtime: nvidia
-       environment:
-         - NVIDIA_VISIBLE_DEVICES=all
-         - NVIDIA_DRIVER_CAPABILITIES=compute,video,utility
-   ```
-
-   `video` is the part that matters: it's what makes the encoder available
-   inside the container.
-
-   With `docker run`, add these flags instead:
-
-   ```bash
-     --runtime=nvidia \
-     -e NVIDIA_VISIBLE_DEVICES=all \
-     -e NVIDIA_DRIVER_CAPABILITIES=compute,video,utility \
-   ```
-3. The **Encoder** line should then say *Using your GPU (NVIDIA)*. If it says
-   the NVIDIA encode test failed, the Logs page has the reason (look for
-   `[capture]` lines).
 
 ## Windows
 
@@ -258,11 +283,12 @@ Capture needs.
         - /usr/lib/wsl:/usr/lib/wsl:ro
   ```
 
-  (Keep your existing `/data` volume line; this adds to it.) With `docker run`,
+  Keep your existing `/data` volume line; this adds to it. With `docker run`,
   add `--device /dev/dxg --device /dev/dri -v /usr/lib/wsl:/usr/lib/wsl:ro`
-  instead. FastChannels then
-  installs a newer graphics driver (Mesa 26) and tests the GPU, and the
-  **Encoder** line should say *Using your GPU*. This goes through Microsoft's
+  instead.
+
+  FastChannels then installs a newer graphics driver (Mesa 26) and tests the
+  GPU, and the **Encoder** line should say *Using your GPU*. This goes through Microsoft's
   D3D12 video bridge, which has worked with an AMD Ryzen laptop GPU; Intel and
   NVIDIA GPUs may work the same way. If the test fails, Built-in Capture
   carries on with the CPU. Budget about 2–2.5 CPU cores per channel at 720p
@@ -282,7 +308,7 @@ Capture needs.
 - **NVIDIA (experimental, untested on Windows):** with a recent NVIDIA driver
   on Windows, Docker Desktop can pass the GPU through. You don't need to
   install the NVIDIA Container Toolkit. Add this to the FastChannels service
-  in place of the `runtime: nvidia` lines above:
+  in place of the `runtime: nvidia` lines from [NVIDIA](#nvidia-experimental):
 
   ```yaml
       deploy:
@@ -367,6 +393,17 @@ capture. Check the channel plays in the Channels page preview, and look at the
 The panel shows the reason. The download needs your server to reach
 `dl.google.com` and the Debian package mirrors. Fix the connection, then click
 **Reinstall**.
+
+### The Encoder line says "Using CPU"
+
+Hover over the line to see the reason.
+
+- *Using CPU*: FastChannels can't see a GPU (or **Encoder** is set to CPU).
+  Check the container was recreated after adding the lines in
+  [Use your GPU](#use-your-gpu) (restarting it isn't enough), and that
+  `ls /dev/dri` works on the host.
+- *Using CPU (GPU didn't work)*: the GPU was passed in but the encode test
+  failed. The Logs page has the details (look for `[capture]` lines).
 
 ### The video is choppy
 
