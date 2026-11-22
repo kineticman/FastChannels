@@ -950,7 +950,7 @@
                         onclick='pushCaptureToDvr({{ feed.id }}, {{ feed.name|tojson }}, {{ split.get("capture_count", 0) + (split.get("capture_gracenote_count", 0) if mixed_guide else 0) }}, {{ 0 if mixed_guide else split.get("capture_gracenote_count", 0) }}, this)'
                         {% if not capture_total %}disabled{% endif %}>📺 Add Built-in to Channels DVR</button>
               </div>
-              <p class="help">Chrome inside FastChannels plays and records these. When every tuner is busy, a new DRM channel is turned away.{% if bridged_total > capture_total %} {{ bridged_total - capture_total }} channel{{ '' if bridged_total - capture_total == 1 else 's' }} it can't play (CNN, HBO Max, DAZN, or hardware-only channels) {{ 'is' if bridged_total - capture_total == 1 else 'are' }} left out.{% endif %}</p>
+              <p class="help">Chrome inside FastChannels plays and records these. When every tuner is busy, a new DRM channel is turned away.{% if bridged_total > capture_total %} {{ bridged_total - capture_total }} channel{{ '' if bridged_total - capture_total == 1 else 's' }} it can't play (hardware-only channels) {{ 'is' if bridged_total - capture_total == 1 else 'are' }} left out.{% endif %}</p>
               {% if mixed_guide and not bridge_only_feed %}
               {% set capture_single_total = standard_total + capture_total %}
               <div class="alt-option">

@@ -231,8 +231,8 @@ Built-in Capture works with the same DRM sources as PrismCast. Verified so far:
 Paramount+, Sling, DirecTV Stream, Spectrum, ESPN, NBCUniversal TV Everywhere,
 Disney TV Everywhere, PBS, SportsNet Pittsburgh, Amazon Sports, Amazon Prime
 Free Channels, Philo, The Roku Channel, Versant (USA, E!, Syfy, CNBC and the
-rest), ViX, Tennis Channel, Fubo and Vidaa. Other DRM sources should work the
-same way but haven't been tried yet.
+rest), ViX, Tennis Channel, Fubo, Vidaa, CNN TV Everywhere, HBO Max and DAZN.
+Other DRM sources should work the same way but haven't been tried yet.
 
 A few single channels only allow hardware players such as FastChannels Player,
 even when the rest of their source works (on Fubo, for example, ABC News Live).
@@ -240,16 +240,9 @@ The first time one of them is tuned it fails with a message saying so, and
 Built-in Capture leaves it out of its playlists from then on. It's checked again
 after 30 days in case the provider changes its rules.
 
-Not available:
-
-- **CNN TV Everywhere**: its license server refuses Chrome on Linux.
-- **HBO Max**: uses the same license system as CNN, so it's left out too
-  (not yet confirmed during a live event).
-- **DAZN**: its license server refuses Chrome on Linux ("Device not allowed to
-  receive a license").
-
-**Amazon** channels play in SD (576p). Amazon gives HD only to hardware players
-such as FastChannels Player, not to Chrome.
+**Amazon**, **CNN TV Everywhere** and **HBO Max** channels play in SD (576p).
+These providers give HD only to hardware players such as FastChannels Player,
+not to Chrome on Linux.
 
 ## Which method to use
 
@@ -259,7 +252,7 @@ such as FastChannels Player, not to Chrome.
   HDMI capture setup; see [Single-port HDMI and ah4c Capture](fc-player-setup.md).
 - **Built-in Capture** is the easiest: nothing extra to buy or run. Picture
   quality is limited to what Chrome on Linux is allowed (usually up to 1080p,
-  SD for Amazon), and it uses your server's CPU or GPU.
+  SD for Amazon, CNN and HBO Max), and it uses your server's CPU or GPU.
 - **PrismCast** works the same way as Built-in Capture but runs as its own app,
   which suits setups that already use it or want capture on a different
   machine.
