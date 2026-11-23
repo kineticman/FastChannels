@@ -159,6 +159,19 @@ NETWORKS = [
                    category='Sports', gracenote_id='206205',
                    description="All Elite Wrestling's free 24/7 channel: matches, shows and replays."),
     ]),
+    StaticNetwork('racerselect', 'Racer Select', [
+        # RACER's free channel (racerplus.com/live/317120, DICE realm dce.mavtv).
+        # The site's guest-granted event resolves to this bare Amagi playout
+        # (clear, 240p-1080p, no token; the site only adds ad macros). Racer
+        # Network and the events on the same site need a paid account or a TV
+        # provider and are not here. Gracenote is the FAST station Roku
+        # carries (community CSV). Checked 2026-11-23.
+        NetChannel('racerselect', 'RACER Select',
+                   'https://amg00378-amg00378c5-amgplt0967.playout.now3.amagi.tv/ts-us-w2-n1/playlist/'
+                   'amg00378-amg00378c5-amgplt0967/playlist.m3u8',
+                   logo=_TMS_LOGO.format('121708'), category='Sports', gracenote_id='121708',
+                   description='RACER Select: free motorsports programming, racing stories and gearhead shows.'),
+    ]),
     StaticNetwork('sportsgrid', 'SportsGrid', [
         # sportsgrid.com/live's Amagi playout, without the page's ad macros
         # (clear 720p). Gracenote is the FAST station Sling and Fubo carry;
