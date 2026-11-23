@@ -52,7 +52,7 @@ from app.channel_tags import (AUTO_EVENT_REASONS, EVENT_RETIRED_REASON, EVENT_MI
                               EVENT_SCHEDULE_MISSING_REASON, EVENT_FILTERED_REASON,
                               event_channel_clause)
 from app.event_lifecycle import hide_event, restore_event, delete_event
-from app.tve.adobe_pass import TVENotAuthorizedError
+from app.tve.adobe_pass import TVENotAuthorizedError, resolver_for_audit
 from app.xml_cache import (
     ARTIFACT_IDLE_SECONDS, ARTIFACT_PURGE_SECONDS, artifact_in_use, ensure_xml_artifact, get_artifact,
     invalidate_xml_cache, purge_idle_artifacts, sweep_unused_artifacts, write_artifact,
@@ -1039,7 +1039,7 @@ def run_stream_audit(source_name: str, scope: str = 'linear'):
                 _audit_progress(i - 1, total, flagged, dead, vod, errors, skipped_403, not_authorized_=not_authorized)
                 # Resolve the raw stream URL. Use audit_resolve() if the scraper
                 # provides a lighter-weight bulk-check variant (e.g. Plex skips tune).
-                _resolve = getattr(scraper, 'audit_resolve', scraper.resolve)
+                _resolve = resolver_for_audit(getattr(scraper, 'audit_resolve', scraper.resolve))
                 _resolve_t0 = _time.monotonic()
                 try:
                     resolved_url = _run_with_signal_timeout(
@@ -1663,7 +1663,7 @@ def run_stream_audit_recheck(source_name: str, channel_ids: list):
             # check so the writer lock isn't held across them (see run_stream_audit).
             db.session.commit()
             try:
-                _resolve = getattr(scraper, 'audit_resolve', scraper.resolve)
+                _resolve = resolver_for_audit(getattr(scraper, 'audit_resolve', scraper.resolve))
                 try:
                     resolved_url = _resolve(ch.stream_url)
                 except StreamDeadError as dead_exc:

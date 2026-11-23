@@ -200,6 +200,35 @@ class TVENotAuthorizedError(TVEAuthError):
     pass
 
 
+# What the TVE scrapers say when there is no sign-in at all (not an expired one,
+# which reads "sign-in has expired" and is temporary).
+_NEVER_SIGNED_IN_MARKERS = ('not signed in yet', 'credentials are not configured')
+
+
+def never_signed_in(exc: BaseException) -> bool:
+    """True for a TVEAuthError that means "no sign-in has been made", as
+    opposed to a lapsed one or a provider refusal."""
+    if isinstance(exc, TVENotAuthorizedError) or not isinstance(exc, TVEAuthError):
+        return False
+    message = str(exc).lower()
+    return any(marker in message for marker in _NEVER_SIGNED_IN_MARKERS)
+
+
+def resolver_for_audit(resolve):
+    """Wrap a scraper's resolve for the stream audit so a channel that can't
+    play because nobody has signed in reads as not authorized. The audit then
+    switches it off (NotAuthorized), and the next audit, or a sign-in's
+    re-enable, brings it back once it resolves."""
+    def wrapped(raw_url):
+        try:
+            return resolve(raw_url)
+        except TVEAuthError as exc:
+            if never_signed_in(exc):
+                raise TVENotAuthorizedError(str(exc)) from exc
+            raise
+    return wrapped
+
+
 class TVEPendingAuthError(TVEAuthError):
     """Adobe session isn't authenticated yet — not a failure, just not done.
 
