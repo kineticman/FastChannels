@@ -6878,6 +6878,145 @@
       if (wrap) wrap.style.display = method === 'subscription' ? 'none' : '';
     }
 
+    // ── DAZN: pick how you get it, then sign in that way ─────────────────────
+    function renderDaznConfig(sourceId, schema, values, cfg) {
+      const info = (cfg && cfg.dazn) || {};
+      const direct = (values.sign_in_method || 'tve') === 'subscription';
+      const tveSignin = cfg && cfg.tve_signin ? renderTveSigninSection(sourceId, cfg.tve_signin) : '';
+      const ago = info.signed_in_at ? _epochAgo(info.signed_in_at) : '';
+      const status = info.signed_in
+        ? `<div class="dz-status ok"><span class="dz-dot"></span><div>
+             <b>Signed in${info.email ? ` as ${escapeHtml(info.email)}` : ''}</b>
+             <div class="dz-sub">${info.tier === 'paid' ? 'Paid DAZN plan' : 'Free DAZN account'} · ${info.how === 'link' ? 'signed in with a link' : 'email and password'}${ago ? ` · ${ago}` : ''}</div>
+           </div></div>`
+        : `<div class="dz-status"><span class="dz-dot"></span><div><b>Not signed in</b>
+             <div class="dz-sub">Enter your DAZN email and password, or use a link if you sign in to DAZN with Google.</div></div></div>`;
+      const choice = (value, title, text) => `
+        <button type="button" class="dz-choice-card${(direct ? 'subscription' : 'tve') === value ? ' on' : ''}"
+                data-method="${value}" onclick="daznSetMethod(${sourceId}, '${value}')">
+          <span><b>${title}</b><span class="dz-sub">${text}</span></span>
+        </button>`;
+      return `
+        <style>
+          .dz-choice { display:grid; grid-template-columns:1fr 1fr; gap:.6rem; margin:.7rem 0 1rem; }
+          @media (max-width:640px) { .dz-choice { grid-template-columns:1fr; } }
+          .dz-choice-card { display:flex; gap:.7rem; align-items:flex-start; text-align:left; padding:.75rem .85rem;
+            border:1px solid var(--border); border-radius:10px; background:var(--surface-2); color:var(--text); cursor:pointer;
+            transition:border-color .15s, box-shadow .15s; font:inherit; }
+          .dz-choice-card:hover { border-color:var(--focus-accent); }
+          .dz-choice-card.on { border-color:var(--focus-accent); box-shadow:0 0 0 1px var(--focus-accent) inset; }
+          .dz-choice-card b { display:block; font-size:.9rem; }
+          .dz-sub { display:block; color:var(--text-muted); font-size:.78rem; margin-top:.15rem; font-weight:400; }
+          .dz-status { display:flex; gap:.7rem; align-items:center; padding:.6rem .75rem; border-radius:8px;
+            background:var(--bg); border:1px solid var(--border); }
+          .dz-status b { font-size:.88rem; }
+          .dz-dot { width:.7rem; height:.7rem; border-radius:50%; background:var(--text-muted); flex:none; opacity:.5; }
+          .dz-status.ok .dz-dot { background:var(--success-soft); opacity:1; box-shadow:0 0 0 4px color-mix(in srgb, var(--success-soft) 25%, transparent); }
+          .dz-or { display:flex; align-items:center; gap:.6rem; color:var(--text-muted); font-size:.75rem; margin:.8rem 0 .2rem; }
+          .dz-or::before, .dz-or::after { content:''; flex:1; border-top:1px solid var(--border); }
+          .btn-danger-soft { color:var(--danger); }
+        </style>
+        <div class="config-title">DAZN Settings</div>
+        <div class="config-note">How do you get DAZN? Either way you get DAZN's free channels; a TV provider adds YES and MSG, a paid DAZN plan adds the rest.</div>
+        <div class="dz-choice">
+          ${choice('tve', 'My TV provider', 'YES and MSG regional sports through cable, satellite or streaming TV.')}
+          ${choice('subscription', 'My DAZN account', 'Sign in to your own DAZN account, free or paid. No TV provider needed.')}
+        </div>
+        <input type="hidden" id="cfg-${sourceId}-sign_in_method" data-key="sign_in_method" value="${direct ? 'subscription' : 'tve'}">
+
+        <div id="dazn-direct-${sourceId}" style="${direct ? '' : 'display:none'}">
+          <div class="signin-box" style="margin-top:0">
+            ${status}
+            <div class="fields-grid" style="margin-top:.8rem">
+              <div class="field">
+                <label for="cfg-${sourceId}-email">DAZN email</label>
+                <input type="text" id="cfg-${sourceId}-email" data-key="email" value="${escapeHtml(String(values.email || ''))}"
+                       placeholder="you@example.com" autocomplete="username">
+              </div>
+              <div class="field">
+                <label for="cfg-${sourceId}-password">DAZN password</label>
+                <input type="password" id="cfg-${sourceId}-password" data-key="password" data-secret="true"
+                       value="${escapeHtml(String(values.password || ''))}" autocomplete="current-password">
+              </div>
+            </div>
+            <div class="signin-box-row">
+              <button class="btn btn-run" type="button" onclick="daznPasswordSignin(${sourceId})">${info.signed_in ? 'Save and sign in again' : 'Sign in'}</button>
+              <span class="spacer"></span>
+              <button class="btn btn-cancel btn-danger-soft" type="button" onclick="daznSignOut(${sourceId})" ${info.signed_in || values.email ? '' : 'disabled'}>Sign out</button>
+            </div>
+            <div class="dz-or">no password? signed up with Google?</div>
+            <div class="signin-box-row" style="margin-top:.3rem">
+              <button class="btn btn-run" type="button" onclick="daznLinkStart(${sourceId})">Sign in with a link</button>
+              <span class="dz-sub" style="margin:0">Opens DAZN where you're already signed in.</span>
+            </div>
+            <div id="dazn-msg-${sourceId}" style="margin-top:.6rem;font-size:.84rem"></div>
+          </div>
+        </div>
+
+        <div id="dazn-tve-${sourceId}" style="${direct ? 'display:none' : ''}">${tveSignin}</div>
+
+        <div class="config-actions">
+          <span class="config-status" id="config-status-${sourceId}"></span>
+          <button class="btn btn-run" type="button" onclick="saveSourceConfig(${sourceId})">Save Settings</button>
+        </div>`;
+    }
+
+    function _daznMsg(sourceId, html) {
+      const el = document.getElementById(`dazn-msg-${sourceId}`);
+      if (el) el.innerHTML = html;
+    }
+
+    async function daznSetMethod(sourceId, method) {
+      document.getElementById(`cfg-${sourceId}-sign_in_method`).value = method;
+      document.querySelectorAll(`#source-config-${sourceId} .dz-choice-card`).forEach(c =>
+        c.classList.toggle('on', c.dataset.method === method));
+      document.getElementById(`dazn-direct-${sourceId}`).style.display = method === 'subscription' ? '' : 'none';
+      document.getElementById(`dazn-tve-${sourceId}`).style.display = method === 'subscription' ? 'none' : '';
+      try { await saveSourceConfig(sourceId); } catch (e) { /* the status line shows it */ }
+    }
+
+    async function daznPasswordSignin(sourceId) {
+      _daznMsg(sourceId, '<span style="color:var(--text-muted)">Signing in…</span>');
+      try { await saveSourceConfig(sourceId); } catch (e) { /* carry on with what is saved */ }
+      try {
+        const r = await fetch(`/api/sources/${sourceId}/dazn-signin`, {method: 'POST'});
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(d.error || 'Sign-in failed.');
+        loadSourceConfig(sourceId, 'dazn_tve');
+      } catch (e) {
+        _daznMsg(sourceId, `<span style="color:var(--danger)">${escapeHtml(e.message)}</span>`);
+      }
+    }
+
+    async function daznSignOut(sourceId) {
+      if (!confirm('Sign out of DAZN? This forgets the saved sign-in and password. DAZN\'s channels stop playing until you sign in again.')) return;
+      try {
+        const r = await fetch(`/api/sources/${sourceId}/dazn-signout`, {method: 'POST'});
+        if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || 'Could not sign out.');
+        loadSourceConfig(sourceId, 'dazn_tve');
+      } catch (e) {
+        _daznMsg(sourceId, `<span style="color:var(--danger)">${escapeHtml(e.message)}</span>`);
+      }
+    }
+
+    async function daznLinkStart(sourceId) {
+      _daznMsg(sourceId, '<span style="color:var(--text-muted)">Getting a link…</span>');
+      try {
+        const r = await fetch(`/api/sources/${sourceId}/dazn-link/start`, {method: 'POST'});
+        const d = await r.json();
+        if (!r.ok) { _daznMsg(sourceId, `<span style="color:var(--danger)">${escapeHtml(d.error || 'Could not get a link.')}</span>`); return; }
+        _daznMsg(sourceId, `Open <a href="${escapeHtml(d.url)}" target="_blank" rel="noopener">${escapeHtml(d.url)}</a> and approve it. Waiting…`);
+        for (let i = 0; i < 180; i++) {
+          await new Promise(res => setTimeout(res, 5000));
+          if (!document.getElementById(`dazn-msg-${sourceId}`)) return;  // card closed
+          const s = await (await fetch(`/api/sources/${sourceId}/dazn-link/state`)).json();
+          if (s.state === 'signed_in') { loadSourceConfig(sourceId, 'dazn_tve'); return; }
+          if (s.state === 'expired') { _daznMsg(sourceId, 'The link expired. Get a new one.'); return; }
+        }
+        _daznMsg(sourceId, 'Timed out. Get a new link.');
+      } catch (e) { _daznMsg(sourceId, 'Could not reach DAZN.'); }
+    }
+
     function renderConfigFields(sourceId, sourceName, schema, values, cfg) {
       // TVE sources: the sign-in choice is the whole section, or follows the
       // source's own settings when it has any (NBC).
@@ -6936,6 +7075,8 @@
         return renderSpectrumConfig(sourceId, schema, values, cfg);
       } else if (sourceName === 'fox_one') {
         return renderFoxOneConfig(sourceId, schema, values, cfg);
+      } else if (sourceName === 'dazn_tve') {
+        return renderDaznConfig(sourceId, schema, values, cfg);
       } else if (sourceName === 'pbs') {
         return renderPbsConfig(sourceId, schema, values);
       }
@@ -7048,7 +7189,8 @@
           <button class="btn btn-cancel" type="button" onclick="clearConfigFields(${sourceId})">Clear</button>
           <button class="btn btn-run" type="button" onclick="saveSourceConfig(${sourceId})">Save Settings</button>
         </div>
-        ${tveSignin ? `<div id="tve-signin-wrap-${sourceId}" style="margin-top:1.25rem${values.sign_in_method === 'subscription' ? ';display:none' : ''}">${tveSignin}</div>` : ''}`;
+        ${tveSignin ? `<div id="tve-signin-wrap-${sourceId}" style="margin-top:1.25rem${values.sign_in_method === 'subscription' ? ';display:none' : ''}">${tveSignin}</div>` : ''}
+        `;
     }
 
     async function deleteInactiveChannels(sourceId, days = 7) {

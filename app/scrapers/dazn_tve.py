@@ -50,7 +50,7 @@ from urllib.parse import quote
 
 import requests
 
-from .base import BaseScraper, ChannelData, ProgramData
+from .base import BaseScraper, ChannelData, ConfigField, ProgramData
 from ..gracenote_map import resolve_gracenote
 from ..tve.accounts import tve_account_for
 from ..tve.adobe_pass import TVEAuthError, TVENotAuthorizedError
@@ -68,6 +68,7 @@ SITE = 'https://www.dazn.com'
 SECOND_SCREEN = 'https://second-screen.ar.indazn.com'
 DEVICE_LINK_URL = f'{SITE}/signin/device/{{}}'
 REFRESH_URL = 'https://ott-authz-bff-prod.ar.indazn.com/v5/RefreshAccessToken'
+SIGNIN_URL = 'https://authentication-prod.ar.indazn.com/v5/SignIn'
 PARTNER = 'https://partner-integration-service.ar.indazn.com/v1/adobetve'
 RAIL_URL = 'https://rail-router.discovery.indazn.com/ca/v11/Rail'
 PLAYBACK_URL = 'https://api.playback.indazn.com/v5/Playback'
@@ -136,6 +137,34 @@ def refresh_token(token: str, device_id: str) -> str:
     if not new:
         raise TVEAuthError(f'DAZN: the sign-in could not be renewed (HTTP {r.status_code}).')
     return new
+
+
+def _who(email: str, password: str) -> str:
+    """What a saved direct sign-in was made with, without keeping the password."""
+    import hashlib
+    return hashlib.sha256(f'{email}\n{password}'.encode()).hexdigest()
+
+
+def password_sign_in(email: str, password: str, device_id: str) -> str:
+    """Sign in to a DAZN account with its email and password (what dazn.com's
+    own form posts; no captcha) → the DAZN token. A free account answers
+    "SignedInInactive" with a token that plays DAZN's free channels."""
+    # Like Playback, the sign-in sits behind a bot filter that wants a real Chrome handshake.
+    from curl_cffi import requests as cffi_requests
+    r = cffi_requests.post(SIGNIN_URL, impersonate=IMPERSONATE, timeout=20, headers={
+        'Content-Type': 'application/json', 'Origin': SITE, 'Referer': SITE + '/', 'x-brand': 'DAZN',
+        'User-Agent': UA}, json={'Email': email, 'Password': password, 'Platform': 'web',
+                                 'DeviceId': device_id, 'ProfilingSessionId': uuid.uuid4().hex[:22]})
+    try:
+        data = r.json()
+    except ValueError:
+        data = {}
+    token = (data.get('AuthToken') or {}).get('Token')
+    if not r.ok or not token:
+        reason = data.get('Message') or data.get('odata.error') or data.get('message') or r.text[:100]
+        raise TVEAuthError(f'DAZN: sign-in refused (HTTP {r.status_code}: {str(reason)[:100]}). '
+                           'Check the email and password in the DAZN source settings.')
+    return token
 
 
 # ── TV provider (Adobe, requestor Gotham) ────────────────────────────────────
@@ -235,6 +264,17 @@ class DaznTVEScraper(BaseScraper):
     source_category = 'tve'
     is_premium = True
     scrape_interval = 90  # keeps the 2-hour DAZN token renewed
+    config_schema = [
+        ConfigField('sign_in_method', 'How do you get DAZN?', field_type='select', default='tve',
+                    options=[{'value': 'tve', 'label': 'Through my TV provider (YES, MSG)'},
+                             {'value': 'subscription', 'label': 'Direct DAZN account (free or paid)'}],
+                    help_text='TV provider: sign in below, then link your provider. Direct DAZN account: no TV '
+                              'provider step; use your DAZN email and password, or the link sign-in for a '
+                              'Google account. A free account gets DAZN\'s free channels.'),
+        ConfigField('email', 'DAZN email', placeholder='you@example.com',
+                    help_text='Direct DAZN account only. Leave blank to sign in with a link instead.'),
+        ConfigField('password', 'DAZN password', field_type='password', secret=True),
+    ]
     # Every Playback call takes one of the account's concurrent-stream slots.
     stream_audit_enabled = False
     license_url = _LICENSE_URL
@@ -246,13 +286,51 @@ class DaznTVEScraper(BaseScraper):
 
     # ── session ──────────────────────────────────────────────────────────────
 
+    def _direct(self) -> bool:
+        return (self.config.get('sign_in_method') or 'tve') == 'subscription'
+
     def _auth(self) -> dict:
+        if self._direct():
+            return self._direct_auth()
         account = tve_account_for(self.source_name)
         auth = ((account.config or {}).get('dazn_auth') or {}) if account else {}
         if not auth.get('token') or not auth.get('device_id'):
             raise self._sign_in_needed(
                 'DAZN: not signed in yet — use "Sign in" for DAZN under Settings → TV Everywhere.')
         return auth
+
+    def _direct_auth(self) -> dict:
+        """The sign-in of a direct DAZN account: the email and password in the
+        source settings, else a link sign-in saved on the source ('dazn_link')."""
+        email = (self.config.get('email') or '').strip().lower()
+        password = self.config.get('password') or ''
+        if email and password:
+            who = _who(email, password)
+            saved = self.cache.get('dazn_direct') or {}
+            if saved.get('who') != who or not saved.get('token'):
+                saved = self._password_login(email, password, saved.get('device_id') if saved.get('email') == email
+                                             else None)
+            return {'token': saved['token'], 'device_id': saved['device_id'],
+                    'captured_at': saved['signed_in_at'], 'creds': (email, password)}
+        link = self.cache.get('dazn_link') or {}
+        if not link.get('token') or not link.get('device_id'):
+            raise self._sign_in_needed(
+                'DAZN: not signed in yet — enter your DAZN email and password in the source settings, '
+                'or use "Sign in with a link" there.')
+        return {'token': link['token'], 'device_id': link['device_id'], 'captured_at': link.get('captured_at') or 0}
+
+    def _password_login(self, email: str, password: str, device_id: str | None) -> dict:
+        device_id = device_id or new_device_id()
+        try:
+            token = password_sign_in(email, password, device_id)
+        except TVEAuthError as exc:
+            raise self._sign_in_needed(str(exc)) from exc
+        saved = {'who': _who(email, password), 'email': email, 'token': token, 'device_id': device_id,
+                 'signed_in_at': time.time()}
+        self._update_cache('dazn_direct', saved)
+        self._update_cache('dazn_session', {})
+        self._update_cache('dazn_streams', {})
+        return saved
 
     def _token(self) -> tuple[str, str]:
         """(DAZN token, device id), renewed when close to expiry. The renewed
@@ -268,7 +346,10 @@ class DaznTVEScraper(BaseScraper):
         try:
             token = refresh_token(token, auth['device_id'])
         except TVEAuthError as exc:
-            raise self._sign_in_needed(f'{exc} Sign in to DAZN again under Settings → TV Everywhere.') from exc
+            if not auth.get('creds'):
+                raise self._sign_in_needed(f'{exc} Sign in to DAZN again.') from exc
+            saved = self._password_login(*auth['creds'], auth['device_id'])
+            return saved['token'], saved['device_id']
         self._update_cache('dazn_session', {'token': token, 'device_id': auth['device_id'],
                                             'signed_in_at': auth.get('captured_at') or 0})
         return token, auth['device_id']

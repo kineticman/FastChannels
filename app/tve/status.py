@@ -208,20 +208,25 @@ def tve_network_status(account) -> list[dict]:
         'needs_signin': _needs_signin('newsmax', newsmax_last_signed_in_at, _errors('newsmax_tve')),
     })
 
+    # A direct DAZN account signs in from the source settings, with no TV provider.
+    from ..models import Source
+    _dz_source = Source.query.filter_by(name='dazn_tve').first()
+    dazn_direct = ((_dz_source.config or {}) if _dz_source else {}).get('sign_in_method') == 'subscription'
     dazn_last_signed_in_at = (_cfg('dazn_tve').get('dazn_auth') or {}).get('captured_at')
     dazn_error_message, dazn_error_at = _last_error('dazn', dazn_last_signed_in_at, _errors('dazn_tve'))
-    entries.append({
-        'source': 'dazn_tve',
-        'label': 'DAZN (YES, MSG and DAZN\'s free channels)',
-        'last_signed_in_at': dazn_last_signed_in_at,
-        'note': 'Two links, one after the other: your DAZN account (open it where you\'re signed in to DAZN; '
-                'a free account works), then your TV provider for YES and MSG.',
-        'family': 'dazn',
-        'requestor_id': None,
-        'last_error_message': dazn_error_message,
-        'last_error_at': dazn_error_at,
-        'needs_signin': _needs_signin('dazn', dazn_last_signed_in_at, _errors('dazn_tve')),
-    })
+    if not dazn_direct:
+        entries.append({
+            'source': 'dazn_tve',
+            'label': 'DAZN (YES, MSG and DAZN\'s free channels)',
+            'last_signed_in_at': dazn_last_signed_in_at,
+            'note': 'Two links, one after the other: your DAZN account (open it where you\'re signed in to DAZN; '
+                    'a free account works), then your TV provider for YES and MSG.',
+            'family': 'dazn',
+            'requestor_id': None,
+            'last_error_message': dazn_error_message,
+            'last_error_at': dazn_error_at,
+            'needs_signin': _needs_signin('dazn', dazn_last_signed_in_at, _errors('dazn_tve')),
+        })
 
     cspan_last_signed_in_at = (_cfg('cspan_tve').get('cspan_mvpd_auth') or {}).get('captured_at')
     cspan_error_message, cspan_error_at = _last_error('cspan', cspan_last_signed_in_at, _errors('cspan_tve'))

@@ -51,7 +51,7 @@ SIGNIN_STATE = {
                       'account': ('univision_mvpd_auth',)},
     'disney_tve': {'cache': ('disney_adobe_tokens', 'disney_streams'), 'account': ('disney_mvpd_auth',)},
     'tennis_tve': {'cache': ('tennis_client', 'tennis_streams'), 'account': ('tennis_mvpd_auth',)},
-    'dazn_tve': {'cache': ('dazn_session', 'dazn_streams'), 'account': ('dazn_auth',)},
+    'dazn_tve': {'cache': ('dazn_session', 'dazn_streams', 'dazn_direct', 'dazn_link'), 'account': ('dazn_auth',)},
     'cspan_tve': {'cache': ('cspan_tve_client', 'cspan_tve_authz'), 'account': ('cspan_mvpd_auth',)},
     'sundance_tve': {'cache': ('sundance_session', 'sundance_streams'), 'account': ('sundance_auth',)},
     'cnn_tve': {'cache': ('cnn_tve_client', 'cnn_tve_authz', 'cnn_streams', 'cnn_bolt'), 'account': ('cnn_mvpd_auth',)},

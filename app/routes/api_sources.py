@@ -574,6 +574,8 @@ def get_source_config(source_id):
     if source.name in SEPARATE_SIGNIN_SOURCES:
         from .api_tve import _source_signin_payload
         extra['tve_signin'] = _source_signin_payload(source.name)
+    if source.name == 'dazn_tve':
+        extra['dazn'] = _dazn_card_info(source)
     if source.name == 'directv':
         from ..scrapers import directv_device_auth
         extra['directv'] = {'code_signed_in': directv_device_auth.is_device_session(saved)}
@@ -1804,6 +1806,124 @@ def viewlift_login_verify(source_id):
     _save_viewlift_login(source, cls, login)
     r.delete(f'{cls.key}:login:ctx:{source_id}')
     return jsonify({'status': 'signed_in'})
+
+
+def _dazn_card_info(source) -> dict:
+    """What the DAZN card shows for a direct account: whether it's signed in,
+    how, and what the account is (free or paid)."""
+    from ..scrapers import dazn_tve as dz
+    cache = load_source_cache(source.id) or {}
+    cfg = source.config or {}
+    direct, link = cache.get('dazn_direct') or {}, cache.get('dazn_link') or {}
+    if (cfg.get('email') or '').strip() and cfg.get('password') and direct.get('token'):
+        how, token, at, email = 'password', (cache.get('dazn_session') or {}).get('token') or direct['token'], direct.get('signed_in_at'), direct.get('email')
+    elif link.get('token'):
+        how, token, at, email = 'link', (cache.get('dazn_session') or {}).get('token') or link['token'], link.get('captured_at'), link.get('email')
+    else:
+        return {'signed_in': False}
+    c = dz.claims(token)
+    return {'signed_in': True, 'how': how, 'email': email,
+            'tier': 'paid' if c.get('userstatus') == 'ActivePaid' else 'free', 'signed_in_at': at}
+
+
+@sources_bp.route('/sources/<int:source_id>/dazn-signin', methods=['POST'])
+def dazn_signin(source_id):
+    """Sign in now with the saved email and password, so a wrong password
+    shows on the card instead of waiting for the next scrape."""
+    from ..config_store import persist_source_cache_updates
+    from ..scrapers import dazn_tve as dz
+    from ..tve.adobe_pass import TVEAuthError
+
+    source = Source.query.get_or_404(source_id)
+    if source.name != 'dazn_tve':
+        return jsonify({'error': 'not the DAZN source'}), 400
+    scraper = dz.DaznTVEScraper(config=dict(source.config or {}))
+    try:
+        scraper._token()
+    except TVEAuthError as e:
+        return jsonify({'error': str(e)}), 400
+    finally:
+        persist_source_cache_updates(source.id, scraper._pending_cache_updates)
+    return jsonify({'status': 'signed_in', 'dazn': _dazn_card_info(source)})
+
+
+@sources_bp.route('/sources/<int:source_id>/dazn-signout', methods=['POST'])
+def dazn_signout(source_id):
+    """Sign a direct DAZN account out: forget the saved sign-in and the
+    password, keep the choice of sign-in method."""
+    import redis as _redis
+    from ..tve.accounts import clear_signin_state
+
+    source = Source.query.get_or_404(source_id)
+    if source.name != 'dazn_tve':
+        return jsonify({'error': 'not the DAZN source'}), 400
+    clear_signin_state(source, None)
+    cfg = dict(source.config or {})
+    for k in ('email', 'password'):
+        cfg.pop(k, None)
+    source.config = cfg
+    db.session.commit()
+    _redis.from_url(current_app.config['REDIS_URL']).delete(f'dazn:link:{source_id}')
+    logger.info('[dazn] direct account signed out')
+    return jsonify({'status': 'signed_out'})
+
+
+# ── DAZN direct account: sign in with a link ────────────────────────────────
+# For a DAZN account with no password (Google sign-in): DAZN's "sign in with
+# your phone" pairing, opened wherever the user is signed in to DAZN. No TV
+# provider is involved; the token is kept on the source ('dazn_link').
+
+@sources_bp.route('/sources/<int:source_id>/dazn-link/start', methods=['POST'])
+def dazn_link_start(source_id):
+    import redis as _redis
+    from ..scrapers import dazn_tve as dz
+    from ..tve.adobe_pass import TVEAuthError
+
+    source = Source.query.get_or_404(source_id)
+    if source.name != 'dazn_tve':
+        return jsonify({'error': 'not the DAZN source'}), 400
+    device_id = dz.new_device_id()
+    try:
+        link = dz.request_device_link(device_id)
+    except TVEAuthError as e:
+        return jsonify({'error': str(e)}), 502
+    _redis.from_url(current_app.config['REDIS_URL']).setex(
+        f'dazn:link:{source_id}', 900, json.dumps({'device_id': device_id, 'second_screen_id': link['second_screen_id']}))
+    return jsonify({'url': link['url']})
+
+
+@sources_bp.route('/sources/<int:source_id>/dazn-link/state')
+def dazn_link_state(source_id):
+    import redis as _redis
+    from ..config_store import persist_source_cache_updates
+    from ..scrapers import dazn_tve as dz
+
+    source = Source.query.get_or_404(source_id)
+    if source.name != 'dazn_tve':
+        return jsonify({'error': 'not the DAZN source'}), 400
+    r = _redis.from_url(current_app.config['REDIS_URL'])
+    raw = r.get(f'dazn:link:{source_id}')
+    if not raw:
+        return jsonify({'state': 'expired'})
+    ctx = json.loads(raw)
+    token = dz.poll_device_link(ctx['second_screen_id'])
+    if not token:
+        return jsonify({'state': 'waiting'})
+    r.delete(f'dazn:link:{source_id}')
+    scraper = dz.DaznTVEScraper(config=dict(source.config or {}))
+    email = None
+    try:  # the token doesn't carry the address; the profile does (shown on the card)
+        import requests as _requests
+        pr = _requests.get('https://user-profile.ar.indazn.com/v3/UserProfile', timeout=15, headers=dz.dazn_headers(token))
+        email = (pr.json() or {}).get('Email') if pr.ok else None
+    except Exception:  # noqa: BLE001
+        pass
+    scraper._update_cache('dazn_link', {'token': token, 'device_id': ctx['device_id'],
+                                        'captured_at': int(_time.time()), 'email': email})
+    scraper._update_cache('dazn_session', {})
+    scraper._update_cache('dazn_streams', {})
+    persist_source_cache_updates(source.id, scraper._pending_cache_updates)
+    return jsonify({'state': 'signed_in'})
 
 
 # ── ESPN TV activation code ──────────────────────────────────────────────────
