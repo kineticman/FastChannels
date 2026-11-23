@@ -720,6 +720,64 @@ function saveFcPlayerDevicePowerSettings() {
   });
 }
 
+async function runCaptureDiagnostics(drift) {
+  const status = document.getElementById('capture-diag-status');
+  const box = document.getElementById('capture-diag-result');
+  const buttons = ['capture-diag-quick', 'capture-diag-drift'].map(id => document.getElementById(id));
+  const total = drift ? 60 : 15;
+  buttons.forEach(b => { b.disabled = true; });
+  status.className = 'save-status';
+  status.textContent = '';
+  box.hidden = false;
+  box.innerHTML = `<div class="capture-diag-progress"><div class="capture-diag-bar"><div id="capture-diag-fill"></div></div><div class="help" id="capture-diag-progress-text"></div></div>`;
+  const fill = document.getElementById('capture-diag-fill');
+  const text = document.getElementById('capture-diag-progress-text');
+  const began = Date.now();
+  const tick = () => {
+    const elapsed = (Date.now() - began) / 1000;
+    if (elapsed < total) {
+      fill.style.width = `${Math.min(100, elapsed / total * 100)}%`;
+      text.textContent = `Sampling the capture stream… ${Math.ceil(total - elapsed)} s left. Keep this page open.`;
+    } else {
+      fill.style.width = '100%';
+      text.textContent = 'Analyzing the sample…';
+    }
+  };
+  tick();
+  const timer = setInterval(tick, 250);
+  try {
+    const resp = await fetch('/api/settings/fc-player/capture-diagnostics', {
+      method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({drift: !!drift}),
+    });
+    const data = await resp.json();
+    if (!resp.ok) throw new Error(data.error || 'Capture test failed.');
+    const r = data.result || {};
+    const v = r.video || {}, a = r.audio || {}, d = data.dvr || {};
+    const rows = [];
+    if (r.video) {
+      rows.push(['Video', `${v.codec || '?'} ${v.width || '?'}x${v.height || '?'}, labeled ${v.label_fps} fps, ${v.delivered_fps} fps delivered`]);
+      rows.push(['Audio', a.codec ? `${a.codec}, ${a.channels} ch, ${a.rate} Hz` : 'none']);
+      rows.push(['Speed', `${r.realtime_x}x real time, ${r.kbps} kbps`]);
+      rows.push(['A/V offset', `${r.av_start_offset_ms} ms` + (r.drift ? `, drift ${r.drift.drift_ms} ms over ${Math.round(r.seconds)} s` : '')]);
+    }
+    if (d.version) rows.push(['Channels DVR', `${d.version} on ${d.os || '?'}${d.arch ? ' ' + d.arch : ''}`]);
+    const icon = {ok: '✓', note: 'ℹ', warn: '⚠', bad: '✗'};
+    box.innerHTML =
+      '<ul class="capture-diag-verdicts">' + (data.verdicts || []).map(x =>
+        `<li class="capture-diag-${x.level}">${icon[x.level] || ''} ${_escapeHtml(x.text)}</li>`).join('') + '</ul>' +
+      '<table class="capture-diag-table">' + rows.map(([k, val]) =>
+        `<tr><th>${_escapeHtml(k)}</th><td>${_escapeHtml(String(val))}</td></tr>`).join('') + '</table>';
+    box.hidden = false;
+  } catch (e) {
+    box.hidden = true;
+    status.textContent = e.message || 'Capture test failed.';
+    status.className = 'save-status error';
+  } finally {
+    clearInterval(timer);
+    buttons.forEach(b => { b.disabled = false; });
+  }
+}
+
 async function testFcPlayer() {
   const statusEl = document.getElementById('fc-player-encoder-status');
   statusEl.textContent = 'Testing…';

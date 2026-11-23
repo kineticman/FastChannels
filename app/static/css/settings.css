@@ -481,6 +481,15 @@
     }
     .bridge-capture-picker select { min-height: 9rem; }
     .bridge-capture-picker .field-actions { margin-top: 0.6rem; }
+    .capture-diag-bar { height: 8px; border-radius: 4px; background: var(--border); overflow: hidden; }
+    .capture-diag-bar > div { height: 100%; width: 0; background: var(--accent, var(--primary, #4a90e2)); transition: width 0.3s linear; }
+    .capture-diag-progress .help { margin-top: 0.45rem; }
+    .capture-diag-verdicts { margin: 0 0 0.6rem; padding: 0; list-style: none; }
+    .capture-diag-verdicts li { margin: 0.25rem 0; }
+    .capture-diag-bad { color: var(--danger-soft); }
+    .capture-diag-warn { color: var(--warning-soft); }
+    .capture-diag-table { border-collapse: collapse; font-size: 0.85rem; }
+    .capture-diag-table th { text-align: left; padding: 0.15rem 0.9rem 0.15rem 0; font-weight: 600; white-space: nowrap; }
     .bridge-fallback-details {
       margin-top: 1rem;
       padding-top: 0.85rem;

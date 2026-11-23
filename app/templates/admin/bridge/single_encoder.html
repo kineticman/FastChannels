@@ -61,6 +61,12 @@
         <div class="field-actions"><button class="btn btn-secondary" id="fc-player-create-capture-source" onclick="createFcPlayerCaptureSource()">Add FastChannels Capture Card to Channels DVR</button></div>
       </details>
       <details class="help" style="margin-top:0.65rem">
+        <summary style="cursor:pointer">Check capture quality</summary>
+        <div style="margin-top:0.65rem">Samples the saved capture stream and reports its format, whether it keeps up with real time, the frame rate that actually arrives, and (on the longer test) audio/video drift. Channels DVR does the capture and transcode, so this shows what it delivers, not why. It uses the capture port, so it won't run while Channels DVR is playing or recording.</div>
+        <div class="field-actions"><span class="save-status" id="capture-diag-status"></span><button class="btn btn-secondary" id="capture-diag-quick" onclick="runCaptureDiagnostics(false)">Quick test (15 s)</button><button class="btn btn-secondary" id="capture-diag-drift" onclick="runCaptureDiagnostics(true)">Drift test (60 s)</button></div>
+        <div id="capture-diag-result" class="bridge-capture-picker" hidden></div>
+      </details>
+      <details class="help" style="margin-top:0.65rem">
         <summary style="cursor:pointer">Need to paste it manually instead?</summary>
         In Channels DVR, open <strong>Manage → Export → Copy M3U</strong>, open that URL, then copy the non-comment <code>/stream.mpg</code> line directly below your capture channel's <code>#EXTINF</code> entry. Paste it above and save.
       </details>

@@ -537,6 +537,53 @@ def test_fc_player():
         })
 
 
+@settings_bp.route('/settings/fc-player/capture-diagnostics', methods=['POST'])
+def fc_player_capture_diagnostics():
+    """Sample the saved capture stream and report its health (Single-port HDMI Capture).
+
+    Opens the capture port for 15 s (or 60 s with ``drift``), so it refuses to run
+    while Channels DVR is playing or recording anything, and only one runs at a time.
+    """
+    from .. import capture_diag
+    settings = AppSettings.get()
+    url = settings.saved_fc_player_bridge_encoder_url()
+    if not url:
+        return jsonify({'error': 'Set the capture stream URL above and save it first.'}), 400
+    data = request.get_json(silent=True) or {}
+    seconds = capture_diag.DRIFT_SECONDS if data.get('drift') else capture_diag.QUICK_SECONDS
+
+    r = fc_player_bridge._redis()
+    if not r.set('fc:capture-diag:running', '1', nx=True, ex=seconds + 45):
+        return jsonify({'error': 'A capture test is already running.'}), 409
+    try:
+        busy = (fc_player_bridge._dvr_activity_channel_numbers() or set()) | \
+               (fc_player_bridge._dvr_active_recording_channel_numbers() or set())
+        if busy:
+            return jsonify({'error': 'Channels DVR is playing or recording right now. The capture port '
+                                     'can only serve one stream, so try again when it is idle.'}), 409
+        result = capture_diag.sample_stream(url, seconds)
+    except _req.RequestException as exc:
+        logger.info('[capture-diag] could not open capture stream: %s', exc)
+        return jsonify({'error': 'Could not open the capture stream. Confirm the URL and that the capture '
+                                 'device works in Channels DVR.'}), 502
+    except Exception:
+        logger.exception('[capture-diag] sample failed')
+        return jsonify({'error': 'The capture test failed. See the FastChannels log for details.'}), 500
+    finally:
+        r.delete('fc:capture-diag:running')
+
+    # DVR host info makes forum/support questions ("native or Docker? which OS?") answerable.
+    dvr = {}
+    dvr_url = (settings.effective_channels_dvr_url() or '').strip().rstrip('/')
+    if dvr_url:
+        try:
+            st = _req.get(f'{dvr_url}/status', timeout=3).json()
+            dvr = {'version': st.get('version'), 'os': st.get('os'), 'arch': st.get('arch')}
+        except Exception:
+            pass
+    return jsonify({'result': result, 'verdicts': capture_diag.verdicts(result), 'dvr': dvr})
+
+
 @settings_bp.route('/settings/fc-player/capture-streams', methods=['GET'])
 def fc_player_capture_streams():
     """Offer Channels DVR MPEG-TS streams for the fixed HDMI Capture path."""
