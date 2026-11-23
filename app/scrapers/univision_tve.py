@@ -330,10 +330,13 @@ class UnivisionTVEScraper(MvpdCooldownMixin, BaseScraper):
         return client
 
     @staticmethod
-    def _sign_in_needed(message: str) -> TVEAuthError:
+    def _sign_in_needed(message: str, never_signed_in: bool = False) -> TVEAuthError:
+        """With no sign-in at all the paid channels can't play, so the audit
+        should switch them off (TVENotAuthorizedError) and the sign-in brings
+        them back; an expired one stays a plain error, since that's temporary."""
         from ..tve.signin_notice import mark_signin_needed
         mark_signin_needed(NETWORK_KEY, message)
-        return TVEAuthError(message)
+        return (TVENotAuthorizedError if never_signed_in else TVEAuthError)(message)
 
     def _signed_in_user(self) -> dict:
         """{mso_id, user_id, decisions} from the saved Adobe sign-in."""
@@ -344,7 +347,8 @@ class UnivisionTVEScraper(MvpdCooldownMixin, BaseScraper):
         auth = (account.config or {}).get('univision_mvpd_auth') or {}
         if not auth.get('client_id') or not auth.get('device_fingerprint'):
             raise self._sign_in_needed(
-                'Univision TVE: not signed in yet — use "Sign in" for Univision under Settings → TV Everywhere.')
+                'Univision TVE: not signed in yet — use "Sign in" for Univision under Settings → TV Everywhere.',
+                never_signed_in=True)
         client = self.adobe_client(self._config()['software_statement'], auth)
         profile = self._adobe_profile(client, auth['mso_id'], account)
         if not profile:
@@ -382,7 +386,8 @@ class UnivisionTVEScraper(MvpdCooldownMixin, BaseScraper):
         auth = (account.config or {}).get('univision_mvpd_auth') or {}
         if not auth.get('client_id') or not auth.get('mso_id'):
             raise self._sign_in_needed(
-                'Univision TVE: not signed in yet — use "Sign in" for Univision under Settings → TV Everywhere.')
+                'Univision TVE: not signed in yet — use "Sign in" for Univision under Settings → TV Everywhere.',
+                never_signed_in=True)
         client = self.adobe_client(self._config()['software_statement'], auth)
         url = f'{ADOBE_BASE}/api/v2/{REQUESTOR_ID}/decisions/authorize/{auth["mso_id"]}'
 
