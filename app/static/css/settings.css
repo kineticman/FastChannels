@@ -988,3 +988,32 @@
       .capture-bar > span { transition: none; }
       .capture-steps li.is-current::before { animation: none; border-right-color: var(--accent); }
     }
+
+/* TV Everywhere: network sign-in list */
+#tve-network-status .tve-group { margin: 0 0 0.9rem; }
+#tve-network-status .tve-group-title { font-size: 0.7rem; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-soft); padding: 0.2rem 0 0.3rem; border-bottom: 1px solid var(--border); margin-bottom: 0.15rem; }
+#tve-network-status .tve-group-title span { color: var(--text-dim); margin-left: 0.3rem; }
+#tve-network-status .tve-group.todo .tve-group-title { color: var(--warning-soft, #fcd34d); }
+#tve-network-status .tve-row { display: flex; align-items: center; gap: 0.7rem; padding: 0.38rem 0.15rem; border-bottom: 1px solid color-mix(in srgb, var(--border) 45%, transparent); }
+#tve-network-status .tve-row:last-child { border-bottom: 0; }
+#tve-network-status .tve-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; background: var(--text-dim); }
+#tve-network-status .tve-dot.ok { background: var(--success, #34d399); }
+#tve-network-status .tve-dot.warn { background: var(--warning, #fbbf24); }
+#tve-network-status .tve-main { flex: 1; min-width: 0; }
+#tve-network-status .tve-name { color: var(--text); line-height: 1.3; }
+#tve-network-status .tve-chip { display: inline-block; margin-left: 0.5rem; padding: 0 0.4rem; font-size: 0.68rem; line-height: 1.5; border: 1px solid var(--border); border-radius: 999px; color: var(--text-soft); vertical-align: 1px; }
+#tve-network-status .tve-note { color: var(--text-dim); font-size: 0.72rem; margin-top: 0.1rem; }
+#tve-network-status .tve-note.warn { color: var(--warning-soft, #fcd34d); }
+#tve-network-status .tve-note.bad { color: var(--danger); }
+#tve-network-status .tve-side { display: flex; align-items: center; gap: 0.6rem; white-space: nowrap; flex: none; }
+#tve-network-status .tve-age { color: var(--text-soft); font-size: 0.76rem; min-width: 3.2rem; text-align: right; }
+#tve-network-status .tve-act { padding: 0.15rem 0.7rem; font-size: 0.74rem; }
+#tve-network-status .tve-act.attn { background: var(--warning-soft, #b8860b); color: #1a1a1a; border-color: transparent; font-weight: 600; }
+#tve-network-status .tve-menu { position: relative; }
+#tve-network-status .tve-menu summary { list-style: none; cursor: pointer; width: 1.7rem; height: 1.5rem; line-height: 1.2rem; text-align: center; border-radius: 6px; color: var(--text-soft); font-size: 1.1rem; user-select: none; }
+#tve-network-status .tve-menu summary::-webkit-details-marker { display: none; }
+#tve-network-status .tve-menu summary:hover, #tve-network-status .tve-menu[open] summary { background: var(--border); color: var(--text); }
+#tve-network-status .tve-pop { position: absolute; right: 0; top: 1.7rem; z-index: 20; min-width: 9rem; padding: 0.25rem; background: var(--surface); border: 1px solid var(--border-strong); border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,0.4); display: flex; flex-direction: column; }
+#tve-network-status .tve-pop button { background: none; border: 0; text-align: left; padding: 0.4rem 0.6rem; border-radius: 5px; color: var(--text); font-size: 0.8rem; cursor: pointer; }
+#tve-network-status .tve-pop button:hover { background: var(--border); }
+#tve-network-status .tve-pop button.danger { color: var(--danger); }

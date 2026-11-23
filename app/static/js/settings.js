@@ -1360,64 +1360,55 @@ async function loadTveNetworkStatus() {
   try {
     const r = await fetch('/api/settings/tve/status');
     const d = await r.json();
-    const rows = (d.networks || []).map(n => {
-      // Prefixed so this can't be misread as reflecting the most recent
-      // attempt (that's the separate "Last attempt failed ..." note below)
-      // — a network can genuinely show "Signed in 1d ago" right next to
-      // "Last attempt failed just now" when it last worked under a
-      // different MVPD than whatever's selected now (reported live
-      // 2026-08-17: read as "looks finished but still says 1d ago?").
-      let age = n.last_signed_in_at ? `Signed in ${_tveRelativeTime(n.last_signed_in_at)}` : 'Never signed in';
-      let ageColor = n.last_signed_in_at ? 'var(--text-soft)' : 'var(--text-dim)';
-      // The saved sign-in lapsed and only a person can redo it (see
-      // app/tve/signin_notice.py) — say that plainly instead of a stale age.
-      if (n.needs_signin) {
-        age = 'Sign in again';
-        ageColor = 'var(--warning-soft,#b8860b)';
-      }
-      let note = n.note ? `<div style="color:var(--text-dim);font-size:0.72rem;margin:0.05rem 0 0.35rem">${n.note}</div>` : '';
-      // Otherwise a network that's never signed in successfully just shows
-      // "Never" with no clue why (e.g. this specific network not entitled
-      // on an otherwise-working Cox account) — see app/tve/status.py's
-      // tve_network_status, which only sets this when the failure is newer
-      // than the last success.
-      if (n.unsupported) {
-        note = `<div style="color:var(--text-dim);font-size:0.72rem;margin:0.05rem 0 0.35rem">${_escapeHtml(n.unsupported)}</div>`;
-      }
-      if (n.needs_signin && !n.unsupported) {
-        note = `<div style="color:var(--warning-soft,#b8860b);font-size:0.72rem;margin:0.05rem 0 0.35rem">${_escapeHtml(n.last_error_message || 'The saved sign-in stopped working.')}</div>`;
-      }
-      if (n.last_error_message && !n.needs_signin && !n.unsupported) {
-        const errAge = _tveRelativeTime(n.last_error_at);
-        note = `<div style="color:var(--danger);font-size:0.72rem;margin:0.05rem 0 0.35rem">Last attempt failed ${errAge}: ${_escapeHtml(n.last_error_message)}</div>`;
-      }
-      // Set when this network signs in with its own TV provider login (chosen on
-      // its card under Sources) instead of the one saved above.
-      const separate = n.separate_provider
-        ? ` <span style="color:var(--text-dim);font-size:0.72rem" title="Chosen on this source's card under Sources, where it can also be signed in">· separate sign-in: ${_escapeHtml(n.separate_provider)}</span>`
-        : '';
+    const row = n => {
+      const signedIn = !!n.last_signed_in_at;
+      const attention = !!n.needs_signin || (!!n.last_error_message && !n.unsupported);
+      const dot = n.unsupported ? 'off' : (!signedIn || n.needs_signin ? 'warn' : (attention ? 'warn' : 'ok'));
+      // Generic how-to text only matters before a sign-in; failures always show.
+      let note = '';
+      if (n.unsupported) note = `<div class="tve-note">${_escapeHtml(n.unsupported)}</div>`;
+      else if (n.needs_signin) note = `<div class="tve-note warn">${_escapeHtml(n.last_error_message || 'The saved sign-in stopped working.')}</div>`;
+      else if (n.last_error_message) note = `<div class="tve-note bad">Last attempt failed ${_tveRelativeTime(n.last_error_at)}: ${_escapeHtml(n.last_error_message)}</div>`;
+      else if (n.note && !signedIn) note = `<div class="tve-note">${n.note}</div>`;
+      const chip = n.separate_provider
+        ? `<span class="tve-chip" title="Chosen on this source's card under Sources, where it can also be signed in">${_escapeHtml(n.separate_provider)}</span>` : '';
       const requestorArg = n.requestor_id ? `'${n.requestor_id}'` : 'null';
-      let button = '';
+      const methodArg = n.signin_method ? `'${n.signin_method}'` : 'null';
+      const signIn = `openMvpdLoginModal('${n.family}', ${requestorArg}, ${methodArg})`;
+      let age = signedIn && !n.needs_signin ? _tveRelativeTime(n.last_signed_in_at) : '';
+      let action = '';
       if (n.family && !n.unsupported) {
-        const needsStyle = n.needs_signin ? ';background:var(--warning-soft,#b8860b);color:#1a1a1a;border-color:transparent;font-weight:600' : '';
-        button = `<button class="btn btn-audit" style="padding:0.15rem 0.55rem;font-size:0.74rem${needsStyle}" type="button" title="Sign in to just this network — reuses your saved credentials, doesn't touch any other network's sign-in" onclick="openMvpdLoginModal('${n.family}', ${requestorArg}, ${n.signin_method ? `'${n.signin_method}'` : 'null'})">Sign in</button>`;
+        if (!signedIn || n.needs_signin) {
+          action = `<button class="btn btn-audit tve-act${n.needs_signin ? ' attn' : ''}" type="button" title="Sign in to just this network. Your saved credentials are reused and no other network is touched." onclick="${signIn}">${n.needs_signin ? 'Sign in again' : 'Sign in'}</button>`;
+        } else {
+          const label = _escapeHtml(n.label).replace(/'/g, "\\'");
+          action = `<details class="tve-menu"><summary title="Options" aria-label="Options for ${_escapeHtml(n.label)}">&#8943;</summary>
+            <div class="tve-pop">
+              <button type="button" onclick="this.closest('details').open=false;${signIn}">Sign in again</button>
+              <button type="button" class="danger" onclick="this.closest('details').open=false;signOutTveNetwork('${n.family}', ${requestorArg}, '${label}')">Sign out</button>
+            </div></details>`;
+        }
       }
-      let signOut = '';
-      if (n.last_signed_in_at && !n.unsupported) {
-        signOut = `<button class="btn btn-secondary" style="padding:0.15rem 0.55rem;font-size:0.74rem" type="button" title="Forget this network's saved sign-in. Your TV provider choice stays, and no other network is touched." onclick="signOutTveNetwork('${n.family}', ${requestorArg}, '${_escapeHtml(n.label).replace(/'/g, "\\'")}')">Sign out</button>`;
-      }
-      return `<div style="display:flex;justify-content:space-between;align-items:center;gap:0.75rem;padding:0.15rem 0">
-        <span>${n.label}${separate}</span>
-        <span style="display:flex;align-items:center;gap:0.5rem;white-space:nowrap">
-          <span style="color:${ageColor}">${age}</span>${button}${signOut}
-        </span>
-      </div>${note}`;
-    });
-    container.innerHTML = rows.join('') || 'No TVE networks configured.';
+      return `<div class="tve-row"><span class="tve-dot ${dot}"></span>
+        <div class="tve-main"><div class="tve-name">${n.label}${chip}</div>${note}</div>
+        <div class="tve-side"><span class="tve-age">${age}</span>${action}</div></div>`;
+    };
+    const nets = d.networks || [];
+    const todo = nets.filter(n => !n.unsupported && (!n.last_signed_in_at || n.needs_signin));
+    const done = nets.filter(n => !n.unsupported && n.last_signed_in_at && !n.needs_signin);
+    const na = nets.filter(n => n.unsupported);
+    const group = (title, list, cls) => list.length
+      ? `<div class="tve-group ${cls || ''}"><div class="tve-group-title">${title} <span>${list.length}</span></div>${list.map(row).join('')}</div>` : '';
+    container.innerHTML = nets.length
+      ? group('Needs a sign-in', todo, 'todo') + group('Signed in', done) + group('Not available with your TV provider', na, 'na')
+      : 'No TVE networks configured.';
   } catch (e) {
     container.textContent = 'Could not load network status.';
   }
 }
+document.addEventListener('click', e => {
+  document.querySelectorAll('.tve-menu[open]').forEach(m => { if (!m.contains(e.target)) m.open = false; });
+});
 
 async function signOutTveNetwork(family, requestorId, label) {
   if (!confirm(`Sign out of ${label}? Its saved sign-in is forgotten. Your TV provider choice stays, and no other network is affected.`)) return;
