@@ -1402,10 +1402,14 @@ async function loadTveNetworkStatus() {
         const needsStyle = n.needs_signin ? ';background:var(--warning-soft,#b8860b);color:#1a1a1a;border-color:transparent;font-weight:600' : '';
         button = `<button class="btn btn-audit" style="padding:0.15rem 0.55rem;font-size:0.74rem${needsStyle}" type="button" title="Sign in to just this network — reuses your saved credentials, doesn't touch any other network's sign-in" onclick="openMvpdLoginModal('${n.family}', ${requestorArg}, ${n.signin_method ? `'${n.signin_method}'` : 'null'})">Sign in</button>`;
       }
+      let signOut = '';
+      if (n.last_signed_in_at && !n.unsupported) {
+        signOut = `<button class="btn btn-secondary" style="padding:0.15rem 0.55rem;font-size:0.74rem" type="button" title="Forget this network's saved sign-in. Your TV provider choice stays, and no other network is touched." onclick="signOutTveNetwork('${n.family}', ${requestorArg}, '${_escapeHtml(n.label).replace(/'/g, "\\'")}')">Sign out</button>`;
+      }
       return `<div style="display:flex;justify-content:space-between;align-items:center;gap:0.75rem;padding:0.15rem 0">
         <span>${n.label}${separate}</span>
         <span style="display:flex;align-items:center;gap:0.5rem;white-space:nowrap">
-          <span style="color:${ageColor}">${age}</span>${button}
+          <span style="color:${ageColor}">${age}</span>${button}${signOut}
         </span>
       </div>${note}`;
     });
@@ -1413,6 +1417,23 @@ async function loadTveNetworkStatus() {
   } catch (e) {
     container.textContent = 'Could not load network status.';
   }
+}
+
+async function signOutTveNetwork(family, requestorId, label) {
+  if (!confirm(`Sign out of ${label}? Its saved sign-in is forgotten. Your TV provider choice stays, and no other network is affected.`)) return;
+  try {
+    const r = await fetch('/api/settings/tve/signout', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ family, requestor_id: requestorId }),
+    });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) { alert(d.error || 'Could not sign out.'); return; }
+  } catch (e) {
+    alert('Could not sign out.');
+    return;
+  }
+  loadTveNetworkStatus();
 }
 
 // method: a network with its own separate login passes 'phone', the only way

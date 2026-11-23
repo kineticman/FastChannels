@@ -162,6 +162,57 @@ def tve_network_status_route():
     return jsonify({'networks': tve_network_status(account)})
 
 
+@tve_bp.route('/settings/tve/signout', methods=['POST'])
+def tve_signout():
+    """Sign one network out: forget the saved sign-in (tokens, device identity
+    and the cached playback state built on it) but keep the TV provider
+    choice, so signing back in is one click. Other networks are untouched."""
+    from ..tve.accounts import tve_account_for
+    from ..tve.mvpd_targets import resolve_requestor_target
+    from ..tve.status import tve_network_status
+
+    data = request.get_json(silent=True) or {}
+    family = (data.get('family') or '').strip()
+    requestor_id = (data.get('requestor_id') or '').strip() or None
+    row = next((n for n in tve_network_status(shared_tve_account())
+                if n.get('family') == family and (n.get('requestor_id') or None) == requestor_id), None)
+    if not row:
+        return jsonify({'error': 'Unknown network.'}), 404
+    source = Source.query.filter_by(name=row.get('source')).first()
+    account = tve_account_for(row.get('source'))
+    if not source or not account:
+        return jsonify({'error': 'Nothing is saved for this network.'}), 404
+
+    cfg = dict(account.config or {})
+    errors = dict(cfg.get('tve_last_error') or {})
+    if family == 'legacy':
+        # One requestor's Adobe token on the account; its siblings keep theirs.
+        try:
+            key = resolve_requestor_target(requestor_id)['requestor_id']
+        except Exception:  # noqa: BLE001
+            key = requestor_id
+        authn = dict(cfg.get('mvpd_authn') or {})
+        authn.pop(key, None)
+        cfg['mvpd_authn'] = authn
+        errors.pop(key, None)
+        account.config = cfg
+    else:
+        # The source's own state (see SIGNIN_STATE); these sources carry one network each.
+        clear_signin_state(source, account)
+        cfg = dict(account.config or {})
+        errors.pop(family, None)
+        cfg['tve_last_error'] = errors
+        account.config = cfg
+        db.session.commit()
+        logger.info('[tve] %s signed out', row.get('label'))
+        return jsonify({'status': 'signed_out', 'label': row.get('label')})
+    cfg['tve_last_error'] = errors
+    account.config = cfg
+    db.session.commit()
+    logger.info('[tve] %s signed out', row.get('label'))
+    return jsonify({'status': 'signed_out', 'label': row.get('label')})
+
+
 # Sources whose auth identity is TVE/Adobe-Pass-tied. Kept as one list so
 # reset and any future TVE-wide admin action stay in sync automatically.
 _TVE_SOURCE_NAMES = ('aenetworks_tve', 'fox_tve', 'discovery_tve', 'amcn_tve', 'warner_tve', 'nbc_tve',
