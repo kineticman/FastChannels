@@ -1495,7 +1495,10 @@ def fire_block_boundary_retune(channel_key: str, boundary_ts: float) -> None:
         # fix when it doesn't.
         if tracked_address:
             from urllib.parse import quote as _urlquote
-            retune_url += f'?adb={_urlquote(tracked_address)}'
+            # retune=1: this call comes from FastChannels, not bmitune.sh, so it
+            # carries no scripts= and must not overwrite the tuner's recorded
+            # ah4c script version (it made current tuners show as unversioned).
+            retune_url += f'?adb={_urlquote(tracked_address)}&retune=1'
         try:
             resp = requests.get(retune_url, timeout=15, allow_redirects=False)
             ok = resp.status_code in (200, 204, 302)

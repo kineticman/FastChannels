@@ -3849,7 +3849,7 @@ def play_fc_player_bridge(source_name: str, channel_id: str):
         channel_key=f'{source_name}:{channel_id}',
         adb_address=adb_override,
     )
-    if adb_override:
+    if adb_override and request.args.get('retune') != '1':
         # ?adb= means ah4c's bmitune.sh made this call; remember which script set
         # it's running so the Bridge page can flag tuners that need a re-export.
         from ..ah4c_export import SCRIPTS_VERSION_RE

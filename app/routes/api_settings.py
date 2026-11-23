@@ -819,19 +819,29 @@ def bridge_healthcheck():
                     by_status.setdefault(t['scripts_status'], []).append(t)
 
                 def _nums(rows):
-                    return '#' + ', #'.join(str(t['index']) for t in rows)
+                    # Index is ah4c's 0-based list position (TUNER1_IP is #0), so
+                    # show the address too to make it unambiguous.
+                    return ', '.join(f"#{t['index']} ({t.get('tuner_ip') or t.get('adb_address')})" for t in rows)
 
                 update_hint = ('Set UPDATE_SCRIPTS=true and FASTCHANNELS_URL in ah4c so updating ah4c '
                                'also updates its scripts, or click "Update ah4c scripts" on the Bridge page '
                                'and run the command it shows. This rechecks on each tuner\'s next tune.')
-                stale = by_status.get('outdated', []) + by_status.get('unversioned', [])
+                outdated_t = by_status.get('outdated', [])
+                unversioned_t = by_status.get('unversioned', [])
                 unseen = by_status.get('unknown', [])
-                if stale:
+                if outdated_t or unversioned_t:
                     # 'unversioned' alone is what every ah4c image from before upstream
                     # script versioning ships, so it's informational, not a misconfiguration.
-                    add('warn' if by_status.get('outdated') else 'info', 'ah4c scripts',
-                        f'{len(stale)}/{len(tuners)} tuner(s) use older ah4c scripts (tuner {_nums(stale)}). '
-                        'Tuning still works, but they are missing fixes.', update_hint)
+                    parts = []
+                    if outdated_t:
+                        parts.append(f'{len(outdated_t)}/{len(tuners)} tuner(s) use older ah4c scripts '
+                                     f'(tuner {_nums(outdated_t)}).')
+                    if unversioned_t:
+                        parts.append(f'{len(unversioned_t)}/{len(tuners)} tuner(s) use ah4c scripts that '
+                                     f'predate version tracking (tuner {_nums(unversioned_t)}), so '
+                                     'FastChannels can\'t tell how old they are.')
+                    add('warn' if outdated_t else 'info', 'ah4c scripts',
+                        ' '.join(parts) + ' Tuning still works, but newer scripts include fixes.', update_hint)
                 elif len(unseen) == len(tuners):
                     add('info', 'ah4c scripts',
                         'No ah4c tunes yet, so FastChannels can\'t tell whether its scripts are up to date.')
