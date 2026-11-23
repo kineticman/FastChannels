@@ -169,9 +169,13 @@ def transfer_channel(old: Channel, new: Channel) -> dict:
         elif new_gn != old_gn:
             notes.append(f'Kept {new.name}\'s own Gracenote ID {new_gn} (yours was {old_gn}).')
     elif old.gracenote_mode == 'off' and new.gracenote_mode != 'off':
-        new.gracenote_mode = 'off'
-        new.gracenote_locked = False
-        carried.append('Gracenote turned off')
+        # Off describes the old copy; a target with its own guide ID keeps it.
+        if not new_gn:
+            new.gracenote_mode = 'off'
+            new.gracenote_locked = False
+            carried.append('Gracenote turned off')
+        else:
+            notes.append(f'Kept {new.name}\'s own Gracenote ID {new_gn} (yours was off).')
 
     # Overrides can drive feed filters (category/language), so carry them.
     if old.category_override and not new.category_override:
