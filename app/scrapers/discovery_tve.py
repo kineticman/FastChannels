@@ -203,6 +203,7 @@ class DiscoveryBrowserSignInRequired(TVEAuthError):
     unattended (scripted) sign-in can't renew Discovery's session. A plain
     TVEAuthError, i.e. retryable: the channels aren't disabled, and a fresh
     browser sign-in in Settings fixes it."""
+    signin_needed = True
 
 
 def _browser_signin_required(provider: str, *, separate: bool = False) -> DiscoveryBrowserSignInRequired:

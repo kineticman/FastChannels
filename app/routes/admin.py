@@ -610,7 +610,8 @@ def _humanize_until(dt, now):
     return f'in {int(secs // 86400)}d'
 
 
-def _source_status_line(s, *, cfg_status, epg, cfm, retired, mix, now, tz_name, bridge_ready=True, fill=None):
+def _source_status_line(s, *, cfg_status, epg, cfm, retired, mix, now, tz_name, bridge_ready=True, fill=None,
+                        signed_in=None):
     """The one line under a source: the most important thing about it right
     now, worst first, and a hover title with the detail. state is the dot's
     colour: ok | warn | error | setup | pending | info."""
@@ -628,6 +629,12 @@ def _source_status_line(s, *, cfg_status, epg, cfm, retired, mix, now, tz_name, 
         return {'state': 'setup', 'text': 'Needs setup — open Configure to sign in or add details',
                 'title': 'This source needs settings before it can scrape.'}
     if mix['total'] and mix['off'] == mix['total'] and set(mix['off_reasons']) == {'NotAuthorized'}:
+        if signed_in is False:
+            # Nobody has signed in: the channels aren't missing from a plan, they need a sign-in.
+            return {'state': 'warn', 'text': 'Not signed in — sign in to play these channels',
+                    'title': 'Every channel here needs a TV provider sign-in and none has been made yet. '
+                             'Sign in from Configure or under Settings → TV Everywhere; the channels switch back on after.',
+                    'link': ('/admin/settings#settings-section-tve', 'Sign in →')}
         return {'state': 'warn', 'text': 'Not included in your TV plan — no channel here can play',
                 'title': 'Every channel answered "not authorized" for the signed-in account.'}
     if mix['kind'] == 'drm' and not bridge_ready:
@@ -961,12 +968,23 @@ def sources():
                 SourceCache.source_id.in_([s.id for s in sources_list]))
         .all()
     )
+    # TVE sources with no sign-in made (None = not a TVE source or unknown).
+    _tve_signed_in = {}
+    try:
+        from ..tve.accounts import shared_tve_account
+        from ..tve.status import tve_network_status
+        for _row in tve_network_status(shared_tve_account()):
+            _name = _row.get('source')
+            _ok = bool(_row.get('last_signed_in_at')) and not _row.get('needs_signin')
+            _tve_signed_in[_name] = _tve_signed_in.get(_name, False) or _ok
+    except Exception:  # noqa: BLE001 — a status line must never break the page
+        _tve_signed_in = {}
     source_status = {
         s.id: _source_status_line(
             s, cfg_status=source_config_status.get(s.id), epg=_epg_meta.get(s.id),
             cfm=channel_fetch_meta.get(s.id), retired=source_retired.get(s.id),
             mix=source_mix[s.id], now=_now, tz_name=_tz_name, bridge_ready=bridge_ready.get(s.id, True),
-            fill=_epg_fill.get(s.id))
+            fill=_epg_fill.get(s.id), signed_in=_tve_signed_in.get(s.name))
         for s in sources_list if s.is_enabled and s.name != 'custom'
     }
 

@@ -210,8 +210,29 @@ def never_signed_in(exc: BaseException) -> bool:
     opposed to a lapsed one or a provider refusal."""
     if isinstance(exc, TVENotAuthorizedError) or not isinstance(exc, TVEAuthError):
         return False
+    if getattr(exc, 'never_signed_in', False):
+        return True
     message = str(exc).lower()
     return any(marker in message for marker in _NEVER_SIGNED_IN_MARKERS)
+
+
+# Broader: any "a person has to sign in (again)" error, including a lapsed one.
+_SIGNIN_NEEDED_MARKERS = _NEVER_SIGNED_IN_MARKERS + (
+    'sign in again', 'sign-in has expired', 'sign-in expired', 'sign-in was rejected',
+    'sign-in stopped working', 'needs you to sign in')
+
+
+def signin_needed(exc: BaseException) -> bool:
+    """True for a TVEAuthError that only a person can fix by signing in, never
+    or again. Expected, so a scrape that hits it logs one line, not a
+    traceback. (Unlike never_signed_in, it also covers an expired sign-in,
+    which the audit must not switch channels off for.)"""
+    if isinstance(exc, TVENotAuthorizedError) or not isinstance(exc, TVEAuthError):
+        return False
+    if getattr(exc, 'signin_needed', False):
+        return True
+    message = str(exc).lower()
+    return any(marker in message for marker in _SIGNIN_NEEDED_MARKERS)
 
 
 def resolver_for_audit(resolve):

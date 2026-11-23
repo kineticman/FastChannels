@@ -1687,7 +1687,10 @@ def run_link_login(family: str, requestor_id: str | None, mso_id: str, run_id: s
                     message = adapter.save(ctx, result)
                     steps[i].update(state='done', message=message)
                     logger.info('[link-login] %s: signed in via %s (%s)', label, getattr(adapter, 'mso_id', mso_id), message)
-                    if message == 'authorized':
+                    # 'authorized (your package doesn't include: ...)' is a partial
+                    # package: what it does carry should come back too, and the
+                    # next play or audit switches the rest off again.
+                    if (message or '').startswith('authorized'):
                         _reenable_after_authorized_signin(adapter.error_key)
                 except TVENotAuthorizedError as exc:
                     steps[i].update(state='failed', message=str(exc)[:160])

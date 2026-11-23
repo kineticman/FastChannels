@@ -57,6 +57,7 @@ _USER_TOKEN_MARGIN = 30 * 60
 class HuluNotLinked(TVEAuthError):
     """The account has no linked Hulu device (or Hulu revoked it); only a new
     "Sign in on my phone" can fix it."""
+    signin_needed = True
 
 
 def _headers(serial: str) -> dict[str, str]:

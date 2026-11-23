@@ -52,7 +52,7 @@ from app.channel_tags import (AUTO_EVENT_REASONS, EVENT_RETIRED_REASON, EVENT_MI
                               EVENT_SCHEDULE_MISSING_REASON, EVENT_FILTERED_REASON,
                               event_channel_clause)
 from app.event_lifecycle import hide_event, restore_event, delete_event
-from app.tve.adobe_pass import TVENotAuthorizedError, resolver_for_audit
+from app.tve.adobe_pass import TVENotAuthorizedError, never_signed_in, resolver_for_audit, signin_needed
 from app.xml_cache import (
     ARTIFACT_IDLE_SECONDS, ARTIFACT_PURGE_SECONDS, artifact_in_use, ensure_xml_artifact, get_artifact,
     invalidate_xml_cache, purge_idle_artifacts, sweep_unused_artifacts, write_artifact,
@@ -706,6 +706,17 @@ def run_scraper(source_name: str, force_full: bool = False):
             _progress('done')
         except Exception as e:
             elapsed = time.monotonic() - t0
+            if signin_needed(e):
+                # Nobody has signed in to this TVE source yet, or its sign-in lapsed:
+                # expected, and the message already says what to do. One INFO line,
+                # no traceback.
+                logger.info('[%s] Scrape skipped after %.1fs: sign-in needed — %s', source_name, elapsed, e)
+                db.session.rollback()
+                _apply_scraper_config_updates(source, scraper)
+                source.last_error = str(e)
+                db.session.commit()
+                _progress('done')
+                return
             if _is_transient_network_error(e):
                 reason = _network_error_summary(e)
                 _mark_network_outage(reason)
@@ -856,10 +867,19 @@ def run_stream_audit(source_name: str, scope: str = 'linear'):
         # Fail fast on a source-wide problem (e.g. bad credentials) instead of
         # letting every channel's resolve() hit it and tripping the 20-error
         # abort with a vague "20 errors" summary.
+        _pf_failure = None
         try:
             scraper.audit_preflight()
         except Exception as _pf_exc:
-            _skip_msg = f'Sign-in failed — {str(_pf_exc).strip() or type(_pf_exc).__name__}'
+            if never_signed_in(_pf_exc):
+                # No sign-in has been made: not a broken sign-in to report and stop
+                # on. Go on to the channels so the ones that play stay on and the
+                # ones that need a sign-in are switched off (NotAuthorized).
+                logger.info('[audit] %s: not signed in — checking each channel anyway', source_name)
+            else:
+                _pf_failure = _pf_exc
+        if _pf_failure is not None:
+            _skip_msg = f'Sign-in failed — {str(_pf_failure).strip() or type(_pf_failure).__name__}'
             _geo_hint = _outside_us_hint_for(source)
             if _geo_hint:
                 _skip_msg += f' ({_geo_hint})'
