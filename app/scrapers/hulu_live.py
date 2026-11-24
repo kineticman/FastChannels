@@ -56,6 +56,24 @@ from .category_utils import category_for_channel
 
 logger = logging.getLogger(__name__)
 
+_DBG = {'at': 0.0, 'on': False}
+
+
+def _dbg() -> bool:
+    """Settings -> Advanced "debug logging" (or FC_HULU_LIVE_DEBUG / FC_DEBUG).
+    The root logger is capped at INFO, so debug lines are logged at INFO under a
+    [hulu_live][debug] tag when this is on. Cached 30 s: the MPD is polled every
+    few seconds and the setting is a DB read."""
+    now = time.time()
+    if now - _DBG['at'] > 30:
+        try:
+            from ..debug_flag import debug_logging_enabled
+            _DBG['on'] = bool(debug_logging_enabled('FC_HULU_LIVE_DEBUG'))
+        except Exception:  # noqa: BLE001
+            _DBG['on'] = False
+        _DBG['at'] = now
+    return _DBG['on']
+
 GUIDE = 'https://guide.hulu.com/guide'
 PLAYLIST = 'https://play.hulu.com/v6/playlist'
 LICENSE_BASE = 'https://hulu.playback.edge.bamgrid.com/widevine-hulu/v1/hulu/linear/obtain-license'
@@ -715,9 +733,10 @@ class HuluLiveScraper(BaseScraper):
                         url = self.resolve(f'{SCHEME}{cid}', hd=hd)
                         m = re.search(r'[?&]token=(\d{10})_', url)
                         cached = {'url': url, 'exp': int(m.group(1)) if m else time.time() + 240}
-                        logger.debug('[hulu_live] %s new stream session (hd=%s, replaces=%s, token ends in %ss)',
-                                     cid, hd, 'expired url' if not attempt else 'rejected url',
-                                     int(cached['exp'] - time.time()))
+                        if _dbg():
+                            logger.info('[hulu_live][debug] %s new stream session (hd=%s, replaces=%s, token ends in %ss)',
+                                        cid, hd, 'expired url' if not attempt else 'rejected url',
+                                        int(cached['exp'] - time.time()))
                         if r is not None:
                             try:
                                 r.set(key, json.dumps(cached), ex=max(int(cached['exp'] - time.time()), 1))
@@ -735,7 +754,7 @@ class HuluLiveScraper(BaseScraper):
                 continue  # the token lapsed early; get a new playlist
             resp.raise_for_status()
             mpd = trim_periods(re.sub(r'\s*<Location>.*?</Location>', '', resp.text, flags=re.DOTALL))
-            if logger.isEnabledFor(logging.DEBUG):
+            if _dbg():
                 _log_period_changes(f'{cid}{":hd" if hd else ""}', cached['url'], mpd)
             return mpd
         raise RuntimeError('Hulu + Live TV: no manifest')
@@ -824,11 +843,11 @@ def _log_period_changes(key: str, url: str, mpd: str) -> None:
         prev = _PERIOD_SIG.get(key)
         _PERIOD_SIG[key] = sig
         note = '' if not prev else (' (new session)' if prev[0] != sess else '')
-        logger.debug('[hulu_live] %s manifest: %d periods%s, url …%s', key, len(periods), note, sess)
+        logger.info('[hulu_live][debug] %s manifest: %d periods%s, url …%s', key, len(periods), note, sess)
         for line in periods[-8:]:
-            logger.debug('[hulu_live] %s   %s', key, line)
+            logger.info('[hulu_live][debug] %s   %s', key, line)
     except Exception as e:  # noqa: BLE001
-        logger.debug('[hulu_live] period summary failed: %s', e)
+        logger.info('[hulu_live][debug] period summary failed: %s', e)
 
 
 LOGO_SIZE = '400x400'
