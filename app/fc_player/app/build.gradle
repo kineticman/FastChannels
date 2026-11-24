@@ -58,12 +58,12 @@ android {
 dependencies {
     // PlaybackActivity is the entire app — see its docstring. Media3 handles Widevine directly
     // via the device's own CDM, no host player app needed.
-    implementation 'androidx.media3:media3-exoplayer:1.5.1'
-    implementation 'androidx.media3:media3-exoplayer-dash:1.5.1'
-    implementation 'androidx.media3:media3-exoplayer-hls:1.5.1'
-    implementation 'androidx.media3:media3-ui:1.5.1'
+    implementation 'androidx.media3:media3-exoplayer:1.11.1'
+    implementation 'androidx.media3:media3-exoplayer-dash:1.11.1'
+    implementation 'androidx.media3:media3-exoplayer-hls:1.11.1'
+    implementation 'androidx.media3:media3-ui:1.11.1'
     // ah4c integration test: publishes PlaybackState to dumpsys media_session so an
     // ah4c-driven tuner (adb-only, no on-device UI) can confirm a tune actually started
     // the way it already does for Hulu/YouTube TV, instead of always reading "not playing".
-    implementation 'androidx.media3:media3-session:1.5.1'
+    implementation 'androidx.media3:media3-session:1.11.1'
 }

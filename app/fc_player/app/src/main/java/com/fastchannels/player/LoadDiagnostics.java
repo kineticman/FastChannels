@@ -129,6 +129,39 @@ final class LoadDiagnostics implements AnalyticsListener {
         }
     }
 
+    private Object cachedPlayerId;
+    private boolean playerIdLooked;
+
+    /** Media3 1.11 made the allocator per-player (LoadControl.getAllocator(PlayerId)) and
+     * rejects a null/unset id, which an app has no public way to read; the player keeps it
+     * in a field. Diagnostics only: any failure here just means "no allocator numbers". */
+    private Object playerId() {
+        if (!playerIdLooked) {
+            playerIdLooked = true;
+            try {
+                java.lang.reflect.Field f = player.getClass().getDeclaredField("playerId");
+                f.setAccessible(true);
+                cachedPlayerId = f.get(player);
+            } catch (Throwable t) {
+                Log.w(TAG, "player id not readable, allocator numbers off: " + t);
+            }
+        }
+        return cachedPlayerId;
+    }
+
+    /** Allocator bytes in KB, or -1 when it can't be read. Never throws. */
+    private long allocatedKb() {
+        try {
+            Object id = playerId();
+            if (id instanceof androidx.media3.exoplayer.analytics.PlayerId) {
+                return loadControl.getAllocator((androidx.media3.exoplayer.analytics.PlayerId) id).getTotalBytesAllocated() / 1024;
+            }
+        } catch (Throwable t) {
+            // fall through
+        }
+        return -1;
+    }
+
     private long aheadMs() {
         return Math.max(0, player.getTotalBufferedDuration());
     }
@@ -143,7 +176,7 @@ final class LoadDiagnostics implements AnalyticsListener {
                 liveOffset == C.TIME_UNSET ? "-" : String.format(Locale.US, "%.1fs", liveOffset / 1000.0),
                 player.getPlaybackParameters().speed,
                 player.isLoading(),
-                loadControl.getAllocator().getTotalBytesAllocated() / 1024,
+                allocatedKb(),
                 (rt.totalMemory() - rt.freeMemory()) / (1024 * 1024), rt.maxMemory() / (1024 * 1024),
                 bandwidth.getBitrateEstimate() / 1e6,
                 v == null ? "-" : v.width + "x" + v.height + "@" + (v.frameRate > 0 ? String.format(Locale.US, "%.0f", v.frameRate) : "?")
@@ -158,9 +191,9 @@ final class LoadDiagnostics implements AnalyticsListener {
      * playback carried on, then the load control stopped the loader). Logs where the
      * player thinks it is, so the cause can be read from the next occurrence. */
     private void logHighAllocator() {
-        long kb = loadControl.getAllocator().getTotalBytesAllocated() / 1024;
+        long kb = allocatedKb();
         long now = System.currentTimeMillis();
-        if (kb < 60 * 1024 || now - lastHighLogMs < 30_000) return;
+        if (kb < 60 * 1024 || now - lastHighLogMs < 30_000) return;  // also skips -1 (unreadable)
         lastHighLogMs = now;
         androidx.media3.common.Timeline tl = player.getCurrentTimeline();
         StringBuilder sb = new StringBuilder("ALLOCATOR HIGH ").append(kb / 1024).append("MB: ")

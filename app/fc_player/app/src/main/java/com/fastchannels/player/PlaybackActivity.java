@@ -7,6 +7,8 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.util.Log;
+import android.view.SurfaceView;
+import android.view.View;
 import android.view.WindowManager;
 
 import androidx.media3.common.C;
@@ -20,6 +22,7 @@ import androidx.media3.common.Timeline;
 import androidx.media3.common.VideoSize;
 import androidx.media3.common.util.UnstableApi;
 import androidx.media3.datasource.DefaultHttpDataSource;
+import androidx.media3.exoplayer.DecoderCounters;
 import androidx.media3.exoplayer.DefaultLoadControl;
 import androidx.media3.exoplayer.ExoPlayer;
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory;
@@ -191,11 +194,25 @@ public class PlaybackActivity extends Activity {
     private long lastStallPosMs = -1;
     private long lastAdvanceAtMs;
     private LoadDiagnostics loadDiagnostics;
+    private PlayerView playerView;
     // A stall that sits in BUFFERING never trips the READY-but-frozen watchdog above (it
     // only looks at READY), so it was never recovered. Armed only after the first frame:
     // a slow start (a DRM license, a cold CDN) is not a freeze.
     private long bufferingSinceMs = 0;
     private static final long BUFFERING_REBUILD_MS = 25_000;
+    // A picture that has stopped while ExoPlayer still says READY and its clock runs on:
+    // Media3 1.5.1 could miss the transition into a newly added Period (an ad break) and
+    // leave both decoders idle (#104). Nothing else notices, because the position keeps
+    // advancing. Only judged while a video track is selected, a first frame has shown and
+    // the video surface is live and visible (a TV that is off or an app sent to the
+    // background has no surface, and must never count as frozen).
+    private static final long FROZEN_PICTURE_MS = 20_000;
+    private static final int MAX_PICTURE_REBUILDS = 3;
+    private static final long PICTURE_REBUILD_RESET_MS = 300_000;
+    private long lastRenderedFrames = -1;
+    private long lastFrameChangeAtMs = 0;
+    private long lastPictureRebuildAtMs = 0;
+    private int pictureRebuilds = 0;
     private long lastStallRecoveryAtMs;
     private int stallRecoveries = 0;
 
@@ -227,7 +244,7 @@ public class PlaybackActivity extends Activity {
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON
                 | WindowManager.LayoutParams.FLAG_FULLSCREEN);
 
-        PlayerView playerView = new PlayerView(this);
+        playerView = new PlayerView(this);
         // No remote/touch input ever reaches this device (everything is adb-triggered), so the
         // play/pause/seek overlay has nothing to control and no way to be dismissed — just video.
         playerView.setUseController(false);
@@ -625,6 +642,39 @@ public class PlaybackActivity extends Activity {
         stallHandler.postDelayed(checkStall, STALL_CHECK_INTERVAL_MS);
     }
 
+    /** True when a picture should be on screen but no new frame has been rendered for
+     * FROZEN_PICTURE_MS. Every doubt returns false and restarts the count. */
+    private boolean pictureLooksFrozen(long now) {
+        boolean expectPicture = player.getPlaybackState() == Player.STATE_READY
+                && player.getPlayWhenReady()
+                && firstFrameAtMs != 0
+                && player.getVideoFormat() != null
+                && videoSurfaceLive();
+        DecoderCounters counters = expectPicture ? player.getVideoDecoderCounters() : null;
+        if (counters == null) {
+            lastRenderedFrames = -1;
+            return false;
+        }
+        counters.ensureUpdated();
+        long frames = counters.renderedOutputBufferCount;
+        if (frames != lastRenderedFrames || lastRenderedFrames < 0) {
+            lastRenderedFrames = frames;
+            lastFrameChangeAtMs = now;
+            if (pictureRebuilds > 0 && now - lastPictureRebuildAtMs >= PICTURE_REBUILD_RESET_MS) {
+                pictureRebuilds = 0;
+            }
+            return false;
+        }
+        return now - lastFrameChangeAtMs >= FROZEN_PICTURE_MS;
+    }
+
+    private boolean videoSurfaceLive() {
+        View v = playerView == null ? null : playerView.getVideoSurfaceView();
+        if (v == null || !v.isShown()) return false;
+        if (v instanceof SurfaceView) return ((SurfaceView) v).getHolder().getSurface().isValid();
+        return true;
+    }
+
     private void checkStall() {
         if (player == null || activeStreamUrl == null) return;
         long now = System.currentTimeMillis();
@@ -656,6 +706,28 @@ public class PlaybackActivity extends Activity {
             }
         } else {
             bufferingSinceMs = 0;
+        }
+        if (pictureLooksFrozen(now)) {
+            if (pictureRebuilds >= MAX_PICTURE_REBUILDS) {
+                // Don't finish(): a false alarm must never end a recording. Say so once and wait.
+                if (now - lastFrameChangeAtMs < FROZEN_PICTURE_MS + 5 * STALL_CHECK_INTERVAL_MS) {
+                    Log.e(TAG, "picture still frozen after " + MAX_PICTURE_REBUILDS
+                            + " rebuilds channel_key=" + activeChannelKey);
+                }
+            } else {
+                pictureRebuilds++;
+                lastPictureRebuildAtMs = now;
+                Log.w(TAG, "picture frozen " + (now - lastFrameChangeAtMs) / 1000 + "s (no frames rendered, state READY)"
+                        + " at position " + pos + "ms, rebuilding (" + pictureRebuilds + "/"
+                        + MAX_PICTURE_REBUILDS + ") channel_key=" + activeChannelKey);
+                recordStatusEvent("picture_rebuild");
+                reprepare();
+                lastRenderedFrames = -1;
+                lastStallPosMs = -1;
+                lastAdvanceAtMs = now;
+            }
+            stallHandler.postDelayed(checkStall, STALL_CHECK_INTERVAL_MS);
+            return;
         }
         if (!shouldBePlaying || pos != lastStallPosMs) {
             lastStallPosMs = pos;
