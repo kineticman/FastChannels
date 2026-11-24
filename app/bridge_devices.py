@@ -36,6 +36,8 @@ _RECOVERY_WINDOW_S = 3600
 _RECOVERY_LABELS = {
     'gap_rejoin': 'ad-gap rejoin',
     'freeze_rebuild': 'frozen-picture rebuild',
+    'picture_rebuild': 'no-frames rebuild',
+    'buffering_rebuild': 'stuck-buffering rebuild',
     'error_retry': 'error retry',
     'gave_up': 'gave up',
 }
