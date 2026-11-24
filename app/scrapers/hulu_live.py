@@ -96,6 +96,7 @@ _LICENSE_TTL = 8 * 3600  # signed license URLs are good for ~10 h
 _IP_LOCATION_TTL = 24 * 3600
 _MPD_KEY = 'hulu_live:mpd:'
 _MPD_RENEW_MARGIN = 45   # re-resolve this long before the manifest URL's 300 s token ends
+_PIN_KEY = 'hulu_live:pin:'
 _MPD_KEEP_SECONDS = 1800  # periods that ended longer ago than this are trimmed from the MPD
 # Channels DVR gives up on a tuner after 20 s; each play-time call gets this.
 _PLAY_TIMEOUT = (4, 8)
@@ -754,6 +755,7 @@ class HuluLiveScraper(BaseScraper):
                 continue  # the token lapsed early; get a new playlist
             resp.raise_for_status()
             mpd = trim_periods(re.sub(r'\s*<Location>.*?</Location>', '', resp.text, flags=re.DOTALL))
+            mpd = _pin_periods_cached(r, f'{_PIN_KEY}{cid}{":hd" if hd else ""}', mpd)
             if _dbg():
                 _log_period_changes(f'{cid}{":hd" if hd else ""}', cached['url'], mpd)
             return mpd
@@ -807,6 +809,96 @@ def trim_periods(mpd: str, keep_seconds: float = _MPD_KEEP_SECONDS) -> str:
     if not drop:
         return mpd
     return mpd[:periods[0].start()] + mpd[periods[drop].start():]
+
+
+_PERIOD_TAG_RE = re.compile(r'<Period\b[^>]*>')
+_PERIOD_ID_RE = re.compile(r'\bid="([^"]*)"')
+_PERIOD_STARTSTR_RE = re.compile(r'\bstart="PT([\d.]+)S"')
+_SEGTMPL_RE = re.compile(r'<SegmentTemplate\b[^>]*>')
+_PTO_RE = re.compile(r'presentationTimeOffset="(\d+)"')
+_TIMESCALE_RE = re.compile(r'\btimescale="(\d+)"')
+_PIN_TOLERANCE_S = 0.05   # audio offsets move in whole AAC frames (~21 ms), video/start in 5.005 s
+
+
+def pin_periods(mpd: str, pins: dict) -> tuple[str, dict]:
+    """Holds each Period's start and presentationTimeOffset at the values it first
+    had. Local channels (e.g. an NBC affiliate) come as ONE Period whose start,
+    presentationTimeOffset and first segment time all advance by a segment on
+    every refresh, as Hulu slides the window. Media3 reads that as the Period
+    being removed and replaced: it flushes the buffer and decoder and steps back
+    a few seconds, once per segment (a ~0.4 s stall every ~5 s at 1080p60).
+    Segment presentation time is start + (t - presentationTimeOffset) / timescale,
+    so the same segment lands on the same time when start and offset are held
+    together, which is only done while that stays true for every template (to
+    50 ms: audio offsets move in whole 1024-sample frames); otherwise the Period
+    is re-pinned as it is.
+
+    pins: {period id: {'start': 'PT...S', 'pto': [[pto, timescale], ...]}}.
+    Returns (mpd, pins) with pins reduced to the Periods in this manifest."""
+    out, new_pins, last = [], {}, 0
+    for m in _PERIOD_RE.finditer(mpd):
+        blk = m.group(0)
+        tag_m = _PERIOD_TAG_RE.match(blk)
+        tag = tag_m.group(0)
+        idm, stm = _PERIOD_ID_RE.search(tag), _PERIOD_STARTSTR_RE.search(tag)
+        tmpls = _SEGTMPL_RE.findall(blk)
+        cur = []
+        for t in tmpls:
+            po, ts = _PTO_RE.search(t), _TIMESCALE_RE.search(t)
+            if not po or not ts:
+                cur = None
+                break
+            cur.append([int(po.group(1)), int(ts.group(1))])
+        if not idm or not stm or not cur:
+            continue
+        pid, start = idm.group(1), float(stm.group(1))
+        pin = pins.get(pid)
+        usable = bool(pin and len(pin['pto']) == len(cur))
+        if usable:
+            pstart = float(pin['start'][2:-1])
+            usable = all(abs((pstart - po0 / ts0) - (start - po / ts)) <= _PIN_TOLERANCE_S
+                         for (po0, ts0), (po, ts) in zip(pin['pto'], cur))
+        if not usable:
+            new_pins[pid] = {'start': f'PT{stm.group(1)}S', 'pto': cur}
+            continue
+        new_pins[pid] = pin
+        if pin['start'] == f'PT{stm.group(1)}S' and pin['pto'] == cur:
+            continue
+        nt = _PERIOD_STARTSTR_RE.sub(lambda _m: f'start="{pin["start"]}"', tag, count=1)
+        idx = iter(range(len(cur)))
+        body = blk[tag_m.end():]
+
+        def fix(tm):
+            i = next(idx)
+            return _PTO_RE.sub(f'presentationTimeOffset="{pin["pto"][i][0]}"', tm.group(0), count=1)
+        body = _SEGTMPL_RE.sub(fix, body)
+        out.append((m.start(), m.end(), nt + body))
+    if not out:
+        return mpd, new_pins
+    res, pos = [], 0
+    for a, b, text in out:
+        res.append(mpd[pos:a])
+        res.append(text)
+        pos = b
+    res.append(mpd[pos:])
+    return ''.join(res), new_pins
+
+
+def _pin_periods_cached(r, key: str, mpd: str) -> str:
+    """pin_periods with the pins kept in redis per channel (shared by every
+    gunicorn worker and player). Never breaks playback: any failure serves the
+    manifest as fetched."""
+    if r is None:
+        return mpd
+    try:
+        pins = json.loads(r.get(key) or '{}')
+        fixed, new_pins = pin_periods(mpd, pins)
+        if new_pins != pins:
+            r.set(key, json.dumps(new_pins), ex=6 * 3600)
+        return fixed
+    except Exception as exc:  # noqa: BLE001
+        logger.warning('[hulu_live] period pinning skipped: %s', exc)
+        return mpd
 
 
 _PERIOD_SIG: dict[str, tuple] = {}   # per channel: last logged (session, period ids)
