@@ -97,6 +97,10 @@ _IP_LOCATION_TTL = 24 * 3600
 _MPD_KEY = 'hulu_live:mpd:'
 _MPD_RENEW_MARGIN = 45   # re-resolve this long before the manifest URL's 300 s token ends
 _PIN_KEY = 'hulu_live:pin:'
+# Hulu asks for 12 s, but on some channels (a CW affiliate, ~2.5 s of media ahead of a
+# player sitting 15 s back) the listed edge runs well behind the clock, so a player
+# at the suggested delay can only buffer a couple of seconds and rebuffers. Sit further back.
+_PRESENTATION_DELAY_S = 20
 _MPD_KEEP_SECONDS = 1800  # periods that ended longer ago than this are trimmed from the MPD
 # Channels DVR gives up on a tuner after 20 s; each play-time call gets this.
 _PLAY_TIMEOUT = (4, 8)
@@ -756,6 +760,8 @@ class HuluLiveScraper(BaseScraper):
             resp.raise_for_status()
             mpd = trim_periods(re.sub(r'\s*<Location>.*?</Location>', '', resp.text, flags=re.DOTALL))
             mpd = _pin_periods_cached(r, f'{_PIN_KEY}{cid}{":hd" if hd else ""}', mpd)
+            mpd = re.sub(r'suggestedPresentationDelay="PT\d+(?:\.\d+)?S"',
+                         f'suggestedPresentationDelay="PT{_PRESENTATION_DELAY_S}S"', mpd, count=1)
             if _dbg():
                 _log_period_changes(f'{cid}{":hd" if hd else ""}', cached['url'], mpd)
             return mpd
