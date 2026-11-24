@@ -20,6 +20,7 @@ import androidx.media3.common.Timeline;
 import androidx.media3.common.VideoSize;
 import androidx.media3.common.util.UnstableApi;
 import androidx.media3.datasource.DefaultHttpDataSource;
+import androidx.media3.exoplayer.DefaultLoadControl;
 import androidx.media3.exoplayer.ExoPlayer;
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory;
 import androidx.media3.exoplayer.trackselection.DefaultTrackSelector;
@@ -189,6 +190,12 @@ public class PlaybackActivity extends Activity {
     private final Runnable checkStall = this::checkStall;
     private long lastStallPosMs = -1;
     private long lastAdvanceAtMs;
+    private LoadDiagnostics loadDiagnostics;
+    // A stall that sits in BUFFERING never trips the READY-but-frozen watchdog above (it
+    // only looks at READY), so it was never recovered. Armed only after the first frame:
+    // a slow start (a DRM license, a cold CDN) is not a freeze.
+    private long bufferingSinceMs = 0;
+    private static final long BUFFERING_REBUILD_MS = 25_000;
     private long lastStallRecoveryAtMs;
     private int stallRecoveries = 0;
 
@@ -262,7 +269,10 @@ public class PlaybackActivity extends Activity {
         trackSelector = new DefaultTrackSelector(this);
 
         renderersFactory = new AudioModeRenderersFactory(this);
+        // Stock buffering. Built here only so LoadDiagnostics can read the allocator.
+        DefaultLoadControl loadControl = new DefaultLoadControl.Builder().build();
         player = new ExoPlayer.Builder(this, renderersFactory)
+                .setLoadControl(loadControl)
                 .setTrackSelector(trackSelector)
                 .setBandwidthMeter(bandwidthMeter)
                 .setMediaSourceFactory(new DefaultMediaSourceFactory(this)
@@ -277,6 +287,8 @@ public class PlaybackActivity extends Activity {
         // rather than gated behind a flag since there's no on-device UI to toggle it from.
         player.addAnalyticsListener(new EventLogger(trackSelector, "FCPlayer.EventLogger"));
         player.addAnalyticsListener(new AudioDiagnostics(() -> activeChannelKey));
+        loadDiagnostics = new LoadDiagnostics(this, player, loadControl, bandwidthMeter, () -> activeChannelKey);
+        player.addAnalyticsListener(loadDiagnostics);
         // Without this, a failed tune (entitlement rejection, DRM license denial, decode
         // error — ExoPlayer treats all of these as a fatal PlaybackException) left the
         // Activity sitting on a blank surface forever: nothing observed the error, so
@@ -467,6 +479,8 @@ public class PlaybackActivity extends Activity {
         activeLicenseUrl = licenseUrl;
         reprepare();
         stallRecoveries = 0;
+        bufferingSinceMs = 0;
+        if (loadDiagnostics != null) loadDiagnostics.onTune();
         startStallWatch();
 
         boundaryPollHandler.removeCallbacksAndMessages(null);
@@ -616,6 +630,33 @@ public class PlaybackActivity extends Activity {
         long now = System.currentTimeMillis();
         long pos = player.getCurrentPosition();
         boolean shouldBePlaying = player.getPlaybackState() == Player.STATE_READY && player.getPlayWhenReady();
+        // BUFFERING for too long is a freeze too: nothing above ever fired for it.
+        if (player.getPlaybackState() == Player.STATE_BUFFERING && player.getPlayWhenReady() && firstFrameAtMs != 0) {
+            if (bufferingSinceMs == 0) bufferingSinceMs = now;
+            if (now - bufferingSinceMs >= BUFFERING_REBUILD_MS) {
+                if (stallRecoveries >= MAX_STALL_RECOVERIES) {
+                    Log.e(TAG, "stuck buffering again after " + MAX_STALL_RECOVERIES
+                            + " recoveries, giving up channel_key=" + activeChannelKey);
+                    recordStatusEvent("gave_up");
+                    finish();
+                    return;
+                }
+                stallRecoveries++;
+                lastStallRecoveryAtMs = now;
+                Log.w(TAG, "stuck BUFFERING " + (now - bufferingSinceMs) / 1000 + "s at position "
+                        + pos + "ms, rebuilding (" + stallRecoveries + "/" + MAX_STALL_RECOVERIES
+                        + ") channel_key=" + activeChannelKey);
+                bufferingSinceMs = 0;
+                reprepare();
+                lastStallPosMs = -1;
+                lastAdvanceAtMs = now;
+                recordStatusEvent("buffering_rebuild");
+                stallHandler.postDelayed(checkStall, STALL_CHECK_INTERVAL_MS);
+                return;
+            }
+        } else {
+            bufferingSinceMs = 0;
+        }
         if (!shouldBePlaying || pos != lastStallPosMs) {
             lastStallPosMs = pos;
             lastAdvanceAtMs = now;
@@ -786,6 +827,7 @@ public class PlaybackActivity extends Activity {
         retryHandler.removeCallbacksAndMessages(null);
         retryCount = 0;
         stallHandler.removeCallbacksAndMessages(null);
+        if (loadDiagnostics != null) loadDiagnostics.release();
         boundaryPollHandler.removeCallbacksAndMessages(null);
         boundaryStatusUrl = null;
         // Tells the server nobody's watching this channel anymore, so its
@@ -809,6 +851,7 @@ public class PlaybackActivity extends Activity {
         destroying = true;
         retryHandler.removeCallbacksAndMessages(null);
         stallHandler.removeCallbacksAndMessages(null);
+        if (loadDiagnostics != null) loadDiagnostics.release();
         boundaryPollHandler.removeCallbacksAndMessages(null);
         boundaryStatusUrl = null;
         // Release the player before shutting the executors down: release() fires the
