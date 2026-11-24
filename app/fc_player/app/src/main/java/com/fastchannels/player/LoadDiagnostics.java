@@ -151,8 +151,43 @@ final class LoadDiagnostics implements AnalyticsListener {
                 droppedFrames);
     }
 
+    private long lastHighLogMs = 0;
+
+    /** One-off dump when the allocator is far above what a ~10 s buffer needs (a normal run
+     * sits at 5-20 MB; one Hulu Lifetime run grew to 143 MB at the download rate while
+     * playback carried on, then the load control stopped the loader). Logs where the
+     * player thinks it is, so the cause can be read from the next occurrence. */
+    private void logHighAllocator() {
+        long kb = loadControl.getAllocator().getTotalBytesAllocated() / 1024;
+        long now = System.currentTimeMillis();
+        if (kb < 60 * 1024 || now - lastHighLogMs < 30_000) return;
+        lastHighLogMs = now;
+        androidx.media3.common.Timeline tl = player.getCurrentTimeline();
+        StringBuilder sb = new StringBuilder("ALLOCATOR HIGH ").append(kb / 1024).append("MB: ")
+                .append("periodIdx=").append(player.getCurrentPeriodIndex()).append('/').append(tl.getPeriodCount())
+                .append(" pos=").append(player.getCurrentPosition())
+                .append(" bufferedPos=").append(player.getBufferedPosition())
+                .append(" contentBufferedPos=").append(player.getContentBufferedPosition())
+                .append(" totalBufferedMs=").append(player.getTotalBufferedDuration())
+                .append(" duration=").append(player.getDuration())
+                .append(" isPlayingAd=").append(player.isPlayingAd())
+                .append(" isLoading=").append(player.isLoading());
+        if (!tl.isEmpty()) {
+            androidx.media3.common.Timeline.Window w = tl.getWindow(player.getCurrentMediaItemIndex(), new androidx.media3.common.Timeline.Window());
+            sb.append(" windowStartDefault=").append(w.defaultPositionUs / 1000).append(" windowDur=").append(w.durationUs / 1000);
+            androidx.media3.common.Timeline.Period pd = new androidx.media3.common.Timeline.Period();
+            int n = tl.getPeriodCount();
+            for (int i = Math.max(0, n - 3); i < n; i++) {
+                tl.getPeriod(i, pd);
+                sb.append(" [p").append(i).append(" dur=").append(pd.durationUs / 1000).append(']');
+            }
+        }
+        Log.w(TAG, sb.toString());
+    }
+
     private void logTick() {
         tickCount++;
+        logHighAllocator();
         Log.i(TAG, "tick#" + tickCount + " state=" + stateName(player.getPlaybackState())
                 + " pos=" + player.getCurrentPosition() / 1000 + "s " + snapshot()
                 + " rebuffers=" + rebuffers + "(" + rebufferTotalMs + "ms) slowChunks=" + slowChunks
