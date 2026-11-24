@@ -715,6 +715,9 @@ class HuluLiveScraper(BaseScraper):
                         url = self.resolve(f'{SCHEME}{cid}', hd=hd)
                         m = re.search(r'[?&]token=(\d{10})_', url)
                         cached = {'url': url, 'exp': int(m.group(1)) if m else time.time() + 240}
+                        logger.debug('[hulu_live] %s new stream session (hd=%s, replaces=%s, token ends in %ss)',
+                                     cid, hd, 'expired url' if not attempt else 'rejected url',
+                                     int(cached['exp'] - time.time()))
                         if r is not None:
                             try:
                                 r.set(key, json.dumps(cached), ex=max(int(cached['exp'] - time.time()), 1))
@@ -731,7 +734,10 @@ class HuluLiveScraper(BaseScraper):
             if resp.status_code in (403, 404, 410) and not attempt:
                 continue  # the token lapsed early; get a new playlist
             resp.raise_for_status()
-            return trim_periods(re.sub(r'\s*<Location>.*?</Location>', '', resp.text, flags=re.DOTALL))
+            mpd = trim_periods(re.sub(r'\s*<Location>.*?</Location>', '', resp.text, flags=re.DOTALL))
+            if logger.isEnabledFor(logging.DEBUG):
+                _log_period_changes(f'{cid}{":hd" if hd else ""}', cached['url'], mpd)
+            return mpd
         raise RuntimeError('Hulu + Live TV: no manifest')
 
     # ── DRM license proxy wiring ──
@@ -782,6 +788,47 @@ def trim_periods(mpd: str, keep_seconds: float = _MPD_KEEP_SECONDS) -> str:
     if not drop:
         return mpd
     return mpd[:periods[0].start()] + mpd[periods[drop].start():]
+
+
+_PERIOD_SIG: dict[str, tuple] = {}   # per channel: last logged (session, period ids)
+_ATTR_RES = {k: re.compile(rf'\b{k}="([^"]*)"') for k in
+             ('id', 'start', 'duration', 'width', 'height', 'frameRate', 'codecs', 'cenc:default_KID')}
+
+
+def _log_period_changes(key: str, url: str, mpd: str) -> None:
+    """DEBUG only. Logs a one-line summary per Period (id, start, duration,
+    own BaseURL, video size/fps/codec, default_KID) whenever the Period list or
+    the stream session changes, not on every poll. For ad-break freezes: shows
+    whether ads switch resolution, codec or key, and whether a re-resolve hands
+    back a different Period layout."""
+    try:
+        periods = []
+        for m in _PERIOD_RE.finditer(mpd):
+            blk = m.group(0)
+            tag = blk[:blk.index('>') + 1]
+            get = lambda pat, text: (_ATTR_RES[pat].search(text) or [None, '-'])[1]  # noqa: E731
+            video = re.search(r'<AdaptationSet\b[^>]*(?:contentType="video"|mimeType="video)[^>]*>.*?</AdaptationSet>',
+                              blk, flags=re.DOTALL)
+            vtxt = video.group(0) if video else blk
+            reps = re.findall(r'<Representation\b[^>]*>', vtxt)
+            top = max(reps, key=lambda r: int(get('height', r) if get('height', r).isdigit() else 0)) if reps else ''
+            periods.append('%s start=%s dur=%s base=%s v=%sx%s@%s %s kid=%s' % (
+                get('id', tag), get('start', tag), get('duration', tag),
+                'own' if '<BaseURL' in blk else 'inherit',
+                get('width', top), get('height', top), get('frameRate', top), get('codecs', top),
+                (get('cenc:default_KID', blk) or '-')[:8]))
+        sess = re.sub(r'token=\d+_[0-9a-f]+', 'token=*', url)[-60:]
+        sig = (sess, tuple(p.split(' ', 1)[0] for p in periods))
+        if _PERIOD_SIG.get(key) == sig:
+            return
+        prev = _PERIOD_SIG.get(key)
+        _PERIOD_SIG[key] = sig
+        note = '' if not prev else (' (new session)' if prev[0] != sess else '')
+        logger.debug('[hulu_live] %s manifest: %d periods%s, url …%s', key, len(periods), note, sess)
+        for line in periods[-8:]:
+            logger.debug('[hulu_live] %s   %s', key, line)
+    except Exception as e:  # noqa: BLE001
+        logger.debug('[hulu_live] period summary failed: %s', e)
 
 
 LOGO_SIZE = '400x400'
