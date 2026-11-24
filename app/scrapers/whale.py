@@ -4,6 +4,9 @@ Uses the rlaxx/zeasn.tv API — no user credentials required.
 """
 from __future__ import annotations
 
+import base64
+import hashlib
+import hmac
 import logging
 import re
 import threading
@@ -20,10 +23,30 @@ from .category_utils import category_for_channel
 logger = logging.getLogger(__name__)
 
 _API_TOKEN      = "4ef13b5f3d2744e3b0a569feb8dde298"
-_AUTH_URL       = "https://rlaxx.zeasn.tv/livetv/api/v1/auth/access"
-_CHANNELS_URL   = "https://rlaxx.zeasn.tv/livetv/api/device/browser/v1/category/channels"
-_EPG_URL        = "https://rlaxx.zeasn.tv/livetv/api/device/browser/v1/epg"
-_EPG_DETAIL_URL = "https://rlaxx.zeasn.tv/livetv/api/device/browser/v1/epg/detail"
+_API_BASE       = "https://rlaxx.zeasn.tv/livetv"
+_AUTH_PATH      = "/api/device/v2/auth/access"
+_CHANNELS_PATH  = "/api/device/v2/browser/category/channels"
+_EPG_PATH       = "/api/device/v2/browser/epg"
+_EPG_DETAIL_PATH = "/api/device/v2/browser/epg/detail"
+_AUTH_URL       = _API_BASE + _AUTH_PATH
+_CHANNELS_URL   = _API_BASE + _CHANNELS_PATH
+_EPG_URL        = _API_BASE + _EPG_PATH
+_EPG_DETAIL_URL = _API_BASE + _EPG_DETAIL_PATH
+
+# The v2 API (2026-11) wants a signed `authorization` header on every call:
+# accessKey:base64(HMAC-SHA1("/livetv" + path + ts, secretKey)):ts. These keys
+# are the ones the public watch.whaletvplus.com web player sends itself.
+_ACCESS_KEY = "12dd64aa233691458793d0e026178f45f6"
+_SECRET_KEY = "1161280c2d031447e19ec14aa29a689713"
+
+
+def _signed_headers(path: str, token: str | None = None) -> dict:
+    ts = str(int(time.time() * 1000))
+    mac = hmac.new(_SECRET_KEY.encode(), f"/livetv{path}{ts}".encode(), hashlib.sha1).digest()
+    h = {"authorization": f"{_ACCESS_KEY}:{base64.b64encode(mac).decode()}:{ts}"}
+    if token:
+        h["token"] = token
+    return h
 _LOGO_BASE      = "https://d3b6luslimvglo.cloudfront.net/images/79/rlaxximages/channels-rescaled/icon-white"
 
 _CHANNEL_SCHEME = "whale://"
@@ -131,6 +154,7 @@ class WhaleScraper(BaseScraper):
                 r = self.session.get(
                     _AUTH_URL,
                     params={"uuid": "1", "apiToken": _API_TOKEN, "langCode": "en"},
+                    headers=_signed_headers(_AUTH_PATH),
                     timeout=15,
                 )
                 r.raise_for_status()
@@ -157,7 +181,7 @@ class WhaleScraper(BaseScraper):
             r = self.session.get(
                 _CHANNELS_URL,
                 params={"langCode": "en", "countryCode": "US"},
-                headers={"token": token},
+                headers=_signed_headers(_CHANNELS_PATH, token),
                 timeout=20,
             )
             r.raise_for_status()
@@ -255,7 +279,7 @@ class WhaleScraper(BaseScraper):
             try:
                 r = self.session.get(
                     f"{_EPG_DETAIL_URL}/{prgch_id}",
-                    headers={"token": token},
+                    headers=_signed_headers(f"{_EPG_DETAIL_PATH}/{prgch_id}", token),
                     timeout=15,
                 )
                 if r.status_code == 200:
@@ -339,7 +363,7 @@ class WhaleScraper(BaseScraper):
             url = (f"{_EPG_URL}?channelIds={','.join(batch)}"
                    f"&startTime={start_ms}&endTime={end_ms}&langCode=en&countryCode=US")
             try:
-                r = self.session.get(url, headers={"token": token}, timeout=30)
+                r = self.session.get(url, headers=_signed_headers(_EPG_PATH, token), timeout=30)
                 r.raise_for_status()
                 batch_data = r.json()
                 all_ch_rows.extend(batch_data.get("data") or [])
