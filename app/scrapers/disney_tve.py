@@ -369,7 +369,17 @@ class DisneyTVEScraper(MvpdCooldownMixin, BaseScraper):
     def audit_resolve(self, raw_url: str) -> str:
         # Validate entitlement, then hand back the opaque URL so the audit skips
         # manifest inspection (the CENC markers live in the variant playlists).
-        self.resolve(raw_url)
+        try:
+            self.resolve(raw_url)
+        except RuntimeError as exc:
+            # Adobe/the TV provider answering "denied" at playback is a definite no
+            # for this account, same as not-entitled. Only the audit treats it that
+            # way: at play time a single denial can be transient, and disabling a
+            # channel on one failed play is the flapping we avoid. The audit
+            # re-enables the channel when the denial clears.
+            if 'adobe-pass-failed-denied' in str(exc):
+                raise TVENotAuthorizedError(f'Disney TVE: your TV provider denied access ({exc})') from exc
+            raise
         return raw_url
 
     def resolve(self, raw_url: str) -> str:

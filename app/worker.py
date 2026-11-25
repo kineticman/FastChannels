@@ -821,6 +821,23 @@ def _active_bridge_label(source_name: str) -> str:
     return active_bridge_label(source_name)
 
 
+# disable_reason values FastChannels sets itself when a stream stops working.
+# When the audit later finds the stream working again, both are undone. A channel
+# the user disabled by hand has no reason and is_active still True, so it is
+# never touched here.
+_AUTO_RECOVERABLE_REASONS = ('Dead', 'NotAuthorized')
+
+
+def _reactivate_recovered(ch) -> None:
+    """Undo an automatic disable once the audit sees the stream work again."""
+    if ch.disable_reason in _AUTO_RECOVERABLE_REASONS:
+        ch.is_enabled = True
+    if not ch.is_active:
+        ch.is_active = True
+        ch.disable_reason = None
+        logger.info('[audit] re-activated previously disabled channel: %s', ch.name)
+
+
 def run_stream_audit(source_name: str, scope: str = 'linear'):
     """
     Stream Audit — resolves selected channels (active and previously dead/VOD) via
@@ -1203,12 +1220,7 @@ def run_stream_audit(source_name: str, scope: str = 'linear'):
                     consecutive_errors = 0
                     consecutive_skipped_403 = 0
                     consecutive_transient_errors = 0
-                    if ch.disable_reason == 'NotAuthorized':
-                        ch.is_enabled = True
-                    if not ch.is_active:
-                        ch.is_active = True
-                        ch.disable_reason = None
-                        logger.info('[audit] re-activated previously dead channel: %s', ch.name)
+                    _reactivate_recovered(ch)
                     # Opaque-URL scrapers (stirr/xumo/roku/localnow/plex) confirm
                     # liveness without fetching the manifest, so stream_info (the
                     # resolution/codec badge) would otherwise never be populated by an
@@ -1424,12 +1436,7 @@ def run_stream_audit(source_name: str, scope: str = 'linear'):
                         # re-activate if it was previously dead.
                         if getattr(ch, 'requires_drm_bridge', False):
                             ch.requires_drm_bridge = False
-                        if ch.disable_reason == 'NotAuthorized':
-                            ch.is_enabled = True
-                        if not ch.is_active:
-                            ch.is_active = True
-                            ch.disable_reason = None
-                            logger.info('[audit] re-activated previously dead channel: %s', ch.name)
+                        _reactivate_recovered(ch)
                     continue   # DASH — skip HLS checks below
 
                 # EXT-X-KEY only appears in media playlists, not master playlists.
@@ -1525,12 +1532,7 @@ def run_stream_audit(source_name: str, scope: str = 'linear'):
                     if getattr(ch, 'requires_drm_bridge', False):
                         ch.requires_drm_bridge = False
                         logger.info('[audit] DRM-bridge cleared (now clear HLS): %s', ch.name)
-                    if ch.disable_reason == 'NotAuthorized':
-                        ch.is_enabled = True
-                    if not ch.is_active:
-                        ch.is_active = True
-                        ch.disable_reason = None
-                        logger.info('[audit] re-activated previously dead channel: %s', ch.name)
+                    _reactivate_recovered(ch)
 
             except Exception as e:
                 if _is_transient_network_error(e):
@@ -1747,11 +1749,7 @@ def run_stream_audit_recheck(source_name: str, channel_ids: list):
                     continue
 
                 # Live — re-enable if it was previously flagged
-                if ch.disable_reason == 'NotAuthorized':
-                    ch.is_enabled = True
-                if not ch.is_active:
-                    ch.is_active = True
-                    ch.disable_reason = None
+                _reactivate_recovered(ch)
                 recheck_results[ch.id] = None  # ok
 
             except Exception as e:
