@@ -2316,6 +2316,7 @@
     let _auditModalPollTimer  = null;
     let _auditModalGrace      = 0;
     const _lastRecheckIds     = {};
+    const _lastRecheckAuthIds = {};
     const _auditScopeBySource = {};
     const _auditEventCount    = {};
 
@@ -2487,6 +2488,7 @@
           html += renderGroup('Skipped — not checked', skipped, false);
           html += `</div>`;
           _lastRecheckIds[sourceId] = limited.map(c => c.id).filter(Boolean);
+          _lastRecheckAuthIds[sourceId] = unauthorized.map(c => c.id).filter(Boolean);
         } else if (!result) {
           html += `<div class="audit-no-results">No audit has been run yet. Choose which channels to check below.</div>`;
         } else if (result && result.channel_count === 0) {
@@ -2506,9 +2508,11 @@
       }
 
       const recheckIds = _lastRecheckIds[sourceId] || [];
+      const recheckAuthIds = _lastRecheckAuthIds[sourceId] || [];
       html += `
         <div class="audit-modal-actions">
           ${!isRunning && recheckIds.length ? `<button class="btn btn-audit" onclick="recheckRateLimited(${Number(sourceId)})">Recheck Rate-limited (${recheckIds.length})</button>` : ''}
+          ${!isRunning && recheckAuthIds.length ? `<button class="btn btn-audit" onclick="recheckRateLimited(${Number(sourceId)}, 'auth')" title="Check only the channels the account was not entitled to, and turn on any that work again">Recheck Not authorized (${recheckAuthIds.length})</button>` : ''}
           ${!isRunning ? `<button class="btn btn-audit" onclick="runAudit(${Number(sourceId)})">${result ? 'Run Audit Again' : 'Run Audit'}</button>` : ''}
           <button class="btn-cancel-modal" onclick="_closeAuditModal()">Close</button>
         </div>`;
@@ -2541,8 +2545,8 @@
       } catch (e) { _pollAuditModal(); }
     }
 
-    async function recheckRateLimited(sourceId) {
-      const ids = _lastRecheckIds[sourceId] || [];
+    async function recheckRateLimited(sourceId, kind) {
+      const ids = (kind === 'auth' ? _lastRecheckAuthIds : _lastRecheckIds)[sourceId] || [];
       if (!ids.length) return;
       const content = document.getElementById('audit-modal-content');
       if (!content) return;

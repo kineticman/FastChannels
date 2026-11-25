@@ -1716,6 +1716,15 @@ def run_stream_audit_recheck(source_name: str, channel_ids: list):
                     _rc_progress(i, total)
                     continue
 
+                if not resolved_url or not resolved_url.startswith('http'):
+                    # Opaque-URL scrapers (the TVE sources, stirr/xumo/roku/...) confirm
+                    # liveness in resolve() itself, as the full audit treats them: there
+                    # is no manifest to fetch, so a resolve that returns is a pass.
+                    _reactivate_recovered(ch)
+                    recheck_results[ch.id] = None  # ok
+                    _rc_progress(i, total)
+                    continue
+
                 try:
                     r = sess.get(resolved_url, timeout=15, allow_redirects=True)
                 except Exception as req_exc:
