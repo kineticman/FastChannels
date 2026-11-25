@@ -287,6 +287,7 @@ def detect_encoder(uid: int, gid: int, setting: str) -> dict:
         drivers = [{}]
         if glob.glob('/usr/lib/*/dri/i965_drv_video.so'):
             drivers.append({'LIBVA_DRIVER_NAME': 'i965'})
+        first_err = ''
         for env in drivers:
             for low_power in ((True, False) if not env else (False,)):
                 ok, err = _try_encoder(uid, gid, [dgid], [
@@ -299,6 +300,9 @@ def detect_encoder(uid: int, gid: int, setting: str) -> dict:
                     logger.info('[capture] GPU encoding on %s (%s%s)', device, enc['driver'],
                                 ', low-power' if low_power else '')
                     return enc
+                first_err = first_err or err
+        # Report the default driver's failure; the i965 retry's is usually just "no such chip".
+        err = first_err or err
         reasons.append(f'GPU encode test failed: {_vaapi_reason(err)}')
         logger.warning('[capture] VA-API encode test failed on %s: %s', device, _vaapi_reason(err))
         logger.debug('[capture] VA-API encode test ffmpeg output:\n%s', err)
