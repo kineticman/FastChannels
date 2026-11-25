@@ -308,8 +308,9 @@ Capture needs.
   detected the GPU right away.
 - **Intel/AMD GPU (experimental, and not available on every PC).** Windows
   doesn't hand these GPUs to containers the way Linux does, so the Intel/AMD
-  setup above doesn't apply. It also needs Docker Desktop's VM to have a GPU
-  render node, and some setups don't. **Check first**: open PowerShell and run
+  setup above doesn't apply. **First, update WSL**: open PowerShell, run
+  `wsl --update`, then restart Docker Desktop. An old WSL is a known reason for
+  the GPU not showing up. Then check that Docker's VM has a GPU render node:
 
   ```powershell
   docker run --rm --privileged alpine ls /dev/dri
@@ -317,11 +318,8 @@ Capture needs.
 
   If it lists `renderD128` (or similar), carry on below. If it says `No such
   file or directory`, your VM has no render node, so Intel/AMD GPU encoding
-  isn't possible there. This is a known problem on Windows: Intel's own
-  support threads describe the same missing `/dev/dri` in WSL2, and Windows
-  exposes the GPU as `/dev/dxg` instead. Update Docker Desktop, run
-  `wsl --update` and restart Docker Desktop, then check again. Otherwise skip this and use the CPU, which
-  handles two tuners fine on most modern PCs.
+  isn't possible there yet. Check for a Docker Desktop update too. Otherwise
+  skip this and use the CPU, which handles two tuners fine on most modern PCs.
 
   If the node is there, add this to the FastChannels service and recreate the
   container:

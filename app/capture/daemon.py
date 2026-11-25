@@ -735,15 +735,16 @@ def _self_help(facts: list[dict], enc: dict, setting: str, on_wsl: bool, node: s
             ['Lower the number of tuners on this page, or give the container more RAM.'
              + (' On Docker Desktop: Settings → Resources (or .wslconfig: memory=).' if on_wsl else '')])
     if on_wsl and not node and not nvidia:
+        add('Intel or AMD card? Update WSL first',
+            ['In PowerShell run: wsl --update , then restart Docker Desktop. An old WSL is a known reason for the GPU not showing up.',
+             'Then run: docker run --rm --privileged alpine ls /dev/dri',
+             'If it lists renderD128, recreate the container with /dev/dxg, /dev/dri and the /usr/lib/wsl mount.',
+             'If it says "No such file or directory", also check for a Docker Desktop update. Until then Intel/AMD GPU '
+             'encoding is not possible there, and FastChannels keeps working on the CPU.',
+             'If the container refuses to start with a /dev/dri error, remove that line from your compose file.'])
         add('NVIDIA card? Use its own setup',
             ['NVIDIA GPUs do not need /dev/dxg or /dev/dri. Remove those lines, add this to the FastChannels service '
              'and recreate the container:'], _NVIDIA_COMPOSE_WSL)
-        add('Intel or AMD card? Check Docker\'s VM for a render node',
-            ['In PowerShell run: docker run --rm --privileged alpine ls /dev/dri',
-             'If that says "No such file or directory", Docker Desktop\'s VM has no render node and Intel/AMD GPU '
-             'encoding is not possible there. FastChannels keeps working on the CPU.',
-             'Try updating Docker Desktop, then run wsl --update in PowerShell and restart Docker Desktop.',
-             'If the container refuses to start with a /dev/dri error, remove that line from your compose file.'])
     elif on_wsl and not wsl_libs_present():
         add('Mount the Windows GPU libraries', ['Add this under volumes: for the FastChannels service and recreate the container:'],
             '      - /usr/lib/wsl:/usr/lib/wsl:ro')
@@ -803,8 +804,8 @@ def _gpu_hint(enc: dict, in_use: dict, setting: str, on_wsl: bool, node: str | N
         return ('An NVIDIA driver is in the Docker VM but the container did not get the GPU. Use the NVIDIA steps '
                 '(deploy reservation with driver nvidia, plus NVIDIA_DRIVER_CAPABILITIES=compute,video,utility).')
     if on_wsl and not node:
-        return ('Docker Desktop\'s VM has no /dev/dri render node, so Intel/AMD GPU encoding isn\'t possible there. '
-                'Remove the "/dev/dri" line (Docker refuses to start with it) and use the CPU. NVIDIA cards work on '
+        return ('Docker Desktop\'s VM has no /dev/dri render node. For Intel/AMD, first run "wsl --update" and restart '
+                'Docker Desktop. If it is still missing: remove the "/dev/dri" line (Docker refuses to start with it) and use the CPU. NVIDIA cards work on '
                 'Windows without /dev/dxg or /dev/dri: see the NVIDIA steps.')
     if not node and not nvidia and not on_wsl:
         return 'No GPU reached the container. Add the GPU lines for your setup (see "How?" on this page), then recreate the container.'
