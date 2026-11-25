@@ -658,7 +658,7 @@ def fill_detail_cache() -> tuple[int, int, bool]:
                     channel_id=cid, start_time=datetime.fromtimestamp(start_ts, tz=timezone.utc),
                 ).update(vals, synchronize_session=False)
                 if not n:
-                    _debug("row write: no program row for channel %s at %s (replaced by a scrape?)",
+                    _debug("row write: no program row yet for channel %s at %s (not saved by a scrape; the next scrape applies the cached detail)",
                            chl_id, datetime.fromtimestamp(start_ts, tz=timezone.utc).isoformat())
                 updated += n
         try:
