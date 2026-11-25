@@ -303,9 +303,23 @@ Capture needs.
   say *Using your GPU (NVIDIA)*. This was confirmed on Windows 11 with an RTX
   2070 Super: Built-in Capture installed Chrome, started two warm tuners and
   detected the GPU right away.
-- **Intel/AMD GPU (experimental).** Windows doesn't hand these GPUs to
-  containers the way Linux does, so the Intel/AMD setup above doesn't apply.
-  Instead, add this to the FastChannels service and recreate the container:
+- **Intel/AMD GPU (experimental, and not available on every PC).** Windows
+  doesn't hand these GPUs to containers the way Linux does, so the Intel/AMD
+  setup above doesn't apply. It also needs Docker Desktop's VM to have a GPU
+  render node, and some setups don't. **Check first**: open PowerShell and run
+
+  ```powershell
+  docker run --rm --privileged alpine ls /dev/dri
+  ```
+
+  If it lists `renderD128` (or similar), carry on below. If it says `No such
+  file or directory`, your VM has no render node, so Intel/AMD GPU encoding
+  isn't possible there. Update Docker Desktop, run `wsl --update` and restart
+  Docker Desktop, then check again. Otherwise skip this and use the CPU, which
+  handles two tuners fine on most modern PCs.
+
+  If the node is there, add this to the FastChannels service and recreate the
+  container:
 
   ```yaml
       devices:
@@ -362,6 +376,11 @@ Capture needs.
   This leaves out `/dev/dri`, so it starts on any Docker VM. Add the
   `- /dev/dri:/dev/dri` line under `devices:` only if the VM has a render
   node. If it doesn't, you get CPU encoding.
+- **If something doesn't work, run GPU diagnostics** (Bridge page, next to the
+  Encoder line). It lists what reached the container and what to try, and
+  **Copy report** gives you something to paste into a help post. Please also say
+  how you run FastChannels (compose, Portainer or `docker run`), your Docker
+  Desktop and Windows versions and your GPU model, since the report can't see those.
 - **Memory matters most.** Docker Desktop gets half of the PC's memory unless
   you change it, and each tuner needs about 0.8 GB on top of FastChannels
   itself. The test PC had 4 GB, so Docker got under 2 GB. It ran out of memory
