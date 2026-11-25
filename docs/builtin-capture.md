@@ -299,7 +299,10 @@ Capture needs.
         - NVIDIA_DRIVER_CAPABILITIES=compute,video,utility
   ```
 
-  Don't add `/dev/dxg` or `/dev/dri` for NVIDIA. The **Encoder** line should
+  Don't add `/dev/dxg` or `/dev/dri` for NVIDIA. Docker's own guide to
+  [GPU support in Docker Desktop for Windows](https://docs.docker.com/desktop/features/gpu/)
+  lists the requirements (a current NVIDIA driver, the WSL2 backend and
+  `wsl --update`) and has a "Validate GPU support" step you can run first. The **Encoder** line should
   say *Using your GPU (NVIDIA)*. This was confirmed on Windows 11 with an RTX
   2070 Super: Built-in Capture installed Chrome, started two warm tuners and
   detected the GPU right away.
@@ -314,8 +317,10 @@ Capture needs.
 
   If it lists `renderD128` (or similar), carry on below. If it says `No such
   file or directory`, your VM has no render node, so Intel/AMD GPU encoding
-  isn't possible there. Update Docker Desktop, run `wsl --update` and restart
-  Docker Desktop, then check again. Otherwise skip this and use the CPU, which
+  isn't possible there. This is a known problem on Windows: Intel's own
+  support threads describe the same missing `/dev/dri` in WSL2, and Windows
+  exposes the GPU as `/dev/dxg` instead. Update Docker Desktop, run
+  `wsl --update` and restart Docker Desktop, then check again. Otherwise skip this and use the CPU, which
   handles two tuners fine on most modern PCs.
 
   If the node is there, add this to the FastChannels service and recreate the
