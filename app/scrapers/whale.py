@@ -73,6 +73,23 @@ _RATE_WINDOW     = 30.5
 _DETAIL_DEADLINE = 150     # s of wall-clock spent on enrichment per scrape
 _rate_lock  = threading.Lock()
 _rate_times: list[float] = []
+_throttle_waited = [0.0]   # total seconds spent waiting in _throttle() (debug summary)
+_dbg = {'on': False}       # per-run debug flag, see _debug_start()
+
+
+def _debug_start() -> None:
+    """Resolve the debug flag once per run (FC_WHALE_DEBUG / FC_DEBUG / the
+    Settings toggle; see app/debug_flag.py). Fails closed outside an app context."""
+    try:
+        from app.debug_flag import debug_logging_enabled
+        _dbg['on'] = debug_logging_enabled('FC_WHALE_DEBUG')
+    except Exception:
+        _dbg['on'] = False
+
+
+def _debug(msg: str, *args) -> None:
+    if _dbg['on']:
+        logger.info('[whale][debug] ' + msg, *args)
 
 
 # ── Detail cache ──────────────────────────────────────────────────────────────
@@ -150,6 +167,7 @@ def _throttle() -> None:
                 _rate_times.append(now)
                 return
             wait = _RATE_WINDOW - (now - _rate_times[0])
+        _throttle_waited[0] += max(wait, 0.05)
         time.sleep(max(wait, 0.05))
 
 _HEADERS = {
@@ -378,6 +396,7 @@ class WhaleScraper(BaseScraper):
                     return "ok", _slim_detail(r.json().get("data") or {})
                 except Exception:
                     return "error", None
+            _debug("detail %s -> HTTP %d (attempt %d)", prgch_id, r.status_code, attempt + 1)
             if r.status_code == 429 and attempt == 0:
                 time.sleep(_RATE_WINDOW)   # window miscounted (other traffic): wait it out, retry once
                 continue
@@ -429,6 +448,9 @@ class WhaleScraper(BaseScraper):
         if not token:
             return []
 
+        _debug_start()
+        _t_epg = time.monotonic()
+        _throttle_waited[0] = 0.0
         chl_ids = [str(ch.source_channel_id) for ch in channels]
         total_channels = len(chl_ids)
         now_utc  = datetime.now(timezone.utc)
@@ -452,6 +474,7 @@ class WhaleScraper(BaseScraper):
             if self._progress_cb:
                 self._progress_cb('epg', min(i + _EPG_BATCH_SIZE, total_channels), total_channels)
 
+        _debug("EPG batches: %d channel rows in %.1fs", len(all_ch_rows), time.monotonic() - _t_epg)
         with _current_prog_desc_lock:
             prog_descs = dict(_current_prog_desc)
 
@@ -501,6 +524,8 @@ class WhaleScraper(BaseScraper):
                       if st <= now_ts and pid not in cached]
             seen: set[str] = set()
             airing = [a for a in airing if not (a[1] in seen or seen.add(a[1]))]
+            _debug("%d airings (%d distinct programs), %d already cached, %d airing-now to fetch",
+                   len(rows), len({r[1] for r in rows}), len(cached), len(airing))
             have = set(cached) | self._enrich_airing(airing, token, con, total_channels, total_channels)
 
             # Queue the rest of the next 24 h for the background fill job.
@@ -519,6 +544,8 @@ class WhaleScraper(BaseScraper):
                 con.executemany("DELETE FROM detail WHERE prog_id=?", [(p,) for p in old])
             con.commit()
             n_pending = con.execute("SELECT COUNT(*) FROM pending").fetchone()[0]
+            _debug("cache pruned %d stale entries; throttle waited %.1fs; epg phase %.1fs",
+                   len(old) if live_ids else 0, _throttle_waited[0], time.monotonic() - _t_epg)
             con.close()
             logger.info("[whale] detail cache: %d programs applied, %d queued for background fill",
                         len(cached), n_pending)
@@ -568,9 +595,11 @@ def fill_detail_cache() -> tuple[int, int, bool]:
     from app.extensions import db
     from app.models import Source, Channel, Program
 
+    _debug_start()
     con = _cache_conn()
     source = Source.query.filter_by(name="whale").first()
     if not source or not source.is_enabled:
+        _debug("fill skipped: whale source %s", "missing" if not source else "disabled")
         con.execute("DELETE FROM pending")
         con.commit()
         con.close()
@@ -584,6 +613,8 @@ def fill_detail_cache() -> tuple[int, int, bool]:
     todo = [(pid, g) for pid, g in groups.items() if pid not in have]
     # Programs already cached but still pending only need their rows written.
     todo_rows = [(pid, g, _cache_get(con, [pid])[pid]) for pid, g in groups.items() if pid in have]
+    _debug("fill slice start: %d pending airings, %d distinct programs, %d to fetch, %d cached (row write only)",
+           len(pend), len(groups), len(todo), len(todo_rows))
     if not todo and not todo_rows:
         con.close()
         return 0, 0, False
@@ -621,10 +652,15 @@ def fill_detail_cache() -> tuple[int, int, bool]:
             for _prgch, chl_id, start_ts in g:
                 cid = chan_ids.get(chl_id)
                 if cid is None:
+                    _debug("row write: unknown channel %s", chl_id)
                     continue
-                updated += Program.query.filter_by(
+                n = Program.query.filter_by(
                     channel_id=cid, start_time=datetime.fromtimestamp(start_ts, tz=timezone.utc),
                 ).update(vals, synchronize_session=False)
+                if not n:
+                    _debug("row write: no program row for channel %s at %s (replaced by a scrape?)",
+                           chl_id, datetime.fromtimestamp(start_ts, tz=timezone.utc).isoformat())
+                updated += n
         try:
             db.session.commit()
         except OperationalError as exc:
@@ -656,6 +692,7 @@ def fill_detail_cache() -> tuple[int, int, bool]:
         return item, st, d
 
     fetched = errors = 0
+    t_slice = time.monotonic()
     batch: list = []
     with ThreadPoolExecutor(max_workers=4) as pool:
         for (pid, g), st, d in pool.map(fetch, todo):
@@ -663,6 +700,10 @@ def fill_detail_cache() -> tuple[int, int, bool]:
                 _cache_put(con, pid, d)
                 batch.append((pid, g, d))
                 fetched += 1
+                if fetched % 25 == 0:
+                    el = time.monotonic() - t_slice
+                    _debug("fill progress: %d/%d fetched, %.1f req/s, %d errors",
+                           fetched, len(todo), fetched / el if el else 0, errors)
             elif st == "error":
                 errors += 1
             if len(batch) >= 100:
@@ -680,4 +721,10 @@ def fill_detail_cache() -> tuple[int, int, bool]:
     con.close()
     logger.info("[whale] detail fill: %d fetched, %d errors, %d program rows updated, %d still pending%s",
                 fetched, errors, updated, left, " (rate-limited)" if stop.is_set() else "")
+    _debug("fill slice end: %.1fs, reason=%s, throttle waited %.1fs", time.monotonic() - t_slice,
+           "rate-limited" if stop.is_set() else ("drained" if not left else "deadline"), _throttle_waited[0])
+    if stop.is_set():
+        logger.info("[whale] detail fill stopped by the rate limit; %d pending, the 3-hourly job resumes it", left)
+    elif not left:
+        logger.info("[whale] detail fill complete: every queued program has its detail")
     return updated, left, stop.is_set()
