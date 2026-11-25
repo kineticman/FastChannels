@@ -22,6 +22,7 @@ CPU priority than FastChannels itself.
 """
 from __future__ import annotations
 
+import glob
 import json
 import logging
 import os
@@ -281,17 +282,23 @@ def detect_encoder(uid: int, gid: int, setting: str) -> dict:
         reasons.append(why)
     elif device:
         dgid = os.stat(device).st_gid
-        for low_power in (True, False):
-            ok, err = _try_encoder(uid, gid, [dgid], [
-                '-vaapi_device', device, '-vf', 'format=nv12,hwupload', '-c:v', 'h264_vaapi',
-                *(['-low_power', '1'] if low_power else []), '-b:v', '4000k'])
-            if ok:
-                driver = _driver_name(err)
-                enc = {'kind': 'vaapi', 'device': device, 'gid': dgid, 'low_power': low_power,
-                       'driver': driver or 'VA-API', 'reason': ''}
-                logger.info('[capture] GPU encoding on %s (%s%s)', device, enc['driver'],
-                            ', low-power' if low_power else '')
-                return enc
+        # Default driver (iHD / Mesa) first; then the legacy i965 driver, which still
+        # encodes on Kaby Lake and older Intel where iHD's encoder fails or is absent.
+        drivers = [{}]
+        if glob.glob('/usr/lib/*/dri/i965_drv_video.so'):
+            drivers.append({'LIBVA_DRIVER_NAME': 'i965'})
+        for env in drivers:
+            for low_power in ((True, False) if not env else (False,)):
+                ok, err = _try_encoder(uid, gid, [dgid], [
+                    '-vaapi_device', device, '-vf', 'format=nv12,hwupload', '-c:v', 'h264_vaapi',
+                    *(['-low_power', '1'] if low_power else []), '-b:v', '4000k'], extra_env=env)
+                if ok:
+                    driver = _driver_name(err)
+                    enc = {'kind': 'vaapi', 'device': device, 'gid': dgid, 'low_power': low_power,
+                           'driver': driver or 'VA-API', 'reason': '', 'env': dict(env)}
+                    logger.info('[capture] GPU encoding on %s (%s%s)', device, enc['driver'],
+                                ', low-power' if low_power else '')
+                    return enc
         reasons.append(f'GPU encode test failed: {_vaapi_reason(err)}')
         logger.warning('[capture] VA-API encode test failed on %s: %s', device, _vaapi_reason(err))
         logger.debug('[capture] VA-API encode test ffmpeg output:\n%s', err)

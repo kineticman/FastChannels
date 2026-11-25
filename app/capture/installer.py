@@ -35,10 +35,12 @@ GPU_PACKAGES = ('intel-media-va-driver', 'mesa-va-drivers')
 # to encode (see WSL_MESA_MIN_MAJOR); taken from <codename>-backports when the
 # base image's Mesa is older.
 WSL_GPU_PACKAGES = ('mesa-va-drivers', 'libva2')
-# Only for the GPU diagnostics report (lists the encoders the GPU offers). Never
+# vainfo is only for the GPU diagnostics report (lists the encoders the GPU offers);
+# i965-va-driver is the fallback encoder for Intel chips iHD can't encode on
+# (Kaby Lake and older; detect_encoder tries it second). Never
 # required: installed best-effort alongside the drivers, and not part of
 # gpu_drivers_present(), so existing installs don't get pushed into a reinstall.
-GPU_TOOLS = ('vainfo',)
+GPU_TOOLS = ('vainfo', 'i965-va-driver')
 BACKPORTS_LIST = '/etc/apt/sources.list.d/fastchannels-capture-backports.list'
 CAPTURE_USER = 'fccapture'
 
