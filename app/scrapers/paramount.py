@@ -759,8 +759,33 @@ class ParamountScraper(BaseScraper):
         if not auth:
             raise RuntimeError('Paramount+: this match isn\'t streaming yet or isn\'t available to this account')
         _KEY_TOKENS[content_id] = (auth, _jwt_exp(auth) or time.time() + 3600)
-        video = (data.get('listing') or {}).get('contentCANVideo') or {}
-        return auth, video.get('daistreamKey') or (data.get('metaData') or {}).get('daistreamKey')
+        listing = data.get('listing') or {}
+        video = listing.get('contentCANVideo') or {}
+        key = video.get('daistreamKey') or (data.get('metaData') or {}).get('daistreamKey')
+        # Simultaneous kickoffs in one league were reported tuning to the same
+        # match. If metadata.json answers with another match's listing, don't
+        # trust its stream key; take the one from this match's own listing.
+        got = listing.get('videoContentId') or listing.get('contentId')
+        if got and got != content_id:
+            logger.warning('[paramount] metadata for %s returned listing %s (%s); using listings feed',
+                           content_id, got, listing.get('title'))
+            key = self._listing_stream_key(content_id, slug)
+        else:
+            logger.info('[paramount] %s metadata listing=%s title=%r dai=%s', content_id, got,
+                        listing.get('title'), (key or '')[:12])
+        return auth, key
+
+    def _listing_stream_key(self, content_id: str, slug: str) -> str | None:
+        try:
+            items = self._get(f'live/channels/{slug}/listings.json', rows=100, start=0,
+                              showListing='true').get('listing') or []
+        except requests.RequestException as exc:
+            logger.warning('[paramount] %s listings unavailable: %s', slug, exc)
+            return None
+        for item in items:
+            if item.get('videoContentId') == content_id:
+                return (item.get('contentCANVideo') or {}).get('daistreamKey')
+        return None
 
     def key_authorization(self, raw_url: str, force: bool = False) -> str:
         """The key server's Authorization header for this match, cached until near expiry."""
