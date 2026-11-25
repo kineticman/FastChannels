@@ -2332,7 +2332,8 @@ def _enqueue_whale_detail_fill(_continuation: bool = False) -> str:
             return 'active'
         q.enqueue('app.worker.run_whale_detail_fill', job_timeout=600,
                   job_id=f'whale-detail-fill-{int(time.time())}')
-        logger.info('[whale] enqueued detail fill')
+        if not _continuation:   # per-slice results are logged by the fill itself
+            logger.info('[whale] enqueued detail fill')
         return 'queued'
     except Exception as exc:
         logger.warning('[whale] could not enqueue detail fill: %s', exc)
