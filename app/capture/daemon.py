@@ -213,6 +213,19 @@ def _nvenc_reason(stderr: str) -> str:
     return _last_line(stderr)
 
 
+def _vaapi_reason(stderr: str) -> str:
+    """Why a VA-API test failed. FFmpeg's last line is a generic "Conversion failed!";
+    the cause (driver init, unsupported profile/entrypoint, no device) is earlier."""
+    lines = [l.strip() for l in (stderr or '').splitlines()]
+    for key in ('va_openDriver', 'vaInitialize', 'Failed to initialise VAAPI', 'No VA display',
+                'Failed to open', 'Permission denied', 'driver init failed', 'Error',
+                'Failed to create', 'not supported', 'No usable encoding'):
+        hit = next((l for l in lines if key in l), None)
+        if hit:
+            return hit[:200]
+    return _last_line(stderr)
+
+
 def detect_encoder(uid: int, gid: int, setting: str) -> dict:
     """GPU encoding when a GPU was passed into the container and it really works for
     the capture user, else x264 with the reason shown on the Bridge page:
@@ -250,8 +263,9 @@ def detect_encoder(uid: int, gid: int, setting: str) -> dict:
                 logger.info('[capture] GPU encoding on %s (%s%s)', device, enc['driver'],
                             ', low-power' if low_power else '')
                 return enc
-        reasons.append(f'GPU encode test failed: {_last_line(err)}')
-        logger.warning('[capture] VA-API encode test failed on %s: %s', device, _last_line(err))
+        reasons.append(f'GPU encode test failed: {_vaapi_reason(err)}')
+        logger.warning('[capture] VA-API encode test failed on %s: %s', device, _vaapi_reason(err))
+        logger.debug('[capture] VA-API encode test ffmpeg output:\n%s', err)
     if nvidia_present():
         groups = _nvidia_gids()
         ok, err = _try_encoder(uid, gid, groups, ['-pix_fmt', 'bgr0', '-c:v', 'h264_nvenc', '-b:v', '4000k'])

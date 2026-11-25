@@ -9,7 +9,8 @@
   - /dev/dxg:/dev/dxg
   - /dev/dri:/dev/dri
 volumes:
-  - /usr/lib/wsl:/usr/lib/wsl:ro</pre></div>
+  - /usr/lib/wsl:/usr/lib/wsl:ro</pre>
+                If Docker says <code>/dev/dri</code> doesn't exist, your Docker VM has no render node: drop that line and capture will use the CPU.</div>
               <div style="margin-top:0.6rem"><strong>NVIDIA</strong> (experimental): install the NVIDIA Container Toolkit on the server, then add:
                 <pre style="margin:0.4rem 0">runtime: nvidia
 environment:
