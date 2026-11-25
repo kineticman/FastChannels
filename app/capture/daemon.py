@@ -615,6 +615,20 @@ def diagnose_gpu(uid: int, gid: int) -> dict:
                             break
         finally:
             _trace = None
+    # A failed attempt that a later one made up for (AMD has no low-power engine,
+    # so its low-power test always fails and the standard one passes) isn't a problem:
+    # say so, so it doesn't read as the GPU failing.
+    # Only the encoder actually in use counts, and only attempts on its device.
+    dev_flag = f"-vaapi_device {enc.get('device')} "
+    ok_at = [i for i, t in enumerate(trace) if t['ok'] and t['test'].startswith(dev_flag)]
+    for i, t in enumerate(trace):
+        if enc.get('kind') == 'vaapi' and not t['ok'] and t['test'].startswith(dev_flag) \
+                and any(j > i for j in ok_at):
+            t['superseded'] = True
+            t['note'] = ("This GPU doesn't offer the low-power encoder, so FastChannels uses "
+                         'the standard one (the next passing test). Nothing to fix.'
+                         if '-low_power' in t['test'] else
+                         'Did not work, but a later test passed and is used instead. Nothing to fix.')
 
     vainfo = _vainfo_report(uid, gid, node, on_wsl)
     if vainfo:

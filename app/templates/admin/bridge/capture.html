@@ -507,12 +507,15 @@ environment:
       (d.tests || []).forEach((t) => {
         const det = el('details', null, null);
         det.style.cssText = 'margin:0.4rem 0';
-        det.open = !t.ok || Boolean(t.show);
-        det.appendChild(el('summary', null, (t.ok ? '✓ ' : '✕ ') + t.test));
+        det.open = (!t.ok && !t.superseded) || Boolean(t.show);
+        det.appendChild(el('summary', null, (t.ok ? '✓ ' : t.superseded ? '– ' : '✕ ') + t.test));
+        if (t.note) det.appendChild(el('div', 'help', t.note));
         const pre = el('pre', null, t.output || '(no output)');
         pre.style.cssText = 'font-size:0.75rem;max-height:14rem;overflow:auto;white-space:pre-wrap;margin:0.4rem 0';
         det.appendChild(pre); body.appendChild(det);
-        lines.push(`${t.ok ? 'OK  ' : 'FAIL'} ${t.test}`, ...(t.ok && !t.show ? [] : [t.output || '(no output)']));
+        lines.push(`${t.ok ? 'OK  ' : t.superseded ? 'SKIP' : 'FAIL'} ${t.test}`,
+          ...(t.note ? [t.note] : []),
+          ...((t.ok || t.superseded) && !t.show ? [] : [t.output || '(no output)']));
       });
       gpuReportText = lines.join('\n');
       $('capture-gpu-copy').disabled = false;
