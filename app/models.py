@@ -207,9 +207,10 @@ class TVEAccount(db.Model):
             'last_auth_at': self.last_auth_at.isoformat() if self.last_auth_at else None,
             'configured': bool(self.is_enabled and self.has_credentials()),
             'xfinity_cookie_jar_captured_at': cfg.get('xfinity_cookie_jar_captured_at'),
-            # How the network sign-ins do the provider login: 'browser' (our
-            # Camoufox fills it in) or 'phone' (a link the user opens).
-            'signin_method': 'phone' if cfg.get('signin_method') == 'phone' else 'browser',
+            # How the network sign-ins do the provider login: 'phone' (a link the
+            # user opens, the default) or 'browser' (our Camoufox fills it in,
+            # only when the user chose it).
+            'signin_method': 'browser' if cfg.get('signin_method') == 'browser' else 'phone',
         }
 
     def __repr__(self):

@@ -2190,7 +2190,7 @@ def settings():
                                'username': '',
                                'password_configured': False,
                                'is_enabled': False,
-                               'signin_method': 'browser',
+                               'signin_method': 'phone',
                                'last_auth_status': None,
                                'last_auth_message': None,
                                'last_auth_at': None,

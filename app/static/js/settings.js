@@ -3145,7 +3145,7 @@ if (document.getElementById('local-backups-list')) loadLatestBackup();
 
 function _tveSigninMethod() {
   const el = document.getElementById('tve-signin-method');
-  return (el && el.dataset.method) || 'browser';
+  return (el && el.dataset.method) || 'phone';
 }
 
 async function saveTveSigninMethod(method) {
