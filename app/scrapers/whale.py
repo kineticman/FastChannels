@@ -8,7 +8,10 @@ import base64
 import hashlib
 import hmac
 import logging
+import json
+import os
 import re
+import sqlite3
 import threading
 import time
 import uuid
@@ -54,8 +57,100 @@ _TOKEN_TTL      = 82800   # 23 hr (API gives ~24 hr)
 _URL_CACHE_TTL  = 7200    # 2 hr between resolve() cache refreshes
 _EPG_DAYS           = 7
 _EPG_BATCH_SIZE     = 10   # channels per EPG request (matches website's batched approach)
-_EPG_DETAIL_HOURS   = 24   # enrich programs starting within this many hours
-_EPG_DETAIL_WORKERS = 15   # concurrent detail requests
+_EPG_DETAIL_WORKERS = 8    # concurrent detail requests
+# The v2 API rate-limits every endpoint to 100 requests per fixed 30 s window per
+# IP (HTTP 429, auth included; measured 2026-11-25). Detail is therefore fetched
+# only for what a guide shows first: the airing-now and up-next program of each
+# channel (~2 per channel), now-airing first, through a shared throttle that
+# stays under the limit and leaves headroom for play-time resolve().
+_DETAIL_HORIZON_H = 24    # background fill covers programs starting within this many hours
+_FILL_RATE        = 2.0   # background requests/s (the scrape's own throttle uses the rest)
+_FILL_DEADLINE    = 180   # s per fill slice; the worker re-enqueues for the rest so the
+                          # single maintenance worker is never held for long
+_CACHE_PATH = os.environ.get('FASTCHANNELS_WHALE_DETAIL_DB', '/data/cache/whale_detail.db')
+_RATE_LIMIT      = 90
+_RATE_WINDOW     = 30.5
+_DETAIL_DEADLINE = 150     # s of wall-clock spent on enrichment per scrape
+_rate_lock  = threading.Lock()
+_rate_times: list[float] = []
+
+
+# ── Detail cache ──────────────────────────────────────────────────────────────
+# Detail (description, poster, rating, episode info) belongs to the program
+# (`id`), not the airing (`prgchId`), and never changes, so it is cached forever
+# in a small SQLite file (~0.5 KB/program, <2 MB for a day of guide). The scrape
+# applies it to every airing for free; fill_detail_cache() fetches the rest.
+
+def _cache_conn() -> sqlite3.Connection:
+    os.makedirs(os.path.dirname(_CACHE_PATH), exist_ok=True)
+    con = sqlite3.connect(_CACHE_PATH, timeout=30)
+    con.execute("PRAGMA journal_mode=WAL")
+    con.execute("CREATE TABLE IF NOT EXISTS detail (prog_id TEXT PRIMARY KEY, body TEXT NOT NULL, fetched_at REAL NOT NULL)")
+    con.execute("CREATE TABLE IF NOT EXISTS pending (prgch_id TEXT PRIMARY KEY, prog_id TEXT NOT NULL, "
+                "chl_id TEXT NOT NULL, start_ts REAL NOT NULL)")
+    return con
+
+
+def _slim_detail(d: dict) -> dict:
+    images = d.get("images") or []
+    return {
+        "desc":   (d.get("prgDesc") or "").strip(),
+        "poster": ((images[0].get("pimgUrl") or "").strip() if images else ""),
+        "rating": (d.get("prgRating") or "").strip(),
+        "type":   (d.get("prgType") or "").upper(),
+        "series": (d.get("seriesTitle") or "").strip(),
+        "title":  (d.get("prgTitle") or "").strip(),
+        "season": d.get("seasonNumber"),
+        "ep":     d.get("episodeNumber"),
+    }
+
+
+def _apply_detail(prog: ProgramData, d: dict) -> None:
+    if d.get("desc"):
+        prog.description = d["desc"]
+    if d.get("poster"):
+        prog.poster_url = d["poster"]
+    if d.get("rating"):
+        prog.rating = d["rating"]
+    if d.get("type") == "EPISODE":
+        prog.program_type = "episode"
+        if d.get("series"):
+            prog.title = d["series"]
+            prog.episode_title = d.get("title") or None
+        try:
+            if d.get("season"):
+                prog.season = int(d["season"])
+            if d.get("ep"):
+                prog.episode = int(d["ep"])
+        except (ValueError, TypeError):
+            pass
+
+
+def _cache_get(con: sqlite3.Connection, prog_ids: list[str]) -> dict[str, dict]:
+    out: dict[str, dict] = {}
+    for i in range(0, len(prog_ids), 500):
+        chunk = prog_ids[i:i + 500]
+        q = ",".join("?" * len(chunk))
+        for pid, body in con.execute(f"SELECT prog_id, body FROM detail WHERE prog_id IN ({q})", chunk):
+            out[pid] = json.loads(body)
+    return out
+
+
+def _cache_put(con: sqlite3.Connection, prog_id: str, d: dict) -> None:
+    con.execute("INSERT OR REPLACE INTO detail VALUES (?,?,?)", (prog_id, json.dumps(d), time.time()))
+
+
+def _throttle() -> None:
+    """Block until a request slot is free in the current rate window."""
+    while True:
+        with _rate_lock:
+            now = time.monotonic()
+            _rate_times[:] = [t for t in _rate_times if now - t < _RATE_WINDOW]
+            if len(_rate_times) < _RATE_LIMIT:
+                _rate_times.append(now)
+                return
+            wait = _RATE_WINDOW - (now - _rate_times[0])
+        time.sleep(max(wait, 0.05))
 
 _HEADERS = {
     "User-Agent": (
@@ -269,78 +364,62 @@ class WhaleScraper(BaseScraper):
         logger.info("[whale] %d channels", len(channels))
         return channels
 
-    def _enrich_near_term(self, near_term: dict[str, ProgramData], token: str,
-                           progress_base: int = 0, progress_total: int | None = None) -> None:
-        """Call /epg/detail for near-term programs to add descriptions, posters, episode metadata."""
-        if not near_term:
-            return
-
-        def _fetch_one(prgch_id: str) -> tuple[str, dict | None]:
+    def _fetch_detail(self, prgch_id: str, token: str) -> tuple[str, dict | None]:
+        """One detail call. Returns (status, slim detail); status 'ok'|'limited'|'error'."""
+        path = f"{_EPG_DETAIL_PATH}/{prgch_id}"
+        for attempt in (0, 1):
+            _throttle()
             try:
-                r = self.session.get(
-                    f"{_EPG_DETAIL_URL}/{prgch_id}",
-                    headers=_signed_headers(f"{_EPG_DETAIL_PATH}/{prgch_id}", token),
-                    timeout=15,
-                )
-                if r.status_code == 200:
-                    return prgch_id, r.json().get("data") or {}
+                r = self.session.get(_API_BASE + path, headers=_signed_headers(path, token), timeout=15)
             except Exception:
-                pass
-            return prgch_id, None
+                return "error", None
+            if r.status_code == 200:
+                try:
+                    return "ok", _slim_detail(r.json().get("data") or {})
+                except Exception:
+                    return "error", None
+            if r.status_code == 429 and attempt == 0:
+                time.sleep(_RATE_WINDOW)   # window miscounted (other traffic): wait it out, retry once
+                continue
+            return ("limited" if r.status_code == 429 else "error"), None
+        return "error", None
 
-        total = progress_total if progress_total is not None else len(near_term)
-        completed_lock = threading.Lock()
-        completed = 0
-        enriched = errors = 0
+    def _enrich_airing(self, airing: list[tuple[str, str, ProgramData]], token: str,
+                       con: sqlite3.Connection, progress_base: int, total_channels: int) -> set[str]:
+        """Fetch + cache detail for programs airing now that aren't cached yet."""
+        got: set[str] = set()
+        if not airing:
+            return got
+        deadline = time.monotonic() + _DETAIL_DEADLINE
+        total = progress_base + len(airing)
+        done = enriched = errors = 0
+        limited = threading.Event()
+
+        def work(item):
+            prgch_id, prog_id, _prog = item
+            if limited.is_set() or time.monotonic() > deadline:
+                return item, "skipped", None
+            st, d = self._fetch_detail(prgch_id, token)
+            if st == "limited":
+                limited.set()
+            return item, st, d
+
         with ThreadPoolExecutor(max_workers=_EPG_DETAIL_WORKERS) as pool:
-            futures = {pool.submit(_fetch_one, pid): pid for pid in near_term}
-            for fut in as_completed(futures):
-                prgch_id, detail = fut.result()
-                with completed_lock:
-                    completed += 1
-                    if self._progress_cb:
-                        self._progress_cb('epg', progress_base + completed, total)
-                if detail is None:
+            for item, st, d in pool.map(work, airing):
+                done += 1
+                if self._progress_cb:
+                    self._progress_cb('epg', progress_base + done, total)
+                if st == "ok" and d is not None:
+                    _cache_put(con, item[1], d)
+                    _apply_detail(item[2], d)
+                    got.add(item[1])
+                    enriched += 1
+                elif st == "error":
                     errors += 1
-                    continue
-                if not detail:
-                    continue
-
-                prog = near_term[prgch_id]
-
-                desc = (detail.get("prgDesc") or "").strip()
-                if desc:
-                    prog.description = desc
-
-                images = detail.get("images") or []
-                if images:
-                    img_url = (images[0].get("pimgUrl") or "").strip()
-                    if img_url:
-                        prog.poster_url = img_url
-
-                rating = (detail.get("prgRating") or "").strip()
-                if rating:
-                    prog.rating = rating
-
-                if (detail.get("prgType") or "").upper() == "EPISODE":
-                    prog.program_type = "episode"
-                    series_title = (detail.get("seriesTitle") or "").strip()
-                    ep_title     = (detail.get("prgTitle") or "").strip()
-                    if series_title:
-                        prog.title         = series_title
-                        prog.episode_title = ep_title or None
-                    try:
-                        if detail.get("seasonNumber"):
-                            prog.season = int(detail["seasonNumber"])
-                        if detail.get("episodeNumber"):
-                            prog.episode = int(detail["episodeNumber"])
-                    except (ValueError, TypeError):
-                        pass
-
-                enriched += 1
-
-        logger.info("[whale] detail enriched %d/%d near-term programs (%d errors)",
-                    enriched, len(near_term), errors)
+        con.commit()
+        logger.info("[whale] airing-now detail: %d fetched, %d errors, %d not attempted",
+                    enriched, errors, len(airing) - enriched - errors)
+        return got
 
     def fetch_epg(self, channels: list[ChannelData], **kwargs) -> list[ProgramData]:
         if not channels:
@@ -362,6 +441,7 @@ class WhaleScraper(BaseScraper):
             batch = chl_ids[i : i + _EPG_BATCH_SIZE]
             url = (f"{_EPG_URL}?channelIds={','.join(batch)}"
                    f"&startTime={start_ms}&endTime={end_ms}&langCode=en&countryCode=US")
+            _throttle()
             try:
                 r = self.session.get(url, headers=_signed_headers(_EPG_PATH, token), timeout=30)
                 r.raise_for_status()
@@ -375,9 +455,10 @@ class WhaleScraper(BaseScraper):
         with _current_prog_desc_lock:
             prog_descs = dict(_current_prog_desc)
 
-        detail_cutoff = now_utc.timestamp() + _EPG_DETAIL_HOURS * 3600
-        near_term: dict[str, ProgramData] = {}
-
+        now_ts = now_utc.timestamp()
+        horizon = now_ts + _DETAIL_HORIZON_H * 3600
+        # (prgch_id, prog_id, chl_id, start_ts, prog)
+        rows: list[tuple[str, str, str, float, ProgramData]] = []
         programs: list[ProgramData] = []
         for ch_row in all_ch_rows:
             chl_id = str(ch_row.get("chlId", ""))
@@ -403,12 +484,46 @@ class WhaleScraper(BaseScraper):
                     description       = prog_descs.get(prgch_id),
                 )
                 programs.append(prog)
-                if prgch_id and start.timestamp() < detail_cutoff:
-                    near_term[prgch_id] = prog
+                prog_id = str(pt.get("id") or "")
+                if prgch_id and prog_id:
+                    rows.append((prgch_id, prog_id, chl_id, start.timestamp(), prog))
 
-        self._enrich_near_term(near_term, token,
-                                progress_base=total_channels,
-                                progress_total=total_channels + len(near_term))
+        try:
+            con = _cache_conn()
+            cached = _cache_get(con, list({r[1] for r in rows}))
+            for _prgch, prog_id, _chl, _st, prog in rows:
+                d = cached.get(prog_id)
+                if d:
+                    _apply_detail(prog, d)
+
+            # Airing now and not cached: fetch immediately (≤ ~1 per channel).
+            airing = [(pc, pid, pr) for pc, pid, _c, st, pr in rows
+                      if st <= now_ts and pid not in cached]
+            seen: set[str] = set()
+            airing = [a for a in airing if not (a[1] in seen or seen.add(a[1]))]
+            have = set(cached) | self._enrich_airing(airing, token, con, total_channels, total_channels)
+
+            # Queue the rest of the next 24 h for the background fill job.
+            con.execute("DELETE FROM pending")
+            con.executemany(
+                "INSERT OR REPLACE INTO pending VALUES (?,?,?,?)",
+                [(pc, pid, c, st) for pc, pid, c, st, _pr in rows
+                 if st <= horizon and pid not in have],
+            )
+            # Drop cache entries no airing in the 7-day window references, once stale.
+            live_ids = {r[1] for r in rows}
+            if live_ids:
+                old = [pid for (pid,) in con.execute(
+                    "SELECT prog_id FROM detail WHERE fetched_at < ?", (time.time() - 2 * 86400,))
+                    if pid not in live_ids]
+                con.executemany("DELETE FROM detail WHERE prog_id=?", [(p,) for p in old])
+            con.commit()
+            n_pending = con.execute("SELECT COUNT(*) FROM pending").fetchone()[0]
+            con.close()
+            logger.info("[whale] detail cache: %d programs applied, %d queued for background fill",
+                        len(cached), n_pending)
+        except Exception as exc:
+            logger.warning("[whale] detail cache unavailable (%s); continuing without detail", exc)
 
         logger.info("[whale] %d EPG entries", len(programs))
         return programs
@@ -439,3 +554,130 @@ class WhaleScraper(BaseScraper):
 
         logger.warning("[whale] could not resolve URL for chlId=%s", chl_id)
         return raw_url
+
+
+# ── Background fill (maintenance queue) ──────────────────────────────────────
+
+def fill_detail_cache() -> tuple[int, int, bool]:
+    """Fetch detail for programs the scrape queued (next 24 h, not yet cached),
+    cache it, and write it straight into the programs table so guides update
+    without waiting for the next scrape. Needs a Flask app context. Returns the
+    (rows updated, airings still pending, rate-limited). One slice of at most
+    _FILL_DEADLINE seconds. Does nothing when Whale is disabled."""
+    from sqlalchemy.exc import OperationalError
+    from app.extensions import db
+    from app.models import Source, Channel, Program
+
+    con = _cache_conn()
+    source = Source.query.filter_by(name="whale").first()
+    if not source or not source.is_enabled:
+        con.execute("DELETE FROM pending")
+        con.commit()
+        con.close()
+        return 0, 0, False
+
+    pend = con.execute("SELECT prgch_id, prog_id, chl_id, start_ts FROM pending ORDER BY start_ts").fetchall()
+    have = set(_cache_get(con, list({p[1] for p in pend})))
+    groups: dict[str, list[tuple[str, str, float]]] = {}
+    for prgch_id, prog_id, chl_id, start_ts in pend:
+        groups.setdefault(prog_id, []).append((prgch_id, chl_id, start_ts))
+    todo = [(pid, g) for pid, g in groups.items() if pid not in have]
+    # Programs already cached but still pending only need their rows written.
+    todo_rows = [(pid, g, _cache_get(con, [pid])[pid]) for pid, g in groups.items() if pid in have]
+    if not todo and not todo_rows:
+        con.close()
+        return 0, 0, False
+
+    scraper = WhaleScraper()
+    token = scraper._get_token()
+    if not token and todo:
+        con.close()
+        logger.warning("[whale] detail fill: no auth token")
+        return 0, 0, True
+
+    chan_ids = {c.source_channel_id: c.id for c in
+                Channel.query.filter_by(source_id=source.id).with_entities(Channel.source_channel_id, Channel.id)}
+    updated = 0
+
+    def write_rows(batch):
+        nonlocal updated
+        for _pid, g, d in batch:
+            vals = {}
+            if d.get("desc"):   vals["description"] = d["desc"]
+            if d.get("poster"): vals["poster_url"] = d["poster"]
+            if d.get("rating"): vals["rating"] = d["rating"]
+            if d.get("type") == "EPISODE":
+                vals["program_type"] = "episode"
+                if d.get("series"):
+                    vals["title"] = d["series"]
+                    vals["episode_title"] = d.get("title") or None
+                try:
+                    if d.get("season"): vals["season"] = int(d["season"])
+                    if d.get("ep"):     vals["episode"] = int(d["ep"])
+                except (ValueError, TypeError):
+                    pass
+            if not vals:
+                continue
+            for _prgch, chl_id, start_ts in g:
+                cid = chan_ids.get(chl_id)
+                if cid is None:
+                    continue
+                updated += Program.query.filter_by(
+                    channel_id=cid, start_time=datetime.fromtimestamp(start_ts, tz=timezone.utc),
+                ).update(vals, synchronize_session=False)
+        try:
+            db.session.commit()
+        except OperationalError as exc:
+            db.session.rollback()
+            logger.warning("[whale] detail fill: DB busy, rows will pick detail up on next scrape (%s)", exc)
+
+    write_rows(todo_rows)
+    for pid, g, _d in todo_rows:
+        con.executemany("DELETE FROM pending WHERE prgch_id=?", [(x[0],) for x in g])
+    con.commit()
+
+    pace_lock = threading.Lock()
+    next_slot = [time.monotonic()]
+    stop = threading.Event()
+    deadline = time.monotonic() + _FILL_DEADLINE
+
+    def fetch(item):
+        pid, g = item
+        if stop.is_set() or time.monotonic() > deadline:
+            return item, "skipped", None
+        with pace_lock:
+            wait = next_slot[0] - time.monotonic()
+            next_slot[0] = max(next_slot[0], time.monotonic()) + 1.0 / _FILL_RATE
+        if wait > 0:
+            time.sleep(wait)
+        st, d = scraper._fetch_detail(g[0][0], token)
+        if st == "limited":
+            stop.set()
+        return item, st, d
+
+    fetched = errors = 0
+    batch: list = []
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        for (pid, g), st, d in pool.map(fetch, todo):
+            if st == "ok" and d is not None:
+                _cache_put(con, pid, d)
+                batch.append((pid, g, d))
+                fetched += 1
+            elif st == "error":
+                errors += 1
+            if len(batch) >= 100:
+                write_rows(batch)
+                for bpid, bg, _ in batch:
+                    con.executemany("DELETE FROM pending WHERE prgch_id=?", [(x[0],) for x in bg])
+                con.commit()
+                batch = []
+    if batch:
+        write_rows(batch)
+        for bpid, bg, _ in batch:
+            con.executemany("DELETE FROM pending WHERE prgch_id=?", [(x[0],) for x in bg])
+    con.commit()
+    left = con.execute("SELECT COUNT(*) FROM pending").fetchone()[0]
+    con.close()
+    logger.info("[whale] detail fill: %d fetched, %d errors, %d program rows updated, %d still pending%s",
+                fetched, errors, updated, left, " (rate-limited)" if stop.is_set() else "")
+    return updated, left, stop.is_set()

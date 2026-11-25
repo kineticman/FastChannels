@@ -656,6 +656,8 @@ def run_scraper(source_name: str, force_full: bool = False):
                 elapsed = time.monotonic() - t0
                 logger.info('[%s] Scrape complete — %d channels, %d programs (%.1fs)',
                             source_name, len(channels), len(programs), elapsed)
+                if source_name == 'whale':
+                    _enqueue_whale_detail_fill()
                 if scraper.retry_soon:
                     minutes = _schedule_scrape_retry(source_name)
                     if minutes:
@@ -2293,6 +2295,48 @@ def run_xml_refresh():
 def run_artifact_build(cache_keys: list[str]):
     """Build specific artifacts for a request that found them missing or idle."""
     _refresh_xml_artifacts_subprocess(timeout_seconds=300, only_keys=set(cache_keys))
+
+
+def run_whale_detail_fill():
+    """Maintenance job: fill the Whale detail cache (descriptions/posters) for
+    the next 24 h of programs and write it into the guide. See
+    app/scrapers/whale.py fill_detail_cache()."""
+    with flask_app.app_context():
+        from app.scrapers.whale import fill_detail_cache
+        updated, left, limited = fill_detail_cache()
+        if updated:
+            _invalidate_and_refresh_xml()
+    # One short slice per job: re-enqueue at the back of the queue so other
+    # maintenance jobs (sign-ins, cache refreshes) run in between. A 429 stops
+    # the chain; the 3-hourly scheduler job restarts it.
+    if left and not limited:
+        _enqueue_whale_detail_fill(_continuation=True)
+
+
+def _enqueue_whale_detail_fill(_continuation: bool = False) -> str:
+    """Queue the Whale detail fill unless one is already queued or running, or
+    Whale is off."""
+    try:
+        with flask_app.app_context():
+            src = Source.query.filter_by(name='whale').first()
+            if not src or not src.is_enabled:
+                return 'disabled'
+        r = redis.from_url(flask_app.config['REDIS_URL'])
+        q = Queue('maintenance', connection=r)
+        # The running slice is still "started" when it re-enqueues its successor,
+        # so only queued jobs block a continuation.
+        active = set(q.get_job_ids())
+        if not _continuation:
+            active |= set(StartedJobRegistry(q.name, connection=q.connection).get_job_ids())
+        if any(j.startswith('whale-detail-fill') for j in active):
+            return 'active'
+        q.enqueue('app.worker.run_whale_detail_fill', job_timeout=600,
+                  job_id=f'whale-detail-fill-{int(time.time())}')
+        logger.info('[whale] enqueued detail fill')
+        return 'queued'
+    except Exception as exc:
+        logger.warning('[whale] could not enqueue detail fill: %s', exc)
+        return 'error'
 
 
 def run_tvtv_cache_refresh(max_stations: int | None = None):
@@ -4646,6 +4690,10 @@ if __name__ == '__main__':
             ok, msg = fetch_remote_gracenote_exclusions(url)
             if not ok:
                 logger.warning('[gracenote-exclusions] scheduled remote refresh failed: %s', msg)
+
+        # Safety net: a fill pass stops at its deadline or a 429; this resumes it.
+        scheduler.add_job(_enqueue_whale_detail_fill, 'interval', hours=3,
+                          id='whale_detail_fill', max_instances=1, coalesce=True)
 
         scheduler.add_job(_scheduled_remote_gracenote_exclusions_refresh, 'interval', hours=24,
                           id='gracenote_exclusions_remote_refresh', max_instances=1, coalesce=True)
