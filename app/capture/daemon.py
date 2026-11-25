@@ -386,10 +386,13 @@ def _read(path: str) -> str:
 
 
 def _can_open(uid: int, gid: int, groups: list[int], path: str) -> bool:
-    """Whether the capture user (not root) can read and write this device node."""
+    """Whether the capture user (not root) can really open this device node read/write.
+    An actual open(), not a permission-bit check: a container runtime's device rules
+    (an LXC without access, SELinux) refuse an open that the mode bits allow."""
     try:
-        return subprocess.run(['test', '-r', path, '-a', '-w', path], user=uid, group=gid,
-                              extra_groups=groups, timeout=5).returncode == 0
+        return subprocess.run([sys.executable, '-I', '-c', 'import os,sys; os.close(os.open(sys.argv[1], os.O_RDWR))', path],
+                              user=uid, group=gid, extra_groups=groups, timeout=5,
+                              capture_output=True).returncode == 0
     except Exception:
         return False
 
@@ -453,6 +456,40 @@ def _bench_gpu_args(enc: dict) -> tuple[list[str], dict, list[int]] | None:
     return None
 
 
+def _environment_facts(kernel: str) -> list[dict]:
+    """Setup traps that look like "GPU doesn't work" but aren't about the GPU itself."""
+    from ..config import VERSION
+    facts = [_fact('Versions', 'info', f'FastChannels {VERSION} · kernel {os.uname().release} · '
+                   + (installer.chrome_version() or 'Chrome not installed'))]
+    env = ''
+    try:
+        env = open('/proc/1/environ', 'rb').read().decode('utf-8', 'replace')
+    except OSError:
+        pass
+    if 'container=lxc' in env:
+        facts.append(_fact('Container type', 'warn', 'LXC (Proxmox?): the GPU must be passed to the LXC first, then to Docker'))
+    elif 'microsoft' in kernel.lower():
+        pass
+    elif ' hypervisor' in _read('/proc/cpuinfo'):
+        facts.append(_fact('Container type', 'info', 'inside a virtual machine: the VM needs the GPU passed through to it'))
+    if _read('/sys/fs/selinux/enforce') == '1':
+        facts.append(_fact('SELinux', 'warn', 'enforcing: it can block /dev/dri even when permissions look right. '
+                           'If the open test fails, add "security_opt: [label=disable]" to the service'))
+    uid_map = _read('/proc/self/uid_map').split()
+    if len(uid_map) == 3 and uid_map[:2] != ['0', '0']:
+        facts.append(_fact('User namespace', 'warn', 'rootless Docker or user-namespace remapping: devices '
+                           'passed in are often unreadable, so the GPU may not work'))
+    for path, label in (('/data', 'Disk /data'), (RUN_DIR, 'Disk capture')):
+        try:
+            st = os.statvfs(path)
+        except OSError:
+            continue
+        free = st.f_bavail * st.f_frsize / 2**30
+        facts.append(_fact(label, 'ok' if free >= 2 else 'warn', f'{free:.1f} GB free'
+                           + ('' if free >= 2 else ': low, installs and recordings may fail')))
+    return facts
+
+
 def diagnose_gpu(uid: int, gid: int) -> dict:
     """Everything needed to answer "why isn't my GPU used": what reached the container,
     what's installed, every test encode with FFmpeg's own output, and a speed test.
@@ -473,6 +510,7 @@ def diagnose_gpu(uid: int, gid: int) -> dict:
     facts.append(_fact('Host', 'info', ('Windows (Docker Desktop / WSL2)' if 'microsoft' in kernel.lower() else 'Linux')
                        + f' · {cpu or "unknown CPU"} · {os.cpu_count() or "?"} cores{cpu_cap}'))
     facts += _memory_facts(int(cfg.get('max_tuners') or 1))
+    facts += _environment_facts(kernel)
 
     nodes = _render_nodes()
     node = render_node()
@@ -488,10 +526,12 @@ def diagnose_gpu(uid: int, gid: int) -> dict:
         used = n == node
         groups = sorted({os.stat(n).st_gid}) if os.path.exists(n) else []
         access = _can_open(uid, gid, groups, n)
+        old = 'kernel driver radeon' in _node_gpu(n)
         facts.append(_fact(f'  {os.path.basename(n)}' + (' (used)' if used else ' (not used)'),
-                           'ok' if access else 'fail',
+                           'ok' if access and not old else ('warn' if access else 'fail'),
                            f'{_node_gpu(n)} · {_node_info(n)} · capture user '
-                           + ('can open it' if access else "can't open it: permissions")))
+                           + ('can open it' if access else "can't open it (permissions, SELinux or the container's device rules)")
+                           + (' · the old "radeon" kernel driver has no VA-API encoder; amdgpu is needed' if old else '')))
     if on_wsl or os.path.exists('/usr/lib/wsl'):
         facts.append(_fact('/dev/dxg', 'ok' if on_wsl else 'fail', _node_info('/dev/dxg')))
         facts.append(_fact('/usr/lib/wsl', 'ok' if wsl_libs_present() else 'fail',
