@@ -206,13 +206,14 @@ public class PlaybackActivity extends Activity {
     // advancing. Only judged while a video track is selected, a first frame has shown and
     // the video surface is live and visible (a TV that is off or an app sent to the
     // background has no surface, and must never count as frozen).
-    private static final long FROZEN_PICTURE_MS = 20_000;
+    private static final long FROZEN_PICTURE_MS = 8_000;   // was 20 s; boundary stalls recover instantly on rebuild (#104)
     private static final int MAX_PICTURE_REBUILDS = 3;
     private static final long PICTURE_REBUILD_RESET_MS = 300_000;
     private long lastRenderedFrames = -1;
     private long lastFrameChangeAtMs = 0;
     private long lastPictureRebuildAtMs = 0;
     private int pictureRebuilds = 0;
+    private boolean frozenDumped = false;
     private long lastStallRecoveryAtMs;
     private int stallRecoveries = 0;
 
@@ -470,6 +471,14 @@ public class PlaybackActivity extends Activity {
         }
         renderersFactory.setPcmOnly(pcmOnly);
         trackSelector.setParameters(trackSelector.buildUponParameters()
+                // Issue #104: this app never uses timed metadata (ID3 / emsg event messages), but
+                // Media3 gives it a renderer, and the player leaves a Period only once EVERY
+                // enabled renderer has read it to its end. On Hulu Live boundaries that stalled
+                // (video and audio frozen, no AUTO_TRANSITION, Media3's stuck-player error after
+                // 60 s) the renderer dump showed video and audio had finished the old Period and
+                // only this metadata renderer had not. Why it fails to finish is unknown. Side by
+                // side with the renderer enabled, 3 stalls in 34 boundaries; with it off, 0 in 68.
+                .setTrackTypeDisabled(C.TRACK_TYPE_METADATA, true)
                 .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, !captions)
                 .setPreferredTextLanguage(captions ? "en" : null)
                 .setSelectUndeterminedTextLanguage(captions)
@@ -660,12 +669,19 @@ public class PlaybackActivity extends Activity {
         if (frames != lastRenderedFrames || lastRenderedFrames < 0) {
             lastRenderedFrames = frames;
             lastFrameChangeAtMs = now;
+            frozenDumped = false;
             if (pictureRebuilds > 0 && now - lastPictureRebuildAtMs >= PICTURE_REBUILD_RESET_MS) {
                 pictureRebuilds = 0;
             }
             return false;
         }
-        return now - lastFrameChangeAtMs >= FROZEN_PICTURE_MS;
+        long stuckFor = now - lastFrameChangeAtMs;
+        if (stuckFor >= 4_000 && !frozenDumped && loadDiagnostics != null) {
+            // Capture what every renderer is waiting for while it is still stuck.
+            frozenDumped = true;
+            loadDiagnostics.dumpRendererState("no frames for " + stuckFor / 1000 + "s");
+        }
+        return stuckFor >= FROZEN_PICTURE_MS;
     }
 
     private boolean videoSurfaceLive() {
