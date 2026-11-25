@@ -35,6 +35,10 @@ GPU_PACKAGES = ('intel-media-va-driver', 'mesa-va-drivers')
 # to encode (see WSL_MESA_MIN_MAJOR); taken from <codename>-backports when the
 # base image's Mesa is older.
 WSL_GPU_PACKAGES = ('mesa-va-drivers', 'libva2')
+# Only for the GPU diagnostics report (lists the encoders the GPU offers). Never
+# required: installed best-effort alongside the drivers, and not part of
+# gpu_drivers_present(), so existing installs don't get pushed into a reinstall.
+GPU_TOOLS = ('vainfo',)
 BACKPORTS_LIST = '/etc/apt/sources.list.d/fastchannels-capture-backports.list'
 CAPTURE_USER = 'fccapture'
 
@@ -202,6 +206,12 @@ def _apt_install(progress) -> None:
     gpu = WSL_GPU_PACKAGES if wsl else GPU_PACKAGES if render_node() else ()
     _run(['apt-get', 'install', '-y', '-q', '--no-install-recommends', '-o', cache,
           *APT_PACKAGES, *gpu, CHROME_DEB], timeout=1800)
+    if gpu:
+        try:
+            _run(['apt-get', 'install', '-y', '-q', '--no-install-recommends', '-o', cache, *GPU_TOOLS],
+                 timeout=300)
+        except Exception as e:
+            logger.warning('[capture-install] optional GPU tools (%s) not installed: %s', ', '.join(GPU_TOOLS), e)
     if wsl:
         progress('Installing GPU drivers for Docker on Windows', 'packages')
         _install_wsl_mesa(cache)

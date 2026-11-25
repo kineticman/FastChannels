@@ -490,6 +490,32 @@ def _environment_facts(kernel: str) -> list[dict]:
     return facts
 
 
+def _vainfo_report(uid: int, gid: int, node: str | None, on_wsl: bool) -> tuple[dict, dict] | None:
+    """What the VA-API driver says the GPU can encode, as a fact plus the raw output.
+    The H.264 encode entrypoints are the answer to "can this GPU do it at all"."""
+    if not node or not shutil.which('vainfo'):
+        return None
+    try:
+        proc = subprocess.run(['vainfo', '--display', 'drm', '--device', node],
+                              env={**_base_env(HOME_DIR), **(WSL_VAAPI_ENV if on_wsl else {})},
+                              user=uid, group=gid, extra_groups=sorted({os.stat(node).st_gid}),
+                              capture_output=True, text=True, timeout=20)
+    except Exception as e:
+        return (_fact('vainfo', 'warn', f'failed to run: {e}'),
+                {'test': f'vainfo --display drm --device {node}', 'ok': False, 'output': str(e), 'show': True})
+    out = (proc.stdout or '') + (proc.stderr or '')
+    entry = {'test': f'vainfo --display drm --device {node}', 'ok': proc.returncode == 0,
+             'output': '\n'.join(l for l in out.splitlines() if l.strip())[-3000:], 'show': True}
+    enc = sorted({m.group(1) for l in out.splitlines()
+                  for m in [re.search(r'VAProfileH264\w*\s*:\s*VAEntrypoint(EncSlice\w*|EncPicture)', l)] if m})
+    if proc.returncode != 0:
+        return _fact('vainfo', 'fail', 'could not open the GPU (see the output below)'), entry
+    if enc:
+        return _fact('vainfo', 'ok', 'H.264 encode: ' + ', '.join(enc)
+                     + (' (EncSliceLP is the low-power engine)' if 'EncSliceLP' in enc else '')), entry
+    return _fact('vainfo', 'fail', 'this GPU/driver lists NO H.264 encoder, so GPU encoding can\'t work on it'), entry
+
+
 def diagnose_gpu(uid: int, gid: int) -> dict:
     """Everything needed to answer "why isn't my GPU used": what reached the container,
     what's installed, every test encode with FFmpeg's own output, and a speed test.
@@ -579,6 +605,14 @@ def diagnose_gpu(uid: int, gid: int) -> dict:
         finally:
             _trace = None
 
+    vainfo = _vainfo_report(uid, gid, node, on_wsl)
+    if vainfo:
+        facts.append(vainfo[0])
+        trace.append(vainfo[1])
+    elif node:
+        facts.append(_fact('vainfo', 'info', 'not installed (Reinstall the add-on to add it); '
+                           'it lists what encoders the GPU offers'))
+
     # Speed test: how many times faster than real time each encoder runs 720p60.
     with SERVICE.lock:
         playing = sum(1 for x in SERVICE.sessions.values() if x.state in ('tuning', 'live'))
@@ -597,10 +631,14 @@ def diagnose_gpu(uid: int, gid: int) -> dict:
     facts += speeds
 
     in_use = {k: v for k, v in ENCODER.items() if k not in ('gid', 'gids', 'groups', 'env')}
+    hint = _gpu_hint(enc, in_use, setting, on_wsl, node, nv, len(nodes))
+    vi = next((f for f in facts if f['label'] == 'vainfo' and f['status'] == 'fail'), None)
+    if vi and enc.get('kind') not in ('vaapi', 'nvenc'):
+        hint = vi['detail'][0].upper() + vi['detail'][1:] + '. Copy this report when asking for help.'
     return {'facts': facts, 'tests': trace,
             'result': {k: v for k, v in enc.items() if k not in ('gid', 'gids', 'groups', 'env')},
             'in_use': in_use,
-            'hint': _gpu_hint(enc, in_use, setting, on_wsl, node, nv, len(nodes))}
+            'hint': hint}
 
 
 def _gpu_hint(enc: dict, in_use: dict, setting: str, on_wsl: bool, node: str | None,
