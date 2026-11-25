@@ -478,11 +478,35 @@ environment:
       head.appendChild(el('div', null, d.hint || ''));
       body.appendChild(head);
 
+      const helpLines = [];
+      if ((d.help || []).length) {
+        body.appendChild(el('strong', null, 'Things to try'));
+        helpLines.push('', 'Things to try');
+        (d.help || []).forEach((h, i) => {
+          const box = el('div', null, null);
+          box.style.cssText = 'margin:0.5rem 0 0.9rem;line-height:1.5';
+          box.appendChild(el('div', null, (i + 1) + '. ' + h.title)).style.fontWeight = '600';
+          helpLines.push(`${i + 1}. ${h.title}`);
+          (h.steps || []).forEach((st) => {
+            const p = el('div', 'help', st); p.style.marginLeft = '1rem'; box.appendChild(p);
+            helpLines.push('   ' + st);
+          });
+          if (h.snippet) {
+            const pre = el('pre', null, h.snippet);
+            pre.style.cssText = 'font-size:0.78rem;margin:0.3rem 0 0 1rem;padding:0.5rem 0.7rem;border:1px solid var(--border);border-radius:6px;overflow:auto';
+            box.appendChild(pre);
+            helpLines.push(...h.snippet.split('\n').map((l) => '   | ' + l));
+          }
+          body.appendChild(box);
+        });
+      }
+
       const used = (d.in_use || {}).kind;
       const lines = [`GPU diagnostics, ${new Date().toISOString()}`,
                      `Test result: ${good ? 'GPU works (' + (res.driver || res.kind) + ')' : 'CPU'}`
                      + ` · running tuners use: ${used === 'vaapi' || used === 'nvenc' ? 'GPU' : 'CPU'}`];
       if (!good && res.reason) lines.push('Reason: ' + res.reason);
+      lines.push(...helpLines);
       lines.push('', 'Checks');
       const table = el('table', null, null);
       table.style.cssText = 'width:100%;border-collapse:collapse;font-size:0.88rem;margin-bottom:1rem';
@@ -517,6 +541,8 @@ environment:
           ...(t.note ? [t.note] : []),
           ...((t.ok || t.superseded) && !t.show ? [] : [t.output || '(no output)']));
       });
+      lines.push('', 'When asking for help, also say: how you run FastChannels (compose, Portainer or docker run), '
+        + 'your Docker Desktop and Windows versions, and your GPU model. This report cannot see those.');
       gpuReportText = lines.join('\n');
       $('capture-gpu-copy').disabled = false;
     };
