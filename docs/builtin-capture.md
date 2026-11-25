@@ -196,13 +196,17 @@ options pile up; see
   both the host and the container path, then click **Deploy the container** and
   confirm replacing it. Your data stays in its volume.
 
+Portainer on Windows (Docker Desktop) is different: don't use the `/dev/dri`
+lines above. See [Windows](#windows).
+
 Unraid, Proxmox, Synology and others: see
 [Other platforms](#other-platforms).
 
 ### NVIDIA (experimental)
 
-NVIDIA cards encode through NVENC. This is new and hasn't been tested on real
-NVIDIA hardware yet, so please report how it goes.
+NVIDIA cards encode through NVENC. This has been confirmed on Windows with
+Docker Desktop and an RTX 2070 Super (see [Windows](#windows)). It's newer on
+Linux, so please report how it goes there.
 
 1. Install the NVIDIA driver and the
    [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html)
@@ -260,6 +264,14 @@ Every setup comes down to the same thing: pass `/dev/dri` into the container
   a compose file: paste the compose file from the README into the tool's custom
   app or compose editor, with the `devices:` lines added.
 
+### Checking whether the GPU works
+
+On the Bridge page, click **GPU diagnostics** next to the Encoder line. It lists
+what reached the container (GPU devices, drivers, memory, CPU), runs a short test
+encode and shows FFmpeg's own output if it fails, tells you what to fix, and
+times the CPU and GPU encoders at 720p60. If you ask for help, click
+**Copy report** and paste it into your post.
+
 ## Windows
 
 Built-in Capture works on Windows with Docker Desktop. It has been tested on a
@@ -271,9 +283,29 @@ Capture needs.
   [WSL Containers](FastChannels-Windows-11.md). With Docker Desktop you can
   set how much memory containers get and try an NVIDIA GPU (below). With WSL
   Containers you can't.
-- **GPU encoding (experimental).** Windows doesn't hand the GPU to containers
-  the way Linux does, so the Intel/AMD setup above doesn't apply. Instead, add
-  this to the FastChannels service and recreate the container:
+- **NVIDIA GPU:** Docker Desktop can pass an NVIDIA card straight through
+  (this needs a current NVIDIA driver on Windows). Add this to the FastChannels
+  service and recreate the container:
+
+  ```yaml
+      deploy:
+        resources:
+          reservations:
+            devices:
+              - driver: nvidia
+                count: all
+                capabilities: [gpu]
+      environment:
+        - NVIDIA_DRIVER_CAPABILITIES=compute,video,utility
+  ```
+
+  Don't add `/dev/dxg` or `/dev/dri` for NVIDIA. The **Encoder** line should
+  say *Using your GPU (NVIDIA)*. This was confirmed on Windows 11 with an RTX
+  2070 Super: Built-in Capture installed Chrome, started two warm tuners and
+  detected the GPU right away.
+- **Intel/AMD GPU (experimental).** Windows doesn't hand these GPUs to
+  containers the way Linux does, so the Intel/AMD setup above doesn't apply.
+  Instead, add this to the FastChannels service and recreate the container:
 
   ```yaml
       devices:
@@ -287,12 +319,49 @@ Capture needs.
   add `--device /dev/dxg --device /dev/dri -v /usr/lib/wsl:/usr/lib/wsl:ro`
   instead.
 
+  If Docker refuses to start the container with `error gathering device
+  information while adding custom device "/dev/dri": no such file or directory`,
+  your Docker VM has no render node. Remove the `/dev/dri` line and the
+  container will start, but GPU encoding needs that node, so Built-in Capture
+  uses the CPU (x264) instead. Everything else in FastChannels never uses the
+  GPU, so nothing is lost there.
+
   FastChannels then installs a newer graphics driver (Mesa 26) and tests the
   GPU, and the **Encoder** line should say *Using your GPU*. This goes through Microsoft's
-  D3D12 video bridge, which has worked with an AMD Ryzen laptop GPU; Intel and
-  NVIDIA GPUs may work the same way. If the test fails, Built-in Capture
+  D3D12 video bridge, which has worked with an AMD Ryzen laptop GPU; Intel
+  GPUs may work the same way. If the test fails, Built-in Capture
   carries on with the CPU. Budget about 2–2.5 CPU cores per channel at 720p
   60 fps without the GPU.
+
+  **Portainer on Windows:** this is the same compose file, so paste it into
+  your stack's **Editor** and click **Update the stack**. Don't also follow the
+  Linux Portainer steps above, which add `/dev/dri` on its own. Combining the
+  two is the usual cause of the error above. A working stack looks like this
+  (keep your own ports and volumes):
+
+  ```yaml
+  services:
+    fastchannels:
+      image: ghcr.io/kineticman/fastchannels:latest
+      container_name: fastchannels
+      ports:
+        - 5523:5523
+      volumes:
+        - db_data:/data
+        - adb_keys:/root/.android
+        - /usr/lib/wsl:/usr/lib/wsl:ro
+      devices:
+        - /dev/dxg:/dev/dxg
+      restart: unless-stopped
+
+  volumes:
+    db_data:
+    adb_keys:
+  ```
+
+  This leaves out `/dev/dri`, so it starts on any Docker VM. Add the
+  `- /dev/dri:/dev/dri` line under `devices:` only if the VM has a render
+  node. If it doesn't, you get CPU encoding.
 - **Memory matters most.** Docker Desktop gets half of the PC's memory unless
   you change it, and each tuner needs about 0.8 GB on top of FastChannels
   itself. The test PC had 4 GB, so Docker got under 2 GB. It ran out of memory
