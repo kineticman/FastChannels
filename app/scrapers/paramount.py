@@ -759,20 +759,23 @@ class ParamountScraper(BaseScraper):
         if not auth:
             raise RuntimeError('Paramount+: this match isn\'t streaming yet or isn\'t available to this account')
         _KEY_TOKENS[content_id] = (auth, _jwt_exp(auth) or time.time() + 3600)
+        # metadata.json's `listing` block is unreliable when several matches in
+        # one league are live: it is often empty or another match's listing
+        # (12 of 16 calls on 2026-11-25), and its daistreamKey then belongs to
+        # that other match, so simultaneous kickoffs tuned to the same game.
+        # `metaData.daistreamKey` was right every time (16 of 16). Use it, and
+        # take `listing` only when it is this match's own.
+        key = (data.get('metaData') or {}).get('daistreamKey')
         listing = data.get('listing') or {}
-        video = listing.get('contentCANVideo') or {}
-        key = video.get('daistreamKey') or (data.get('metaData') or {}).get('daistreamKey')
-        # Simultaneous kickoffs in one league were reported tuning to the same
-        # match. If metadata.json answers with another match's listing, don't
-        # trust its stream key; take the one from this match's own listing.
-        got = listing.get('videoContentId') or listing.get('contentId')
-        if got and got != content_id:
-            logger.warning('[paramount] metadata for %s returned listing %s (%s); using listings feed',
-                           content_id, got, listing.get('title'))
-            key = self._listing_stream_key(content_id, slug)
-        else:
-            logger.info('[paramount] %s metadata listing=%s title=%r dai=%s', content_id, got,
-                        listing.get('title'), (key or '')[:12])
+        if not key:
+            got = listing.get('videoContentId') or listing.get('contentId')
+            if got == content_id:
+                key = (listing.get('contentCANVideo') or {}).get('daistreamKey')
+            if not key:
+                logger.warning('[paramount] metadata for %s has no stream key of its own (listing=%s); '
+                               'using listings feed', content_id, got)
+                key = self._listing_stream_key(content_id, slug)
+        logger.info('[paramount] %s dai=%s title=%r', content_id, (key or '')[:12], data.get('title'))
         return auth, key
 
     def _listing_stream_key(self, content_id: str, slug: str) -> str | None:
