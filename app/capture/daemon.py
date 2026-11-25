@@ -25,6 +25,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import secrets
 import shutil
 import signal
@@ -180,18 +181,36 @@ def _nvidia_gids() -> list[int]:
     return sorted(gids)
 
 
+# The GPU diagnostics modal reruns detect_encoder with this set, so every test
+# encode's raw FFmpeg output is kept for the report. None outside a diagnosis.
+_trace: list | None = None
+_trace_lock = threading.Lock()
+
+
+def _trace_add(video_args: list[str], ok: bool, stderr: str) -> None:
+    if _trace is None:
+        return
+    lines = [l for l in (stderr or '').splitlines() if l.strip()]
+    _trace.append({'test': ' '.join(video_args), 'ok': ok, 'output': '\n'.join(lines[-25:])[-3000:]})
+
+
 def _try_encoder(uid: int, gid: int, groups: list[int], video_args: list[str],
-                 extra_env: dict | None = None) -> tuple[bool, str]:
+                 extra_env: dict | None = None, *, frames: int = 10, rate: int = 30,
+                 record: bool = True) -> tuple[bool, str]:
     """Test-encode a few frames as the capture user. (ok, ffmpeg's stderr)."""
-    cmd = ['ffmpeg', '-hide_banner', '-loglevel', 'verbose', '-nostdin',
-           '-f', 'lavfi', '-i', 'testsrc2=size=1280x720:rate=30', '-frames:v', '10',
+    cmd = ['ffmpeg', '-hide_banner', '-loglevel', 'verbose' if record else 'info', '-nostdin',
+           '-f', 'lavfi', '-i', f'testsrc2=size=1280x720:rate={rate}', '-frames:v', str(frames),
            *video_args, '-f', 'null', '-']
     try:
         proc = subprocess.run(cmd, env={**_base_env(HOME_DIR), **(extra_env or {})},
                               user=uid, group=gid, extra_groups=groups,
                               capture_output=True, text=True, timeout=30)
     except Exception as e:
+        if record:
+            _trace_add(video_args, False, str(e))
         return False, str(e)
+    if record:
+        _trace_add(video_args, proc.returncode == 0, proc.stderr)
     return proc.returncode == 0, proc.stderr
 
 
@@ -211,6 +230,17 @@ def _nvenc_reason(stderr: str) -> str:
         if hit:
             return hit[:200]
     return _last_line(stderr)
+
+
+def _driver_name(stderr: str) -> str:
+    """The VA-API driver FFmpeg reports, tidied: "Intel iHD driver for Intel(R) Gen
+    Graphics - 25.2.3 ()" -> "Intel iHD 25.2.3"."""
+    raw = next((l.split('driver:', 1)[1].strip() for l in (stderr or '').splitlines()
+                if 'VAAPI driver:' in l or 'VA-API driver:' in l), '')
+    m = re.match(r'(Intel iHD) driver.*? - ([\d.]+)', raw)
+    if m:
+        return f'{m.group(1)} {m.group(2)}'
+    return re.sub(r'\s*\(\s*\)\s*$', '', raw)
 
 
 def _vaapi_reason(stderr: str) -> str:
@@ -256,8 +286,7 @@ def detect_encoder(uid: int, gid: int, setting: str) -> dict:
                 '-vaapi_device', device, '-vf', 'format=nv12,hwupload', '-c:v', 'h264_vaapi',
                 *(['-low_power', '1'] if low_power else []), '-b:v', '4000k'])
             if ok:
-                driver = next((l.split('driver:', 1)[1].strip() for l in err.splitlines()
-                               if 'VAAPI driver:' in l or 'VA-API driver:' in l), '')
+                driver = _driver_name(err)
                 enc = {'kind': 'vaapi', 'device': device, 'gid': dgid, 'low_power': low_power,
                        'driver': driver or 'VA-API', 'reason': ''}
                 logger.info('[capture] GPU encoding on %s (%s%s)', device, enc['driver'],
@@ -275,7 +304,9 @@ def detect_encoder(uid: int, gid: int, setting: str) -> dict:
         reasons.append(f'NVIDIA encode test failed: {_nvenc_reason(err)}')
         logger.warning('[capture] NVENC encode test failed, using CPU: %s', _nvenc_reason(err))
     if not reasons:
-        reasons.append('no GPU passed to the container')
+        reasons.append(
+            'Windows GPU bridge (/dev/dxg) found, but this Docker VM has no /dev/dri render node, '
+            'which GPU encoding needs' if wsl_gpu() else 'no GPU passed to the container')
     return {'kind': 'x264', 'reason': '; '.join(reasons)}
 
 
@@ -316,8 +347,7 @@ def _detect_wsl_vaapi(uid: int, gid: int, device: str) -> tuple[dict | None, str
                                                 '-c:v', 'h264_vaapi', '-b:v', '4000k'],
                                extra_env=WSL_VAAPI_ENV)
         if ok:
-            driver = next((l.split('driver:', 1)[1].strip() for l in err.splitlines()
-                           if 'VAAPI driver:' in l or 'VA-API driver:' in l), '')
+            driver = _driver_name(err)
             logger.info('[capture] GPU encoding on Windows GPU via D3D12 (%s, %s colour conversion)',
                         driver or 'Mesa d3d12', upload.upper())
             return {'kind': 'vaapi', 'device': device, 'gid': gids[0], 'gids': gids,
@@ -325,6 +355,236 @@ def _detect_wsl_vaapi(uid: int, gid: int, device: str) -> tuple[dict | None, str
                     'driver': driver or 'Mesa D3D12', 'reason': ''}, ''
     logger.warning('[capture] D3D12 VA-API encode test failed on %s: %s', device, _last_line(err))
     return None, f'Windows GPU encode test failed: {_last_line(err)}'
+
+
+def _fact(label: str, status: str, detail: str) -> dict:
+    return {'label': label, 'status': status, 'detail': detail}   # status: ok | warn | fail | info
+
+
+def _node_info(path: str) -> str:
+    try:
+        st = os.stat(path)
+    except OSError:
+        return 'missing'
+    return f'mode {st.st_mode & 0o777:o}, uid {st.st_uid}, gid {st.st_gid}'
+
+
+def _first_line(cmd: list[str]) -> str:
+    try:
+        out = subprocess.run(cmd, capture_output=True, text=True, timeout=10).stdout
+        return (out.strip().splitlines() or [''])[0][:160]
+    except Exception:
+        return ''
+
+
+def _read(path: str) -> str:
+    try:
+        with open(path) as fp:
+            return fp.read().strip()
+    except OSError:
+        return ''
+
+
+def _can_open(uid: int, gid: int, groups: list[int], path: str) -> bool:
+    """Whether the capture user (not root) can read and write this device node."""
+    try:
+        return subprocess.run(['test', '-r', path, '-a', '-w', path], user=uid, group=gid,
+                              extra_groups=groups, timeout=5).returncode == 0
+    except Exception:
+        return False
+
+
+def _render_nodes() -> list[str]:
+    try:
+        return [f'/dev/dri/{n}' for n in sorted(os.listdir('/dev/dri')) if n.startswith('renderD')]
+    except OSError:
+        return []
+
+
+_VENDOR_IDS = {'0x8086': 'Intel', '0x1002': 'AMD', '0x10de': 'NVIDIA'}
+
+
+def _node_gpu(node: str) -> str:
+    """"Intel 8086:46D2, kernel driver i915" for a render node (vgem on Windows)."""
+    base = f'/sys/class/drm/{os.path.basename(node)}/device'
+    uevent = dict(l.split('=', 1) for l in _read(f'{base}/uevent').splitlines() if '=' in l)
+    vendor = _read(f'{base}/vendor').lower()
+    pci = uevent.get('PCI_ID', '')
+    name = _VENDOR_IDS.get(vendor, '')
+    parts = [f'{name} {pci}'.strip() if (name or pci) else 'unknown GPU']
+    if uevent.get('DRIVER'):
+        parts.append(f"kernel driver {uevent['DRIVER']}")
+    return ', '.join(parts)
+
+
+def _memory_facts(tuners: int) -> list[dict]:
+    """RAM is the usual limit: about 1 GB for FastChannels plus 0.8 GB per tuner."""
+    total = 0
+    for l in _read('/proc/meminfo').splitlines():
+        if l.startswith('MemTotal:'):
+            total = int(l.split()[1]) * 1024
+    limit = _read('/sys/fs/cgroup/memory.max') or _read('/sys/fs/cgroup/memory/memory.limit_in_bytes')
+    cap = total
+    if limit.isdigit() and 0 < int(limit) < (1 << 60):
+        cap = min(total or int(limit), int(limit))
+    gb = lambda b: f'{b / 2**30:.1f} GB'
+    need = 2**30 + int(0.8 * 2**30) * tuners
+    if not cap:
+        return [_fact('Memory', 'info', 'unknown')]
+    detail = (f'{gb(cap)} available to the container' + (f' (host has {gb(total)})' if total and cap < total * 0.98 else '')
+              + f'; {tuners} tuner{"s need" if tuners != 1 else " needs"} about {gb(need)}')
+    return [_fact('Memory', 'ok' if cap >= need else 'warn', detail)]
+
+
+def _speed(stderr: str) -> float:
+    m = re.findall(r'speed=\s*([\d.]+)x', stderr or '')
+    return float(m[-1]) if m else 0.0
+
+
+def _bench_gpu_args(enc: dict) -> tuple[list[str], dict, list[int]] | None:
+    if enc.get('kind') == 'nvenc':
+        return ['-pix_fmt', 'bgr0', '-c:v', 'h264_nvenc', '-b:v', '6000k'], {}, list(enc.get('groups') or [])
+    if enc.get('kind') == 'vaapi':
+        vf = (f'format=bgr0,{_VAAPI_GPU_CONVERT}' if enc.get('upload') == 'gpu'
+              else 'format=nv12,hwupload')
+        return (['-vaapi_device', enc['device'], '-vf', vf, '-c:v', 'h264_vaapi',
+                 *(['-low_power', '1'] if enc.get('low_power') else []), '-b:v', '6000k'],
+                dict(enc.get('env') or {}), _encoder_groups(enc))
+    return None
+
+
+def diagnose_gpu(uid: int, gid: int) -> dict:
+    """Everything needed to answer "why isn't my GPU used": what reached the container,
+    what's installed, every test encode with FFmpeg's own output, and a speed test.
+    Reruns the same detection a pool start does, but never changes the encoder in use."""
+    global _trace
+    from . import gpu_info, read_config
+    cfg = read_config()
+    setting = cfg.get('encoder', 'auto')
+    facts = []
+    kernel = _read('/proc/version')
+    on_wsl = wsl_gpu()
+    cpu = next((l.split(':', 1)[1].strip() for l in _read('/proc/cpuinfo').splitlines()
+                if l.startswith('model name')), '')
+    cpu_max = _read('/sys/fs/cgroup/cpu.max').split()
+    cpu_cap = ''
+    if len(cpu_max) == 2 and cpu_max[0].isdigit():
+        cpu_cap = f', limited to {int(cpu_max[0]) / int(cpu_max[1]):.1f} cores'
+    facts.append(_fact('Host', 'info', ('Windows (Docker Desktop / WSL2)' if 'microsoft' in kernel.lower() else 'Linux')
+                       + f' · {cpu or "unknown CPU"} · {os.cpu_count() or "?"} cores{cpu_cap}'))
+    facts += _memory_facts(int(cfg.get('max_tuners') or 1))
+
+    nodes = _render_nodes()
+    node = render_node()
+    try:
+        dri = sorted(os.listdir('/dev/dri'))
+    except OSError:
+        dri = []
+    facts.append(_fact('/dev/dri', 'ok' if node else ('fail' if not on_wsl else 'warn'),
+                       (', '.join(dri) if node else
+                        ('not present: the container has no GPU render node' if not dri else
+                         f'{", ".join(dri)}, but no render node'))))
+    for n in nodes:
+        used = n == node
+        groups = sorted({os.stat(n).st_gid}) if os.path.exists(n) else []
+        access = _can_open(uid, gid, groups, n)
+        facts.append(_fact(f'  {os.path.basename(n)}' + (' (used)' if used else ' (not used)'),
+                           'ok' if access else 'fail',
+                           f'{_node_gpu(n)} · {_node_info(n)} · capture user '
+                           + ('can open it' if access else "can't open it: permissions")))
+    if on_wsl or os.path.exists('/usr/lib/wsl'):
+        facts.append(_fact('/dev/dxg', 'ok' if on_wsl else 'fail', _node_info('/dev/dxg')))
+        facts.append(_fact('/usr/lib/wsl', 'ok' if wsl_libs_present() else 'fail',
+                           'D3D12 libraries mounted' if wsl_libs_present() else 'libd3d12.so not found: mount /usr/lib/wsl:/usr/lib/wsl:ro'))
+    nv = nvidia_present()
+    info = gpu_info()
+    if nv:
+        facts.append(_fact('NVIDIA', 'ok',
+                           f'/dev/nvidiactl {"present" if os.path.exists("/dev/nvidiactl") else "missing"}, '
+                           f'capabilities={os.environ.get("NVIDIA_DRIVER_CAPABILITIES") or "unset"}'))
+    facts.append(_fact('GPU seen', 'ok' if info.get('vendor') else 'info',
+                       f"{info.get('vendor') or 'none'}" + (f" via {info['via']}" if info.get('via') else '')))
+    mesa = installer.mesa_va_major()
+    drivers = installer.gpu_drivers_present()
+    facts.append(_fact('GPU drivers', 'ok' if drivers else 'warn',
+                       'installed' if drivers else 'not installed yet (use Reinstall on this page)'))
+    facts.append(_fact('Mesa', 'ok' if (mesa and (not on_wsl or mesa >= WSL_MESA_MIN_MAJOR)) else ('warn' if on_wsl else 'info'),
+                       f'{mesa or "not installed"}' + (f' (Windows needs {WSL_MESA_MIN_MAJOR}+)' if on_wsl else '')))
+    stray = {k: os.environ[k] for k in ('LIBVA_DRIVER_NAME', 'LIBVA_DRIVERS_PATH', 'GALLIUM_DRIVER',
+                                        'MESA_LOADER_DRIVER_OVERRIDE') if os.environ.get(k)}
+    if stray and not on_wsl:
+        facts.append(_fact('Driver overrides', 'warn',
+                           ', '.join(f'{k}={v}' for k, v in stray.items())
+                           + ': remove these from your compose file unless you set them on purpose'))
+    facts.append(_fact('FFmpeg', 'info', _first_line(['ffmpeg', '-version']) or 'not found'))
+    facts.append(_fact('Encoder setting', 'ok' if setting == 'auto' else 'warn',
+                       'Auto' if setting == 'auto' else 'CPU only (set on this page); GPU is never tried'))
+
+    with _trace_lock:
+        _trace = trace = []
+        try:
+            enc = detect_encoder(uid, gid, setting)
+            # A second GPU (say an iGPU plus a graphics card): only the first render node
+            # is used, so say whether the others would have worked.
+            if setting != 'cpu' and not on_wsl and len(nodes) > 1 and installer.gpu_drivers_present():
+                for other in nodes:
+                    if other == node:
+                        continue
+                    for low_power in (True, False):
+                        ok, _ = _try_encoder(uid, gid, sorted({os.stat(other).st_gid}), [
+                            '-vaapi_device', other, '-vf', 'format=nv12,hwupload', '-c:v', 'h264_vaapi',
+                            *(['-low_power', '1'] if low_power else []), '-b:v', '4000k'])
+                        if ok:
+                            break
+        finally:
+            _trace = None
+
+    # Speed test: how many times faster than real time each encoder runs 720p60.
+    with SERVICE.lock:
+        playing = sum(1 for x in SERVICE.sessions.values() if x.state in ('tuning', 'live'))
+    note = f' (measured with {playing} channel{"s" if playing != 1 else ""} playing, so it reads low)' if playing else ''
+    speeds = []
+    ok, err = _try_encoder(uid, gid, [], ['-c:v', 'libx264', '-preset', 'veryfast', '-pix_fmt', 'yuv420p',
+                                          '-b:v', '4000k'], frames=180, rate=60, record=False)
+    if ok and _speed(err):
+        speeds.append(_fact('Speed: CPU', 'info', f'{_speed(err):.1f}x real time at 720p60 (x264){note}'))
+    gpu_args = _bench_gpu_args(enc)
+    if gpu_args:
+        args, env, groups = gpu_args
+        ok, err = _try_encoder(uid, gid, groups, args, env, frames=180, rate=60, record=False)
+        if ok and _speed(err):
+            speeds.append(_fact('Speed: GPU', 'info', f'{_speed(err):.1f}x real time at 720p60 ({enc.get("driver") or enc["kind"]}){note}'))
+    facts += speeds
+
+    in_use = {k: v for k, v in ENCODER.items() if k not in ('gid', 'gids', 'groups', 'env')}
+    return {'facts': facts, 'tests': trace,
+            'result': {k: v for k, v in enc.items() if k not in ('gid', 'gids', 'groups', 'env')},
+            'in_use': in_use,
+            'hint': _gpu_hint(enc, in_use, setting, on_wsl, node, nv, len(nodes))}
+
+
+def _gpu_hint(enc: dict, in_use: dict, setting: str, on_wsl: bool, node: str | None,
+              nvidia: bool, n_nodes: int) -> str:
+    """What to do next, in plain words, for the most common ways this goes wrong."""
+    if enc.get('kind') in ('vaapi', 'nvenc'):
+        extra = (' Only the first GPU is used; the others are listed above.' if n_nodes > 1 else '')
+        if in_use.get('kind') not in ('vaapi', 'nvenc'):
+            return ('GPU encoding works now, but the running tuners are on the CPU. Turn Built-in Capture off and on '
+                    'to pick it up.' + extra)
+        return 'GPU encoding works.' + extra
+    if setting == 'cpu':
+        return 'Encoder is set to CPU only. Set it to Auto to try the GPU.'
+    if on_wsl and not node:
+        return ('Docker Desktop\'s VM has no /dev/dri render node, so Intel/AMD GPU encoding isn\'t possible there. '
+                'Remove the "/dev/dri" line (Docker refuses to start with it) and use the CPU. NVIDIA cards work on '
+                'Windows without /dev/dxg or /dev/dri: see the NVIDIA steps.')
+    if not node and not nvidia and not on_wsl:
+        return 'No GPU reached the container. Add the GPU lines for your setup (see "How?" on this page), then recreate the container.'
+    if on_wsl and not wsl_libs_present():
+        return 'Mount /usr/lib/wsl into the container: add "- /usr/lib/wsl:/usr/lib/wsl:ro" under volumes.'
+    if not installer.gpu_drivers_present():
+        return 'GPU drivers aren\'t installed yet. Use Reinstall on this page, then run this again.'
+    return 'The GPU reached the container but the test encode failed. Copy this report when asking for help; the FFmpeg output below shows why.'
 
 
 def _encoder_groups(enc: dict) -> list[int]:
@@ -1177,6 +1437,14 @@ class Handler(BaseHTTPRequestHandler):
         if self.path in ('/install', '/uninstall', '/update-chrome'):
             ok, msg = SERVICE.start_action(self.path.strip('/'))
             return self._json(202 if ok else 409, {'ok': ok, 'message': msg})
+        if self.path == '/gpu-diagnose':
+            uid, gid = SERVICE.uid, SERVICE.gid
+            if uid is None:
+                try:
+                    uid, gid = installer.ensure_capture_user()
+                except Exception as e:
+                    return self._json(409, {'error': f'Built-in Capture isn\'t installed yet ({e})'})
+            return self._json(200, diagnose_gpu(uid, gid))
         if self.path == '/reconcile':
             threading.Thread(target=SERVICE.reconcile, daemon=True).start()
             return self._json(202, {'ok': True})

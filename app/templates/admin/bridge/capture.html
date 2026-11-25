@@ -88,7 +88,8 @@ environment:
               <option value="auto">Auto</option>
               <option value="cpu">CPU only</option>
             </select>
-            <div class="help"><span id="capture-encoder-status"></span></div>
+            <div class="help"><span id="capture-encoder-status"></span>
+              <a href="#" onclick="captureGpuDiagnostics();return false" style="margin-left:0.4rem">GPU diagnostics</a></div>
           </div>
           <div class="field">
             <label for="capture-warm">Between channels</label>
@@ -119,6 +120,18 @@ environment:
         <div class="help" style="margin-top:0.5rem" id="capture-tuner-status"></div>
       </div>
       <span class="save-status" id="capture-status-msg"></span>
+    </div>
+  </div>
+  <div class="modal-overlay" id="capture-gpu-modal" onclick="if(event.target===this)this.classList.remove('open')">
+    <div class="modal-box" style="max-width:760px;max-height:85vh;display:flex;flex-direction:column">
+      <h3 style="margin:0 0 0.25rem">GPU diagnostics</h3>
+      <p style="color:var(--text-subtle);margin:0 0 1rem;font-size:0.85rem;line-height:1.5">Shows what reached the container and runs a short test encode. If you ask for help, use Copy report.</p>
+      <div id="capture-gpu-body" style="margin-bottom:1rem;line-height:1.5;font-size:0.95rem;overflow-y:auto"></div>
+      <div style="display:flex;gap:0.5rem;flex-wrap:wrap">
+        <button class="btn btn-secondary" id="capture-gpu-rerun" onclick="captureGpuDiagnostics()">Run again</button>
+        <button class="btn btn-secondary" id="capture-gpu-copy" onclick="captureGpuCopy()" disabled>Copy report</button>
+        <button class="btn-cancel-modal" onclick="document.getElementById('capture-gpu-modal').classList.remove('open')">Close</button>
+      </div>
     </div>
   </div>
   <script>
@@ -435,6 +448,79 @@ environment:
       const cfg = Object.assign({}, lastStatus.config || {}, {enabled: on});
       await fetch('/api/capture/config', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(cfg)});
       setTimeout(() => location.reload(), 600);
+    };
+
+    // ---- GPU diagnostics modal: checks + every test encode with FFmpeg's own output.
+    let gpuReportText = '';
+    const STATUS_MARK = {ok: '✓', warn: '!', fail: '✕', info: '·'};
+    window.captureGpuDiagnostics = async function () {
+      $('capture-gpu-modal').classList.add('open');
+      const body = $('capture-gpu-body');
+      body.textContent = 'Running GPU tests (a few seconds)…';
+      $('capture-gpu-copy').disabled = true;
+      $('capture-gpu-rerun').disabled = true;
+      let d;
+      try {
+        const r = await fetch('/api/capture/gpu-diagnostics');
+        d = await r.json();
+        if (!r.ok) d = {error: d.error || ('HTTP ' + r.status)};
+      } catch (e) { d = {error: String(e)}; }
+      $('capture-gpu-rerun').disabled = false;
+      body.textContent = '';
+      if (d.error) { body.appendChild(el('p', null, 'Couldn\'t run the tests: ' + d.error)); return; }
+      const res = d.result || {};
+      const good = res.kind === 'vaapi' || res.kind === 'nvenc';
+      const head = el('div', null, null);
+      head.style.cssText = 'padding:0.7rem 0.9rem;border-radius:8px;margin-bottom:1rem;border:1px solid var(--border);line-height:1.5';
+      head.appendChild(el('strong', null, good ? 'GPU encoding works' + (res.driver ? ' (' + res.driver + ')' : '')
+                          : 'Using CPU'));
+      if (!good && res.reason) head.appendChild(el('div', 'help', res.reason));
+      head.appendChild(el('div', null, d.hint || ''));
+      body.appendChild(head);
+
+      const used = (d.in_use || {}).kind;
+      const lines = [`GPU diagnostics, ${new Date().toISOString()}`,
+                     `Test result: ${good ? 'GPU works (' + (res.driver || res.kind) + ')' : 'CPU'}`
+                     + ` · running tuners use: ${used === 'vaapi' || used === 'nvenc' ? 'GPU' : 'CPU'}`];
+      if (!good && res.reason) lines.push('Reason: ' + res.reason);
+      lines.push('', 'Checks');
+      const table = el('table', null, null);
+      table.style.cssText = 'width:100%;border-collapse:collapse;font-size:0.88rem;margin-bottom:1rem';
+      (d.facts || []).forEach((f) => {
+        const tr = el('tr', null, null);
+        const mark = el('td', null, STATUS_MARK[f.status] || '·');
+        mark.style.cssText = 'width:1.4rem;font-weight:700;vertical-align:top;color:' + (f.status === 'ok' ? 'var(--success, #3a3)'
+          : f.status === 'fail' ? 'var(--danger, #d44)' : f.status === 'warn' ? 'var(--warning, #c90)' : 'inherit');
+        const label = el('td', null, f.label); label.style.cssText = 'white-space:nowrap;padding-right:0.8rem;vertical-align:top';
+        const det = el('td', null, f.detail); det.style.cssText = 'word-break:break-word;color:var(--text-subtle)';
+        tr.append(mark, label, det); table.appendChild(tr);
+        lines.push(`${STATUS_MARK[f.status] || '·'} ${f.label}: ${f.detail}`);
+      });
+      body.appendChild(table);
+
+      lines.push('', 'Test encodes');
+      body.appendChild(el('strong', null, 'Test encodes'));
+      if (!(d.tests || []).length) {
+        const none = el('div', 'help', 'No test encode ran, because no GPU reached the container.');
+        body.appendChild(none); lines.push('none ran');
+      }
+      (d.tests || []).forEach((t) => {
+        const det = el('details', null, null);
+        det.style.cssText = 'margin:0.4rem 0';
+        det.open = !t.ok;
+        det.appendChild(el('summary', null, (t.ok ? '✓ ' : '✕ ') + t.test));
+        const pre = el('pre', null, t.output || '(no output)');
+        pre.style.cssText = 'font-size:0.75rem;max-height:14rem;overflow:auto;white-space:pre-wrap;margin:0.4rem 0';
+        det.appendChild(pre); body.appendChild(det);
+        lines.push(`${t.ok ? 'OK  ' : 'FAIL'} ${t.test}`, ...(t.ok ? [] : [t.output || '(no output)']));
+      });
+      gpuReportText = lines.join('\n');
+      $('capture-gpu-copy').disabled = false;
+    };
+    window.captureGpuCopy = async function () {
+      try { await navigator.clipboard.writeText(gpuReportText); $('capture-gpu-copy').textContent = 'Copied'; }
+      catch (e) { window.prompt('Copy this report:', gpuReportText); }
+      setTimeout(() => { $('capture-gpu-copy').textContent = 'Copy report'; }, 2000);
     };
 
     window.captureUninstall = function () {

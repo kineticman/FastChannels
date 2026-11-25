@@ -264,6 +264,14 @@ Every setup comes down to the same thing: pass `/dev/dri` into the container
   a compose file: paste the compose file from the README into the tool's custom
   app or compose editor, with the `devices:` lines added.
 
+### Checking whether the GPU works
+
+On the Bridge page, click **GPU diagnostics** next to the Encoder line. It lists
+what reached the container (GPU devices, drivers, memory, CPU), runs a short test
+encode and shows FFmpeg's own output if it fails, tells you what to fix, and
+times the CPU and GPU encoders at 720p60. If you ask for help, click
+**Copy report** and paste it into your post.
+
 ## Windows
 
 Built-in Capture works on Windows with Docker Desktop. It has been tested on a

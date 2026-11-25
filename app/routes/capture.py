@@ -324,6 +324,16 @@ def _channel_names(ids) -> dict:
     return {str(cid): name for cid, name in rows}
 
 
+@capture_bp.get('/api/capture/gpu-diagnostics')
+def capture_gpu_diagnostics():
+    """GPU checks and test encodes for the Bridge page's diagnostics modal. Runs a few
+    10-frame test encodes, so it takes a few seconds."""
+    code, body = capture.daemon_request('POST', '/gpu-diagnose', timeout=120)
+    if code != 200:
+        return jsonify({'error': body.get('error') or f'capture service returned HTTP {code}'}), 503
+    return jsonify(body)
+
+
 @capture_bp.post('/api/capture/sessions/<session_id>/stop')
 def capture_stop_session(session_id: str):
     if not session_id.isalnum():
