@@ -347,8 +347,8 @@ Capture needs.
 
   FastChannels then installs a newer graphics driver (Mesa 26) and tests the
   GPU, and the **Encoder** line should say *Using your GPU*. This goes through Microsoft's
-  D3D12 video bridge, which has worked with an AMD Ryzen laptop GPU; Intel
-  GPUs may work the same way. If the test fails, Built-in Capture
+  D3D12 video bridge, which has worked with an AMD Ryzen laptop GPU and with
+  an Intel UHD Graphics 770 (Core i5-12500) on Windows 11. If the test fails, Built-in Capture
   carries on with the CPU. Budget about 2–2.5 CPU cores per channel at 720p
   60 fps without the GPU.
 
