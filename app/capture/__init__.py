@@ -157,7 +157,7 @@ def gpu_info() -> dict:
 def gpu_choices() -> list[dict]:
     """The GPUs the container could encode on, {'vendor', 'node'}: each real
     /dev/dri render node, plus NVIDIA handed over by the toolkit without one
-    (node None). Virtual display adapters (VMs) aren't GPUs and are left out.
+    (node None). NVIDIA appears at most once. Virtual display adapters (VMs) aren't GPUs and are left out.
     Empty on Windows, where the vendor is hidden behind D3D12."""
     if wsl_gpu():
         return []
@@ -172,10 +172,11 @@ def gpu_choices() -> list[dict]:
                 vendor = _PCI_VENDORS.get(fp.read().strip().lower())
         except OSError:
             vendor = None
-        if vendor:
+        # NVENC can't be pointed at one of several NVIDIA cards, so they count once.
+        if vendor and not (vendor == 'NVIDIA' and any(g['vendor'] == 'NVIDIA' for g in out)):
             out.append({'vendor': vendor, 'node': f'/dev/dri/{name}'})
-    toolkit = os.path.exists('/dev/nvidiactl') or (os.environ.get('NVIDIA_VISIBLE_DEVICES') or 'void') not in ('void', 'none', '')
-    if toolkit and not any(g['vendor'] == 'NVIDIA' for g in out):
+    # The device, not NVIDIA_VISIBLE_DEVICES: that can be set with no card behind it.
+    if os.path.exists('/dev/nvidiactl') and not any(g['vendor'] == 'NVIDIA' for g in out):
         out.append({'vendor': 'NVIDIA', 'node': None})
     return out
 

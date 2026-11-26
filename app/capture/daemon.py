@@ -872,7 +872,7 @@ def diagnose_gpu(uid: int, gid: int) -> dict:
     facts += speeds
 
     in_use = {k: v for k, v in ENCODER.items() if k not in ('gid', 'gids', 'groups', 'env')}
-    hint = _gpu_hint(enc, in_use, setting, on_wsl, node, nv, len(choices))
+    hint = _gpu_hint(enc, in_use, setting, on_wsl, node, nv)
     vi = next((f for f in facts if f['label'] == 'vainfo' and f['status'] == 'fail'), None)
     if vi and enc.get('kind') not in ('vaapi', 'nvenc'):
         hint = vi['detail'][0].upper() + vi['detail'][1:] + '. Copy this report when asking for help.'
@@ -886,6 +886,7 @@ def diagnose_gpu(uid: int, gid: int) -> dict:
             'hint': hint,
             'log': _recent_gpu_log(),
             'choose': _gpu_choice_help(enc, choices),
+            'choose_intro': _gpu_choice_intro(enc, choices),
             'help': (_self_help(facts, enc, setting, on_wsl, node, nv, nodes)
                      + _rate_control_help(enc, trace, node))}
 
@@ -1042,6 +1043,18 @@ def _gpu_choice_help(enc: dict, choices: list[dict]) -> list[dict]:
     return out
 
 
+def _gpu_choice_intro(enc: dict, choices: list[dict]) -> str:
+    """Says first that switching is optional, so it doesn't read as a fix."""
+    if len(choices) < 2:
+        return ''
+    used = next((g for g in choices if _gpu_in_use(enc, g)), None)
+    if not used:
+        return 'No GPU is being used right now. You can try passing in just one of them:'
+    node = f" ({os.path.basename(used['node'])})" if used['node'] else ''
+    other = 'the other one' if len(choices) == 2 else 'another one'
+    return f"Your {used['vendor']} GPU{node} is in use and nothing needs changing. To use {other} instead:"
+
+
 def _gpu_in_use(enc: dict, gpu: dict) -> bool:
     if enc.get('kind') == 'nvenc':
         return gpu['vendor'] == 'NVIDIA'
@@ -1055,14 +1068,13 @@ def _gpu_list_fact(enc: dict, choices: list[dict]) -> dict:
 
 
 def _gpu_hint(enc: dict, in_use: dict, setting: str, on_wsl: bool, node: str | None,
-              nvidia: bool, n_nodes: int) -> str:
+              nvidia: bool) -> str:
     """What to do next, in plain words, for the most common ways this goes wrong."""
     if enc.get('kind') in ('vaapi', 'nvenc'):
-        extra = (' Only one GPU is used; "Which GPU to use" below shows how to change it.' if n_nodes > 1 else '')
         if in_use.get('kind') not in ('vaapi', 'nvenc'):
             return ('GPU encoding works now, but the running tuners are on the CPU. Turn Built-in Capture off and on '
-                    'to pick it up.' + extra)
-        return 'GPU encoding works.' + extra
+                    'to pick it up.')
+        return 'GPU encoding works.'
     if setting == 'cpu':
         return 'Encoder is set to CPU only. Set it to Auto to try the GPU.'
     if on_wsl and not node and not nvidia and os.environ.get('NVIDIA_DRIVER_CAPABILITIES') is None \

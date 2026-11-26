@@ -270,7 +270,8 @@ want, then recreate the container:
 | One of two Intel or AMD GPUs | Only that device, for example `- /dev/dri/renderD129:/dev/dri/renderD129` |
 
 **GPU diagnostics** shows which chip each `renderD` number is, and when it finds
-two GPUs it gives you the lines to use. The numbers can change after a hardware
+two GPUs, **Switching GPUs (optional)** gives you the lines to use. If the GPU in
+use works, nothing needs changing. The numbers can change after a hardware
 change or sometimes a reboot, so run it again if the wrong GPU is picked.
 
 ### Other platforms

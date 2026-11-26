@@ -91,7 +91,7 @@ environment:
             <div class="help"><span id="capture-encoder-status"></span>
               <a href="#" onclick="captureGpuDiagnostics();return false" style="margin-left:0.4rem">GPU diagnostics</a></div>
             <div class="help" id="capture-gpu-choice" hidden><span id="capture-gpu-count"></span> GPUs found.
-              <a href="#" onclick="captureGpuDiagnostics();return false">How to choose which one is used</a></div>
+              <a href="#" onclick="captureGpuDiagnostics();return false">How to switch (optional)</a></div>
             <div class="help" id="capture-intel-newer" hidden>
               <span id="capture-intel-newer-failed" hidden>The newer Intel driver didn't work here, so the standard one was put back.</span>
               <button type="button" class="btn btn-secondary btn-sm" id="capture-intel-newer-try" onclick="captureIntelNewer()" hidden>Try a newer Intel driver (experimental)</button>
@@ -506,10 +506,14 @@ environment:
       body.appendChild(head);
 
       const helpLines = [];
-      const addHelp = (title, items) => {
+      const addHelp = (title, items, intro) => {
         if (!(items || []).length) return;
         body.appendChild(el('strong', null, title));
         helpLines.push('', title);
+        if (intro) {
+          body.appendChild(el('div', 'help', intro));
+          helpLines.push(intro);
+        }
         items.forEach((h, i) => {
           const box = el('div', null, null);
           box.style.cssText = 'margin:0.5rem 0 0.9rem;line-height:1.5';
@@ -529,7 +533,7 @@ environment:
         });
       };
       addHelp('Things to try', d.help);
-      addHelp('Which GPU to use', d.choose);
+      addHelp('Switching GPUs (optional)', d.choose, d.choose_intro);
 
       const used = (d.in_use || {}).kind;
       const lines = [`GPU diagnostics, ${new Date().toISOString()}`,
