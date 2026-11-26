@@ -1934,7 +1934,7 @@ def paramount_dash(channel_id: str):
 
 @play_bp.route('/play/hbomax/<channel_id>/dash.mpd')
 def hbomax_dash(channel_id: str):
-    """HBO Max live events under a .mpd name for FastChannels Player, like
+    """HBO Max channels and events under a .mpd name for FastChannels Player, like
     versant_tve_dash/paramount_dash: on the .m3u8 URL the Player parsed the
     Bolt DASH manifest as HLS (ERROR_CODE_PARSING_MANIFEST_MALFORMED, Fire TV
     2026-11-17). The manifest's BaseURLs are absolute and CORS is open, so this

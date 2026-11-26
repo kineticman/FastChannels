@@ -1,6 +1,6 @@
 """
-hbomax.py — HBO Max live sports events (TBS / TNT / truTV) via a direct
-subscription sign-in.
+hbomax.py — HBO Max via a direct subscription sign-in: the linear HBO channels
+and live sports events (TBS / TNT / truTV).
 
 Scoped and proven 2026-11-17; see dev/hbomax/BUILD_PLAN.md and the REA doc
 (dev/hbomax/HBO_Max_AndroidTV_7.14.0.69_REA.md) for the full trace.
@@ -14,11 +14,16 @@ Key facts:
   headless Camoufox web login (hbomax_login.py) that harvests the cookie jar —
   the same cookie-jar pattern as the Xfinity TVE source. The Android device-code
   flow is HMAC-signed and intentionally un-reproducible, so it is not used.
-- Live content: GET /cms/routes/sport-schedule (JSON:API) lists LIVE `video`
+- Linear channels: GET /cms/routes/channels lists `distributionChannel` items.
+  The ones with an `edit` relationship (HBO, Comedy, Drama, Hits, Movies) are
+  playable; the rest are themed hubs with no stream. Their `airing` items are
+  the guide (about 10 per channel).
+- Live events: GET /cms/routes/sport-schedule (JSON:API) lists LIVE `video`
   items, each with an `edit` relationship (the editId) and a `primaryChannel`
   (TBS/TNT/truTV). These are modelled as temporary event channels.
 - Playback: POST /any/playback/v1/playbackInfo with the editId → Widevine DASH
   (dash-cmaf-cenc) and a pre-signed license URL. Bridge-only (DRM), default-off.
+  An account without HBO is switched off per channel by the stream audit.
 """
 from __future__ import annotations
 
@@ -29,11 +34,13 @@ import uuid
 from datetime import datetime, timedelta, timezone
 
 from .base import BaseScraper, ChannelData, ConfigField, ProgramData, EVENT_CHANNEL_TAG, infer_language
-from ..tve.adobe_pass import TVEAuthError
+from ..gracenote_map import resolve_gracenote
+from ..tve.adobe_pass import TVEAuthError, TVENotAuthorizedError
 
 logger = logging.getLogger(__name__)
 
-SCHEME = 'hbomax://edit/'
+SCHEME = 'hbomax://edit/'                    # a sports event: <editId>
+CHANNEL_SCHEME = 'hbomax://channel/'         # a linear channel: <channelId>/<editId>
 UA = ('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
       '(KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36')
 SITE = 'https://www.hbomax.com'
@@ -60,12 +67,16 @@ _ROUTE_PARAMS = {'include': 'default',
 EVENT_END_GRACE_SECONDS = 2 * 3600          # keep the channel this long past scheduled end
 _EVENT_LOOKAHEAD_HOURS = 48                  # list events airing now or starting within this window
 _EVENT_PREFIX = 'event-'
+_CHANNEL_PREFIX = 'channel-'
+CHANNELS_ROUTE = '/cms/routes/channels'
+_CHANNEL_CATEGORIES = {'HBO': 'Entertainment', 'HBO Comedy': 'Comedy', 'HBO Drama': 'Drama',
+                       'HBO Hits': 'Movies', 'HBO Movies': 'Movies'}
 _SIGN_IN_MSG = ('HBO Max: not signed in yet — add your email and password and use '
                 '"Sign in" for HBO Max under Settings.')
 
 
 class HBOMaxScraper(BaseScraper):
-    """HBO Max live sports events (TBS / TNT / truTV) via a direct subscription."""
+    """HBO Max linear channels and live sports events via a direct subscription."""
 
     source_name = 'hbomax'
     added_in = '6.0.0'
@@ -73,8 +84,10 @@ class HBOMaxScraper(BaseScraper):
     source_category = 'premium'
     is_premium = True
     scrape_interval = 120
-    # Every channel is a time-boxed event; an upcoming one has no stream to audit.
-    stream_audit_enabled = False
+    # The default (linear) audit scope covers the HBO channels: it resolves each
+    # one, switches off what the account can't play, and fills the resolution
+    # badge. Events are skipped unless the audit is run with events included.
+    stream_audit_enabled = True
     license_url = LICENSE_BASE
     all_channels_require_drm_bridge = True
     config_required = True
@@ -85,6 +98,10 @@ class HBOMaxScraper(BaseScraper):
         ConfigField('email', 'HBO Max email', placeholder='you@example.com'),
         ConfigField('password', 'HBO Max password', field_type='password', secret=True),
         ConfigField('cookie_jar', 'HBO Max session', secret=True, hidden=True),
+        ConfigField('include_channels', 'Include HBO channels', field_type='toggle', default='true',
+                    help_text='24/7 HBO channels; needs a plan that includes them.'),
+        ConfigField('include_events', 'Include live sports events', field_type='toggle', default='true',
+                    help_text='TNT, TBS and truTV events as temporary channels, one per event.'),
     ]
 
     def __init__(self, config: dict | None = None):
@@ -97,6 +114,9 @@ class HBOMaxScraper(BaseScraper):
     def _signed_in(self) -> bool:
         jar = self.config.get('cookie_jar') or {}
         return bool(jar.get('cookies'))
+
+    def _flag(self, key: str) -> bool:
+        return str(self.config.get(key, 'true')).strip().lower() in ('1', 'true', 'yes', 'on')
 
     def _device_id(self) -> str:
         jar = self.config.get('cookie_jar') or {}
@@ -149,8 +169,25 @@ class HBOMaxScraper(BaseScraper):
         if not self._signed_in():
             logger.info('[hbomax] not signed in; no channels')
             return []
-        events = self._live_events()
+        linear = self._linear_channels() if self._flag('include_channels') else []
+        events = self._live_events() if self._flag('include_events') else []
+        self._events_cache = events
+        self.excluded_channel_ids = self._switched_off_ids()
         out = []
+        for ch in linear:
+            out.append(ChannelData(
+                source_channel_id=f'{_CHANNEL_PREFIX}{ch["id"]}',
+                name=ch['name'],
+                slug=f'hbomax-{ch["id"]}',
+                logo_url=ch['logo'],
+                stream_url=f'{CHANNEL_SCHEME}{ch["id"]}/{ch["edit_id"]}',
+                stream_type='dash',
+                category=_CHANNEL_CATEGORIES.get(ch['name'], 'Entertainment'),
+                language='en',
+                country='US',
+                gracenote_id=resolve_gracenote('hbomax', lookup_key=ch['id']),
+                guide_key=f'{_CHANNEL_PREFIX}{ch["id"]}',
+            ))
         now = datetime.now(timezone.utc)
         for ev in events:
             end = ev['end'] or (now + timedelta(hours=4))
@@ -190,16 +227,52 @@ class HBOMaxScraper(BaseScraper):
                 gracenote_mode='off',
             ))
             logger.info('[hbomax] + VOD test channel (%s)', test_edit)
-        logger.info('[hbomax] %d live event channels', len(out))
+        logger.info('[hbomax] %d channels (%d linear)', len(out), len(linear))
         return out
+
+    def _switched_off_ids(self) -> set[str]:
+        """Stored rows of a kind the user has turned off, so they leave the
+        output as filtered rather than as missing upstream."""
+        prefixes = tuple(p for flag, p in (('include_channels', _CHANNEL_PREFIX),
+                                           ('include_events', _EVENT_PREFIX))
+                         if not self._flag(flag))
+        if not prefixes:
+            return set()
+        from ..models import Channel, Source
+        rows = (Channel.query.join(Source).with_entities(Channel.source_channel_id)
+                .filter(Source.name == 'hbomax').all())
+        return {cid for (cid,) in rows if cid.startswith(prefixes)}
+
+    def _linear_channels(self) -> list[dict]:
+        """The playable linear channels, each with its upcoming airings."""
+        cached = getattr(self, '_linear_cache', None)
+        if cached is not None:
+            return cached
+        r = self.session.get(f'{HOME}{CHANNELS_ROUTE}', headers=self._headers(),
+                             params=_ROUTE_PARAMS, timeout=30)
+        if r.status_code in (401, 403):
+            raise self._sign_in_needed()
+        r.raise_for_status()
+        self._linear_cache = _parse_channels(r.json() or {})
+        if not self._linear_cache:
+            # Never seen from a working session; don't let it drop the channels.
+            raise RuntimeError('HBO Max: the channel page listed no playable channels')
+        return self._linear_cache
 
     def fetch_epg(self, channels: list[ChannelData], **kwargs) -> list[ProgramData]:
         programs = []
+        if self._signed_in() and self._flag('include_channels'):
+            wanted = {c.source_channel_id for c in channels}
+            for ch in self._linear_channels():
+                cid = f'{_CHANNEL_PREFIX}{ch["id"]}'
+                if cid in wanted:
+                    programs.extend(ProgramData(source_channel_id=cid, **a) for a in ch['airings'])
         by_edit = {c.source_channel_id: c for c in channels}
         # EPG-only runs skip fetch_channels, so populate the event cache if needed.
         events = getattr(self, '_events_cache', None)
         if events is None:
-            events = self._live_events() if self._signed_in() else []
+            wanted = self._signed_in() and self._flag('include_events')
+            events = self._live_events() if wanted else []
         for ev in events:
             cid = f'{_EVENT_PREFIX}{ev["edit_id"]}'
             if cid not in by_edit:
@@ -304,13 +377,13 @@ class HBOMaxScraper(BaseScraper):
     # ── playback ─────────────────────────────────────────────────────────────
 
     def audit_resolve(self, raw_url: str) -> str:
-        self.resolve(raw_url)
+        if (raw_url or '').startswith(CHANNEL_SCHEME):
+            return self.resolve(raw_url)
+        # An upcoming event has no stream yet; its place in the schedule is the check.
         return raw_url
 
     def resolve(self, raw_url: str) -> str:
-        edit_id = raw_url[len(SCHEME):] if raw_url.startswith(SCHEME) else ''
-        if not edit_id:
-            raise ValueError(f'Unsupported HBO Max stream URL: {raw_url}')
+        key, edit_id = _parse_stream_url(raw_url)
         if not self._signed_in():
             raise self._sign_in_needed()
         state = self._bootstrap_state()
@@ -330,14 +403,19 @@ class HBOMaxScraper(BaseScraper):
                 raise RuntimeError(
                     f'HBO Max: event is not playable yet (its playback window has not opened): '
                     f'HTTP {r.status_code} {_err(r)}')
-            raise RuntimeError(f'HBO Max: not entitled for this event: HTTP {r.status_code} {_err(r)}')
+            if _not_in_plan(_err(r)):
+                raise TVENotAuthorizedError(
+                    f'HBO Max: your plan does not include this channel: HTTP {r.status_code} {_err(r)}')
+            raise RuntimeError(f'HBO Max: playback refused: HTTP {r.status_code} {_err(r)}')
         body = _json(r)
         url = (body.get('manifest') or {}).get('url')
         if not r.ok or not url:
             raise RuntimeError(f'HBO Max: no stream for {edit_id}: HTTP {r.status_code} {_err(r)}')
         license_url = ((((body.get('drm') or {}).get('schemes') or {}).get('widevine')) or {}).get('licenseUrl')
+        # Merged on write (config_store), so two channels tuned at once both keep
+        # their license URL.
         streams = dict(self.cache.get('hbomax_streams') or {})
-        streams[edit_id] = {'license': license_url, 'url': url, 'at': time.time()}
+        streams[key] = {'license': license_url, 'at': time.time()}
         self._update_cache('hbomax_streams', streams)
         logger.info('[hbomax] stream session for %s (%s)', edit_id, url.split('/')[2])
         return url
@@ -366,14 +444,89 @@ class HBOMaxScraper(BaseScraper):
 
     @classmethod
     def get_license_url(cls, config: dict, channel_id: str | None = None) -> str | None:
-        key = (channel_id or '')[len(_EVENT_PREFIX):] if (channel_id or '').startswith(_EVENT_PREFIX) else channel_id
-        cached = ((config.get('hbomax_streams') or {}).get(key or '') or {}).get('license')
+        key = (channel_id or '').removeprefix(_EVENT_PREFIX).removeprefix(_CHANNEL_PREFIX)
+        cached = ((config.get('hbomax_streams') or {}).get(key) or {}).get('license')
         return cached or cls.license_url
 
     @classmethod
     def prepare_license_request(cls, challenge: bytes, config: dict, channel_id: str | None = None, **kwargs):
         return challenge, {'Content-Type': 'application/octet-stream', 'User-Agent': UA,
                            'Origin': SITE, 'Referer': SITE + '/'}
+
+
+def _parse_stream_url(raw_url: str) -> tuple[str, str]:
+    """(license cache key, editId). The key is the channel id for a linear
+    channel and the editId for an event, matching the source_channel_id."""
+    if (raw_url or '').startswith(CHANNEL_SCHEME):
+        key, _, edit_id = raw_url[len(CHANNEL_SCHEME):].partition('/')
+    else:
+        key = edit_id = raw_url[len(SCHEME):] if (raw_url or '').startswith(SCHEME) else ''
+    if not (key and edit_id):
+        raise ValueError(f'Unsupported HBO Max stream URL: {raw_url}')
+    return key, edit_id
+
+
+def _not_in_plan(code: str) -> bool:
+    """A 403 that means the account lacks the content, as opposed to a location
+    or stream-limit refusal that a later try could pass."""
+    code = (code or '').lower()
+    if any(word in code for word in ('geo', 'concurren', 'limit', 'region')):
+        return False
+    return any(word in code for word in ('access.denied', 'entitle', 'package', 'subscription'))
+
+
+def _parse_channels(data: dict) -> list[dict]:
+    inc = data.get('included') or []
+    images = {x['id']: (x.get('attributes') or {})
+              for x in inc if x.get('type') == 'image'}
+
+    def ref(x, name):
+        d = ((x.get('relationships') or {}).get(name) or {}).get('data')
+        return d.get('id') if isinstance(d, dict) else None
+
+    def image(x, *kinds):
+        refs = ((x.get('relationships') or {}).get('images') or {}).get('data') or []
+        by_kind = {}
+        for r in refs:
+            attrs = images.get(r.get('id')) or {}
+            by_kind.setdefault(attrs.get('kind'), attrs.get('src'))
+        return next((by_kind[k] for k in kinds if by_kind.get(k)), None)
+
+    airings: dict[str, dict] = {}
+    for x in inc:
+        if x.get('type') != 'airing':
+            continue
+        a = x.get('attributes') or {}
+        start, end = _dt(a.get('scheduleStart')), _dt(a.get('scheduleEnd'))
+        title = (a.get('showName') or a.get('name') or '').strip()
+        if not (start and end and end > start and title):
+            continue
+        name = (a.get('name') or '').strip()
+        airings.setdefault(ref(x, 'distributionChannel'), {})[start] = {
+            'title': title,
+            'episode_title': name if name and name != title else None,
+            'start_time': start,
+            'end_time': end,
+            'description': a.get('description'),
+            'season': a.get('seasonNumber'),
+            'episode': a.get('episodeNumber'),
+            'program_type': 'episode' if a.get('episodeNumber') else None,
+            'poster_url': image(x, 'default', 'cover-artwork-horizontal', 'cover-artwork'),
+        }
+
+    out = []
+    for x in inc:
+        if x.get('type') != 'distributionChannel' or not ref(x, 'edit'):
+            continue
+        name = ((x.get('attributes') or {}).get('name') or '').strip()
+        if not name:
+            continue
+        out.append({
+            'id': x['id'], 'name': name, 'edit_id': ref(x, 'edit'),
+            'logo': image(x, 'cover-artwork-square', 'cover-artwork', 'default'),
+            'airings': [v for _, v in sorted(airings.get(x['id'], {}).items())],
+        })
+    return out
 
 
 def _tax_name(rel: dict, key: str, tax: dict) -> str | None:

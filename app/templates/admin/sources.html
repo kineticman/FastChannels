@@ -5298,9 +5298,12 @@
         : (info.signin_error ? `<span style="color:var(--danger-soft)">${escapeHtml(info.signin_error)}</span>` : '');
       return `
         <div class="config-title">HBO Max Settings</div>
-        <div class="config-note">Adds HBO Max live sports events (TNT, TBS, truTV) as temporary channels, one per event
-          airing now or in the next two days. Needs an HBO Max subscription. These are DRM (Widevine) streams, so they play
-          only through a DRM bridge. HBO's own channels aren't carried — Max streams events, not linear channels.</div>
+        <div class="config-note">Adds the HBO channels (HBO, Comedy, Drama, Hits, Movies) and HBO Max live sports events
+          (TNT, TBS, truTV). Needs an HBO Max subscription. These are DRM (Widevine) streams, so they play only through a
+          DRM bridge (FastChannels Player or PrismCast) and appear in the bridge playlists, not the standard one. Stream
+          Audit switches off any channel your plan doesn't include.</div>
+        ${_eventToggle('include_channels', 'Include HBO channels', values)}
+        ${_eventToggle('include_events', 'Include live sports events', values)}
         <div class="fields-grid">
           <div class="field">
             <label for="cfg-${sourceId}-email">HBO Max email</label>
