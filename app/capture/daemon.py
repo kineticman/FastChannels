@@ -56,6 +56,8 @@ WIDEVINE_SETTLE_SECONDS = 6
 TUNE_TIMEOUT_SECONDS = 40
 SESSION_IDLE_SECONDS = 45
 TUNER_RETRY_SECONDS = 30
+PULSE_START_SECONDS = 30   # generous: a 2-core NAS is slow right after an install
+POOL_RETRY_SECONDS = 60    # after a failed pool start, doubling up to 10 minutes
 PREEMPT_IDLE_SECONDS = 6   # unpolled this long + another channel wants the tuner = client is gone
 STALL_RELOAD_SECONDS = 20
 GPU_STALL_SECONDS = 15      # GPU ffmpeg alive but no frame out this long = driver hang
@@ -186,6 +188,10 @@ def _nvidia_gids() -> list[int]:
 # encode's raw FFmpeg output is kept for the report. None outside a diagnosis.
 _trace: list | None = None
 _trace_lock = threading.Lock()
+
+
+def _pulse_log(limit: int) -> list[str]:
+    return [l.strip()[:300] for l in _read(os.path.join(RUN_DIR, 'pulse.log')).splitlines() if l.strip()][-limit:]
 
 
 def _trace_add(video_args: list[str], ok: bool, stderr: str, env: dict | None = None) -> None:
@@ -646,7 +652,8 @@ def _recent_gpu_log(limit: int = 15) -> list[str]:
     """The latest capture log lines about drivers and encoding, so a pasted report
     carries them. A message repeated in a row shows once, with a count."""
     from ..logfile import LOG_PATH
-    words = ('driver', 'gpu', 'encod', 'va-api', 'nvenc', 'apt-get', 'capture-install] failed')
+    words = ('driver', 'gpu', 'encod', 'va-api', 'nvenc', 'apt-get', 'capture-install] failed',
+             'audio', 'could not start', 'failed to start')
     found = deque(maxlen=limit)     # [message without its timestamp, latest line, count]
     try:
         with open(LOG_PATH, encoding='utf-8', errors='replace') as fp:
@@ -813,6 +820,15 @@ def diagnose_gpu(uid: int, gid: int) -> dict:
             t['why'] = _vaapi_reason(t.get('output') or '')
 
     vainfo = _vainfo_report(uid, gid, node, on_wsl)
+    with SERVICE.lock:
+        pool_error, tuner_states = SERVICE.pool_error, [t.state for t in SERVICE.tuners]
+    if pool_error:
+        facts.append(_fact('Tuners', 'fail', f"couldn't start: {pool_error}"))
+        trace.append({'test': 'PulseAudio log', 'ok': False, 'show': True,
+                      'output': '\n'.join(_pulse_log(20)) or '(PulseAudio wrote nothing)'})
+    else:
+        facts.append(_fact('Tuners', 'ok' if tuner_states else 'info',
+                           ', '.join(tuner_states) or 'none running (Built-in Capture is off or still starting)'))
     if vainfo:
         facts.append(vainfo[0])
         trace.append(vainfo[1])
@@ -842,7 +858,11 @@ def diagnose_gpu(uid: int, gid: int) -> dict:
     vi = next((f for f in facts if f['label'] == 'vainfo' and f['status'] == 'fail'), None)
     if vi and enc.get('kind') not in ('vaapi', 'nvenc'):
         hint = vi['detail'][0].upper() + vi['detail'][1:] + '. Copy this report when asking for help.'
+    if pool_error:
+        # Nothing about the GPU matters until the tuners run.
+        hint = f"The tuners couldn't start: {pool_error}. Copy this report when asking for help."
     return {'facts': facts, 'tests': trace,
+            'tuners_running': bool(tuner_states) and not pool_error,
             'result': {k: v for k, v in enc.items() if k not in ('gid', 'gids', 'groups', 'env')},
             'in_use': in_use,
             'hint': hint,
@@ -1470,6 +1490,8 @@ class CaptureService:
         self.pulse: subprocess.Popen | None = None
         self.pool_key: tuple | None = None
         self.pool_error = ''
+        self.pool_fails = 0
+        self.pool_retry_at = 0.0
         self.busy_action = ''          # 'install' | 'uninstall' | 'update-chrome' | 'reinstall'
         self.uid = self.gid = None
 
@@ -1532,9 +1554,16 @@ class CaptureService:
         with self.lock:
             if desired == self.pool_key and all(t.alive() or t.state in ('starting', 'error', 'asleep')
                                                 for t in self.tuners):
-                self._restart_dead_tuners()
-                self._apply_warmth()
-                return
+                if not (desired and self.pool_error and time.monotonic() >= self.pool_retry_at):
+                    self._restart_dead_tuners()
+                    self._apply_warmth()
+                    return
+                # The last start failed: try again. Claimed here so a second
+                # reconcile running now doesn't start it too.
+                self.pool_retry_at = time.monotonic() + 3600
+                logger.info('[capture] retrying after: %s', self.pool_error)
+            elif desired != self.pool_key:
+                self.pool_fails = 0
             if self.sessions and desired is not None and self.pool_key is not None:
                 # Settings changed while someone is watching: apply when the pool is idle.
                 if any(s.state in ('tuning', 'live') for s in self.sessions.values()):
@@ -1605,13 +1634,18 @@ class CaptureService:
             ENCODER.clear()
             ENCODER.update(enc)
         except Exception as e:
-            self.pool_error = f'could not start audio: {e}'
-            logger.error('[capture] %s', self.pool_error)
+            what = 'could not start audio' if 'pulseaudio' in str(e) else 'could not start'
+            self.pool_error = f'{what}: {e}'
+            self.pool_fails += 1
+            delay = min(POOL_RETRY_SECONDS * 2 ** (self.pool_fails - 1), 600)
+            self.pool_retry_at = time.monotonic() + delay
+            logger.error('[capture] %s (trying again in %d s)', self.pool_error, delay)
             self.pool_key = key
             return
         keep_warm = read_config().get('keep_warm', True)
         with self.lock:
             self.pool_error = ''
+            self.pool_fails = 0
             self.tuners = [Tuner(i, quality, self.uid, self.gid) for i in range(tuners)]
             self.pool_key = key
         if not keep_warm:
@@ -1684,14 +1718,23 @@ class CaptureService:
                '-L', f'module-native-protocol-unix socket={PULSE_SOCKET} auth-anonymous=1']
         for i in range(tuners):
             cmd += ['-L', f'module-null-sink sink_name=fct{i} rate=48000 channels=2']
+        try:
+            os.unlink(os.path.join(RUN_DIR, 'pulse.log'))    # only this attempt's output
+        except OSError:
+            pass
         self.pulse = _spawn(cmd, uid=self.uid, gid=self.gid, env=_base_env(HOME_DIR), log_name='pulse')
-        for _ in range(50):
+        for _ in range(PULSE_START_SECONDS * 10):
             if os.path.exists(PULSE_SOCKET):
                 return
             if self.pulse.poll() is not None:
                 break
             time.sleep(0.1)
-        raise RuntimeError(f'pulseaudio did not start; see {RUN_DIR}/pulse.log')
+        code = self.pulse.poll()
+        how = f'exited with code {code}' if code is not None else f'not ready after {PULSE_START_SECONDS} s'
+        tail = _pulse_log(6)
+        for line in tail:
+            logger.error('[capture] pulseaudio: %s', line)
+        raise RuntimeError(f'pulseaudio did not start ({how})' + (f': {tail[-1]}' if tail else ', with no output'))
 
     def stop_pool(self) -> None:
         with self.lock:

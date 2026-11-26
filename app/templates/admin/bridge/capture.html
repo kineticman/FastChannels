@@ -527,10 +527,11 @@ environment:
       const used = (d.in_use || {}).kind;
       const lines = [`GPU diagnostics, ${new Date().toISOString()}`,
                      `Test result: ${good ? 'GPU works (' + (res.driver || res.kind) + ')' : 'CPU'}`
-                     + ` · running tuners use: ${used === 'vaapi' || used === 'nvenc' ? 'GPU' : 'CPU'}`];
+                     + (d.tuners_running === false ? ' · no tuners running'
+                        : ` · running tuners use: ${used === 'vaapi' || used === 'nvenc' ? 'GPU' : 'CPU'}`)];
       if (!good && res.reason) lines.push('Reason: ' + res.reason);
       // The short answers first: a long paste often gets cut in the middle.
-      const key = (d.facts || []).filter((f) => ['Versions', 'Driver packages', 'Intel driver', 'Intel firmware'].includes(f.label)
+      const key = (d.facts || []).filter((f) => ['Tuners', 'Versions', 'Driver packages', 'Intel driver', 'Intel firmware'].includes(f.label)
         || f.label.includes('(used)'));
       if (key.length) lines.push('', 'Summary', ...key.map((f) => `${f.label.trim()}: ${f.detail}`));
       (d.tests || []).filter((t) => t.why).forEach((t) => {
