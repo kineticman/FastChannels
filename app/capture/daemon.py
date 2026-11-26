@@ -526,6 +526,10 @@ def _environment_facts(kernel: str) -> list[dict]:
     return facts
 
 
+_INTEL_NO_H264 = ('the installed driver offers no H.264 encoder for this GPU. It may be the driver '
+                  'and not the hardware')
+
+
 def _vainfo_report(uid: int, gid: int, node: str | None, on_wsl: bool) -> tuple[dict, dict] | None:
     """What the VA-API driver says the GPU can encode, as a fact plus the raw output.
     The H.264 encode entrypoints are the answer to "can this GPU do it at all"."""
@@ -549,6 +553,9 @@ def _vainfo_report(uid: int, gid: int, node: str | None, on_wsl: bool) -> tuple[
     if enc:
         return _fact('vainfo', 'ok', 'H.264 encode: ' + ', '.join(enc)
                      + (' (EncSliceLP is the low-power engine)' if 'EncSliceLP' in enc else '')), entry
+    if _node_gpu(node).startswith('Intel'):
+        # Newer Intel chips can list none with the driver we install, so don't blame the GPU.
+        return _fact('vainfo', 'fail', _INTEL_NO_H264), entry
     return _fact('vainfo', 'fail', 'this GPU/driver lists NO H.264 encoder, so GPU encoding can\'t work on it'), entry
 
 
@@ -779,7 +786,11 @@ def _self_help(facts: list[dict], enc: dict, setting: str, on_wsl: bool, node: s
                  'to the service.'], _NVIDIA_COMPOSE_WSL if on_wsl else _NVIDIA_COMPOSE_LINUX)
     if node and not installer.gpu_drivers_present():
         add('GPU drivers are not installed', ['Use Reinstall on this page, wait for it to finish, then run this again.'])
-    if status('vainfo') == 'fail':
+    if (by.get('vainfo') or {}).get('detail') == _INTEL_NO_H264:
+        add('The driver offers no H.264 encoder for this GPU',
+            ['It may be the driver and not the hardware. Use Copy report and post it so it can be looked into. '
+             'The CPU is used meanwhile.'])
+    elif status('vainfo') == 'fail' and 'NO H.264' in by['vainfo']['detail']:
         add('The GPU has no H.264 encoder', ['vainfo lists no H.264 encode for this GPU or driver, so GPU encoding cannot work on it. '
                                              'Nothing to fix; the CPU is used.'])
     if not out and node:
