@@ -529,18 +529,19 @@ Hover over the line to see the reason.
 
 ### A very new Intel chip shows no H.264 encoder
 
-**GPU diagnostics** may say *the installed driver offers no H.264 encoder for
-this GPU*. This has been seen on a Core Ultra 7 356H (Panther Lake): the GPU
-reaches the container, but the Intel driver FastChannels installs is older than
-the chip needs. FastChannels also tries Intel's non-free driver (see
-[Use your GPU](#use-your-gpu)), which hasn't been tested on this chip. A newer
-Intel driver did encode on that machine, but it comes from Debian's unstable
-release, so FastChannels doesn't install it. Without a working driver Built-in
-Capture uses the CPU, which is usually plenty on a chip this new.
+**Panther Lake** (Core Ultra series 3) needs a newer Intel driver than the one
+in FastChannels' Debian release. When the test encode fails on one of these
+chips, the Bridge page shows **Try a newer Intel driver (experimental)** under
+**Encoder**. It installs that driver and a few supporting libraries from Debian
+testing, which is not a finished release, so it only happens if you click it.
+It hasn't been confirmed on Panther Lake with this setup. The driver is kept
+only if the GPU then encodes, and **Go back to the standard Intel driver** on the
+same page undoes it. A future change in Debian testing could stop it installing
+after an update, which would leave you on the CPU.
 
-Installing the driver by hand isn't recommended: it can pull other unstable
-packages into the container, and recreating the container (which every update
-does) removes it.
+On other very new Intel chips, **GPU diagnostics** may say *the installed driver
+offers no H.264 encoder for this GPU*. Built-in Capture uses the CPU; please post
+the diagnostics report.
 
 ### The video is choppy
 

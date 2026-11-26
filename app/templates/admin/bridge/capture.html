@@ -90,6 +90,11 @@ environment:
             </select>
             <div class="help"><span id="capture-encoder-status"></span>
               <a href="#" onclick="captureGpuDiagnostics();return false" style="margin-left:0.4rem">GPU diagnostics</a></div>
+            <div class="help" id="capture-intel-newer" hidden>
+              <span id="capture-intel-newer-failed" hidden>The newer Intel driver didn't work here, so the standard one was put back.</span>
+              <button type="button" class="btn btn-secondary btn-sm" id="capture-intel-newer-try" onclick="captureIntelNewer()" hidden>Try a newer Intel driver (experimental)</button>
+              <a href="#" id="capture-intel-newer-undo" onclick="captureIntelStandard();return false" hidden>Go back to the standard Intel driver</a>
+            </div>
           </div>
           <div class="field">
             <label for="capture-warm">Between channels</label>
@@ -265,6 +270,15 @@ environment:
       if (onGpu && enc.nonfree && tunersRunning(s)) {
         $('capture-encoder-status').textContent += ' with Intel\'s non-free driver (the free one couldn\'t encode on this chip)';
       }
+      if (onGpu && enc.newer && tunersRunning(s)) {
+        $('capture-encoder-status').textContent += ' with a newer Intel driver (the standard one is too old for this chip)';
+      }
+      const intel = s.intel_newer || {};
+      const offer = Boolean(enc.offer_newer) && !s.action;
+      show('capture-intel-newer', offer || (Boolean(intel.chosen) && !s.action));
+      show('capture-intel-newer-try', offer);
+      show('capture-intel-newer-failed', offer && Boolean(intel.failed));
+      show('capture-intel-newer-undo', Boolean(intel.chosen));
       // The full reason (e.g. which driver piece is missing) on hover.
       $('capture-encoder-status').title = onGpu ? '' : (enc.reason || '');
       show('capture-gpu-tip', tunersRunning(s) && !onGpu && !gpuFailed && (cfg.encoder || 'auto') === 'auto');
@@ -273,6 +287,8 @@ environment:
       renderNowPlaying(s, enc, onGpu);
       $('capture-tuner-status').textContent = tuners.length ? ''
         : s.action === 'gpu-driver' ? 'Your Intel GPU couldn\'t encode with the free driver. Trying Intel\'s non-free one (about a minute)…'
+        : s.action === 'intel-newer' ? 'Installing and testing the newer Intel driver (about a minute)…'
+        : s.action === 'intel-standard' ? 'Putting the standard Intel driver back…'
         : (s.pool_error ? 'Tuners couldn\'t start: ' + s.pool_error : (cfg.enabled ? 'Tuners starting…' : ''));
       const playing = (s.sessions || []).some((x) => x.state === 'tuning' || x.state === 'live');
 
@@ -557,6 +573,26 @@ environment:
       try { await navigator.clipboard.writeText(gpuReportText); $('capture-gpu-copy').textContent = 'Copied'; }
       catch (e) { window.prompt('Copy this report:', gpuReportText); }
       setTimeout(() => { $('capture-gpu-copy').textContent = 'Copy report'; }, 2000);
+    };
+
+    async function captureIntelAction(action) {
+      const r = await fetch(`/api/capture/${action}`, {method: 'POST'}).catch(() => null);
+      const body = r ? await r.json().catch(() => ({})) : {};
+      if (!r || !r.ok) alert(body.message || 'Could not reach the capture service.');
+      setTimeout(refresh, 800);
+    }
+    window.captureIntelNewer = function () {
+      if (confirm('Try a newer Intel driver? (experimental)\n\n'
+          + 'Your Intel chip is newer than the video driver FastChannels includes. This installs a newer driver '
+          + 'and a few supporting libraries from Debian testing, which is not a finished release.\n\n'
+          + '\u2022 It has not been confirmed to work on Panther Lake with this setup.\n'
+          + '\u2022 A future change in Debian testing could stop it installing after an update. You would be back on the CPU.\n'
+          + '\u2022 It is kept only if the GPU then encodes. Otherwise the standard driver is put back.\n'
+          + '\u2022 The capture tuners restart, so anything playing stops.')) captureIntelAction('intel-newer');
+    };
+    window.captureIntelStandard = function () {
+      if (confirm('Go back to the standard Intel driver?\n\nBuilt-in Capture will use the CPU on this chip. '
+          + 'The capture tuners restart, so anything playing stops.')) captureIntelAction('intel-standard');
     };
 
     window.captureUninstall = function () {

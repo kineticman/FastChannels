@@ -300,6 +300,8 @@ def detect_encoder(uid: int, gid: int, setting: str) -> dict:
                            'driver': driver or 'VA-API', 'reason': '', 'env': dict(env)}
                     if installer.intel_state().get('nonfree') and installer.nonfree_intel_installed():
                         enc['nonfree'] = True
+                    if installer.intel_state().get('newer') and installer.newer_intel_installed():
+                        enc['newer'] = True
                     logger.info('[capture] GPU encoding on %s (%s%s)', device, enc['driver'],
                                 ', low-power' if low_power else '')
                     return enc
@@ -324,17 +326,38 @@ def detect_encoder(uid: int, gid: int, setting: str) -> dict:
     return {'kind': 'x264', 'reason': '; '.join(reasons)}
 
 
-def _wants_intel_nonfree(uid: int, gid: int, setting: str, enc: dict) -> bool:
+def _intel_variant(device: str) -> str:
+    """Which other driver to try on this chip: Panther Lake needs a newer one,
+    anything else the non-free build."""
+    pci = re.search(r'8086:[0-9A-F]{4}', _node_gpu(device).upper())
+    if pci and pci.group(0) in installer.PANTHER_LAKE_IDS and installer.newer_intel_available():
+        return 'newer'
+    return 'nonfree'
+
+
+def _intel_gpu_failed(uid: int, gid: int, setting: str, enc: dict) -> bool:
     """An Intel GPU the capture user can open, whose test encode failed with the
-    free driver, and the non-free one hasn't been tried by this version."""
-    from ..config import VERSION
+    standard driver."""
     device = render_node()
-    state = installer.intel_state()
     return bool(setting != 'cpu' and enc.get('kind') == 'x264' and device and not wsl_gpu()
                 and installer.gpu_drivers_present() and not installer.nonfree_intel_installed()
-                and state.get('failed_on') != VERSION
+                and not installer.newer_intel_installed()
                 and _node_gpu(device).startswith('Intel')
                 and _can_open(uid, gid, [os.stat(device).st_gid], device))
+
+
+def _wants_intel_nonfree(uid: int, gid: int, setting: str, enc: dict) -> bool:
+    """Try the non-free driver automatically: it's from the image's own Debian
+    release. Once per FastChannels version if it doesn't help."""
+    from ..config import VERSION
+    return (_intel_gpu_failed(uid, gid, setting, enc) and _intel_variant(render_node()) == 'nonfree'
+            and installer.intel_state().get('failed_on') != VERSION)
+
+
+def _offers_newer_intel(uid: int, gid: int, setting: str, enc: dict) -> bool:
+    """Offer the newer driver on the Bridge page. It comes from Debian testing, so
+    it's only installed when the user asks."""
+    return _intel_gpu_failed(uid, gid, setting, enc) and _intel_variant(render_node()) == 'newer'
 
 
 # x11grab delivers bgr0; this is how sessions upload it and convert on the GPU.
@@ -684,8 +707,11 @@ def diagnose_gpu(uid: int, gid: int) -> dict:
     if not on_wsl and node and _node_gpu(node).startswith('Intel'):
         if installer.nonfree_intel_installed() and installer.intel_state().get('nonfree'):
             facts.append(_fact('Intel driver', 'info', "Intel's non-free build (the free one couldn't encode on this chip)"))
+        elif installer.newer_intel_installed() and installer.intel_state().get('newer'):
+            facts.append(_fact('Intel driver', 'info', "newer build from Debian testing (the standard one is too "
+                               'old for this chip)'))
         elif 'failed_on' in installer.intel_state():
-            facts.append(_fact('Intel driver', 'info', "free build; Intel's non-free build was tried and didn't "
+            facts.append(_fact('Intel driver', 'info', 'standard build; another driver was tried and didn\'t '
                                'encode either (Reinstall tries again)'))
     stray = {k: os.environ[k] for k in ('LIBVA_DRIVER_NAME', 'LIBVA_DRIVERS_PATH', 'GALLIUM_DRIVER',
                                         'MESA_LOADER_DRIVER_OVERRIDE') if os.environ.get(k)}
@@ -846,7 +872,10 @@ def _self_help(facts: list[dict], enc: dict, setting: str, on_wsl: bool, node: s
                  'to the service.'], _NVIDIA_COMPOSE_WSL if on_wsl else _NVIDIA_COMPOSE_LINUX)
     if node and not installer.gpu_drivers_present():
         add('GPU drivers are not installed', ['Use Reinstall on this page, wait for it to finish, then run this again.'])
-    if (by.get('vainfo') or {}).get('detail') == _INTEL_NO_H264:
+    if node and _node_gpu(node).startswith('Intel') and _intel_variant(node) == 'newer':
+        add('Panther Lake: a newer Intel driver is available (experimental)',
+            ['Close this window and use "Try a newer Intel driver" under Encoder on the Bridge page.'])
+    elif (by.get('vainfo') or {}).get('detail') == _INTEL_NO_H264:
         add('The driver offers no H.264 encoder for this GPU',
             ['It may be the driver and not the hardware. Use Copy report and post it so it can be looked into. '
              'The CPU is used meanwhile.'])
@@ -1379,6 +1408,10 @@ class CaptureService:
         with self.lock:
             if self.busy_action:
                 return False, f'{self.busy_action} already running'
+            if action == 'intel-newer' and not ENCODER.get('offer_newer'):
+                return False, "The newer Intel driver isn't offered on this server."
+            if action == 'intel-standard' and not installer.intel_state().get('newer'):
+                return False, 'The standard driver is already in use.'
             if action in ('install', 'update-chrome') and not supported_platform():
                 return False, 'Google Chrome for Linux is only available on amd64 (x86_64).'
             self.busy_action = action
@@ -1387,7 +1420,7 @@ class CaptureService:
 
     def _run_action(self, action: str) -> None:
         try:
-            if action in ('uninstall', 'update-chrome', 'install'):
+            if action in ('uninstall', 'update-chrome', 'install', 'intel-newer', 'intel-standard'):
                 self.stop_pool()
             if action == 'install':
                 installer.install()
@@ -1397,6 +1430,13 @@ class CaptureService:
                 installer.reinstall()
             elif action == 'uninstall':
                 installer.uninstall()
+            elif action == 'intel-newer':
+                uid, gid = installer.ensure_capture_user()
+                self.uid, self.gid = uid, gid
+                self._swap_intel_driver('newer', read_config()['encoder'],
+                                        {'kind': 'x264', 'reason': 'GPU encode test failed'})
+            elif action == 'intel-standard':
+                installer.restore_free_intel(failed=False)
         finally:
             with self.lock:
                 self.busy_action = ''
@@ -1490,6 +1530,8 @@ class CaptureService:
             enc = detect_encoder(self.uid, self.gid, encoder_setting)
             if _wants_intel_nonfree(self.uid, self.gid, encoder_setting, enc):
                 enc = self._try_intel_nonfree(encoder_setting, enc)
+            elif _offers_newer_intel(self.uid, self.gid, encoder_setting, enc):
+                enc = {**enc, 'offer_newer': True}
             ENCODER.clear()
             ENCODER.update(enc)
         except Exception as e:
@@ -1513,38 +1555,48 @@ class CaptureService:
         logger.info('[capture] starting %d tuner(s) at %s', tuners, quality)
 
     def _try_intel_nonfree(self, setting: str, enc: dict) -> dict:
-        """Install Intel's non-free drivers and test again; keep them only if the GPU
-        then encodes. Holds busy_action so no install/uninstall runs apt meanwhile."""
+        """The automatic fallback at pool start. Holds busy_action so no
+        install/uninstall runs apt meanwhile."""
         with self.lock:
             if self.busy_action:
                 return enc
             self.busy_action = 'gpu-driver'
         try:
-            logger.info("[capture] the Intel GPU test failed; trying Intel's non-free driver")
+            return self._swap_intel_driver('nonfree', setting, enc)
+        finally:
+            with self.lock:
+                self.busy_action = ''
+
+    def _swap_intel_driver(self, variant: str, setting: str, enc: dict) -> dict:
+        """Install the other Intel driver ('nonfree' or 'newer') and test again; keep
+        it only if the GPU then encodes. The caller holds busy_action."""
+        try:
+            what = "a newer Intel driver" if variant == 'newer' else "Intel's non-free driver"
+            logger.info("[capture] the Intel GPU test failed; trying %s", what)
             ENCODER.clear()
-            ENCODER.update(kind='x264', reason="trying Intel's non-free GPU driver")
+            ENCODER.update(kind='x264', reason=f'trying {what}')
             tested = False
             try:
                 installer.begin_intel_nonfree()
-                installer.switch_intel_drivers(True)
+                if variant == 'newer':
+                    installer.switch_to_newer_intel()
+                else:
+                    installer.switch_intel_drivers(True)
                 new = detect_encoder(self.uid, self.gid, setting)
                 tested = True
                 if new.get('kind') == 'vaapi':
-                    installer.keep_intel_nonfree()
-                    logger.info("[capture] Intel's non-free driver works (%s); keeping it", new.get('driver'))
-                    return {**new, 'nonfree': True}
-                logger.warning("[capture] Intel's non-free driver didn't encode either; restoring the free one")
+                    installer.keep_intel_driver(variant)
+                    logger.info('[capture] %s works (%s); keeping it', what, new.get('driver'))
+                    return {**new, variant: True}
+                logger.warning("[capture] %s didn't encode either; restoring the standard one", what)
             except Exception as e:
                 # Usually no network: not remembered as failed, so a later start tries again.
-                logger.warning("[capture] could not set up Intel's non-free driver: %s", e)
+                logger.warning('[capture] could not set up %s: %s', what, e)
             installer.restore_free_intel(failed=tested)
             return enc
         except Exception as e:
             logger.warning("[capture] Intel driver fallback failed: %s", e)
             return enc
-        finally:
-            with self.lock:
-                self.busy_action = ''
 
     def _start_pulse(self, tuners: int) -> None:
         _kill(self.pulse)
@@ -1672,11 +1724,15 @@ class CaptureService:
 
     def health(self) -> dict:
         status = read_status()
+        intel = installer.intel_state()
+        from ..config import VERSION
         with self.lock:
             return {
                 'platform_supported': supported_platform(),
                 'install': status,
                 'action': self.busy_action,
+                'intel_newer': {'chosen': bool(intel.get('newer')),
+                                'failed': intel.get('failed_on') == VERSION},
                 'config': read_config(),
                 'pool_error': self.pool_error,
                 'encoder': {k: v for k, v in ENCODER.items() if k not in ('gid', 'gids', 'groups', 'env')},
@@ -1772,7 +1828,7 @@ class Handler(BaseHTTPRequestHandler):
             sid = self.path[len('/sessions/'):-len('/stop')]
             ok = SERVICE.stop_session(sid)
             return self._json(200 if ok else 404, {'ok': ok})
-        if self.path in ('/install', '/uninstall', '/update-chrome'):
+        if self.path in ('/install', '/uninstall', '/update-chrome', '/intel-newer', '/intel-standard'):
             ok, msg = SERVICE.start_action(self.path.strip('/'))
             return self._json(202 if ok else 409, {'ok': ok, 'message': msg})
         if self.path == '/gpu-diagnose':

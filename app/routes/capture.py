@@ -367,7 +367,7 @@ def capture_action(action: str):
             _last_active = capture.is_active()
             _apply_capture_change()
         return jsonify({'ok': True, 'config': cfg})
-    if action not in ('install', 'uninstall', 'update-chrome'):
+    if action not in ('install', 'uninstall', 'update-chrome', 'intel-newer', 'intel-standard'):
         abort(404)
     code, body = capture.daemon_request('POST', f'/{action}', timeout=5)
     if code == 0:
