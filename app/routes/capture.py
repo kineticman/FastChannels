@@ -47,6 +47,8 @@ _BUSY_WAIT_SECONDS = 10
 # segment — VLC logged a stall per 2 s segment for the first ~45 s with 2 here.
 _MIN_SEGMENTS = 3
 _HLS_HEADERS = {'Cache-Control': 'no-cache, no-store'}
+_HLS_MIMETYPE = 'application/vnd.apple.mpegurl'
+_M3U_HEADER = '#EXTM3U\n'
 
 
 _last_warn: dict[int, float] = {}
@@ -203,6 +205,38 @@ def capture_playlist(channel_id: int):
         return _text(f'{channel.name} is only allowed on hardware players (its license keys are '
                      'restricted), so Built-in Capture skips it. Use FastChannels Player for it.', 422)
 
+    steps = _tune(channel.id, channel.name)
+    first = next(steps)
+    if first is not None:
+        # Settled without waiting: an already-running capture, or a refusal.
+        status, text, retry_after = first
+        if status == 200:
+            return Response(text, mimetype=_HLS_MIMETYPE, headers=_HLS_HEADERS)
+        return _text(text, status, retry_after=retry_after)
+
+    # A new tune takes 10 s or more to produce video, and Channels DVR gives up on a
+    # playlist whose response headers haven't arrived by then ("timeout awaiting
+    # response headers"). Send them and the first line now, the rest when it exists.
+    # The status is already 200, so a tune that fails from here ends in a comment.
+    def body():
+        yield _M3U_HEADER
+        for step in steps:
+            if step is not None:
+                status, text, _ = step
+                yield text.removeprefix(_M3U_HEADER) if status == 200 else f'# {" ".join(text.split())}\n'
+
+    return Response(body(), mimetype=_HLS_MIMETYPE,
+                    headers={**_HLS_HEADERS, 'X-Accel-Buffering': 'no'})
+
+
+def _tune(channel_id: int, name: str):
+    """Start or keep alive this channel's capture. Yields None for each second spent
+    waiting on a tune (or a waking tuner), then one (status, text, retry_after): the
+    playlist when status is 200, otherwise why there isn't one. Waiting for a busy
+    tuner yields nothing, so that refusal still goes out with its own status.
+
+    Runs partly after the request has ended, so it must not touch the database or
+    anything else tied to the app context."""
     deadline = time.monotonic() + _TUNE_WAIT_SECONDS
     started = time.monotonic()
     busy_since = None
@@ -222,17 +256,21 @@ def capture_playlist(channel_id: int):
             else:
                 wait_until = deadline
             if body.get('retry_after') and now + 1 < wait_until:
+                if body.get('reason') == 'starting':
+                    yield None
                 time.sleep(1)
                 continue
-            _warn_limited(channel_id, '[capture] channel %s (%s): %s', channel_id, channel.name, msg)
-            return _text(msg, 503, retry_after=body.get('retry_after') or 10)
+            _warn_limited(channel_id, '[capture] channel %s (%s): %s', channel_id, name, msg)
+            yield 503, msg, body.get('retry_after') or 10
+            return
         if not logged and body.get('state') == 'tuning':
             # Only new tunes: the playlist is re-polled every ~2s while someone watches.
-            logger.info('[capture] channel %s (%s) tuning, session %s', channel_id, channel.name,
+            logger.info('[capture] channel %s (%s) tuning, session %s', channel_id, name,
                         body.get('session'))
             logged = True
         if body.get('state') == 'failed':
-            return _text(f"Capture failed: {body.get('error') or 'unknown error'}", 502)
+            yield 502, f"Capture failed: {body.get('error') or 'unknown error'}", None
+            return
         session_id = body.get('session') or ''
         if body.get('state') == 'live' and _SESSION_RE.match(session_id):
             path = os.path.join(capture.SESSION_ROOT, session_id, 'index.m3u8')
@@ -245,10 +283,12 @@ def capture_playlist(channel_id: int):
                 if time.monotonic() - started > 1:
                     logger.info('[capture] channel %s ready after %.1fs (source video %s)',
                                 channel_id, time.monotonic() - started, body.get('video_size'))
-                return Response(_rewrite(playlist, session_id),
-                                mimetype='application/vnd.apple.mpegurl', headers=_HLS_HEADERS)
+                yield 200, _rewrite(playlist, session_id), None
+                return
         if time.monotonic() > deadline:
-            return _text(f'Capture did not produce video within {_TUNE_WAIT_SECONDS}s.', 504, retry_after=5)
+            yield 504, f'Capture did not produce video within {_TUNE_WAIT_SECONDS}s.', 5
+            return
+        yield None
         time.sleep(1)
 
 
