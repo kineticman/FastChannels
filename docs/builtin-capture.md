@@ -256,6 +256,23 @@ Linux, so please report how it goes there.
    the NVIDIA encode test failed, the Logs page has the reason (look for
    `[capture]` lines).
 
+### More than one GPU
+
+FastChannels uses one GPU. There is no setting to pick it: it uses what you pass
+into the container. With both an Intel or AMD GPU and an NVIDIA card passed in,
+the first one in `/dev/dri` is tried first. To choose, pass in only the one you
+want, then recreate the container:
+
+| To use | Pass in |
+|---|---|
+| NVIDIA instead of Intel or AMD | The [NVIDIA](#nvidia-experimental) settings, with the `/dev/dri` lines removed |
+| Intel or AMD instead of NVIDIA | `/dev/dri`, with the NVIDIA settings removed. If `/dev/dri` also lists the NVIDIA card, pass only the other device |
+| One of two Intel or AMD GPUs | Only that device, for example `- /dev/dri/renderD129:/dev/dri/renderD129` |
+
+**GPU diagnostics** shows which chip each `renderD` number is, and when it finds
+two GPUs it gives you the lines to use. The numbers can change after a hardware
+change or sometimes a reboot, so run it again if the wrong GPU is picked.
+
 ### Other platforms
 
 Every setup comes down to the same thing: pass `/dev/dri` into the container

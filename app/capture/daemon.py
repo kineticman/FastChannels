@@ -42,7 +42,7 @@ import requests
 from . import (CHROME_BIN, DAEMON_HOST, DAEMON_PORT, PROFILES_DIR, HOME_DIR,
                INCOMPATIBLE_SOURCES, QUALITY_PRESETS, SESSION_ROOT, WATCH_BASE,
                GPU_BITRATE_FACTOR, is_restricted_error, mark_restricted, read_config, read_status,
-               render_node, supported_platform, COLD_IDLE_SECONDS,
+               render_node, gpu_choices, supported_platform, COLD_IDLE_SECONDS,
                WSL_MESA_MIN_MAJOR, WSL_VAAPI_ENV, wsl_gpu, wsl_libs_present)
 from . import installer
 
@@ -184,6 +184,16 @@ def _nvidia_gids() -> list[int]:
     return sorted(gids)
 
 
+def _nvenc_only(node: str | None) -> bool:
+    """A render node on NVIDIA's own driver, with the container toolkit set up:
+    it encodes through NVENC and has no VA-API driver, so testing VA-API on it
+    only produces failures that look like a broken GPU."""
+    if not node or not nvidia_present():
+        return False
+    link = f'/sys/class/drm/{os.path.basename(node)}/device/driver'
+    return os.path.basename(os.path.realpath(link)) == 'nvidia'
+
+
 # The GPU diagnostics modal reruns detect_encoder with this set, so every test
 # encode's raw FFmpeg output is kept for the report. None outside a diagnosis.
 _trace: list | None = None
@@ -283,6 +293,8 @@ def detect_encoder(uid: int, gid: int, setting: str) -> dict:
         return {'kind': 'x264', 'reason': 'CPU only (set on the Bridge page)'}
     reasons = []
     device = render_node()
+    if _nvenc_only(device):
+        device = None
     if device and not installer.gpu_drivers_present():
         reasons.append('GPU drivers not installed yet (Reinstall the add-on)')
     elif device and wsl_gpu():
@@ -789,7 +801,7 @@ def diagnose_gpu(uid: int, gid: int) -> dict:
             # is used, so say whether the others would have worked.
             if setting != 'cpu' and not on_wsl and len(nodes) > 1 and installer.gpu_drivers_present():
                 for other in nodes:
-                    if other == node:
+                    if other == node or _nvenc_only(other):
                         continue
                     for low_power in (True, False):
                         ok, _ = _try_encoder(uid, gid, sorted({os.stat(other).st_gid}), [
@@ -819,7 +831,7 @@ def diagnose_gpu(uid: int, gid: int) -> dict:
         if not t['ok']:
             t['why'] = _vaapi_reason(t.get('output') or '')
 
-    vainfo = _vainfo_report(uid, gid, node, on_wsl)
+    vainfo = None if _nvenc_only(node) else _vainfo_report(uid, gid, node, on_wsl)
     with SERVICE.lock:
         pool_error, tuner_states = SERVICE.pool_error, [t.state for t in SERVICE.tuners]
     if pool_error:
@@ -832,9 +844,15 @@ def diagnose_gpu(uid: int, gid: int) -> dict:
     if vainfo:
         facts.append(vainfo[0])
         trace.append(vainfo[1])
+    elif _nvenc_only(node):
+        facts.append(_fact('VA-API', 'info', 'not tested: it is for Intel and AMD; NVIDIA encodes through NVENC'))
     elif node:
         facts.append(_fact('vainfo', 'info', 'not installed (Reinstall the add-on to add it); '
                            'it lists what encoders the GPU offers'))
+
+    choices = gpu_choices()
+    if len(choices) > 1:
+        facts.append(_gpu_list_fact(enc, choices))
 
     # Speed test: how many times faster than real time each encoder runs 720p60.
     with SERVICE.lock:
@@ -854,7 +872,7 @@ def diagnose_gpu(uid: int, gid: int) -> dict:
     facts += speeds
 
     in_use = {k: v for k, v in ENCODER.items() if k not in ('gid', 'gids', 'groups', 'env')}
-    hint = _gpu_hint(enc, in_use, setting, on_wsl, node, nv, len(nodes))
+    hint = _gpu_hint(enc, in_use, setting, on_wsl, node, nv, len(choices))
     vi = next((f for f in facts if f['label'] == 'vainfo' and f['status'] == 'fail'), None)
     if vi and enc.get('kind') not in ('vaapi', 'nvenc'):
         hint = vi['detail'][0].upper() + vi['detail'][1:] + '. Copy this report when asking for help.'
@@ -867,6 +885,7 @@ def diagnose_gpu(uid: int, gid: int) -> dict:
             'in_use': in_use,
             'hint': hint,
             'log': _recent_gpu_log(),
+            'choose': _gpu_choice_help(enc, choices),
             'help': (_self_help(facts, enc, setting, on_wsl, node, nv, nodes)
                      + _rate_control_help(enc, trace, node))}
 
@@ -998,11 +1017,48 @@ def _self_help(facts: list[dict], enc: dict, setting: str, on_wsl: bool, node: s
     return out
 
 
+def _gpu_choice_help(enc: dict, choices: list[dict]) -> list[dict]:
+    """With two or more GPUs: for each one not in use, the compose lines that make
+    FastChannels use it. There is no setting; it's whichever GPU is passed in."""
+    if len(choices) < 2:
+        return []
+    out = []
+    for gpu in choices:
+        if _gpu_in_use(enc, gpu):
+            continue
+        if gpu['vendor'] == 'NVIDIA':
+            out.append({'title': 'To use the NVIDIA GPU',
+                        'steps': ['Remove the /dev/dri lines from the FastChannels service, add these (they need the '
+                                  'NVIDIA Container Toolkit on the host) and recreate the container:'],
+                        'snippet': _NVIDIA_COMPOSE_LINUX})
+        else:
+            name = os.path.basename(gpu['node'])
+            nvidia_too = any(g['vendor'] == 'NVIDIA' for g in choices)
+            out.append({'title': f"To use the {gpu['vendor']} GPU ({name})",
+                        'steps': ['In the FastChannels service, pass in only this device instead of all of /dev/dri'
+                                  + (', remove the NVIDIA settings' if nvidia_too else '')
+                                  + ' and recreate the container:'],
+                        'snippet': f"    devices:\n      - {gpu['node']}:{gpu['node']}"})
+    return out
+
+
+def _gpu_in_use(enc: dict, gpu: dict) -> bool:
+    if enc.get('kind') == 'nvenc':
+        return gpu['vendor'] == 'NVIDIA'
+    return enc.get('kind') == 'vaapi' and gpu['node'] == enc.get('device')
+
+
+def _gpu_list_fact(enc: dict, choices: list[dict]) -> dict:
+    names = [gpu['vendor'] + (f" ({os.path.basename(gpu['node'])})" if gpu['node'] else '')
+             + (' in use' if _gpu_in_use(enc, gpu) else '') for gpu in choices]
+    return _fact('GPUs found', 'info', ', '.join(names))
+
+
 def _gpu_hint(enc: dict, in_use: dict, setting: str, on_wsl: bool, node: str | None,
               nvidia: bool, n_nodes: int) -> str:
     """What to do next, in plain words, for the most common ways this goes wrong."""
     if enc.get('kind') in ('vaapi', 'nvenc'):
-        extra = (' Only the first GPU is used; the others are listed above.' if n_nodes > 1 else '')
+        extra = (' Only one GPU is used; "Which GPU to use" below shows how to change it.' if n_nodes > 1 else '')
         if in_use.get('kind') not in ('vaapi', 'nvenc'):
             return ('GPU encoding works now, but the running tuners are on the CPU. Turn Built-in Capture off and on '
                     'to pick it up.' + extra)
@@ -1874,6 +1930,7 @@ class CaptureService:
                 'config': read_config(),
                 'pool_error': self.pool_error,
                 'encoder': {k: v for k, v in ENCODER.items() if k not in ('gid', 'gids', 'groups', 'env')},
+                'gpus': len(gpu_choices()),
                 'tuners': [t.describe() for t in self.tuners],
                 'sessions': [s.describe() for s in self.sessions.values()],
                 'incompatible_sources': sorted(INCOMPATIBLE_SOURCES),

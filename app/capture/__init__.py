@@ -154,6 +154,32 @@ def gpu_info() -> dict:
     return {'vendor': '', 'via': ''}
 
 
+def gpu_choices() -> list[dict]:
+    """The GPUs the container could encode on, {'vendor', 'node'}: each real
+    /dev/dri render node, plus NVIDIA handed over by the toolkit without one
+    (node None). Virtual display adapters (VMs) aren't GPUs and are left out.
+    Empty on Windows, where the vendor is hidden behind D3D12."""
+    if wsl_gpu():
+        return []
+    try:
+        nodes = sorted(n for n in os.listdir('/dev/dri') if n.startswith('renderD'))
+    except OSError:
+        nodes = []
+    out = []
+    for name in nodes:
+        try:
+            with open(f'/sys/class/drm/{name}/device/vendor') as fp:
+                vendor = _PCI_VENDORS.get(fp.read().strip().lower())
+        except OSError:
+            vendor = None
+        if vendor:
+            out.append({'vendor': vendor, 'node': f'/dev/dri/{name}'})
+    toolkit = os.path.exists('/dev/nvidiactl') or (os.environ.get('NVIDIA_VISIBLE_DEVICES') or 'void') not in ('void', 'none', '')
+    if toolkit and not any(g['vendor'] == 'NVIDIA' for g in out):
+        out.append({'vendor': 'NVIDIA', 'node': None})
+    return out
+
+
 def supported_platform() -> bool:
     return platform.machine().lower() in ('x86_64', 'amd64')
 

@@ -90,6 +90,8 @@ environment:
             </select>
             <div class="help"><span id="capture-encoder-status"></span>
               <a href="#" onclick="captureGpuDiagnostics();return false" style="margin-left:0.4rem">GPU diagnostics</a></div>
+            <div class="help" id="capture-gpu-choice" hidden><span id="capture-gpu-count"></span> GPUs found.
+              <a href="#" onclick="captureGpuDiagnostics();return false">How to choose which one is used</a></div>
             <div class="help" id="capture-intel-newer" hidden>
               <span id="capture-intel-newer-failed" hidden>The newer Intel driver didn't work here, so the standard one was put back.</span>
               <button type="button" class="btn btn-secondary btn-sm" id="capture-intel-newer-try" onclick="captureIntelNewer()" hidden>Try a newer Intel driver (experimental)</button>
@@ -273,6 +275,8 @@ environment:
       if (onGpu && enc.newer && tunersRunning(s)) {
         $('capture-encoder-status').textContent += ' with a newer Intel driver (the standard one is too old for this chip)';
       }
+      $('capture-gpu-count').textContent = s.gpus || '';
+      show('capture-gpu-choice', (s.gpus || 0) > 1);
       const intel = s.intel_newer || {};
       const offer = Boolean(enc.offer_newer) && !s.action;
       show('capture-intel-newer', offer || (Boolean(intel.chosen) && !s.action));
@@ -502,10 +506,11 @@ environment:
       body.appendChild(head);
 
       const helpLines = [];
-      if ((d.help || []).length) {
-        body.appendChild(el('strong', null, 'Things to try'));
-        helpLines.push('', 'Things to try');
-        (d.help || []).forEach((h, i) => {
+      const addHelp = (title, items) => {
+        if (!(items || []).length) return;
+        body.appendChild(el('strong', null, title));
+        helpLines.push('', title);
+        items.forEach((h, i) => {
           const box = el('div', null, null);
           box.style.cssText = 'margin:0.5rem 0 0.9rem;line-height:1.5';
           box.appendChild(el('div', null, (i + 1) + '. ' + h.title)).style.fontWeight = '600';
@@ -522,7 +527,9 @@ environment:
           }
           body.appendChild(box);
         });
-      }
+      };
+      addHelp('Things to try', d.help);
+      addHelp('Which GPU to use', d.choose);
 
       const used = (d.in_use || {}).kind;
       const lines = [`GPU diagnostics, ${new Date().toISOString()}`,
@@ -531,7 +538,7 @@ environment:
                         : ` · running tuners use: ${used === 'vaapi' || used === 'nvenc' ? 'GPU' : 'CPU'}`)];
       if (!good && res.reason) lines.push('Reason: ' + res.reason);
       // The short answers first: a long paste often gets cut in the middle.
-      const key = (d.facts || []).filter((f) => ['Tuners', 'Versions', 'Driver packages', 'Intel driver', 'Intel firmware'].includes(f.label)
+      const key = (d.facts || []).filter((f) => ['Tuners', 'Versions', 'Driver packages', 'Intel driver', 'Intel firmware', 'GPUs found'].includes(f.label)
         || f.label.includes('(used)'));
       if (key.length) lines.push('', 'Summary', ...key.map((f) => `${f.label.trim()}: ${f.detail}`));
       (d.tests || []).filter((t) => t.why).forEach((t) => {
