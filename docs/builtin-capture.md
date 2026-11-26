@@ -332,7 +332,9 @@ Capture needs.
   doesn't hand these GPUs to containers the way Linux does, so the Intel/AMD
   setup above doesn't apply. **First, update WSL**: open PowerShell, run
   `wsl --update`, then restart Docker Desktop. An old WSL is a known reason for
-  the GPU not showing up. Then check that Docker's VM has a GPU render node:
+  the GPU not showing up. (If the update itself fails, see
+  [`wsl --update` fails on Windows](#wsl---update-fails-on-windows).) Then check
+  that Docker's VM has a GPU render node:
 
   ```powershell
   docker run --rm --privileged alpine ls /dev/dri
@@ -571,3 +573,26 @@ the diagnostics report.
 The panel shows *Tuners couldn't start* with a reason, and the Logs page has
 the details. A failed tuner retries on its own every 30 seconds. Restarting the
 FastChannels container clears anything left over from an unclean shutdown.
+
+### `wsl --update` fails on Windows
+
+An error such as `1921. Service 'WSL Service' (WSLService) could not be
+stopped`, often ending in `1603`, means Windows couldn't stop WSL to replace it,
+usually because Docker Desktop is using it.
+
+1. Quit Docker Desktop (right-click the whale icon by the clock, then **Quit**),
+   or reboot and don't open it.
+2. Right-click Start and choose **Terminal (Admin)**.
+3. Run `wsl --shutdown`, then `wsl --update`.
+
+If it fails the same way, run `taskkill /F /IM wslservice.exe` in the same admin
+window, then `wsl --update` again.
+
+If you downloaded the installer file yourself, run it from that admin window,
+with the full path to your file:
+
+```powershell
+msiexec /i "C:\path\to\wsl.msi"
+```
+
+Then start Docker Desktop again.
