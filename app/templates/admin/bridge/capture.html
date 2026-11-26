@@ -324,6 +324,7 @@ environment:
       const tuners = s.tuners || [];
       const sessions = Object.fromEntries((s.sessions || []).map((x) => [x.session, x]));
       const names = s.channel_names || {};
+      const sources = s.channel_sources || {};
       const list = $('capture-now-list');
       show('capture-now', tuners.length > 0);
       list.textContent = '';
@@ -345,6 +346,8 @@ environment:
         const name = names[String(sess.channel_id)] || `Channel ${sess.channel_id}`;
         const what = el('span', 'capture-now-what');
         what.appendChild(el('strong', null, name));
+        const source = sources[String(sess.channel_id)];
+        if (source) what.appendChild(el('span', 'capture-now-age', ' · ' + source));
         if (sess.state === 'live') what.appendChild(el('span', 'capture-now-age', ' · ' + duration(sess.live_s || 0)));
         main.appendChild(what);
         const health = sess.state === 'tuning' ? 'tuning' : (st.health || 'starting');

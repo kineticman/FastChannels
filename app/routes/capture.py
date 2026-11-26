@@ -311,17 +311,22 @@ def capture_status():
         })
     health['incompatible_names'] = _source_names(capture.INCOMPATIBLE_SOURCES)
     health['gpu'] = capture.gpu_info()
-    health['channel_names'] = _channel_names(
+    health['channel_names'], health['channel_sources'] = _channel_labels(
         {x.get('channel_id') for x in health.get('sessions') or [] if x.get('channel_id')})
     return jsonify(health)
 
 
-def _channel_names(ids) -> dict:
+def _channel_labels(ids) -> tuple[dict, dict]:
+    """({channel id: channel name}, {channel id: source's display name})."""
     if not ids:
-        return {}
-    from ..models import Channel
-    rows = Channel.query.with_entities(Channel.id, Channel.name).filter(Channel.id.in_(ids)).all()
-    return {str(cid): name for cid, name in rows}
+        return {}, {}
+    from ..models import Channel, Source
+    # Named columns only: Source.config can be megabytes.
+    rows = (Channel.query.join(Source)
+            .with_entities(Channel.id, Channel.name, Source.name, Source.display_name)
+            .filter(Channel.id.in_(ids)).all())
+    return ({str(cid): name for cid, name, _, _ in rows},
+            {str(cid): display or source for cid, _, source, display in rows})
 
 
 @capture_bp.get('/api/capture/gpu-diagnostics')
