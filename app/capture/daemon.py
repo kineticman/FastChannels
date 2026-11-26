@@ -644,19 +644,24 @@ def _intel_driver_fact(uid: int, gid: int, node: str, setting: str) -> dict:
 
 def _recent_gpu_log(limit: int = 15) -> list[str]:
     """The latest capture log lines about drivers and encoding, so a pasted report
-    carries them."""
+    carries them. A message repeated in a row shows once, with a count."""
     from ..logfile import LOG_PATH
     words = ('driver', 'gpu', 'encod', 'va-api', 'nvenc', 'apt-get', 'capture-install] failed')
-    found = deque(maxlen=limit)
+    found = deque(maxlen=limit)     # [message without its timestamp, latest line, count]
     try:
         with open(LOG_PATH, encoding='utf-8', errors='replace') as fp:
             for line in fp:
                 low = line.lower()
                 if '[capture' in low and '] $ ' not in low and any(w in low for w in words):
-                    found.append(line.rstrip()[:300])
+                    line = line.rstrip()[:300]
+                    message = line[line.find('[capture'):]
+                    if found and found[-1][0] == message:
+                        found[-1][1:] = [line, found[-1][2] + 1]
+                    else:
+                        found.append([message, line, 1])
     except OSError:
         pass
-    return list(found)
+    return [line + (f'  (x{n} in a row, latest shown)' if n > 1 else '') for _, line, n in found]
 
 
 def _vainfo_report(uid: int, gid: int, node: str | None, on_wsl: bool) -> tuple[dict, dict] | None:
