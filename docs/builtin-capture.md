@@ -202,6 +202,13 @@ lines above. See [Windows](#windows).
 Unraid, Proxmox, Synology and others: see
 [Other platforms](#other-platforms).
 
+**Intel's non-free driver.** FastChannels installs Intel's free video driver.
+Some Intel chips, such as 7th-generation Core (Kaby Lake), can't encode with it.
+When the test encode on an Intel GPU fails, FastChannels automatically installs
+Intel's non-free driver from Debian's own repository and tests again. It keeps
+that driver only if the GPU then encodes, and puts the free one back if not. The
+Encoder line and **GPU diagnostics** say when it's in use.
+
 ### NVIDIA (experimental)
 
 NVIDIA cards encode through NVENC. This has been confirmed on Windows with
@@ -525,9 +532,11 @@ Hover over the line to see the reason.
 **GPU diagnostics** may say *the installed driver offers no H.264 encoder for
 this GPU*. This has been seen on a Core Ultra 7 356H (Panther Lake): the GPU
 reaches the container, but the Intel driver FastChannels installs is older than
-the chip needs. A newer Intel driver did encode on that machine, but it comes
-from Debian's unstable release, so FastChannels doesn't install it. Built-in
-Capture uses the CPU instead, which is usually plenty on a chip this new.
+the chip needs. FastChannels also tries Intel's non-free driver (see
+[Use your GPU](#use-your-gpu)), which hasn't been tested on this chip. A newer
+Intel driver did encode on that machine, but it comes from Debian's unstable
+release, so FastChannels doesn't install it. Without a working driver Built-in
+Capture uses the CPU, which is usually plenty on a chip this new.
 
 Installing the driver by hand isn't recommended: it can pull other unstable
 packages into the container, and recreating the container (which every update

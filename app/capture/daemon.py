@@ -298,6 +298,8 @@ def detect_encoder(uid: int, gid: int, setting: str) -> dict:
                     driver = _driver_name(err)
                     enc = {'kind': 'vaapi', 'device': device, 'gid': dgid, 'low_power': low_power,
                            'driver': driver or 'VA-API', 'reason': '', 'env': dict(env)}
+                    if installer.intel_state().get('nonfree') and installer.nonfree_intel_installed():
+                        enc['nonfree'] = True
                     logger.info('[capture] GPU encoding on %s (%s%s)', device, enc['driver'],
                                 ', low-power' if low_power else '')
                     return enc
@@ -320,6 +322,19 @@ def detect_encoder(uid: int, gid: int, setting: str) -> dict:
             'Windows GPU bridge (/dev/dxg) found, but this Docker VM has no /dev/dri render node, '
             'which GPU encoding needs' if wsl_gpu() else 'no GPU passed to the container')
     return {'kind': 'x264', 'reason': '; '.join(reasons)}
+
+
+def _wants_intel_nonfree(uid: int, gid: int, setting: str, enc: dict) -> bool:
+    """An Intel GPU the capture user can open, whose test encode failed with the
+    free driver, and the non-free one hasn't been tried by this version."""
+    from ..config import VERSION
+    device = render_node()
+    state = installer.intel_state()
+    return bool(setting != 'cpu' and enc.get('kind') == 'x264' and device and not wsl_gpu()
+                and installer.gpu_drivers_present() and not installer.nonfree_intel_installed()
+                and state.get('failed_on') != VERSION
+                and _node_gpu(device).startswith('Intel')
+                and _can_open(uid, gid, [os.stat(device).st_gid], device))
 
 
 # x11grab delivers bgr0; this is how sessions upload it and convert on the GPU.
@@ -430,6 +445,43 @@ def _node_gpu(node: str) -> str:
     if uevent.get('DRIVER'):
         parts.append(f"kernel driver {uevent['DRIVER']}")
     return ', '.join(parts)
+
+
+_DRIVER_PACKAGES = ('intel-media-va-driver', 'intel-media-va-driver-non-free', 'i965-va-driver',
+                    'i965-va-driver-shaders', 'mesa-va-drivers')
+# apt source files the image and the add-on put there themselves.
+_OWN_APT_SOURCES = ('debian.sources', 'google-chrome.', 'fastchannels-capture-')
+
+
+def _setup_facts(cfg: dict, node: str | None) -> list[dict]:
+    """The things otherwise asked for by hand: settings, driver packages, Intel
+    firmware loading, and apt sources someone added."""
+    facts = [_fact('Capture settings', 'info', f"{cfg.get('quality')} · {cfg.get('max_tuners')} tuner(s) · "
+                   + ('Chrome kept ready' if cfg.get('keep_warm', True) else 'Chrome closed when idle'))]
+    found = []
+    for pkg in _DRIVER_PACKAGES:
+        version = installer._deb_version(pkg)
+        if version:
+            found.append(f'{pkg} {version}')
+    facts.append(_fact('Driver packages', 'info', ', '.join(found) or 'none installed'))
+    if node and _node_gpu(node).startswith('Intel'):
+        guc = _read('/sys/module/i915/parameters/enable_guc').strip()
+        if guc:
+            facts.append(_fact('Intel firmware', 'info', f'i915 enable_guc={guc} '
+                               '(2 or 3 loads HuC, which some older chips need to encode)'))
+    extra = []
+    for path in sorted(glob.glob('/etc/apt/sources.list.d/*')) + ['/etc/apt/sources.list']:
+        name = os.path.basename(path)
+        if name.startswith(_OWN_APT_SOURCES):
+            continue
+        lines = [l.strip() for l in _read(path).splitlines() if l.strip().startswith(('deb ', 'URIs:', 'Suites:'))]
+        if lines:
+            extra.append(f'{name}: {lines[0]}')
+    if extra:
+        facts.append(_fact('Extra apt sources', 'warn', '; '.join(extra)[:300]
+                           + ' (added by hand? Packages from them can replace the ones FastChannels expects; '
+                           'recreating the container removes them)'))
+    return facts
 
 
 def _drm_kernel_facts() -> list[dict]:
@@ -581,6 +633,7 @@ def diagnose_gpu(uid: int, gid: int) -> dict:
                        + f' · {cpu or "unknown CPU"} · {os.cpu_count() or "?"} cores{cpu_cap}'))
     facts += _memory_facts(int(cfg.get('max_tuners') or 1))
     facts += _environment_facts(kernel)
+    facts += _setup_facts(cfg, render_node())
 
     nodes = _render_nodes()
     node = render_node()
@@ -628,6 +681,12 @@ def diagnose_gpu(uid: int, gid: int) -> dict:
                            'installed' if drivers else 'not installed yet (use Reinstall on this page)'))
         facts.append(_fact('Mesa', 'ok' if (mesa and (not on_wsl or mesa >= WSL_MESA_MIN_MAJOR)) else ('warn' if on_wsl else 'info'),
                            f'{mesa or "not installed"}' + (f' (Windows needs {WSL_MESA_MIN_MAJOR}+)' if on_wsl else '')))
+    if not on_wsl and node and _node_gpu(node).startswith('Intel'):
+        if installer.nonfree_intel_installed() and installer.intel_state().get('nonfree'):
+            facts.append(_fact('Intel driver', 'info', "Intel's non-free build (the free one couldn't encode on this chip)"))
+        elif 'failed_on' in installer.intel_state():
+            facts.append(_fact('Intel driver', 'info', "free build; Intel's non-free build was tried and didn't "
+                               'encode either (Reinstall tries again)'))
     stray = {k: os.environ[k] for k in ('LIBVA_DRIVER_NAME', 'LIBVA_DRIVERS_PATH', 'GALLIUM_DRIVER',
                                         'MESA_LOADER_DRIVER_OVERRIDE') if os.environ.get(k)}
     if stray and not on_wsl:
@@ -1426,7 +1485,11 @@ class CaptureService:
             os.chmod('/tmp/.X11-unix', 0o1777)
             os.makedirs(SESSION_ROOT, exist_ok=True)
             self._start_pulse(tuners)
+            if installer.intel_state().get('restore'):
+                installer.restore_free_intel()
             enc = detect_encoder(self.uid, self.gid, encoder_setting)
+            if _wants_intel_nonfree(self.uid, self.gid, encoder_setting, enc):
+                enc = self._try_intel_nonfree(encoder_setting, enc)
             ENCODER.clear()
             ENCODER.update(enc)
         except Exception as e:
@@ -1448,6 +1511,40 @@ class CaptureService:
         for t in self.tuners:
             threading.Thread(target=self._start_tuner, args=(t,), daemon=True).start()
         logger.info('[capture] starting %d tuner(s) at %s', tuners, quality)
+
+    def _try_intel_nonfree(self, setting: str, enc: dict) -> dict:
+        """Install Intel's non-free drivers and test again; keep them only if the GPU
+        then encodes. Holds busy_action so no install/uninstall runs apt meanwhile."""
+        with self.lock:
+            if self.busy_action:
+                return enc
+            self.busy_action = 'gpu-driver'
+        try:
+            logger.info("[capture] the Intel GPU test failed; trying Intel's non-free driver")
+            ENCODER.clear()
+            ENCODER.update(kind='x264', reason="trying Intel's non-free GPU driver")
+            tested = False
+            try:
+                installer.begin_intel_nonfree()
+                installer.switch_intel_drivers(True)
+                new = detect_encoder(self.uid, self.gid, setting)
+                tested = True
+                if new.get('kind') == 'vaapi':
+                    installer.keep_intel_nonfree()
+                    logger.info("[capture] Intel's non-free driver works (%s); keeping it", new.get('driver'))
+                    return {**new, 'nonfree': True}
+                logger.warning("[capture] Intel's non-free driver didn't encode either; restoring the free one")
+            except Exception as e:
+                # Usually no network: not remembered as failed, so a later start tries again.
+                logger.warning("[capture] could not set up Intel's non-free driver: %s", e)
+            installer.restore_free_intel(failed=tested)
+            return enc
+        except Exception as e:
+            logger.warning("[capture] Intel driver fallback failed: %s", e)
+            return enc
+        finally:
+            with self.lock:
+                self.busy_action = ''
 
     def _start_pulse(self, tuners: int) -> None:
         _kill(self.pulse)

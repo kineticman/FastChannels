@@ -169,11 +169,23 @@ class HBOMaxScraper(BaseScraper):
         if not self._signed_in():
             logger.info('[hbomax] not signed in; no channels')
             return []
-        linear = self._linear_channels() if self._flag('include_channels') else []
+        linear, kept = [], []
+        if self._flag('include_channels'):
+            try:
+                linear = self._linear_channels()
+            except TVEAuthError:
+                raise
+            except Exception as e:
+                # The channel page failing mustn't stop the events refreshing, nor
+                # drop the HBO channels already stored.
+                kept = self._stored_linear_channels()
+                if not kept and not self._flag('include_events'):
+                    raise
+                logger.warning('[hbomax] channel page failed (%s); keeping %d stored channel(s)', e, len(kept))
         events = self._live_events() if self._flag('include_events') else []
         self._events_cache = events
         self.excluded_channel_ids = self._switched_off_ids()
-        out = []
+        out = list(kept)
         for ch in linear:
             out.append(ChannelData(
                 source_channel_id=f'{_CHANNEL_PREFIX}{ch["id"]}',
@@ -227,7 +239,7 @@ class HBOMaxScraper(BaseScraper):
                 gracenote_mode='off',
             ))
             logger.info('[hbomax] + VOD test channel (%s)', test_edit)
-        logger.info('[hbomax] %d channels (%d linear)', len(out), len(linear))
+        logger.info('[hbomax] %d channels (%d linear)', len(out), len(linear) + len(kept))
         return out
 
     def _switched_off_ids(self) -> set[str]:
@@ -243,6 +255,19 @@ class HBOMaxScraper(BaseScraper):
                 .filter(Source.name == 'hbomax').all())
         return {cid for (cid,) in rows if cid.startswith(prefixes)}
 
+    def _stored_linear_channels(self) -> list[ChannelData]:
+        """The linear channels as last scraped, for a run where their page failed."""
+        from ..models import Channel, Source
+        rows = (Channel.query.join(Source)
+                .filter(Source.name == 'hbomax', Channel.source_channel_id.startswith(_CHANNEL_PREFIX))
+                .all())
+        return [ChannelData(
+            source_channel_id=c.source_channel_id, name=c.name, slug=c.slug, logo_url=c.logo_url,
+            stream_url=c.stream_url, stream_type=c.stream_type, category=c.category,
+            language=c.language, country=c.country, guide_key=c.guide_key,
+            gracenote_id=resolve_gracenote('hbomax', lookup_key=c.source_channel_id[len(_CHANNEL_PREFIX):]),
+        ) for c in rows]
+
     def _linear_channels(self) -> list[dict]:
         """The playable linear channels, each with its upcoming airings."""
         cached = getattr(self, '_linear_cache', None)
@@ -253,17 +278,25 @@ class HBOMaxScraper(BaseScraper):
         if r.status_code in (401, 403):
             raise self._sign_in_needed()
         r.raise_for_status()
-        self._linear_cache = _parse_channels(r.json() or {})
-        if not self._linear_cache:
+        channels = _parse_channels(r.json() or {})
+        if not channels:
             # Never seen from a working session; don't let it drop the channels.
             raise RuntimeError('HBO Max: the channel page listed no playable channels')
-        return self._linear_cache
+        self._linear_cache = channels
+        return channels
 
     def fetch_epg(self, channels: list[ChannelData], **kwargs) -> list[ProgramData]:
         programs = []
         if self._signed_in() and self._flag('include_channels'):
             wanted = {c.source_channel_id for c in channels}
-            for ch in self._linear_channels():
+            try:
+                linear = self._linear_channels()
+            except TVEAuthError:
+                raise
+            except Exception as e:
+                logger.warning('[hbomax] no channel guide this run: %s', e)
+                linear = []    # stored airings are left as they are
+            for ch in linear:
                 cid = f'{_CHANNEL_PREFIX}{ch["id"]}'
                 if cid in wanted:
                     programs.extend(ProgramData(source_channel_id=cid, **a) for a in ch['airings'])

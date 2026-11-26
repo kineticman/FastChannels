@@ -262,6 +262,9 @@ environment:
       $('capture-encoder-status').textContent = !tunersRunning(s) ? ''
         : onGpu ? `Using your GPU${vendor ? ' (' + vendor + ')' : ''}`
         : gpuFailed ? 'Using CPU (GPU didn\'t work)' : 'Using CPU';
+      if (onGpu && enc.nonfree && tunersRunning(s)) {
+        $('capture-encoder-status').textContent += ' with Intel\'s non-free driver (the free one couldn\'t encode on this chip)';
+      }
       // The full reason (e.g. which driver piece is missing) on hover.
       $('capture-encoder-status').title = onGpu ? '' : (enc.reason || '');
       show('capture-gpu-tip', tunersRunning(s) && !onGpu && !gpuFailed && (cfg.encoder || 'auto') === 'auto');
@@ -269,6 +272,7 @@ environment:
       const tuners = s.tuners || [];
       renderNowPlaying(s, enc, onGpu);
       $('capture-tuner-status').textContent = tuners.length ? ''
+        : s.action === 'gpu-driver' ? 'Your Intel GPU couldn\'t encode with the free driver. Trying Intel\'s non-free one (about a minute)…'
         : (s.pool_error ? 'Tuners couldn\'t start: ' + s.pool_error : (cfg.enabled ? 'Tuners starting…' : ''));
       const playing = (s.sessions || []).some((x) => x.state === 'tuning' || x.state === 'live');
 
