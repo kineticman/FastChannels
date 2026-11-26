@@ -529,6 +529,14 @@ environment:
                      `Test result: ${good ? 'GPU works (' + (res.driver || res.kind) + ')' : 'CPU'}`
                      + ` · running tuners use: ${used === 'vaapi' || used === 'nvenc' ? 'GPU' : 'CPU'}`];
       if (!good && res.reason) lines.push('Reason: ' + res.reason);
+      // The short answers first: a long paste often gets cut in the middle.
+      const key = (d.facts || []).filter((f) => ['Versions', 'Driver packages', 'Intel driver', 'Intel firmware'].includes(f.label)
+        || f.label.includes('(used)'));
+      if (key.length) lines.push('', 'Summary', ...key.map((f) => `${f.label.trim()}: ${f.detail}`));
+      (d.tests || []).filter((t) => t.why).forEach((t) => {
+        const opts = (t.test.match(/-low_power 1|LIBVA_DRIVER_NAME=\w+/g) || []).join(' ');
+        lines.push(`Test ${t.superseded ? 'skipped' : 'failed'}${opts ? ' (' + opts + ')' : ''}: ${t.why}`);
+      });
       lines.push(...helpLines);
       lines.push('', 'Checks');
       const table = el('table', null, null);
@@ -566,6 +574,15 @@ environment:
       });
       lines.push('', 'When asking for help, also say: how you run FastChannels (compose, Portainer or docker run), '
         + 'your Docker Desktop and Windows versions, and your GPU model. This report cannot see those.');
+      if ((d.log || []).length) {
+        const det = el('details', null, null);
+        det.style.cssText = 'margin:0.6rem 0';
+        det.appendChild(el('summary', null, 'Recent capture log'));
+        const pre = el('pre', null, d.log.join('\n'));
+        pre.style.cssText = 'font-size:0.75rem;max-height:14rem;overflow:auto;white-space:pre-wrap;margin:0.4rem 0';
+        det.appendChild(pre); body.appendChild(det);
+        lines.push('', 'Recent capture log', ...d.log);
+      }
       gpuReportText = lines.join('\n');
       $('capture-gpu-copy').disabled = false;
     };

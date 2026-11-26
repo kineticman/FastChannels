@@ -156,6 +156,30 @@ def nonfree_intel_installed() -> bool:
     return _deb_installed(NONFREE_FOR['intel-media-va-driver'])
 
 
+INTEL_LAST_PATH = os.path.join(ADDON_DIR, 'intel_last.json')
+
+
+def record_intel_attempt(variant: str, result: str, detail: str = '') -> None:
+    """What the last try of another Intel driver did, for GPU diagnostics."""
+    from ..config import VERSION
+    try:
+        os.makedirs(ADDON_DIR, exist_ok=True)
+        with open(INTEL_LAST_PATH, 'w', encoding='utf-8') as fp:
+            json.dump({'at': time.strftime('%Y-%m-%d %H:%M UTC', time.gmtime()), 'version': VERSION,
+                       'variant': variant, 'result': result, 'detail': detail[:300]}, fp)
+    except OSError as e:
+        logger.warning('[capture] could not record the Intel driver attempt: %s', e)
+
+
+def intel_last_attempt() -> dict:
+    try:
+        with open(INTEL_LAST_PATH, encoding='utf-8') as fp:
+            data = json.load(fp)
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
 def newer_intel_installed() -> bool:
     try:
         return int(_deb_version('intel-media-va-driver').split(':')[-1].split('.', 1)[0]) >= NEWER_MIN_MAJOR

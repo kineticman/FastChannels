@@ -188,11 +188,13 @@ _trace: list | None = None
 _trace_lock = threading.Lock()
 
 
-def _trace_add(video_args: list[str], ok: bool, stderr: str) -> None:
+def _trace_add(video_args: list[str], ok: bool, stderr: str, env: dict | None = None) -> None:
     if _trace is None:
         return
     lines = [l for l in (stderr or '').splitlines() if l.strip()]
-    _trace.append({'test': ' '.join(video_args), 'ok': ok, 'output': '\n'.join(lines[-25:])[-3000:]})
+    # The driver override goes last: callers match tests by how they start.
+    driver = (env or {}).get('LIBVA_DRIVER_NAME')
+    _trace.append({'test': ' '.join(video_args) + (f'  [LIBVA_DRIVER_NAME={driver}]' if driver else ''), 'ok': ok, 'output': '\n'.join(lines[-25:])[-3000:]})
 
 
 def _try_encoder(uid: int, gid: int, groups: list[int], video_args: list[str],
@@ -208,10 +210,10 @@ def _try_encoder(uid: int, gid: int, groups: list[int], video_args: list[str],
                               capture_output=True, text=True, timeout=30)
     except Exception as e:
         if record:
-            _trace_add(video_args, False, str(e))
+            _trace_add(video_args, False, str(e), extra_env)
         return False, str(e)
     if record:
-        _trace_add(video_args, proc.returncode == 0, proc.stderr)
+        _trace_add(video_args, proc.returncode == 0, proc.stderr, extra_env)
     return proc.returncode == 0, proc.stderr
 
 
@@ -250,7 +252,8 @@ def _vaapi_reason(stderr: str) -> str:
     # libva also logs "va_openDriver() returns 0" when the driver loaded fine: not a cause.
     lines = [l.strip() for l in (stderr or '').splitlines() if 'va_openDriver() returns 0' not in l]
     for key in ('va_openDriver', 'vaInitialize', 'Failed to initialise VAAPI', 'No VA display',
-                'Failed to open', 'Permission denied', 'driver init failed', 'Error',
+                'Failed to open', 'Permission denied', 'driver init failed',
+                'does not support any RC mode', 'No usable encoding', 'Assertion', 'Error',
                 'Failed to create', 'not supported', 'No usable encoding'):
         hit = next((l for l in lines if key in l), None)
         if hit:
@@ -606,6 +609,56 @@ _INTEL_NO_H264 = ('the installed driver offers no H.264 encoder for this GPU. It
                   'and not the hardware')
 
 
+_VARIANT_NAMES = {'nonfree': "Intel's non-free driver", 'newer': 'the newer driver from Debian testing'}
+
+
+def _intel_driver_fact(uid: int, gid: int, node: str, setting: str) -> dict:
+    """Which Intel driver is installed, what the last attempt at another one did,
+    and if there was none, why: the question otherwise answered from the logs."""
+    if installer.nonfree_intel_installed():
+        using = "non-free build"
+    elif installer.newer_intel_installed():
+        using = "newer build from Debian testing"
+    else:
+        using = "standard build"
+    last = installer.intel_last_attempt()
+    if last:
+        what = _VARIANT_NAMES.get(last.get('variant'), last.get('variant'))
+        tail = (f"last tried {what} on {last.get('at')} (FastChannels {last.get('version')}): {last.get('result')}"
+                + (f" ({last['detail']})" if last.get('detail') else ''))
+    elif setting == 'cpu':
+        tail = 'no other driver tried: Encoder is set to CPU only'
+    elif not installer.gpu_drivers_present():
+        tail = 'no other driver tried: GPU drivers are not installed'
+    elif not _can_open(uid, gid, [os.stat(node).st_gid], node):
+        tail = "no other driver tried: the capture user can't open the GPU"
+    elif ENCODER.get('kind') == 'vaapi':
+        tail = 'no other driver needed'
+    elif _intel_variant(node) == 'newer':
+        tail = 'the newer driver is offered on the Bridge page but has not been tried'
+    else:
+        tail = ('no other driver tried yet: that happens when the tuners start and the GPU test fails '
+                '(turn Built-in Capture off and on)')
+    return _fact('Intel driver', 'info', f'{using} · {tail}')
+
+
+def _recent_gpu_log(limit: int = 15) -> list[str]:
+    """The latest capture log lines about drivers and encoding, so a pasted report
+    carries them."""
+    from ..logfile import LOG_PATH
+    words = ('driver', 'gpu', 'encod', 'va-api', 'nvenc', 'apt-get', 'capture-install] failed')
+    found = deque(maxlen=limit)
+    try:
+        with open(LOG_PATH, encoding='utf-8', errors='replace') as fp:
+            for line in fp:
+                low = line.lower()
+                if '[capture' in low and '] $ ' not in low and any(w in low for w in words):
+                    found.append(line.rstrip()[:300])
+    except OSError:
+        pass
+    return list(found)
+
+
 def _vainfo_report(uid: int, gid: int, node: str | None, on_wsl: bool) -> tuple[dict, dict] | None:
     """What the VA-API driver says the GPU can encode, as a fact plus the raw output.
     The H.264 encode entrypoints are the answer to "can this GPU do it at all"."""
@@ -705,14 +758,7 @@ def diagnose_gpu(uid: int, gid: int) -> dict:
         facts.append(_fact('Mesa', 'ok' if (mesa and (not on_wsl or mesa >= WSL_MESA_MIN_MAJOR)) else ('warn' if on_wsl else 'info'),
                            f'{mesa or "not installed"}' + (f' (Windows needs {WSL_MESA_MIN_MAJOR}+)' if on_wsl else '')))
     if not on_wsl and node and _node_gpu(node).startswith('Intel'):
-        if installer.nonfree_intel_installed() and installer.intel_state().get('nonfree'):
-            facts.append(_fact('Intel driver', 'info', "Intel's non-free build (the free one couldn't encode on this chip)"))
-        elif installer.newer_intel_installed() and installer.intel_state().get('newer'):
-            facts.append(_fact('Intel driver', 'info', "newer build from Debian testing (the standard one is too "
-                               'old for this chip)'))
-        elif 'failed_on' in installer.intel_state():
-            facts.append(_fact('Intel driver', 'info', 'standard build; another driver was tried and didn\'t '
-                               'encode either (Reinstall tries again)'))
+        facts.append(_intel_driver_fact(uid, gid, node, setting))
     stray = {k: os.environ[k] for k in ('LIBVA_DRIVER_NAME', 'LIBVA_DRIVERS_PATH', 'GALLIUM_DRIVER',
                                         'MESA_LOADER_DRIVER_OVERRIDE') if os.environ.get(k)}
     if stray and not on_wsl:
@@ -756,6 +802,11 @@ def diagnose_gpu(uid: int, gid: int) -> dict:
                          if '-low_power' in t['test'] else
                          'Did not work, but a later test passed and is used instead. Nothing to fix.')
 
+    # One line per failed encode, for the top of the report: forum pastes get cut.
+    for t in trace:
+        if not t['ok']:
+            t['why'] = _vaapi_reason(t.get('output') or '')
+
     vainfo = _vainfo_report(uid, gid, node, on_wsl)
     if vainfo:
         facts.append(vainfo[0])
@@ -790,7 +841,21 @@ def diagnose_gpu(uid: int, gid: int) -> dict:
             'result': {k: v for k, v in enc.items() if k not in ('gid', 'gids', 'groups', 'env')},
             'in_use': in_use,
             'hint': hint,
-            'help': _self_help(facts, enc, setting, on_wsl, node, nv, nodes)}
+            'log': _recent_gpu_log(),
+            'help': (_self_help(facts, enc, setting, on_wsl, node, nv, nodes)
+                     + _rate_control_help(enc, trace))}
+
+
+def _rate_control_help(enc: dict, trace: list[dict]) -> list[dict]:
+    """Low-power Intel encoders without HuC firmware only do constant quality."""
+    if enc.get('kind') in ('vaapi', 'nvenc') or not any('supported modes: CQP' in (t.get('output') or '')
+                                                        for t in trace):
+        return []
+    return [{'title': 'Intel low-power encoder needs HuC firmware',
+             'steps': ["This chip's low-power encoder can't encode at a set bitrate until the host loads Intel's "
+                       'HuC firmware. On a Debian or Ubuntu host (not Synology and similar), run these and reboot:'],
+             'snippet': 'echo "options i915 enable_guc=2" | sudo tee /etc/modprobe.d/i915-guc.conf\n'
+                        'sudo update-initramfs -u'}]
 
 
 _NVIDIA_COMPOSE_WSL = '''    deploy:
@@ -1577,6 +1642,7 @@ class CaptureService:
             ENCODER.update(kind='x264', reason=f'trying {what}')
             tested = False
             try:
+                installer.record_intel_attempt(variant, 'started')
                 installer.begin_intel_nonfree()
                 if variant == 'newer':
                     installer.switch_to_newer_intel()
@@ -1586,12 +1652,16 @@ class CaptureService:
                 tested = True
                 if new.get('kind') == 'vaapi':
                     installer.keep_intel_driver(variant)
+                    installer.record_intel_attempt(variant, 'works', new.get('driver') or '')
                     logger.info('[capture] %s works (%s); keeping it', what, new.get('driver'))
                     return {**new, variant: True}
                 logger.warning("[capture] %s didn't encode either; restoring the standard one", what)
+                installer.record_intel_attempt(variant, 'did not encode', new.get('reason') or '')
             except Exception as e:
                 # Usually no network: not remembered as failed, so a later start tries again.
                 logger.warning('[capture] could not set up %s: %s', what, e)
+                installer.record_intel_attempt(variant, 'could not be tested' if tested else 'could not be installed',
+                                               str(e))
             installer.restore_free_intel(failed=tested)
             return enc
         except Exception as e:
