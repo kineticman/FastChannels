@@ -520,6 +520,19 @@ Hover over the line to see the reason.
 - *Using CPU (GPU didn't work)*: the GPU was passed in but the encode test
   failed. The Logs page has the details (look for `[capture]` lines).
 
+### A very new Intel chip shows no H.264 encoder
+
+**GPU diagnostics** may say *the installed driver offers no H.264 encoder for
+this GPU*. This has been seen on a Core Ultra 7 356H (Panther Lake): the GPU
+reaches the container, but the Intel driver FastChannels installs is older than
+the chip needs. A newer Intel driver did encode on that machine, but it comes
+from Debian's unstable release, so FastChannels doesn't install it. Built-in
+Capture uses the CPU instead, which is usually plenty on a chip this new.
+
+Installing the driver by hand isn't recommended: it can pull other unstable
+packages into the container, and recreating the container (which every update
+does) removes it.
+
 ### The video is choppy
 
 - On a small server, switch **Quality** to *720p 30 fps*, or pass in your GPU.
