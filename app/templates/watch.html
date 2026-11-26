@@ -152,8 +152,8 @@
       }
     }
 
-    function emitWatchDebug(event, extra = {}) {
-      if (!WATCH_DEBUG) return;
+    function emitWatchDebug(event, extra = {}, always = false) {
+      if (!WATCH_DEBUG && !always) return;
       const bufferedEnd = _bufferedEnd();
       const quality = video.getVideoPlaybackQuality ? video.getVideoPlaybackQuality() : null;
       const payload = {
@@ -187,6 +187,30 @@
         body,
         keepalive: true,
       }).catch(() => {});
+    }
+
+    // Logged even without ?debug=1: a "wrong language" report needs to show what the
+    // stream offered and what was picked. Sent only when that changes, a few per tune.
+    let _lastAudioTracks = '';
+    let _audioReports = 0;
+    function reportAudioTracks() {
+      try {
+        const offered = new Set();
+        let selected = null;
+        for (const t of _shaka.getVariantTracks()) {
+          const roles = (t.audioRoles || []).join('+');
+          const desc = [t.language, t.label, t.audioCodec, t.channelsCount && t.channelsCount + 'ch',
+                        roles, t.primary && 'primary'].filter(Boolean).join(' ');
+          offered.add(desc);
+          if (t.active) selected = desc;
+        }
+        const summary = { selected, offered: [...offered].join(' | ') };
+        const key = JSON.stringify(summary);
+        if (!selected || key === _lastAudioTracks || _audioReports >= 5) return;
+        _lastAudioTracks = key;
+        _audioReports += 1;
+        emitWatchDebug('audio-tracks', summary, true);
+      } catch (_) { /* diagnostics are best-effort */ }
     }
 
     function setStatus(msg) {
@@ -298,6 +322,9 @@
         onError: onPlayerError,
       });
       if (_shaka) {
+        ['loaded', 'trackschanged', 'variantchanged'].forEach((name) => {
+          _shaka.addEventListener(name, reportAudioTracks);
+        });
         _shaka.addEventListener('buffering', (event) => {
           emitWatchDebug('shaka-buffering', { buffering: Boolean(event.buffering) });
         });

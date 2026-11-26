@@ -331,7 +331,13 @@
       // refuses Widevine outright for ec-3 (Dolby Digital+) — requesting it
       // fails the whole load with DRM.REQUESTED_KEY_SYSTEM_CONFIG_UNAVAILABLE
       // (6001), verified on Chrome/Windows against NBC's dual-codec manifest.
-      const shakaConfig = { preferredAudioCodecs: ['mp4a.40.2', 'mp4a.40.5', 'aac'] };
+      // Ask for English too: with no preference a feed that lists a second language
+      // first, or marks it as the main one, plays in that language. A stream with no
+      // English track still plays what it has.
+      const shakaConfig = {
+        preferredAudioCodecs: ['mp4a.40.2', 'mp4a.40.5', 'aac'],
+        preferredAudioLanguage: 'en',
+      };
       if (license) {
         shakaConfig.drm = {
           servers: {
