@@ -209,6 +209,21 @@ Intel's non-free driver from Debian's own repository and tests again. It keeps
 that driver only if the GPU then encodes, and puts the free one back if not. The
 Encoder line and **GPU diagnostics** say when it's in use.
 
+**Intel HuC firmware.** Some older Intel chips, such as a 6th-generation Core
+i5-6500, also need the host to load Intel's HuC firmware before they can encode.
+If the Encoder line still says the GPU didn't work, run these on a Debian or
+Ubuntu **host** (not inside the container), then reboot:
+
+```bash
+echo "options i915 enable_guc=2" | sudo tee /etc/modprobe.d/i915-guc.conf
+sudo update-initramfs -u
+```
+
+After the reboot, `sudo dmesg | grep -i huc` should include a line saying HuC is
+`authenticated`. Lines saying GuC submission is disabled are normal with this
+setting. To undo it, delete that file, run `sudo update-initramfs -u` again and
+reboot. NAS systems such as Synology usually don't let you change this.
+
 ### NVIDIA (experimental)
 
 NVIDIA cards encode through NVENC. This has been confirmed on Windows with

@@ -868,17 +868,37 @@ def diagnose_gpu(uid: int, gid: int) -> dict:
             'hint': hint,
             'log': _recent_gpu_log(),
             'help': (_self_help(facts, enc, setting, on_wsl, node, nv, nodes)
-                     + _rate_control_help(enc, trace))}
+                     + _rate_control_help(enc, trace, node))}
 
 
-def _rate_control_help(enc: dict, trace: list[dict]) -> list[dict]:
-    """Low-power Intel encoders without HuC firmware only do constant quality."""
-    if enc.get('kind') in ('vaapi', 'nvenc') or not any('supported modes: CQP' in (t.get('output') or '')
-                                                        for t in trace):
+def _huc_may_help(enc: dict, trace: list[dict], node: str | None) -> bool:
+    """An Intel GPU on the i915 driver that failed its encode test with the host
+    not asked to load HuC. Not Panther Lake, which needs a newer driver instead."""
+    if not node or enc.get('kind') in ('vaapi', 'nvenc') or not _node_gpu(node).startswith('Intel'):
+        return False
+    if not any(not t['ok'] and t['test'].startswith(f'-vaapi_device {node} ') for t in trace):
+        return False
+    driver = os.path.realpath(f'/sys/class/drm/{os.path.basename(node)}/device/driver')
+    guc = _read('/sys/module/i915/parameters/enable_guc').strip()
+    return os.path.basename(driver) == 'i915' and guc not in ('', '2', '3') and _intel_variant(node) != 'newer'
+
+
+def _rate_control_help(enc: dict, trace: list[dict], node: str | None) -> list[dict]:
+    """The HuC firmware tip: certain when a low-power encoder only offers constant
+    quality, otherwise only a maybe."""
+    if enc.get('kind') in ('vaapi', 'nvenc'):
         return []
-    return [{'title': 'Intel low-power encoder needs HuC firmware',
-             'steps': ["This chip's low-power encoder can't encode at a set bitrate until the host loads Intel's "
-                       'HuC firmware. On a Debian or Ubuntu host (not Synology and similar), run these and reboot:'],
+    if any('supported modes: CQP' in (t.get('output') or '') for t in trace):
+        title = 'Intel low-power encoder needs HuC firmware'
+        why = "This chip's low-power encoder can't encode at a set bitrate until the host loads Intel's HuC firmware."
+    elif _huc_may_help(enc, trace, node):
+        title = 'Intel HuC firmware might help'
+        why = ("Some older Intel chips can't encode until the host loads Intel's HuC firmware. "
+               "It isn't certain that's the problem here.")
+    else:
+        return []
+    return [{'title': title,
+             'steps': [why + ' On a Debian or Ubuntu host (not Synology and similar), run these and reboot:'],
              'snippet': 'echo "options i915 enable_guc=2" | sudo tee /etc/modprobe.d/i915-guc.conf\n'
                         'sudo update-initramfs -u'}]
 
