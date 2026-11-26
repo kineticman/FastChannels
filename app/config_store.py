@@ -203,7 +203,7 @@ def load_source_cache_by_name(source_name: str, *, keys=None, exclude=None) -> d
 # audit reports) prune by deleting keys, so they MUST fully replace the row value.
 _MERGE_CACHE_KEYS = frozenset({
     "stream_url_cache", "play_id_cache", "selector_url_cache", "dash_cache",
-    "drm_param_cache",
+    "drm_param_cache", "hbomax_streams",
 })
 
 

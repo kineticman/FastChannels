@@ -262,6 +262,9 @@ environment:
       $('capture-encoder-status').textContent = !tunersRunning(s) ? ''
         : onGpu ? `Using your GPU${vendor ? ' (' + vendor + ')' : ''}`
         : gpuFailed ? 'Using CPU (GPU didn\'t work)' : 'Using CPU';
+      if (onGpu && enc.nonfree && tunersRunning(s)) {
+        $('capture-encoder-status').textContent += ' with Intel\'s non-free driver (the free one couldn\'t encode on this chip)';
+      }
       // The full reason (e.g. which driver piece is missing) on hover.
       $('capture-encoder-status').title = onGpu ? '' : (enc.reason || '');
       show('capture-gpu-tip', tunersRunning(s) && !onGpu && !gpuFailed && (cfg.encoder || 'auto') === 'auto');
@@ -269,6 +272,7 @@ environment:
       const tuners = s.tuners || [];
       renderNowPlaying(s, enc, onGpu);
       $('capture-tuner-status').textContent = tuners.length ? ''
+        : s.action === 'gpu-driver' ? 'Your Intel GPU couldn\'t encode with the free driver. Trying Intel\'s non-free one (about a minute)…'
         : (s.pool_error ? 'Tuners couldn\'t start: ' + s.pool_error : (cfg.enabled ? 'Tuners starting…' : ''));
       const playing = (s.sessions || []).some((x) => x.state === 'tuning' || x.state === 'live');
 
@@ -478,11 +482,35 @@ environment:
       head.appendChild(el('div', null, d.hint || ''));
       body.appendChild(head);
 
+      const helpLines = [];
+      if ((d.help || []).length) {
+        body.appendChild(el('strong', null, 'Things to try'));
+        helpLines.push('', 'Things to try');
+        (d.help || []).forEach((h, i) => {
+          const box = el('div', null, null);
+          box.style.cssText = 'margin:0.5rem 0 0.9rem;line-height:1.5';
+          box.appendChild(el('div', null, (i + 1) + '. ' + h.title)).style.fontWeight = '600';
+          helpLines.push(`${i + 1}. ${h.title}`);
+          (h.steps || []).forEach((st) => {
+            const p = el('div', 'help', st); p.style.marginLeft = '1rem'; box.appendChild(p);
+            helpLines.push('   ' + st);
+          });
+          if (h.snippet) {
+            const pre = el('pre', null, h.snippet);
+            pre.style.cssText = 'font-size:0.78rem;margin:0.3rem 0 0 1rem;padding:0.5rem 0.7rem;border:1px solid var(--border);border-radius:6px;overflow:auto';
+            box.appendChild(pre);
+            helpLines.push(...h.snippet.split('\n').map((l) => '   | ' + l));
+          }
+          body.appendChild(box);
+        });
+      }
+
       const used = (d.in_use || {}).kind;
       const lines = [`GPU diagnostics, ${new Date().toISOString()}`,
                      `Test result: ${good ? 'GPU works (' + (res.driver || res.kind) + ')' : 'CPU'}`
                      + ` · running tuners use: ${used === 'vaapi' || used === 'nvenc' ? 'GPU' : 'CPU'}`];
       if (!good && res.reason) lines.push('Reason: ' + res.reason);
+      lines.push(...helpLines);
       lines.push('', 'Checks');
       const table = el('table', null, null);
       table.style.cssText = 'width:100%;border-collapse:collapse;font-size:0.88rem;margin-bottom:1rem';
@@ -507,13 +535,18 @@ environment:
       (d.tests || []).forEach((t) => {
         const det = el('details', null, null);
         det.style.cssText = 'margin:0.4rem 0';
-        det.open = !t.ok || Boolean(t.show);
-        det.appendChild(el('summary', null, (t.ok ? '✓ ' : '✕ ') + t.test));
+        det.open = (!t.ok && !t.superseded) || Boolean(t.show);
+        det.appendChild(el('summary', null, (t.ok ? '✓ ' : t.superseded ? '– ' : '✕ ') + t.test));
+        if (t.note) det.appendChild(el('div', 'help', t.note));
         const pre = el('pre', null, t.output || '(no output)');
         pre.style.cssText = 'font-size:0.75rem;max-height:14rem;overflow:auto;white-space:pre-wrap;margin:0.4rem 0';
         det.appendChild(pre); body.appendChild(det);
-        lines.push(`${t.ok ? 'OK  ' : 'FAIL'} ${t.test}`, ...(t.ok && !t.show ? [] : [t.output || '(no output)']));
+        lines.push(`${t.ok ? 'OK  ' : t.superseded ? 'SKIP' : 'FAIL'} ${t.test}`,
+          ...(t.note ? [t.note] : []),
+          ...((t.ok || t.superseded) && !t.show ? [] : [t.output || '(no output)']));
       });
+      lines.push('', 'When asking for help, also say: how you run FastChannels (compose, Portainer or docker run), '
+        + 'your Docker Desktop and Windows versions, and your GPU model. This report cannot see those.');
       gpuReportText = lines.join('\n');
       $('capture-gpu-copy').disabled = false;
     };

@@ -247,7 +247,8 @@ def _driver_name(stderr: str) -> str:
 def _vaapi_reason(stderr: str) -> str:
     """Why a VA-API test failed. FFmpeg's last line is a generic "Conversion failed!";
     the cause (driver init, unsupported profile/entrypoint, no device) is earlier."""
-    lines = [l.strip() for l in (stderr or '').splitlines()]
+    # libva also logs "va_openDriver() returns 0" when the driver loaded fine: not a cause.
+    lines = [l.strip() for l in (stderr or '').splitlines() if 'va_openDriver() returns 0' not in l]
     for key in ('va_openDriver', 'vaInitialize', 'Failed to initialise VAAPI', 'No VA display',
                 'Failed to open', 'Permission denied', 'driver init failed', 'Error',
                 'Failed to create', 'not supported', 'No usable encoding'):
@@ -297,6 +298,8 @@ def detect_encoder(uid: int, gid: int, setting: str) -> dict:
                     driver = _driver_name(err)
                     enc = {'kind': 'vaapi', 'device': device, 'gid': dgid, 'low_power': low_power,
                            'driver': driver or 'VA-API', 'reason': '', 'env': dict(env)}
+                    if installer.intel_state().get('nonfree') and installer.nonfree_intel_installed():
+                        enc['nonfree'] = True
                     logger.info('[capture] GPU encoding on %s (%s%s)', device, enc['driver'],
                                 ', low-power' if low_power else '')
                     return enc
@@ -319,6 +322,19 @@ def detect_encoder(uid: int, gid: int, setting: str) -> dict:
             'Windows GPU bridge (/dev/dxg) found, but this Docker VM has no /dev/dri render node, '
             'which GPU encoding needs' if wsl_gpu() else 'no GPU passed to the container')
     return {'kind': 'x264', 'reason': '; '.join(reasons)}
+
+
+def _wants_intel_nonfree(uid: int, gid: int, setting: str, enc: dict) -> bool:
+    """An Intel GPU the capture user can open, whose test encode failed with the
+    free driver, and the non-free one hasn't been tried by this version."""
+    from ..config import VERSION
+    device = render_node()
+    state = installer.intel_state()
+    return bool(setting != 'cpu' and enc.get('kind') == 'x264' and device and not wsl_gpu()
+                and installer.gpu_drivers_present() and not installer.nonfree_intel_installed()
+                and state.get('failed_on') != VERSION
+                and _node_gpu(device).startswith('Intel')
+                and _can_open(uid, gid, [os.stat(device).st_gid], device))
 
 
 # x11grab delivers bgr0; this is how sessions upload it and convert on the GPU.
@@ -431,6 +447,68 @@ def _node_gpu(node: str) -> str:
     return ', '.join(parts)
 
 
+_DRIVER_PACKAGES = ('intel-media-va-driver', 'intel-media-va-driver-non-free', 'i965-va-driver',
+                    'i965-va-driver-shaders', 'mesa-va-drivers')
+# apt source files the image and the add-on put there themselves.
+_OWN_APT_SOURCES = ('debian.sources', 'google-chrome.', 'fastchannels-capture-')
+
+
+def _setup_facts(cfg: dict, node: str | None) -> list[dict]:
+    """The things otherwise asked for by hand: settings, driver packages, Intel
+    firmware loading, and apt sources someone added."""
+    facts = [_fact('Capture settings', 'info', f"{cfg.get('quality')} · {cfg.get('max_tuners')} tuner(s) · "
+                   + ('Chrome kept ready' if cfg.get('keep_warm', True) else 'Chrome closed when idle'))]
+    found = []
+    for pkg in _DRIVER_PACKAGES:
+        version = installer._deb_version(pkg)
+        if version:
+            found.append(f'{pkg} {version}')
+    facts.append(_fact('Driver packages', 'info', ', '.join(found) or 'none installed'))
+    if node and _node_gpu(node).startswith('Intel'):
+        guc = _read('/sys/module/i915/parameters/enable_guc').strip()
+        if guc:
+            facts.append(_fact('Intel firmware', 'info', f'i915 enable_guc={guc} '
+                               '(2 or 3 loads HuC, which some older chips need to encode)'))
+    extra = []
+    for path in sorted(glob.glob('/etc/apt/sources.list.d/*')) + ['/etc/apt/sources.list']:
+        name = os.path.basename(path)
+        if name.startswith(_OWN_APT_SOURCES):
+            continue
+        lines = [l.strip() for l in _read(path).splitlines() if l.strip().startswith(('deb ', 'URIs:', 'Suites:'))]
+        if lines:
+            extra.append(f'{name}: {lines[0]}')
+    if extra:
+        facts.append(_fact('Extra apt sources', 'warn', '; '.join(extra)[:300]
+                           + ' (added by hand? Packages from them can replace the ones FastChannels expects; '
+                           'recreating the container removes them)'))
+    return facts
+
+
+def _drm_kernel_facts() -> list[dict]:
+    """Why a Docker Desktop VM has no render node: on WSL it's normally vgem, so say
+    whether this VM's kernel has it. Best effort: each source may be unreadable."""
+    import gzip
+    facts = []
+    try:
+        drm = sorted(os.listdir('/sys/class/drm'))
+    except OSError:
+        drm = []
+    facts.append(_fact('DRM devices', 'info', ', '.join(drm) if drm else 'none in /sys/class/drm'))
+    vgem = ''
+    try:
+        with gzip.open('/proc/config.gz', 'rt') as f:
+            for l in f:
+                if l.startswith(('CONFIG_DRM_VGEM=', '# CONFIG_DRM_VGEM ', 'CONFIG_DRM=', '# CONFIG_DRM ')):
+                    vgem += l.strip() + '; '
+    except OSError:
+        pass
+    modules = _read('/proc/modules')
+    if 'vgem' in modules:
+        vgem += 'vgem module loaded; '
+    facts.append(_fact('Kernel DRM/vgem', 'info', vgem.rstrip('; ') or 'kernel config not readable here'))
+    return facts
+
+
 def _memory_facts(tuners: int) -> list[dict]:
     """RAM is the usual limit: about 1 GB for FastChannels plus 0.8 GB per tuner."""
     total = 0
@@ -501,6 +579,10 @@ def _environment_facts(kernel: str) -> list[dict]:
     return facts
 
 
+_INTEL_NO_H264 = ('the installed driver offers no H.264 encoder for this GPU. It may be the driver '
+                  'and not the hardware')
+
+
 def _vainfo_report(uid: int, gid: int, node: str | None, on_wsl: bool) -> tuple[dict, dict] | None:
     """What the VA-API driver says the GPU can encode, as a fact plus the raw output.
     The H.264 encode entrypoints are the answer to "can this GPU do it at all"."""
@@ -524,6 +606,9 @@ def _vainfo_report(uid: int, gid: int, node: str | None, on_wsl: bool) -> tuple[
     if enc:
         return _fact('vainfo', 'ok', 'H.264 encode: ' + ', '.join(enc)
                      + (' (EncSliceLP is the low-power engine)' if 'EncSliceLP' in enc else '')), entry
+    if _node_gpu(node).startswith('Intel'):
+        # Newer Intel chips can list none with the driver we install, so don't blame the GPU.
+        return _fact('vainfo', 'fail', _INTEL_NO_H264), entry
     return _fact('vainfo', 'fail', 'this GPU/driver lists NO H.264 encoder, so GPU encoding can\'t work on it'), entry
 
 
@@ -548,6 +633,7 @@ def diagnose_gpu(uid: int, gid: int) -> dict:
                        + f' · {cpu or "unknown CPU"} · {os.cpu_count() or "?"} cores{cpu_cap}'))
     facts += _memory_facts(int(cfg.get('max_tuners') or 1))
     facts += _environment_facts(kernel)
+    facts += _setup_facts(cfg, render_node())
 
     nodes = _render_nodes()
     node = render_node()
@@ -569,6 +655,8 @@ def diagnose_gpu(uid: int, gid: int) -> dict:
                            f'{_node_gpu(n)} · {_node_info(n)} · capture user '
                            + ('can open it' if access else "can't open it (permissions, SELinux or the container's device rules)")
                            + (' · the old "radeon" kernel driver has no VA-API encoder; amdgpu is needed' if old else '')))
+    if on_wsl and not node:
+        facts += _drm_kernel_facts()
     if on_wsl or os.path.exists('/usr/lib/wsl'):
         facts.append(_fact('/dev/dxg', 'ok' if on_wsl else 'fail', _node_info('/dev/dxg')))
         facts.append(_fact('/usr/lib/wsl', 'ok' if wsl_libs_present() else 'fail',
@@ -583,10 +671,22 @@ def diagnose_gpu(uid: int, gid: int) -> dict:
                        f"{info.get('vendor') or 'none'}" + (f" via {info['via']}" if info.get('via') else '')))
     mesa = installer.mesa_va_major()
     drivers = installer.gpu_drivers_present()
-    facts.append(_fact('GPU drivers', 'ok' if drivers else 'warn',
-                       'installed' if drivers else 'not installed yet (use Reinstall on this page)'))
-    facts.append(_fact('Mesa', 'ok' if (mesa and (not on_wsl or mesa >= WSL_MESA_MIN_MAJOR)) else ('warn' if on_wsl else 'info'),
-                       f'{mesa or "not installed"}' + (f' (Windows needs {WSL_MESA_MIN_MAJOR}+)' if on_wsl else '')))
+    if on_wsl and not node and not nv:
+        # Without a render node the drivers are never installed, so Reinstall can't help:
+        # don't present these as problems that bury the real cause.
+        facts.append(_fact('GPU drivers', 'info', 'skipped: they are only installed once a /dev/dri render node exists'))
+        facts.append(_fact('Mesa', 'info', 'skipped: needs a /dev/dri render node'))
+    else:
+        facts.append(_fact('GPU drivers', 'ok' if drivers else 'warn',
+                           'installed' if drivers else 'not installed yet (use Reinstall on this page)'))
+        facts.append(_fact('Mesa', 'ok' if (mesa and (not on_wsl or mesa >= WSL_MESA_MIN_MAJOR)) else ('warn' if on_wsl else 'info'),
+                           f'{mesa or "not installed"}' + (f' (Windows needs {WSL_MESA_MIN_MAJOR}+)' if on_wsl else '')))
+    if not on_wsl and node and _node_gpu(node).startswith('Intel'):
+        if installer.nonfree_intel_installed() and installer.intel_state().get('nonfree'):
+            facts.append(_fact('Intel driver', 'info', "Intel's non-free build (the free one couldn't encode on this chip)"))
+        elif 'failed_on' in installer.intel_state():
+            facts.append(_fact('Intel driver', 'info', "free build; Intel's non-free build was tried and didn't "
+                               'encode either (Reinstall tries again)'))
     stray = {k: os.environ[k] for k in ('LIBVA_DRIVER_NAME', 'LIBVA_DRIVERS_PATH', 'GALLIUM_DRIVER',
                                         'MESA_LOADER_DRIVER_OVERRIDE') if os.environ.get(k)}
     if stray and not on_wsl:
@@ -615,6 +715,20 @@ def diagnose_gpu(uid: int, gid: int) -> dict:
                             break
         finally:
             _trace = None
+    # A failed attempt that a later one made up for (AMD has no low-power engine,
+    # so its low-power test always fails and the standard one passes) isn't a problem:
+    # say so, so it doesn't read as the GPU failing.
+    # Only the encoder actually in use counts, and only attempts on its device.
+    dev_flag = f"-vaapi_device {enc.get('device')} "
+    ok_at = [i for i, t in enumerate(trace) if t['ok'] and t['test'].startswith(dev_flag)]
+    for i, t in enumerate(trace):
+        if enc.get('kind') == 'vaapi' and not t['ok'] and t['test'].startswith(dev_flag) \
+                and any(j > i for j in ok_at):
+            t['superseded'] = True
+            t['note'] = ("This GPU doesn't offer the low-power encoder, so FastChannels uses "
+                         'the standard one (the next passing test). Nothing to fix.'
+                         if '-low_power' in t['test'] else
+                         'Did not work, but a later test passed and is used instead. Nothing to fix.')
 
     vainfo = _vainfo_report(uid, gid, node, on_wsl)
     if vainfo:
@@ -649,7 +763,100 @@ def diagnose_gpu(uid: int, gid: int) -> dict:
     return {'facts': facts, 'tests': trace,
             'result': {k: v for k, v in enc.items() if k not in ('gid', 'gids', 'groups', 'env')},
             'in_use': in_use,
-            'hint': hint}
+            'hint': hint,
+            'help': _self_help(facts, enc, setting, on_wsl, node, nv, nodes)}
+
+
+_NVIDIA_COMPOSE_WSL = '''    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    environment:
+      - NVIDIA_DRIVER_CAPABILITIES=compute,video,utility'''
+
+_NVIDIA_COMPOSE_LINUX = '''    runtime: nvidia
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,video,utility'''
+
+
+def _self_help(facts: list[dict], enc: dict, setting: str, on_wsl: bool, node: str | None,
+               nvidia: bool, nodes: list[str]) -> list[dict]:
+    """Things to try for whatever failed, each {title, steps[, snippet]}. Mirrors the
+    cases that otherwise end up as forum questions; empty when the GPU works."""
+    if enc.get('kind') in ('vaapi', 'nvenc'):
+        return []
+    by = {f['label']: f for f in facts}
+    status = lambda label: (by.get(label) or {}).get('status')
+    out = []
+    add = lambda title, steps, snippet=None: out.append(
+        {'title': title, 'steps': steps, **({'snippet': snippet} if snippet else {})})
+    if setting == 'cpu':
+        add('Encoder is set to CPU only', ['Use the encoder setting on this page and choose Auto, then run this again.'])
+        return out
+    if status('Memory') == 'warn':
+        add('Not enough memory for this many tuners',
+            ['Lower the number of tuners on this page, or give the container more RAM.'
+             + (' On Docker Desktop: Settings → Resources (or .wslconfig: memory=).' if on_wsl else '')])
+    if on_wsl and not node and not nvidia:
+        add('Intel or AMD card? Update WSL first',
+            ['In PowerShell run: wsl --update , then restart Docker Desktop. An old WSL is a known reason for the GPU not showing up.',
+             'Then run: docker run --rm --privileged alpine ls /dev/dri',
+             'If it lists renderD128, recreate the container with /dev/dxg, /dev/dri and the /usr/lib/wsl mount.',
+             'If it says "No such file or directory", also check for a Docker Desktop update. Until then Intel/AMD GPU '
+             'encoding is not possible there, and FastChannels keeps working on the CPU.',
+             'If the container refuses to start with a /dev/dri error, remove that line from your compose file.'])
+        add('NVIDIA card? Use its own setup',
+            ['NVIDIA GPUs do not need /dev/dxg or /dev/dri. Remove those lines, add this to the FastChannels service '
+             'and recreate the container:'], _NVIDIA_COMPOSE_WSL)
+    elif on_wsl and not wsl_libs_present():
+        add('Mount the Windows GPU libraries', ['Add this under volumes: for the FastChannels service and recreate the container:'],
+            '      - /usr/lib/wsl:/usr/lib/wsl:ro')
+    elif not on_wsl and not node and not nvidia:
+        add('No GPU reached the container',
+            ['On the host run: ls /dev/dri . If it does not exist, the host has no GPU driver loaded (or no GPU).',
+             'NVIDIA card: install the NVIDIA Container Toolkit and use the NVIDIA setup below.',
+             'Intel/AMD card: add the device to the FastChannels service and recreate the container:'],
+            '    devices:\n      - /dev/dri:/dev/dri')
+        add('NVIDIA setup', ['Add this to the FastChannels service and recreate the container:'], _NVIDIA_COMPOSE_LINUX)
+        if status('Container type') == 'warn':
+            add('Proxmox / LXC', ['Give the LXC the GPU first (Resources → Add → Device Passthrough: /dev/dri/renderD128), '
+                                  'restart it, check ls /dev/dri inside it, then pass /dev/dri to Docker.'])
+    if node and any(f['label'].strip().startswith('renderD') and f['status'] == 'fail' for f in facts):
+        add('The capture user cannot open the GPU',
+            ['Check the SELinux and user-namespace lines above. On SELinux hosts add this to the service:'],
+            '    security_opt:\n      - label=disable')
+        add('LXC or restricted container', ['If this is a Proxmox LXC or rootless Docker, the device must be readable inside it: '
+                                            'check ls -l /dev/dri in the container.'])
+    if any('kernel driver radeon' in (f.get('detail') or '') for f in facts):
+        add('Old AMD driver', ['The "radeon" kernel driver cannot encode. Older AMD cards need the amdgpu driver on the host; '
+                               'otherwise FastChannels uses the CPU.'])
+    if nvidia:
+        caps = os.environ.get('NVIDIA_DRIVER_CAPABILITIES') or ''
+        if 'video' not in caps and 'all' not in caps:
+            add('NVIDIA: the video capability is missing',
+                ['The encoder is only available inside the container when NVIDIA_DRIVER_CAPABILITIES includes video. '
+                 'Set it and recreate the container:'], '    environment:\n      - NVIDIA_DRIVER_CAPABILITIES=compute,video,utility')
+        elif not os.path.exists('/dev/nvidiactl'):
+            add('NVIDIA: the GPU was not passed in',
+                ['Install the NVIDIA Container Toolkit (Linux) or a current NVIDIA driver (Windows) and add the NVIDIA settings '
+                 'to the service.'], _NVIDIA_COMPOSE_WSL if on_wsl else _NVIDIA_COMPOSE_LINUX)
+    if node and not installer.gpu_drivers_present():
+        add('GPU drivers are not installed', ['Use Reinstall on this page, wait for it to finish, then run this again.'])
+    if (by.get('vainfo') or {}).get('detail') == _INTEL_NO_H264:
+        add('The driver offers no H.264 encoder for this GPU',
+            ['It may be the driver and not the hardware. Use Copy report and post it so it can be looked into. '
+             'The CPU is used meanwhile.'])
+    elif status('vainfo') == 'fail' and 'NO H.264' in by['vainfo']['detail']:
+        add('The GPU has no H.264 encoder', ['vainfo lists no H.264 encode for this GPU or driver, so GPU encoding cannot work on it. '
+                                             'Nothing to fix; the CPU is used.'])
+    if not out and node:
+        add('The test encode failed',
+            ['Open the failed test below and read the FFmpeg output. Copy the report if you ask for help.'])
+    return out
 
 
 def _gpu_hint(enc: dict, in_use: dict, setting: str, on_wsl: bool, node: str | None,
@@ -663,9 +870,13 @@ def _gpu_hint(enc: dict, in_use: dict, setting: str, on_wsl: bool, node: str | N
         return 'GPU encoding works.' + extra
     if setting == 'cpu':
         return 'Encoder is set to CPU only. Set it to Auto to try the GPU.'
+    if on_wsl and not node and not nvidia and os.environ.get('NVIDIA_DRIVER_CAPABILITIES') is None \
+            and 'nvidia' in _read('/proc/modules').lower():
+        return ('An NVIDIA driver is in the Docker VM but the container did not get the GPU. Use the NVIDIA steps '
+                '(deploy reservation with driver nvidia, plus NVIDIA_DRIVER_CAPABILITIES=compute,video,utility).')
     if on_wsl and not node:
-        return ('Docker Desktop\'s VM has no /dev/dri render node, so Intel/AMD GPU encoding isn\'t possible there. '
-                'Remove the "/dev/dri" line (Docker refuses to start with it) and use the CPU. NVIDIA cards work on '
+        return ('Docker Desktop\'s VM has no /dev/dri render node. For Intel/AMD, first run "wsl --update" and restart '
+                'Docker Desktop. If it is still missing: remove the "/dev/dri" line (Docker refuses to start with it) and use the CPU. NVIDIA cards work on '
                 'Windows without /dev/dxg or /dev/dri: see the NVIDIA steps.')
     if not node and not nvidia and not on_wsl:
         return 'No GPU reached the container. Add the GPU lines for your setup (see "How?" on this page), then recreate the container.'
@@ -1274,7 +1485,11 @@ class CaptureService:
             os.chmod('/tmp/.X11-unix', 0o1777)
             os.makedirs(SESSION_ROOT, exist_ok=True)
             self._start_pulse(tuners)
+            if installer.intel_state().get('restore'):
+                installer.restore_free_intel()
             enc = detect_encoder(self.uid, self.gid, encoder_setting)
+            if _wants_intel_nonfree(self.uid, self.gid, encoder_setting, enc):
+                enc = self._try_intel_nonfree(encoder_setting, enc)
             ENCODER.clear()
             ENCODER.update(enc)
         except Exception as e:
@@ -1296,6 +1511,40 @@ class CaptureService:
         for t in self.tuners:
             threading.Thread(target=self._start_tuner, args=(t,), daemon=True).start()
         logger.info('[capture] starting %d tuner(s) at %s', tuners, quality)
+
+    def _try_intel_nonfree(self, setting: str, enc: dict) -> dict:
+        """Install Intel's non-free drivers and test again; keep them only if the GPU
+        then encodes. Holds busy_action so no install/uninstall runs apt meanwhile."""
+        with self.lock:
+            if self.busy_action:
+                return enc
+            self.busy_action = 'gpu-driver'
+        try:
+            logger.info("[capture] the Intel GPU test failed; trying Intel's non-free driver")
+            ENCODER.clear()
+            ENCODER.update(kind='x264', reason="trying Intel's non-free GPU driver")
+            tested = False
+            try:
+                installer.begin_intel_nonfree()
+                installer.switch_intel_drivers(True)
+                new = detect_encoder(self.uid, self.gid, setting)
+                tested = True
+                if new.get('kind') == 'vaapi':
+                    installer.keep_intel_nonfree()
+                    logger.info("[capture] Intel's non-free driver works (%s); keeping it", new.get('driver'))
+                    return {**new, 'nonfree': True}
+                logger.warning("[capture] Intel's non-free driver didn't encode either; restoring the free one")
+            except Exception as e:
+                # Usually no network: not remembered as failed, so a later start tries again.
+                logger.warning("[capture] could not set up Intel's non-free driver: %s", e)
+            installer.restore_free_intel(failed=tested)
+            return enc
+        except Exception as e:
+            logger.warning("[capture] Intel driver fallback failed: %s", e)
+            return enc
+        finally:
+            with self.lock:
+                self.busy_action = ''
 
     def _start_pulse(self, tuners: int) -> None:
         _kill(self.pulse)

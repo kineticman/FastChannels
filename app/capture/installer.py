@@ -11,6 +11,7 @@ packages back from that cache, re-downloading only what the new base needs.
 from __future__ import annotations
 
 import glob
+import json
 import logging
 import os
 import shutil
@@ -41,6 +42,15 @@ WSL_GPU_PACKAGES = ('mesa-va-drivers', 'libva2')
 # required: installed best-effort alongside the drivers, and not part of
 # gpu_drivers_present(), so existing installs don't get pushed into a reinstall.
 GPU_TOOLS = ('vainfo', 'i965-va-driver')
+# Intel's non-free builds of the two drivers above, from Debian's non-free
+# component. Some Intel chips can't encode with the free ones (Kaby Lake: the free
+# iHD only offers constant-quality low-power encoding and the free i965 lacks the
+# encode shaders). Installed only after the free driver's test encode fails on an
+# Intel GPU, and kept only if the encode then works (intel_driver.json).
+NONFREE_FOR = {'intel-media-va-driver': 'intel-media-va-driver-non-free',
+               'i965-va-driver': 'i965-va-driver-shaders'}
+INTEL_STATE_PATH = os.path.join(ADDON_DIR, 'intel_driver.json')
+NONFREE_LIST = '/etc/apt/sources.list.d/fastchannels-capture-nonfree.list'
 BACKPORTS_LIST = '/etc/apt/sources.list.d/fastchannels-capture-backports.list'
 CAPTURE_USER = 'fccapture'
 
@@ -103,7 +113,100 @@ def gpu_drivers_present() -> bool:
     # whole install. The daemon checks the version before trusting the GPU.
     if wsl_gpu():
         return _deb_installed('mesa-va-drivers')
-    return all(_deb_installed(p) for p in GPU_PACKAGES)
+    return all(_deb_installed(p) or (p in NONFREE_FOR and _deb_installed(NONFREE_FOR[p]))
+               for p in GPU_PACKAGES)
+
+
+def intel_state() -> dict:
+    """{'nonfree': True} when this server needs Intel's non-free drivers,
+    {'failed_on': <FastChannels version>} when they didn't help either, else {}.
+    'restore': True means an attempt didn't finish: put the free drivers back."""
+    try:
+        with open(INTEL_STATE_PATH, encoding='utf-8') as fp:
+            data = json.load(fp)
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _save_intel_state(state: dict) -> None:
+    os.makedirs(ADDON_DIR, exist_ok=True)
+    with open(INTEL_STATE_PATH + '.tmp', 'w', encoding='utf-8') as fp:
+        json.dump(state, fp)
+    os.replace(INTEL_STATE_PATH + '.tmp', INTEL_STATE_PATH)
+
+
+def nonfree_intel_installed() -> bool:
+    return _deb_installed(NONFREE_FOR['intel-media-va-driver'])
+
+
+def _driver_names(packages: tuple, nonfree: bool) -> tuple:
+    return tuple(NONFREE_FOR.get(p, p) if nonfree else p for p in packages)
+
+
+def _add_nonfree_source() -> None:
+    codename = _debian_codename()
+    if not codename:
+        raise RuntimeError('unknown Debian release')
+    with open(NONFREE_LIST, 'w') as fp:
+        fp.write(f'deb http://deb.debian.org/debian {codename} non-free\n')
+
+
+def _remove_nonfree_source() -> None:
+    try:
+        os.unlink(NONFREE_LIST)
+    except OSError:
+        pass
+
+
+def _drop_apt_lists() -> None:
+    shutil.rmtree('/var/lib/apt/lists', ignore_errors=True)
+    os.makedirs('/var/lib/apt/lists/partial', exist_ok=True)
+
+
+def switch_intel_drivers(nonfree: bool) -> None:
+    """Swap between the free and non-free Intel drivers (each replaces the other).
+    Raises if apt can't. The non-free source only exists while apt runs."""
+    os.makedirs(os.path.join(DEBS_DIR, 'partial'), exist_ok=True)
+    try:
+        if nonfree:
+            _add_nonfree_source()
+        _run(['apt-get', 'update', '-q'], timeout=300)
+        _run(['apt-get', 'install', '-y', '-q', '--no-install-recommends',
+              '-o', f'Dir::Cache::archives={DEBS_DIR}',
+              *_driver_names(('intel-media-va-driver', 'i965-va-driver'), nonfree)], timeout=900)
+    finally:
+        _remove_nonfree_source()
+        _drop_apt_lists()
+
+
+def begin_intel_nonfree() -> None:
+    """Recorded before the swap, so a crash or restart mid-attempt still gets undone."""
+    _save_intel_state({'restore': True})
+
+
+def keep_intel_nonfree() -> None:
+    _save_intel_state({'nonfree': True})
+
+
+def restore_free_intel(failed: bool | None = None) -> bool:
+    """Undo an attempt that didn't prove the non-free drivers. failed=True records
+    that they were tested and didn't encode; None keeps what an earlier attempt
+    recorded. False if apt couldn't do it yet (the 'restore' flag stays set)."""
+    from ..config import VERSION
+    state = intel_state()
+    if failed is not None:
+        state = {'failed_on': VERSION} if failed else {}
+    state.pop('restore', None)
+    if nonfree_intel_installed() or _deb_installed(NONFREE_FOR['i965-va-driver']):
+        try:
+            switch_intel_drivers(False)
+        except Exception as e:
+            logger.warning('[capture] could not restore the free Intel driver yet: %s', e)
+            _save_intel_state({**state, 'restore': True})
+            return False
+    _save_intel_state(state)
+    return True
 
 
 def _debian_codename() -> str:
@@ -200,27 +303,38 @@ def _download_chrome(progress) -> None:
 
 def _apt_install(progress) -> None:
     os.makedirs(os.path.join(DEBS_DIR, 'partial'), exist_ok=True)
+    try:
+        _apt_install_packages(progress)
+    finally:
+        # Keep the cache (that's the point of DEBS_DIR) but drop the package lists from
+        # the container layer, like the Dockerfile does.
+        _remove_nonfree_source()
+        _drop_apt_lists()
+
+
+def _apt_install_packages(progress) -> None:
     cache = f'Dir::Cache::archives={DEBS_DIR}'
+    nonfree = bool(intel_state().get('nonfree'))
     progress('Updating package lists', 'packages')
+    if nonfree:
+        _add_nonfree_source()
+    else:
+        _remove_nonfree_source()
     _run(['apt-get', 'update', '-q'], timeout=300)
     progress('Installing Chrome, PulseAudio and FFmpeg', 'packages')
     wsl = bool(render_node()) and wsl_gpu()
-    gpu = WSL_GPU_PACKAGES if wsl else GPU_PACKAGES if render_node() else ()
+    gpu = WSL_GPU_PACKAGES if wsl else _driver_names(GPU_PACKAGES, nonfree) if render_node() else ()
     _run(['apt-get', 'install', '-y', '-q', '--no-install-recommends', '-o', cache,
           *APT_PACKAGES, *gpu, CHROME_DEB], timeout=1800)
     if gpu:
         try:
-            _run(['apt-get', 'install', '-y', '-q', '--no-install-recommends', '-o', cache, *GPU_TOOLS],
-                 timeout=300)
+            _run(['apt-get', 'install', '-y', '-q', '--no-install-recommends', '-o', cache,
+                  *_driver_names(GPU_TOOLS, nonfree and not wsl)], timeout=300)
         except Exception as e:
             logger.warning('[capture-install] optional GPU tools (%s) not installed: %s', ', '.join(GPU_TOOLS), e)
     if wsl:
         progress('Installing GPU drivers for Docker on Windows', 'packages')
         _install_wsl_mesa(cache)
-    # Keep the cache (that's the point of DEBS_DIR) but drop the package lists from
-    # the container layer, like the Dockerfile does.
-    shutil.rmtree('/var/lib/apt/lists', ignore_errors=True)
-    os.makedirs('/var/lib/apt/lists/partial', exist_ok=True)
 
 
 def install(*, refresh_chrome: bool = False) -> None:
@@ -237,6 +351,8 @@ def install(*, refresh_chrome: bool = False) -> None:
         return
     try:
         os.makedirs(ADDON_DIR, exist_ok=True)
+        if 'failed_on' in intel_state():
+            _save_intel_state({})   # Install/Reinstall clicked: try the Intel fallback again
         if refresh_chrome or not os.path.exists(CHROME_DEB):
             progress('Downloading Google Chrome', 'download', 0)
             _download_chrome(progress)
@@ -286,6 +402,8 @@ def reinstall() -> bool:
 
 def _offline_dpkg() -> None:
     debs = []
+    # The cache can hold both builds of the Intel drivers; they conflict.
+    skip = set(NONFREE_FOR) if intel_state().get('nonfree') else set(NONFREE_FOR.values())
     for path in sorted(glob.glob(os.path.join(DEBS_DIR, '*.deb'))):
         try:
             pkg = subprocess.run(['dpkg-deb', '-f', path, 'Package'], capture_output=True,
@@ -294,7 +412,7 @@ def _offline_dpkg() -> None:
             continue
         installed = subprocess.run(['dpkg-query', '-W', '-f=${Status}', pkg],
                                    capture_output=True, text=True).stdout
-        if 'install ok installed' not in installed:
+        if 'install ok installed' not in installed and pkg not in skip:
             debs.append(path)
     if debs:
         _run(['dpkg', '-i', *debs], timeout=1200)

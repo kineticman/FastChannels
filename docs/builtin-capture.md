@@ -202,6 +202,13 @@ lines above. See [Windows](#windows).
 Unraid, Proxmox, Synology and others: see
 [Other platforms](#other-platforms).
 
+**Intel's non-free driver.** FastChannels installs Intel's free video driver.
+Some Intel chips, such as 7th-generation Core (Kaby Lake), can't encode with it.
+When the test encode on an Intel GPU fails, FastChannels automatically installs
+Intel's non-free driver from Debian's own repository and tests again. It keeps
+that driver only if the GPU then encodes, and puts the free one back if not. The
+Encoder line and **GPU diagnostics** say when it's in use.
+
 ### NVIDIA (experimental)
 
 NVIDIA cards encode through NVENC. This has been confirmed on Windows with
@@ -299,13 +306,30 @@ Capture needs.
         - NVIDIA_DRIVER_CAPABILITIES=compute,video,utility
   ```
 
-  Don't add `/dev/dxg` or `/dev/dri` for NVIDIA. The **Encoder** line should
+  Don't add `/dev/dxg` or `/dev/dri` for NVIDIA. Docker's own guide to
+  [GPU support in Docker Desktop for Windows](https://docs.docker.com/desktop/features/gpu/)
+  lists the requirements (a current NVIDIA driver, the WSL2 backend and
+  `wsl --update`) and has a "Validate GPU support" step you can run first. The **Encoder** line should
   say *Using your GPU (NVIDIA)*. This was confirmed on Windows 11 with an RTX
   2070 Super: Built-in Capture installed Chrome, started two warm tuners and
   detected the GPU right away.
-- **Intel/AMD GPU (experimental).** Windows doesn't hand these GPUs to
-  containers the way Linux does, so the Intel/AMD setup above doesn't apply.
-  Instead, add this to the FastChannels service and recreate the container:
+- **Intel/AMD GPU (experimental, and not available on every PC).** Windows
+  doesn't hand these GPUs to containers the way Linux does, so the Intel/AMD
+  setup above doesn't apply. **First, update WSL**: open PowerShell, run
+  `wsl --update`, then restart Docker Desktop. An old WSL is a known reason for
+  the GPU not showing up. Then check that Docker's VM has a GPU render node:
+
+  ```powershell
+  docker run --rm --privileged alpine ls /dev/dri
+  ```
+
+  If it lists `renderD128` (or similar), carry on below. If it says `No such
+  file or directory`, your VM has no render node, so Intel/AMD GPU encoding
+  isn't possible there yet. Check for a Docker Desktop update too. Otherwise
+  skip this and use the CPU, which handles two tuners fine on most modern PCs.
+
+  If the node is there, add this to the FastChannels service and recreate the
+  container:
 
   ```yaml
       devices:
@@ -328,8 +352,8 @@ Capture needs.
 
   FastChannels then installs a newer graphics driver (Mesa 26) and tests the
   GPU, and the **Encoder** line should say *Using your GPU*. This goes through Microsoft's
-  D3D12 video bridge, which has worked with an AMD Ryzen laptop GPU; Intel
-  GPUs may work the same way. If the test fails, Built-in Capture
+  D3D12 video bridge, which has worked with an AMD Ryzen laptop GPU and with
+  an Intel UHD Graphics 770 (Core i5-12500) on Windows 11. If the test fails, Built-in Capture
   carries on with the CPU. Budget about 2–2.5 CPU cores per channel at 720p
   60 fps without the GPU.
 
@@ -362,6 +386,11 @@ Capture needs.
   This leaves out `/dev/dri`, so it starts on any Docker VM. Add the
   `- /dev/dri:/dev/dri` line under `devices:` only if the VM has a render
   node. If it doesn't, you get CPU encoding.
+- **If something doesn't work, run GPU diagnostics** (Bridge page, next to the
+  Encoder line). It lists what reached the container and what to try, and
+  **Copy report** gives you something to paste into a help post. Please also say
+  how you run FastChannels (compose, Portainer or `docker run`), your Docker
+  Desktop and Windows versions and your GPU model, since the report can't see those.
 - **Memory matters most.** Docker Desktop gets half of the PC's memory unless
   you change it, and each tuner needs about 0.8 GB on top of FastChannels
   itself. The test PC had 4 GB, so Docker got under 2 GB. It ran out of memory
@@ -497,6 +526,21 @@ Hover over the line to see the reason.
   `ls /dev/dri` works on the host.
 - *Using CPU (GPU didn't work)*: the GPU was passed in but the encode test
   failed. The Logs page has the details (look for `[capture]` lines).
+
+### A very new Intel chip shows no H.264 encoder
+
+**GPU diagnostics** may say *the installed driver offers no H.264 encoder for
+this GPU*. This has been seen on a Core Ultra 7 356H (Panther Lake): the GPU
+reaches the container, but the Intel driver FastChannels installs is older than
+the chip needs. FastChannels also tries Intel's non-free driver (see
+[Use your GPU](#use-your-gpu)), which hasn't been tested on this chip. A newer
+Intel driver did encode on that machine, but it comes from Debian's unstable
+release, so FastChannels doesn't install it. Without a working driver Built-in
+Capture uses the CPU, which is usually plenty on a chip this new.
+
+Installing the driver by hand isn't recommended: it can pull other unstable
+packages into the container, and recreating the container (which every update
+does) removes it.
 
 ### The video is choppy
 
