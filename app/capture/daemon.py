@@ -247,7 +247,8 @@ def _driver_name(stderr: str) -> str:
 def _vaapi_reason(stderr: str) -> str:
     """Why a VA-API test failed. FFmpeg's last line is a generic "Conversion failed!";
     the cause (driver init, unsupported profile/entrypoint, no device) is earlier."""
-    lines = [l.strip() for l in (stderr or '').splitlines()]
+    # libva also logs "va_openDriver() returns 0" when the driver loaded fine: not a cause.
+    lines = [l.strip() for l in (stderr or '').splitlines() if 'va_openDriver() returns 0' not in l]
     for key in ('va_openDriver', 'vaInitialize', 'Failed to initialise VAAPI', 'No VA display',
                 'Failed to open', 'Permission denied', 'driver init failed', 'Error',
                 'Failed to create', 'not supported', 'No usable encoding'):
