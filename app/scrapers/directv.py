@@ -852,6 +852,13 @@ class DirectvScraper(BaseScraper):
         ConfigField('password', 'Password', field_type='password',
                     secret=True,
                     help_text='Your DirecTV Stream password.'),
+        ConfigField('zip_code', 'ZIP code for local channels',
+                    placeholder='Optional',
+                    help_text=(
+                        '5-digit ZIP of your DirecTV service area. Adds that area\'s local stations on the '
+                        'next scrape; some accounts can list them but not play them. '
+                        'Blank = DirecTV\'s default list (Los Angeles locals).'
+                    )),
         ConfigField('exclude_fast_channels', 'Exclude FAST channels',
                     field_type='toggle', default='false',
                     help_text=(
@@ -1008,6 +1015,21 @@ class DirectvScraper(BaseScraper):
                 pass
             logger.exception('[directv] failed to queue background re-auth job')
 
+    # ── Local market ─────────────────────────────────────────────────────────
+
+    def _local_zip(self) -> str:
+        """The ZIP setting, to ask DirecTV for that area's local stations, or ''.
+        Without one AllChannels lists only Los Angeles locals. Opt-in: listed
+        locals don't necessarily play (the test account gets 403/1600 for them)."""
+        configured = str(self.config.get('zip_code') or '').strip()
+        match = re.fullmatch(r'(\d{5})(?:-\d{4})?', configured)
+        if match:
+            logger.info('[directv] adding local channels for the ZIP in source settings')
+            return match.group(1)
+        if configured:
+            logger.warning('[directv] ignoring the ZIP code setting: not a 5-digit ZIP')
+        return ''
+
     # ── Channels ─────────────────────────────────────────────────────────────
 
     def fetch_channels(self) -> list[ChannelData]:
@@ -1019,15 +1041,12 @@ class DirectvScraper(BaseScraper):
 
         _progress(self, 'channels', 0, 1)
         params = {'sort': 'OrdCh=ASC'}
-        # Deliberately NOT sending clientContext to AllChannels. It's a
-        # device/proximity-scoped blob the old browser-fallback sign-in (removed)
-        # captured for the per-channel channel/v1 playback-authorization call,
-        # which does need it -- but it reflects wherever our own server
-        # happened to be, not the subscriber's
-        # real service address, so it has no business steering which local
-        # affiliates or region-scoped rows AllChannels returns. AllChannels
-        # has always worked correctly without it via the normal curl-cffi
-        # auth path, which never captures one in the first place.
+        # AllChannels picks local stations from the ZIP in clientContext. Built
+        # from the ZIP alone, not config['client_context']: that was captured by
+        # the removed browser sign-in and reflects wherever the server was.
+        zip_code = self._local_zip()
+        if zip_code:
+            params['clientContext'] = f'zipCode:{zip_code}'
 
         baseline_non_streamable = int((self.config.get('_eligibility_baseline') or {}).get('non_streamable', 0))
         exclude_fast = self._exclude_fast_channels()
