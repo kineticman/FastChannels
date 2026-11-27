@@ -100,6 +100,9 @@ DEFAULT_CONFIG = {
     # next tune starts it first.
     'keep_warm': True,
     'startup': 'standard',  # a STARTUP_PRESETS name; applies from the next tune
+    # What the bridge-only capture playlists point to: 'hls', or 'ts' (experimental,
+    # /play/capture/<id>.ts: one MPEG-TS stream that can wait out a slow tune).
+    'stream_format': 'hls',
 }
 COLD_IDLE_SECONDS = int(os.environ.get('FC_CAPTURE_COLD_IDLE_SECONDS', '300'))  # env: testing only
 ENCODERS = ('auto', 'cpu')
@@ -240,6 +243,7 @@ def normalize_config(cfg: dict) -> dict:
     out['keep_warm'] = bool(cfg.get('keep_warm', out['keep_warm']))
     startup = cfg.get('startup')
     out['startup'] = startup if startup in STARTUP_PRESETS else out['startup']
+    out['stream_format'] = 'ts' if cfg.get('stream_format') == 'ts' else 'hls'
     return out
 
 

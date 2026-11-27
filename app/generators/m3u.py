@@ -1005,8 +1005,8 @@ def _auto_capture_play_url(ch, base_url: str) -> str:
     return f'{base_url}/play/auto-capture/{source_name}/{channel_id}.m3u8'
 
 
-def _capture_play_url(ch, base_url: str) -> str:
-    return f'{base_url}/play/capture/{ch.id}.m3u8'
+def _capture_play_url(ch, base_url: str, ext: str = 'm3u8') -> str:
+    return f'{base_url}/play/capture/{ch.id}.{ext}'
 
 
 def _ah4c_play_url(ch, ah4c_base_url: str) -> str:
@@ -1259,9 +1259,13 @@ def generate_capture_m3u(filters: dict = None, base_url: str = None, *,
     gracenote False/True/None as in generate_prismcast_m3u."""
     from .. import capture
     base = (base_url or '').rstrip('/')
+    # Bridge-only playlists follow the Bridge page's Stream format. The combined
+    # playlist (_auto_capture_play_url) stays HLS: it shares a Channels DVR source
+    # with standard HLS channels.
+    ext = 'ts' if capture.read_config()['stream_format'] == 'ts' else 'm3u8'
     return generate_prismcast_m3u(
         filters, base_url=base_url, prismcast_url='', gracenote=gracenote,
-        bridge_url_for=lambda ch: _capture_play_url(ch, base),
+        bridge_url_for=lambda ch: _capture_play_url(ch, base, ext),
         exclude_sources=capture.INCOMPATIBLE_SOURCES,
         exclude_channel_ids=capture.restricted_channel_ids(), **number_kwargs)
 

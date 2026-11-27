@@ -94,6 +94,13 @@ Then choose:
   to pause on a weak network or a busy machine. Applies from the next channel
   that starts.
 
+- **Stream format:** *HLS* is the default. *MPEG-TS* is experimental: try it if
+  Channels DVR times out when a channel starts (it waits only about 15 seconds
+  for HLS, but longer for an MPEG-TS stream that has already answered). It
+  changes the links in the Built-in Capture playlists, so add them to Channels
+  DVR again afterwards, or set the source's stream format to MPEG-TS yourself.
+  The single whole-feed playlist stays HLS.
+
 Changes to tuners, quality or encoder wait until nothing is playing, so they
 never cut off someone who's watching.
 

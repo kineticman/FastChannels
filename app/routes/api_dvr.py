@@ -1003,6 +1003,8 @@ def push_feed_capture_to_dvr(feed_id):
     mixed = (feed.guide_mode or 'split') == 'mixed'
     if mixed and (blocked := _mixed_guide_unsupported(dvr_url)):
         return blocked
+    # The playlists link to HLS or MPEG-TS per the Bridge page; the source must match.
+    dvr_type = 'MPEG-TS' if capture.read_config()['stream_format'] == 'ts' else 'HLS'
     largest = (std_count + gn_count) if mixed else max(std_count, gn_count)
     force = bool((request.get_json(silent=True) or {}).get('force'))
     if largest > _CHANNELS_DVR_RECOMMENDED_MAX and not force:
@@ -1026,17 +1028,17 @@ def push_feed_capture_to_dvr(feed_id):
     added = []
     try:
         if mixed:
-            r = _dvr_put_source(dvr_url, std_name, 'HLS', f"{base}/feeds/{feed.slug}/m3u/capture/mixed",
+            r = _dvr_put_source(dvr_url, std_name, dvr_type, f"{base}/feeds/{feed.slug}/m3u/capture/mixed",
                                 epg, mixed=True)
             r.raise_for_status()
             return jsonify({'ok': True, 'sources_added': [std_name], 'mixed': True,
                             'stale_sources': _stale_gracenote_source(dvr_url, feed, gn_name)})
         if gn_count:
-            r = _dvr_put_source(dvr_url, gn_name, 'HLS', f"{base}/feeds/{feed.slug}/m3u/capture/gracenote")
+            r = _dvr_put_source(dvr_url, gn_name, dvr_type, f"{base}/feeds/{feed.slug}/m3u/capture/gracenote")
             r.raise_for_status()
             added.append(gn_name)
         if std_count:
-            r = _dvr_put_source(dvr_url, std_name, 'HLS', f"{base}/feeds/{feed.slug}/m3u/capture",
+            r = _dvr_put_source(dvr_url, std_name, dvr_type, f"{base}/feeds/{feed.slug}/m3u/capture",
                                 epg)
             r.raise_for_status()
             added.append(std_name)
