@@ -1,15 +1,12 @@
 """Shared "debug logging" toggle for any module that wants extra opt-in
 diagnostic logging without spamming the normal INFO-level logs.
 
-The root logger is hard-capped at INFO (app/logfile.py's setup() clamps it
-there unconditionally), so a bare logger.debug() call anywhere in this app
-is silently dropped before it ever reaches a handler — it isn't that the
-file handler filters it out, the LOGGER's own effective level gates whether
-the log record gets created at all. The established pattern (originally
-stream_detector.py's FC_YTDLP_VERBOSE) is an opt-in flag, logged at INFO
-under a distinct tag when the flag is on.
+A plain logger.debug() in app.* is the simplest way: app/logfile.py writes
+those only while the setting (or FC_DEBUG) is on, with secrets stripped.
+This module is for what needs more than a log line, such as dumping a page
+or running an extra command when the setting is on.
 
-This module generalizes that pattern with three independent ways to enable
+It offers three independent ways to enable
 it, checked together — any ONE is sufficient:
   - A module's own env var (e.g. FC_SPECTRUM_DEBUG), for a power user who
     wants just THAT module's noise without turning everything else on too.

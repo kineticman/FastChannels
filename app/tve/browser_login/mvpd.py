@@ -621,7 +621,7 @@ def run_mvpd_browser_login(requestor_id: str, resource: str, software_statement:
                         try:
                             _apply_sling_browser_login_input(page, _json_login.loads(raw))
                         except Exception as exc:  # noqa: BLE001
-                            logger.debug('[mvpd-login] input apply failed: %s', exc)
+                            logger.debug('[mvpd-login] input apply failed: %s', type(exc).__name__)
 
                     now = time.monotonic()
                     if current_job and now - last_heartbeat > 60:

@@ -236,7 +236,7 @@ def run_sling_browser_login():
                         try:
                             _apply_sling_browser_login_input(page, _json_login.loads(raw))
                         except Exception as exc:  # noqa: BLE001
-                            logger.debug('[sling-login] input apply failed: %s', exc)
+                            logger.debug('[sling-login] input apply failed: %s', type(exc).__name__)
 
                     now = time.monotonic()
                     if current_job and now - last_heartbeat > 60:

@@ -79,6 +79,7 @@ def install_browser_login_activity_log(redis_conn):
     except Exception:  # noqa: BLE001
         pass
     handler = _BrowserLoginActivityLogHandler(redis_conn)
+    handler.setLevel(logging.INFO)    # the sign-in window never shows debug lines
     logging.getLogger('app.tve.browser_login').addHandler(handler)
     return handler
 
@@ -1347,7 +1348,7 @@ def _autofill_spectrum_sso_confirm(page) -> bool:
             page.wait_for_timeout(150)
         return True
     except Exception as exc:  # noqa: BLE001
-        logger.debug('[mvpd-login] spectrum SSO-confirm autofill failed: %s', exc)
+        logger.debug('[mvpd-login] spectrum SSO-confirm autofill failed: %s', type(exc).__name__)
         return False
 
 

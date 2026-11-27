@@ -31,17 +31,10 @@ _LOCALNOW_INVALID_PROGRAM_IDS = {'epg-feed-not-available'}
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import quote, urljoin
 
-from ..debug_flag import debug_logging_cached
 from .base import BaseScraper, ChannelData, ConfigField, ProgramData, ScrapeSkipError, infer_language_from_metadata, dedupe_dominant_episode_id
 from .category_utils import infer_category_from_name
 
 logger = logging.getLogger(__name__)
-
-
-def _log_detail(msg: str, *args) -> None:
-    """Step-by-step lines, shown only with debug logging on (Settings → Advanced)."""
-    if debug_logging_cached():
-        logger.info(msg, *args)
 
 
 def _parse_localnow_title(
@@ -307,7 +300,7 @@ class LocalNowScraper(BaseScraper):
                 )
 
         dedupe_dominant_episode_id(programs)
-        _log_detail("[localnow] %d EPG entries fetched", len(programs))
+        logger.debug("[localnow] %d EPG entries fetched", len(programs))
         return programs
 
     def audit_resolve(self, raw_url: str) -> str:
@@ -354,7 +347,7 @@ class LocalNowScraper(BaseScraper):
         ):
             return
 
-        _log_detail("[localnow] bootstrapping runtime config from homepage")
+        logger.debug("[localnow] bootstrapping runtime config from homepage")
         resp = self.session.get(self.HOME_URL, timeout=20)
         # Non-US visitors are blocked at the edge (403) or served a region page
         # (200 without the Next.js payload). Treat both as a skippable geo-block
@@ -413,7 +406,7 @@ class LocalNowScraper(BaseScraper):
         self._runtime_bootstrapped = True
         self._channels_payload_cache = None
 
-        _log_detail(
+        logger.debug(
             "[localnow] runtime bootstrapped host=%s dma=%s market=%s token_exp=%s",
             self._dsp_host,
             self._dma,
@@ -579,7 +572,7 @@ class LocalNowScraper(BaseScraper):
             if ch.get("video_id") or ch.get("_id")
         }
 
-        _log_detail("[localnow] fetched %d channels from live EPG", len(channels))
+        logger.debug("[localnow] fetched %d channels from live EPG", len(channels))
         return channels
 
     def _fetch_playback(self, source_channel_id: str, slug: Optional[str] = None) -> Dict[str, Any]:

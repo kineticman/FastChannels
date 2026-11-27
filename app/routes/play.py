@@ -3803,7 +3803,9 @@ def play(source_name: str, channel_id: str):
 
     logger.debug(
         '[play] redirect request_id=%s ip=%s source=%s channel_id=%s channel_name=%s → %s',
-        getattr(g, 'request_id', '-'), client_ip, source_name, channel_id, channel.name, resolved_url[:80],
+        getattr(g, 'request_id', '-'), client_ip, source_name, channel_id, channel.name,
+        # A playlist URL can carry its key in the path.
+        _redact_url(resolved_url) if source_name == 'custom' or is_playlist_source(source_name) else resolved_url[:80],
     )
     if source_name == 'custom':
         _log_custom_play_path(
