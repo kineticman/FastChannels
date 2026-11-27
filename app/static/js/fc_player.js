@@ -334,8 +334,11 @@
       // Ask for English too: with no preference a feed that lists a second language
       // first, or marks it as the main one, plays in that language. A stream with no
       // English track still plays what it has.
+      // The codec list is a hard filter Shaka applies BEFORE language: tracks that
+      // miss the first matching entry are dropped. So it must not tell AAC variants
+      // apart, or an HE-AAC English track loses to an AAC-LC Spanish one.
       const shakaConfig = {
-        preferredAudioCodecs: ['mp4a.40.2', 'mp4a.40.5', 'aac'],
+        preferredAudioCodecs: ['mp4a.40', 'aac'],
         preferredAudioLanguage: 'en',
       };
       if (license) {
