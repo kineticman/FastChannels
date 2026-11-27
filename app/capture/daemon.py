@@ -1003,7 +1003,7 @@ def _self_help(facts: list[dict], enc: dict, setting: str, on_wsl: bool, node: s
                  'to the service.'], _NVIDIA_COMPOSE_WSL if on_wsl else _NVIDIA_COMPOSE_LINUX)
     if node and not installer.gpu_drivers_present():
         add('GPU drivers are not installed', ['Use Reinstall on this page, wait for it to finish, then run this again.'])
-    if node and _node_gpu(node).startswith('Intel') and _intel_variant(node) == 'newer':
+    if ENCODER.get('offer_newer'):      # the same test as the button itself
         add('Panther Lake: a newer Intel driver is available (experimental)',
             ['Close this window and use "Try a newer Intel driver" under Encoder on the Bridge page.'])
     elif (by.get('vainfo') or {}).get('detail') == _INTEL_NO_H264:
@@ -1580,6 +1580,7 @@ class Session:
 class CaptureService:
     def __init__(self):
         self.lock = threading.RLock()
+        self.pool_lock = threading.Lock()   # one thread stops/starts the pool at a time
         self.tuners: list[Tuner] = []
         self.sessions: dict[str, Session] = {}
         self.pulse: subprocess.Popen | None = None
@@ -1608,7 +1609,8 @@ class CaptureService:
     def _run_action(self, action: str) -> None:
         try:
             if action in ('uninstall', 'update-chrome', 'install', 'intel-newer', 'intel-standard'):
-                self.stop_pool()
+                with self.pool_lock:      # waits out a start already running
+                    self.stop_pool()
             if action == 'install':
                 installer.install()
             elif action == 'update-chrome':
@@ -1639,6 +1641,16 @@ class CaptureService:
         return (cfg['max_tuners'], cfg['quality'], cfg['encoder'])
 
     def reconcile(self) -> None:
+        # The loop and POST /reconcile both call this. Starting the pool takes a while,
+        # so a second caller leaves it to the first; the loop comes round again.
+        if not self.pool_lock.acquire(blocking=False):
+            return
+        try:
+            self._reconcile()
+        finally:
+            self.pool_lock.release()
+
+    def _reconcile(self) -> None:
         if self.busy_action:
             return
         status = read_status()
@@ -1653,9 +1665,7 @@ class CaptureService:
                     self._restart_dead_tuners()
                     self._apply_warmth()
                     return
-                # The last start failed: try again. Claimed here so a second
-                # reconcile running now doesn't start it too.
-                self.pool_retry_at = time.monotonic() + 3600
+                # The last start failed: try again.
                 logger.info('[capture] retrying after: %s', self.pool_error)
             elif desired != self.pool_key:
                 self.pool_fails = 0
@@ -1721,6 +1731,7 @@ class CaptureService:
             self._start_pulse(tuners)
             if installer.intel_state().get('restore'):
                 installer.restore_free_intel()
+            self._reinstall_newer_intel(encoder_setting)
             enc = detect_encoder(self.uid, self.gid, encoder_setting)
             if _wants_intel_nonfree(self.uid, self.gid, encoder_setting, enc):
                 enc = self._try_intel_nonfree(encoder_setting, enc)
@@ -1752,6 +1763,27 @@ class CaptureService:
         for t in self.tuners:
             threading.Thread(target=self._start_tuner, args=(t,), daemon=True).start()
         logger.info('[capture] starting %d tuner(s) at %s', tuners, quality)
+
+    def _reinstall_newer_intel(self, setting: str) -> None:
+        """The user chose the newer driver but it is gone: a container update, with
+        the install from Debian testing failing then. Try again; the choice is kept
+        either way."""
+        if (setting == 'cpu' or not installer.intel_state().get('newer')
+                or installer.newer_intel_installed() or not installer.newer_intel_available()
+                or not render_node() or wsl_gpu() or not installer.gpu_drivers_present()):
+            return
+        with self.lock:
+            if self.busy_action:
+                return
+            self.busy_action = 'gpu-driver-newer'
+        try:
+            logger.info('[capture] installing the newer Intel driver again')
+            installer.switch_to_newer_intel()
+        except Exception as e:
+            logger.warning('[capture] could not install the newer Intel driver yet: %s', e)
+        finally:
+            with self.lock:
+                self.busy_action = ''
 
     def _try_intel_nonfree(self, setting: str, enc: dict) -> dict:
         """The automatic fallback at pool start. Holds busy_action so no
@@ -1938,7 +1970,11 @@ class CaptureService:
     def health(self) -> dict:
         status = read_status()
         intel = installer.intel_state()
+        last = installer.intel_last_attempt()
         from ..config import VERSION
+        newer_error = (last.get('detail') or last.get('result') if
+                       last.get('variant') == 'newer' and last.get('version') == VERSION
+                       and last.get('result') in ('could not be installed', 'could not be tested') else '')
         # Slow parts first: tunes and channel changes wait on the lock, and the
         # memory measurement is a subprocess allowed up to 10 s.
         platform_supported, config, gpus = supported_platform(), read_config(), len(gpu_choices())
@@ -1949,7 +1985,8 @@ class CaptureService:
                 'install': status,
                 'action': self.busy_action,
                 'intel_newer': {'chosen': bool(intel.get('newer')),
-                                'failed': intel.get('failed_on') == VERSION},
+                                'failed': intel.get('failed_on') == VERSION,
+                                'error': newer_error},
                 'config': config,
                 'pool_error': self.pool_error,
                 'encoder': {k: v for k, v in ENCODER.items() if k not in ('gid', 'gids', 'groups', 'env')},

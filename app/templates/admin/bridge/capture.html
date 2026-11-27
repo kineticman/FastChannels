@@ -94,6 +94,7 @@ environment:
               <a href="#" onclick="captureGpuDiagnostics();return false">How to switch (optional)</a></div>
             <div class="help" id="capture-intel-newer" hidden>
               <span id="capture-intel-newer-failed" hidden>The newer Intel driver didn't work here, so the standard one was put back.</span>
+              <span id="capture-intel-newer-error" hidden></span>
               <button type="button" class="btn btn-secondary btn-sm" id="capture-intel-newer-try" onclick="captureIntelNewer()" hidden>Try a newer Intel driver (experimental)</button>
               <a href="#" id="capture-intel-newer-undo" onclick="captureIntelStandard();return false" hidden>Go back to the standard Intel driver</a>
             </div>
@@ -308,6 +309,10 @@ environment:
       show('capture-intel-newer-try', offer);
       show('capture-intel-newer-failed', offer && Boolean(intel.failed));
       show('capture-intel-newer-undo', Boolean(intel.chosen));
+      const newerError = offer && !intel.failed ? intel.error : '';
+      $('capture-intel-newer-error').textContent = newerError
+        ? `The newer Intel driver couldn't be set up: ${newerError}` : '';
+      show('capture-intel-newer-error', Boolean(newerError));
       // The full reason (e.g. which driver piece is missing) on hover.
       $('capture-encoder-status').title = onGpu ? '' : (enc.reason || '');
       show('capture-gpu-tip', tunersRunning(s) && !onGpu && !gpuFailed && (cfg.encoder || 'auto') === 'auto');
@@ -316,6 +321,7 @@ environment:
       renderNowPlaying(s, enc, onGpu);
       $('capture-tuner-status').textContent = tuners.length ? ''
         : s.action === 'gpu-driver' ? 'Your Intel GPU couldn\'t encode with the free driver. Trying Intel\'s non-free one (about a minute)…'
+        : s.action === 'gpu-driver-newer' ? 'Installing the newer Intel driver again…'
         : s.action === 'intel-newer' ? 'Installing and testing the newer Intel driver (about a minute)…'
         : s.action === 'intel-standard' ? 'Putting the standard Intel driver back…'
         : (s.pool_error ? 'Tuners couldn\'t start: ' + s.pool_error : (cfg.enabled ? 'Tuners starting…' : ''));

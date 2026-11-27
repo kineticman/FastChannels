@@ -839,11 +839,14 @@ class SpectrumScraper(BaseScraper):
         self._ensure_session()
         cid, travel = self._parse_stream_url(raw_url)
         with self._stream_cache_transaction():
-            # Reuse an active playback session without replacing its credentials
-            # or releasing it. Audit-only sessions need no persisted license data.
-            cached = self._cached_stream(cid)
-            if cached:
-                return cached['manifest_url']
+            # Reuse a recent playback session without replacing its credentials
+            # or releasing it. Not _cached_stream(): that releases an entry past
+            # the TTL, and its viewer may still be watching. Audit-only sessions
+            # need no persisted license data.
+            entry = self._stream_cache.get(cid)
+            if (entry and entry.get('manifest_url')
+                    and time.time() - float(entry.get('cached_at', 0)) < _STREAM_CACHE_TTL):
+                return entry['manifest_url']
             manifest_url, ast, stream_session_id, aegis_token = self._mint_stream(cid, travel=travel)
             if aegis_token:
                 self._release_aegis(aegis_token)
@@ -1075,7 +1078,13 @@ class SpectrumScraper(BaseScraper):
     def post_license_request(cls, url: str, body: bytes, headers: dict, timeout: float = 15):
         session = requests.Session()  # not closed: that would empty the shared pool
         session.mount('https://', _LICENSE_ADAPTER)
-        return session.post(url, data=body, headers=headers, timeout=timeout)
+        try:
+            return session.post(url, data=body, headers=headers, timeout=timeout)
+        except requests.exceptions.ConnectTimeout:
+            raise
+        except requests.exceptions.ConnectionError:
+            # A pooled connection can die just as it is reused; try once more.
+            return session.post(url, data=body, headers=headers, timeout=timeout)
 
 
 def _token_fingerprint(token: str) -> str:

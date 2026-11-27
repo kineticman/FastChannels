@@ -299,6 +299,7 @@ def capture_segment(session_id: str, segment: str):
 
 _TS_NULL = (b'\x47\x1f\xff\x10' + b'\xff' * 184) * 7
 _TS_STALL_SECONDS = 45      # no new segment for this long (tune or mid-stream): give up
+_TS_GAP_SECONDS = 4         # mid-stream, longer than segments (2 s) normally leave
 _TS_JOIN_SEGMENTS = 2       # joining a capture already running: start this far back
 # How long a busy tune stays silent (so a real "all tuners busy" can still be a 503)
 # before starting the filler for a tuner that is being freed.
@@ -332,7 +333,9 @@ def _ts_stream(channel_id: int, name: str):
                     if new_id != session_id and _SESSION_RE.match(new_id):
                         session_id, sent_upto = new_id, None
                     busy_since = None
-                elif body.get('reason') == 'busy' and not session_id:
+                elif body.get('reason') == 'busy':
+                    # Also when our session is gone and its tuner went to someone else.
+                    session_id, state = '', ''
                     busy_since = busy_since or now
                     if now - busy_since > _BUSY_WAIT_SECONDS:
                         logger.warning('[capture-ts] channel %s (%s): %s', channel_id, name, body.get('error'))
@@ -376,8 +379,8 @@ def _ts_stream(channel_id: int, name: str):
                                _TS_STALL_SECONDS)
                 return
             if not wrote:
-                if video_at is None:
-                    yield _TS_NULL          # keeps the DVR waiting through the tune
+                if video_at is None or time.monotonic() - last_data > _TS_GAP_SECONDS:
+                    yield _TS_NULL          # keeps the DVR waiting through a tune or retune
                 time.sleep(0.25)
     finally:
         # Also reached when the client goes away, which only a write notices.
@@ -412,6 +415,8 @@ def capture_ts(channel_id: int):
     while True:
         code, body = capture.daemon_request('POST', '/sessions', json={'channel_id': channel_id},
                                               timeout=_SESSION_CALL_TIMEOUT)
+        if code == 200 and body.get('state') == 'failed':
+            return _text(f"Capture failed: {body.get('error') or 'unknown error'}", 502)
         if code == 200 or body.get('reason') == 'starting':
             break
         if (body.get('reason') == 'busy' and time.monotonic() - started >= _TS_QUIET_SECONDS
