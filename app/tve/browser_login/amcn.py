@@ -113,7 +113,7 @@ def _run_amcn_browser_assisted_login(r, set_status, source, account, scraper, de
             _watch_spectrum_auth_results(page, 'amcn-mvpd-login')
             _prime_google_session(context, mso_id, source_name=_SOURCE_NAME)
             page.on('crash', lambda p: logger.warning('[amcn-mvpd-login] page CRASH event fired (url was %s)', _safe_page_url(p)))
-            page.on('close', lambda p: logger.warning('[amcn-mvpd-login] page CLOSE event fired'))
+            page.on('close', lambda p: logger.debug('[amcn-mvpd-login] page CLOSE event fired'))
             page.on('pageerror', lambda exc: logger.warning('[amcn-mvpd-login] page JS error: %s', str(exc)[:500]))
 
             # Single listener for the whole (multi-channel) browser session —

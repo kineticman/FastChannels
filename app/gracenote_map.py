@@ -215,7 +215,8 @@ def fetch_remote_gracenote_map(url: str) -> tuple[bool, str]:
     _remote_fetched_at = time.time()
     reload_gracenote_map()
     row_count = sum(1 for ln in lines[1:] if ln.strip())
-    log.info("[gracenote-map] remote map refreshed — %d rows from %s", row_count, url)
+    log.info("[gracenote-map] remote map refreshed — %d rows", row_count)
+    log.debug("[gracenote-map] fetched from %s", url)
     return True, f"OK — {row_count} rows loaded."
 
 
@@ -253,7 +254,8 @@ def fetch_remote_gracenote_exclusions(url: str) -> tuple[bool, str]:
     _exclusions_remote_fetched_at = time.time()
     reload_gracenote_map()
     row_count = sum(1 for ln in lines[1:] if ln.strip())
-    log.info("[gracenote-exclusions] remote list refreshed — %d rows from %s", row_count, url)
+    log.info("[gracenote-exclusions] remote list refreshed — %d rows", row_count)
+    log.debug("[gracenote-exclusions] fetched from %s", url)
     return True, f"OK — {row_count} rows loaded."
 
 

@@ -365,13 +365,13 @@ def trigger_xml_refresh() -> bool:
         job_id = 'xml-refresh'
         acquired = q.connection.set(f'lock:{job_id}', '1', nx=True, ex=10)
         if job_id in q.get_job_ids():
-            logger.info('XML artifact refresh already queued')
+            logger.debug('XML artifact refresh already queued')
             return False
         if acquired and not _job_already_active(q, job_id):
             q.enqueue('app.worker.run_xml_refresh', job_timeout=1800, job_id=job_id)
-            logger.info('Enqueued XML artifact refresh')
+            logger.debug('Enqueued XML artifact refresh')
             return True
-        logger.info('XML artifact refresh running or just ran — queueing a catch-up')
+        logger.debug('XML artifact refresh running or just ran — queueing a catch-up')
         trigger_xml_refresh_catchup()
         return False
     except Exception as e:
@@ -407,7 +407,7 @@ def trigger_xml_refresh_catchup() -> None:
         q = get_fast_queue()
         job_id = 'xml-refresh-catchup'
         if job_id in q.get_job_ids():
-            logger.info('XML artifact catch-up refresh already queued')
+            logger.debug('XML artifact catch-up refresh already queued')
             return
         if _job_already_active(q, job_id):
             # The catch-up itself is running (RQ can't re-queue a running job's id):
@@ -415,10 +415,10 @@ def trigger_xml_refresh_catchup() -> None:
             # regular one isn't running at the same time.
             if 'xml-refresh' not in q.get_job_ids():
                 q.enqueue('app.worker.run_xml_refresh', job_timeout=1800, job_id='xml-refresh')
-                logger.info('Enqueued XML artifact refresh behind the running catch-up')
+                logger.debug('Enqueued XML artifact refresh behind the running catch-up')
             return
         q.enqueue('app.worker.run_xml_refresh', job_timeout=1800, job_id=job_id)
-        logger.info('Enqueued XML artifact catch-up refresh')
+        logger.debug('Enqueued XML artifact catch-up refresh')
     except Exception as e:
         logger.warning(f'RQ unavailable ({e}), skipping catch-up XML refresh: {e}')
 

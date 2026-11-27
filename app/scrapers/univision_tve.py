@@ -183,7 +183,7 @@ class UnivisionTVEScraper(MvpdCooldownMixin, BaseScraper):
                 gracenote_id=resolve_gracenote('univision_tve', lookup_key=cs),
             ))
         self._update_cache('univision_channels', channels)
-        logger.info('[univision_tve] %d channels', len(out))
+        logger.debug('[univision_tve] %d channels', len(out))
         return out
 
     def fetch_epg(self, channels: list[ChannelData], **kwargs) -> list[ProgramData]:
@@ -206,7 +206,7 @@ class UnivisionTVEScraper(MvpdCooldownMixin, BaseScraper):
                     if prog:
                         programs.append(prog)
         programs.sort(key=lambda p: (p.source_channel_id, p.start_time))
-        logger.info('[univision_tve] %d guide entries', len(programs))
+        logger.debug('[univision_tve] %d guide entries', len(programs))
         return programs
 
     # ── playback ─────────────────────────────────────────────────────────────

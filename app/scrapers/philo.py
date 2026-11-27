@@ -442,7 +442,7 @@ class PhiloScraper(BaseScraper):
             raise ScrapeSkipError("[philo] guide returned 0 channels; keeping previous data")
 
         self._persist_session()
-        logger.info("[philo] %d channels fetched", len(channels))
+        logger.debug("[philo] %d channels fetched", len(channels))
         return channels
 
     def _add_channel(self, channels: list[ChannelData], cid: str, ch: dict) -> None:
@@ -515,7 +515,7 @@ class PhiloScraper(BaseScraper):
         programs = [prog for (prog, _k, _b) in entries]
         programs.sort(key=lambda p: (p.source_channel_id, p.start_time))
         n_desc = sum(1 for p in programs if p.description)
-        logger.info("[philo] %d EPG entries across %d channels (%d with descriptions)",
+        logger.debug("[philo] %d EPG entries across %d channels (%d with descriptions)",
                     len(programs), len({p.source_channel_id for p in programs}), n_desc)
         dedupe_dominant_episode_id(programs)
         null_placeholder_season_episode(programs)

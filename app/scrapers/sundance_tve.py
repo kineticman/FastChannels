@@ -271,7 +271,7 @@ class SundanceTVEScraper(BaseScraper):
                 prog = _program(ch.source_channel_id, row)
                 if prog:
                     programs.append(prog)
-        logger.info('[sundance_tve] %d guide entries', len(programs))
+        logger.debug('[sundance_tve] %d guide entries', len(programs))
         return programs
 
     # ── session ──────────────────────────────────────────────────────────────

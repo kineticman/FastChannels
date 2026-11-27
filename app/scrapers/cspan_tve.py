@@ -158,7 +158,7 @@ class CSpanTVEScraper(MvpdCooldownMixin, BaseScraper):
             )
             for cid, n in NETWORKS.items()
         ]
-        logger.info('[cspan_tve] %d channels', len(out))
+        logger.debug('[cspan_tve] %d channels', len(out))
         return out
 
     def fetch_epg(self, channels: list[ChannelData], **kwargs) -> list[ProgramData]:
@@ -170,7 +170,7 @@ class CSpanTVEScraper(MvpdCooldownMixin, BaseScraper):
             # cspan.py's guide fetch only needs a requests session on self.
             rows = CSpanScraper._epg_rows_from_schedule(ch, CSpanScraper._fetch_network_schedule(self, n['network']))
             programs.extend(rows or [CSpanScraper._neutral_block(ch, datetime.now(timezone.utc))])
-        logger.info('[cspan_tve] %d guide entries', len(programs))
+        logger.debug('[cspan_tve] %d guide entries', len(programs))
         return programs
 
     # ── playback ─────────────────────────────────────────────────────────────

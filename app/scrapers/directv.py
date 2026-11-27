@@ -270,6 +270,7 @@ def _fetch_channel_playback(
     try:
         data = r.json()
     except ValueError:
+        logger.warning('[directv] channel/v1 returned non-JSON for ccid=%s', ccid)
         return None
     if not data.get('authorized'):
         status = data.get('responseStatus') or {}
@@ -287,6 +288,7 @@ def _fetch_channel_playback(
     fallback_url = pb.get('fallbackStreamUrl') or pb.get('streamURL')
     play_token = (data.get('dRights') or {}).get('playToken')
     if not fallback_url or not play_token:
+        logger.warning('[directv] channel/v1 gave no stream URL or play token for ccid=%s', ccid)
         return None
     return {
         'fallback_url': fallback_url,

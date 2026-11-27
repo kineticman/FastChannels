@@ -148,7 +148,7 @@ def _run_foxone_browser_assisted_login(r, set_status, source, login, scraper) ->
                 # The saved Google session belongs to the shared account.
                 _prime_google_session(context, mso_id, source_name=None)
             page.on('crash', lambda p: logger.warning('[foxone-mvpd-login] page CRASH event fired (url was %s)', _safe_page_url(p)))
-            page.on('close', lambda p: logger.warning('[foxone-mvpd-login] page CLOSE event fired'))
+            page.on('close', lambda p: logger.debug('[foxone-mvpd-login] page CLOSE event fired'))
             page.on('pageerror', lambda exc: logger.warning('[foxone-mvpd-login] page JS error: %s', str(exc)[:500]))
 
             youtube_gateway_responses = []

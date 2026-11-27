@@ -1188,7 +1188,7 @@ class RokuScraper(BaseScraper):
                 logger.warning("[roku] billboard fetch failed: %s", exc)
 
             if playlist_rows:
-                logger.info("[roku] skipped %d personalized playlist rows (no live stream)", playlist_rows)
+                logger.debug("[roku] skipped %d personalized playlist rows (no live stream)", playlist_rows)
             return channels, {
                 'epg_status': epg_status,
                 'epg_collections': epg_collections,
@@ -1223,7 +1223,7 @@ class RokuScraper(BaseScraper):
             )
             raise ScrapeSkipError("[roku] channel fetch returned 0 channels; keeping previous channel data")
 
-        logger.info("[roku] %d channels fetched", len(channels))
+        logger.debug("[roku] %d channels fetched", len(channels))
 
         return channels
 
@@ -1406,7 +1406,7 @@ class RokuScraper(BaseScraper):
         skipped = len(effective_skip & channel_ids) if effective_skip else 0
         total = len(channels) - skipped  # only count channels that will hit the network
         if skipped:
-            logger.info("[roku] EPG skip: %d/%d channels (fresh, staged, or disabled), skipping dated guide request", skipped, len(channels))
+            logger.debug("[roku] EPG skip: %d/%d channels (fresh, staged, or disabled), skipping dated guide request", skipped, len(channels))
         if self._progress_cb:
             self._progress_cb('epg', 0, total)
         # Snapshot merged headers (session defaults + API-specific) and cookies

@@ -1253,6 +1253,7 @@ class Tuner:
         self.idle_since = time.monotonic()   # for cold mode (keep_warm off)
         self.session: 'Session | None' = None
         self.retired = threading.Event()
+        self.in_pool_start = False   # the pool logs one summary for these
         self._spawn_lock = threading.Lock()   # orders a spawn against retire()
 
     @property
@@ -1338,7 +1339,9 @@ class Tuner:
         self._pause(WIDEVINE_SETTLE_SECONDS)
         self.idle_since = time.monotonic()
         self.state = 'idle'
-        logger.info('[capture] tuner %d ready (:%d, %s)', self.index, self.display, self.quality)
+        logger.log(logging.DEBUG if self.in_pool_start else logging.INFO,
+                   '[capture] tuner %d ready (:%d, %s)', self.index, self.display, self.quality)
+        self.in_pool_start = False
 
     def _spawn_part(self, name: str, cmd: list[str], **kwargs) -> subprocess.Popen:
         """Start Xvfb or Chrome and record it as self.<name>, unless retired."""
@@ -1920,9 +1923,24 @@ class CaptureService:
                 t.state = 'asleep'
             logger.info('[capture] %d tuner(s) at %s, started on demand (keep warm is off)', tuners, quality)
             return
-        for t in self.tuners:
-            threading.Thread(target=self._start_tuner, args=(t,), daemon=True).start()
+        pool = list(self.tuners)
+        threads = []
+        for t in pool:
+            t.in_pool_start = True
+            threads.append(threading.Thread(target=self._start_tuner, args=(t,), daemon=True))
+            threads[-1].start()
         logger.info('[capture] starting %d tuner(s) at %s', tuners, quality)
+        threading.Thread(target=self._log_pool_ready, args=(pool, threads, quality), daemon=True).start()
+
+    def _log_pool_ready(self, pool: list, threads: list, quality: str) -> None:
+        started = time.monotonic()
+        for thread in threads:
+            thread.join()
+        if any(t.retired.is_set() for t in pool):
+            return   # replaced while starting; the new pool reports itself
+        ready = sum(t.state != 'error' for t in pool)
+        logger.info('[capture] %d/%d tuner(s) ready at %s after %.0fs',
+                    ready, len(pool), quality, time.monotonic() - started)
 
     def _reinstall_newer_intel(self, setting: str) -> None:
         """The user chose the newer driver but it is gone: a container update, with

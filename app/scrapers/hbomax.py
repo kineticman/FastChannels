@@ -239,7 +239,7 @@ class HBOMaxScraper(BaseScraper):
                 gracenote_mode='off',
             ))
             logger.info('[hbomax] + VOD test channel (%s)', test_edit)
-        logger.info('[hbomax] %d channels (%d linear)', len(out), len(linear) + len(kept))
+        logger.debug('[hbomax] %d channels (%d linear)', len(out), len(linear) + len(kept))
         return out
 
     def _switched_off_ids(self) -> set[str]:
@@ -321,7 +321,7 @@ class HBOMaxScraper(BaseScraper):
                 category='Sports',
                 is_live=True,
             ))
-        logger.info('[hbomax] %d guide entries', len(programs))
+        logger.debug('[hbomax] %d guide entries', len(programs))
         return programs
 
     def _live_events(self) -> list[dict]:

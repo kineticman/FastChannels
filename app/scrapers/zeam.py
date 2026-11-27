@@ -134,7 +134,7 @@ class ZeamScraper(BaseScraper):
                 stream_type='hls',
                 gracenote_id=resolve_gracenote('zeam', lookup_key=station_id),
             ))
-        logger.info('[%s] %d channels', self.source_name, len(channels))
+        logger.debug('[%s] %d channels', self.source_name, len(channels))
         return channels
 
     def fetch_epg(self, channels: list[ChannelData], **kwargs) -> list[ProgramData]:
@@ -202,7 +202,7 @@ class ZeamScraper(BaseScraper):
                                         end_time=start + timedelta(hours=i + 1), category=ch.category)
                             for i in range(48))
 
-        logger.info('[%s] %d EPG entries for %d channels (%d on placeholder blocks)',
+        logger.debug('[%s] %d EPG entries for %d channels (%d on placeholder blocks)',
                     self.source_name, len(programs), len(wanted), len(bare))
         return programs
 

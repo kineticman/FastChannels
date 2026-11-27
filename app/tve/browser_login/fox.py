@@ -303,7 +303,7 @@ def run_fox_browser_login(mso_id: str, _attempt: int = 1, _deadline: float | Non
                 _watch_spectrum_auth_results(page, 'fox-mvpd-login')
                 _prime_google_session(context, mso_id, source_name=_SOURCE_NAME)
                 page.on('crash', lambda p: logger.warning('[fox-mvpd-login] page CRASH event fired (url was %s)', _safe_page_url(p)))
-                page.on('close', lambda p: logger.warning('[fox-mvpd-login] page CLOSE event fired'))
+                page.on('close', lambda p: logger.debug('[fox-mvpd-login] page CLOSE event fired'))
                 page.on('pageerror', lambda exc: logger.warning('[fox-mvpd-login] page JS error: %s', str(exc)[:500]))
 
                 youtube_gateway_responses = []

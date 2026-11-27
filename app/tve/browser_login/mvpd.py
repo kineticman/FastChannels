@@ -363,7 +363,7 @@ def run_mvpd_browser_login(requestor_id: str, resource: str, software_statement:
                 _watch_spectrum_auth_results(page, 'mvpd-login')
                 _prime_google_session(context, mso_id, source_name=source_name)
                 page.on('crash', lambda p: logger.warning('[mvpd-login] page CRASH event fired (url was %s)', _safe_page_url(p)))
-                page.on('close', lambda p: logger.warning('[mvpd-login] page CLOSE event fired'))
+                page.on('close', lambda p: logger.debug('[mvpd-login] page CLOSE event fired'))
                 page.on('pageerror', lambda exc: logger.warning('[mvpd-login] page JS error: %s', str(exc)[:500]))
 
                 youtube_gateway_responses = []

@@ -484,7 +484,7 @@ class HuluLiveScraper(BaseScraper):
         if not out:
             raise ScrapeSkipError('Hulu + Live TV: Hulu returned no channels.')
         self._warm_logos([c.logo_url for c in out if c.logo_url])
-        logger.info('[hulu_live] %d channels (%d local)', len(out), len(locals_))
+        logger.debug('[hulu_live] %d channels (%d local)', len(out), len(locals_))
         return out
 
     def _warm_logos(self, urls: list[str]) -> None:
@@ -563,7 +563,7 @@ class HuluLiveScraper(BaseScraper):
         out += self._off_air(airings, now, {c.source_channel_id: c.name for c in channels})
         soon = now + timedelta(hours=_ART_WARM_HOURS)
         self._warm_images('warm_art', [p.poster_url for p in out if p.poster_url and p.start_time < soon], 'program')
-        logger.info('[hulu_live] %d EPG entries (%d with details)', len(out), len(details))
+        logger.debug('[hulu_live] %d EPG entries (%d with details)', len(out), len(details))
         return out
 
     @staticmethod

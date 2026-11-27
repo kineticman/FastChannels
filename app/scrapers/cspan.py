@@ -995,7 +995,7 @@ class CSpanScraper(BaseScraper):
             )
             for cid, name, logo, slug, desc in defs
         ]
-        logger.info("[cspan] published %d channels", len(channels))
+        logger.debug("[cspan] published %d channels", len(channels))
         return channels
 
     # ---- discovery dispatch --------------------------------------------------
@@ -1141,7 +1141,7 @@ class CSpanScraper(BaseScraper):
                 programs.append(self._neutral_block(ch, now))
 
         live_nets = sum(1 for it in schedules.values() if it)
-        logger.info("[cspan] built %d EPG entries for %d channels (%d/%d networks live)",
+        logger.debug("[cspan] built %d EPG entries for %d channels (%d/%d networks live)",
                     len(programs), len(channels), live_nets, len(schedules))
         return programs
 

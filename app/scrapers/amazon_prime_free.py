@@ -511,11 +511,10 @@ class AmazonPrimeFreeScraper(BaseScraper):
             preview = ", ".join(skipped_no_free_pe[:10])
             if len(skipped_no_free_pe) > 10:
                 preview += f", +{len(skipped_no_free_pe) - 10} more"
-            logger.info(
-                "[%s] skipped %d stations without a current free playback envelope: %s",
-                self.source_name, len(skipped_no_free_pe), preview,
-            )
-        logger.info("[%s] %d channels", self.source_name, len(channels))
+            logger.info("[%s] skipped %d stations without a current free playback envelope",
+                        self.source_name, len(skipped_no_free_pe))
+            logger.debug("[%s] skipped stations: %s", self.source_name, preview)
+        logger.debug("[%s] %d channels", self.source_name, len(channels))
 
         # Persist the per-channel playback envelopes harvested from the carousel. Prune entries
         # for channels no longer present so the map doesn't grow unbounded.
@@ -523,7 +522,8 @@ class AmazonPrimeFreeScraper(BaseScraper):
             live_ids = {c.source_channel_id for c in channels}
             self._channel_pe = {k: v for k, v in self._channel_pe.items() if k in live_ids}
             self._update_cache("channel_pe", dict(self._channel_pe))
-            logger.info("[%s] harvested playback envelopes for %d/%d channels",
+            logger.log(logging.DEBUG if len(self._channel_pe) >= len(channels) else logging.INFO,
+                        "[%s] harvested playback envelopes for %d/%d channels",
                         self.source_name, len(self._channel_pe), len(channels))
 
         # Stream URLs are resolved lazily at play time in resolve() via GetLivePlaybackResources
@@ -562,7 +562,7 @@ class AmazonPrimeFreeScraper(BaseScraper):
                 programs.append(program)
 
         programs.sort(key=lambda p: (p.source_channel_id, p.start_time, p.title))
-        logger.info("[%s] %d EPG entries", self.source_name, len(programs))
+        logger.debug("[%s] %d EPG entries", self.source_name, len(programs))
         return programs
 
     def resolve(self, raw_url: str) -> str:

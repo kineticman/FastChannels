@@ -81,11 +81,6 @@ _SCRAPER_MISSING_GRACE_DAYS = 7
 
 flask_app = create_app()
 from app.config import VERSION as _VERSION
-# RQ work-horse job processes import this module to execute queued callables.
-# Keep the app object at module scope, but only log startup for the long-lived
-# `python -m app.worker` process so job imports don't look like worker restarts.
-if __name__ == '__main__':
-    logger.info('FastChannels worker v%s starting', _VERSION)
 _NETWORK_OUTAGE_UNTIL = 0.0
 _NETWORK_OUTAGE_REASON = ''
 
@@ -192,19 +187,19 @@ def _enqueue_xml_refresh_job() -> None:
                     pass
                 logger.warning('[xml-cache] cleared orphaned xml-refresh from StartedJobRegistry (no live fast workers)')
             else:
-                logger.info('[xml-cache] refresh already running')
+                logger.debug('[xml-cache] refresh already running')
                 return
 
         queued_ids = set(q.get_job_ids())
         if job_id in queued_ids:
-            logger.info('[xml-cache] refresh already queued')
+            logger.debug('[xml-cache] refresh already queued')
             return
 
         try:
             job = Job.fetch(job_id, connection=q.connection)
             status = job.get_status(refresh=False)
             if status in {'queued', 'deferred', 'scheduled'}:
-                logger.info('[xml-cache] refresh already queued/running')
+                logger.debug('[xml-cache] refresh already queued/running')
                 return
             if status == 'started':
                 # Zombie hash not in any registry — delete so enqueue can proceed.
@@ -339,7 +334,7 @@ def _no_scrapes_pending(current_source_name: str) -> bool:
         ]
         queued = [jid for jid in q.get_job_ids() if jid.startswith('scrape-')]
         if other_running or queued:
-            logger.info('[%s] deferring xml refresh — %d scraper job(s) still pending',
+            logger.debug('[%s] deferring xml refresh — %d scraper job(s) still pending',
                         current_source_name, len(other_running) + len(queued))
             return False
         return True
@@ -2958,8 +2953,8 @@ def _sync_intrinsic_drm_bridge(source) -> None:
             ch.requires_drm_bridge = want
             changed += 1
     if changed:
-        logger.info('[%s] requires_drm_bridge synced on %d %s channel(s) (bridge=%s)',
-                    source.name, changed, label, want)
+        logger.info('[%s] %s %d %schannel(s) as bridge-only', source.name,
+                    'marked' if want else 'unmarked', changed, '' if label == 'all' else f'{label} ')
 
 
 def _upsert_channels(source, channel_data_list, gracenote_auto_fill: bool = True, active_geos: set | None = None,
@@ -3219,13 +3214,15 @@ def _upsert_channels(source, channel_data_list, gracenote_auto_fill: bool = True
         and EVENT_CHANNEL_TAG in (existing[ch_id].tags or '').split(',')
         and not existing[ch_id].scrape_pinned
     }
+    newly_hidden = 0
     for ch_id in missing_event_ids:
         ch = existing[ch_id]
         if ch.is_active:
             ch.missed_scrapes = (ch.missed_scrapes or 0) + 1
+            newly_hidden += 1
         hide_event(ch, EVENT_SCHEDULE_MISSING_REASON, seen_at)
-    if missing_event_ids:
-        logger.info('[%s] hid %d events absent from refreshed schedule', source.name, len(missing_event_ids))
+    if newly_hidden:
+        logger.info('[%s] hid %d events absent from refreshed schedule', source.name, newly_hidden)
 
     # Channels from regions the scraper no longer has configured are intentionally
     # absent — exclude them from the collapse ratio so a region removal doesn't
@@ -3854,7 +3851,7 @@ def _schedule_due_scrapes():
                     elif source.scrape_cron:
                         logger.info('[scheduler] Enqueued %s (cron=%s)', source.name, source.scrape_cron)
                     else:
-                        logger.info('[scheduler] Enqueued %s (interval=%dm, age=%s)',
+                        logger.debug('[scheduler] Enqueued %s (interval=%dm, age=%s)',
                                     source.name, source.scrape_interval,
                                     f'{(now - last).total_seconds() / 60:.0f}m' if last else 'never')
                 except Exception as e:
@@ -4795,8 +4792,8 @@ if __name__ == '__main__':
                     errors.append(f'{lineup_id}={exc}')
                 _time.sleep(2)
             if refreshed:
-                logger.info('[dvr-epg] pushed guide refresh for %d lineup(s): %s',
-                            len(refreshed), ', '.join(refreshed))
+                logger.info('[dvr-epg] pushed guide refresh for %d lineup(s)', len(refreshed))
+                logger.debug('[dvr-epg] refreshed lineups: %s', ', '.join(refreshed))
             if errors:
                 logger.warning('[dvr-epg] guide refresh errors: %s', ', '.join(errors))
 
@@ -4857,7 +4854,7 @@ if __name__ == '__main__':
                 # with several overdue sources drove the host disk to ~100%
                 # util and made gunicorn briefly unresponsive).
                 if _any_scrapes_active():
-                    logger.info('[xml-cache] deferring startup refresh — scraper work active')
+                    logger.debug('[xml-cache] deferring startup refresh — scraper work active')
                 else:
                     _enqueue_xml_refresh_job()
             except Exception:
@@ -4868,7 +4865,7 @@ if __name__ == '__main__':
                 url = AppSettings.get().effective_gracenote_map_url()
                 ok, msg = fetch_remote_gracenote_map(url)
                 if ok:
-                    logger.info('[gracenote-map] startup remote fetch: %s', msg)
+                    logger.debug('[gracenote-map] startup remote fetch: %s', msg)
                 else:
                     logger.warning('[gracenote-map] startup remote fetch failed: %s', msg)
             except Exception:
@@ -4879,7 +4876,7 @@ if __name__ == '__main__':
                 url = AppSettings.get().effective_gracenote_exclusions_url()
                 ok, msg = fetch_remote_gracenote_exclusions(url)
                 if ok:
-                    logger.info('[gracenote-exclusions] startup remote fetch: %s', msg)
+                    logger.debug('[gracenote-exclusions] startup remote fetch: %s', msg)
                 else:
                     logger.warning('[gracenote-exclusions] startup remote fetch failed: %s', msg)
             except Exception:
@@ -4926,21 +4923,21 @@ if __name__ == '__main__':
     def _run_fast_worker():
         r_fast = redis.from_url(flask_app.config['REDIS_URL'])
         w = _FastWorker(queues=[Queue('fast', connection=r_fast)], connection=r_fast)
-        logger.info('Fast worker listening on queue: fast')
+        logger.info('Fast worker v%s listening on queue: fast', _VERSION)
         w.work(logging_level=logging.WARNING)
 
     def _run_maintenance_worker():
         r_maintenance = redis.from_url(flask_app.config['REDIS_URL'])
         with Connection(r_maintenance):
             worker = Worker(queues=[Queue('maintenance', connection=r_maintenance)])
-            logger.info('Maintenance worker listening on queue: maintenance')
+            logger.info('Maintenance worker v%s listening on queue: maintenance', _VERSION)
             worker.work(logging_level=logging.WARNING)
 
     def _run_scraper_worker():
         r = redis.from_url(flask_app.config['REDIS_URL'])
         with Connection(r):
             worker = Worker(queues=[Queue('scraper', connection=r)])
-            logger.info('Scraper worker listening on queue: scraper')
+            logger.info('Scraper worker v%s listening on queue: scraper', _VERSION)
             worker.work(logging_level=logging.WARNING)
 
     if role == 'scheduler':

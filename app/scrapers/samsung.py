@@ -158,7 +158,7 @@ class SamsungScraper(BaseScraper):
 
     def fetch_channels(self) -> list[ChannelData]:
         regions = self._regions()
-        logger.info('[samsung] fetching channel list for regions=%s', regions)
+        logger.debug('[samsung] fetching channel list for regions=%s', regions)
 
         data = self._fetch_gz_json(_CHANNELS_URL)
         all_regions = data.get('regions', {})
@@ -206,9 +206,9 @@ class SamsungScraper(BaseScraper):
                 ))
                 region_count += 1
 
-            logger.info('[samsung] %d channels fetched (region=%s)', region_count, region)
+            logger.debug('[samsung] %d channels fetched (region=%s)', region_count, region)
 
-        logger.info('[samsung] %d total channels across %d region(s)', len(channels), len(regions))
+        logger.debug('[samsung] %d total channels across %d region(s)', len(channels), len(regions))
         return channels
 
     # ── fetch_epg ──────────────────────────────────────────────────────────────
@@ -217,7 +217,7 @@ class SamsungScraper(BaseScraper):
         regions = self._regions()
         known_ids = {ch.source_channel_id for ch in channels}
 
-        logger.info('[samsung] fetching EPG for regions=%s (%d channels)', regions, len(known_ids))
+        logger.debug('[samsung] fetching EPG for regions=%s (%d channels)', regions, len(known_ids))
 
         programs: list[ProgramData] = []
 
@@ -264,7 +264,7 @@ class SamsungScraper(BaseScraper):
                 ))
                 region_count += 1
 
-            logger.info('[samsung] %d programs parsed (region=%s)', region_count, region)
+            logger.debug('[samsung] %d programs parsed (region=%s)', region_count, region)
 
-        logger.info('[samsung] %d total programs across %d region(s)', len(programs), len(regions))
+        logger.debug('[samsung] %d total programs across %d region(s)', len(programs), len(regions))
         return programs

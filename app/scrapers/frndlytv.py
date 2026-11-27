@@ -268,7 +268,7 @@ class FrndlyTVScraper(BaseScraper):
             ))
 
         channels.sort(key=lambda c: c.name.lower())
-        logger.info('[frndlytv] %d channels', len(channels))
+        logger.debug('[frndlytv] %d channels', len(channels))
         return channels
 
     # ── fetch_epg ─────────────────────────────────────────────────────────────
@@ -326,7 +326,7 @@ class FrndlyTVScraper(BaseScraper):
             if self._progress_cb:
                 self._progress_cb('epg', min(i + _GUIDE_CHUNK, len(ids)), len(ids))
 
-        logger.info('[frndlytv] %d EPG entries, %d unique content IDs to enrich (no-gracenote channels)',
+        logger.debug('[frndlytv] %d EPG entries, %d unique content IDs to enrich (no-gracenote channels)',
                     len(programs), len(content_map))
 
         if content_map:

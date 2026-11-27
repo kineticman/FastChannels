@@ -365,7 +365,7 @@ def run_nbc_browser_login(mso_id: str, _attempt: int = 1, _deadline: float | Non
                 if mso_id == 'YouTubeTV':
                     logger.info('[nbc-mvpd-login] Google session priming result=%s', 'primed' if google_session_primed else 'not-available')
                 page.on('crash', lambda p: logger.warning('[nbc-mvpd-login] page CRASH event fired (url was %s)', _safe_page_url(p)))
-                page.on('close', lambda p: logger.warning('[nbc-mvpd-login] page CLOSE event fired'))
+                page.on('close', lambda p: logger.debug('[nbc-mvpd-login] page CLOSE event fired'))
                 page.on('pageerror', lambda exc: logger.warning('[nbc-mvpd-login] page JS error: %s', str(exc)[:500]))
 
                 youtube_gateway_responses = []

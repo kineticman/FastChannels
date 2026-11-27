@@ -180,14 +180,14 @@ class TennisTVEScraper(MvpdCooldownMixin, BaseScraper):
                 guide_key=f'TENNIS:{feed["epg"]}',
                 gracenote_id=resolve_gracenote('tennis_tve', lookup_key=feed['epg']),
             ))
-        logger.info('[tennis_tve] %d channels', len(out))
+        logger.debug('[tennis_tve] %d channels', len(out))
         return out
 
     def fetch_epg(self, channels: list[ChannelData], **kwargs) -> list[ProgramData]:
         programs = []
         for ch in channels:
             programs.extend(self._guide(ch.source_channel_id))
-        logger.info('[tennis_tve] %d guide entries', len(programs))
+        logger.debug('[tennis_tve] %d guide entries', len(programs))
         return programs
 
     def _guide(self, epg_channel: str) -> list[ProgramData]:

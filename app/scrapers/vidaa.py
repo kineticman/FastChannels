@@ -321,8 +321,8 @@ class VidaaScraper(BaseScraper):
             for col in columns
             if col.get("id") is not None
         )
-        logger.info("[vidaa] %d channels fetched across %d categories (%s)",
-                    len(channels), len(columns), breakdown)
+        logger.debug("[vidaa] %d channels fetched across %d categories (%s)",
+                     len(channels), len(columns), breakdown)
         return channels
 
     # ── fetch_epg ────────────────────────────────────────────────────────────
@@ -424,7 +424,7 @@ class VidaaScraper(BaseScraper):
                         placeholder_channels)
 
         programs = list(programs_by_key.values())
-        logger.info("[vidaa] %d EPG programs fetched across %d channels", len(programs), len(channels))
+        logger.debug("[vidaa] %d EPG programs fetched across %d channels", len(programs), len(channels))
         return programs
 
     # ── DRM license bridge (Widevine CENC, DASH tiles only) ─────────────────────

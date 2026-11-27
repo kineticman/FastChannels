@@ -166,7 +166,7 @@ class NewsmaxTVEScraper(MvpdCooldownMixin, BaseScraper):
                     description=row.get('Description') or None,
                     category='News',
                 ))
-        logger.info('[newsmax_tve] %d guide entries', len(programs))
+        logger.debug('[newsmax_tve] %d guide entries', len(programs))
         return programs
 
     # ── playback ─────────────────────────────────────────────────────────────
