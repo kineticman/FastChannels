@@ -674,6 +674,23 @@ def _intel_driver_fact(uid: int, gid: int, node: str, setting: str) -> dict:
     return _fact('Intel driver', 'info', f'{using} · {tail}')
 
 
+# The last time a running capture dropped from GPU to CPU, kept for GPU diagnostics
+# until the capture service restarts. Saved at the time: ffmpeg's log is appended
+# to by later runs, CPU ones included.
+_LAST_GPU_FAILURE: dict = {}
+
+
+def _add_gpu_failure(facts: list[dict], trace: list[dict]) -> None:
+    if not _LAST_GPU_FAILURE:
+        return
+    f = dict(_LAST_GPU_FAILURE)
+    # FFmpeg closes with a generic "Conversion failed!"; the cause comes before it.
+    cause = next((l for l in f['lines'] if 'Conversion failed' not in l), 'no ffmpeg output')
+    facts.append(_fact('Last GPU failure', 'warn', f"{f['when']} · {f['why']} · {cause}"))
+    trace.append({'test': 'Last GPU capture failure (ffmpeg)', 'ok': False, 'show': True,
+                  'output': '\n'.join(f['lines']) or '(ffmpeg wrote nothing)'})
+
+
 def _recent_gpu_log(limit: int = 15) -> list[str]:
     """The latest capture log lines about drivers and encoding, so a pasted report
     carries them. A message repeated in a row shows once, with a count."""
@@ -844,6 +861,7 @@ def diagnose_gpu(uid: int, gid: int) -> dict:
         if not t['ok']:
             t['why'] = _vaapi_reason(t.get('output') or '')
 
+    _add_gpu_failure(facts, trace)
     vainfo = None if _nvenc_only(node) else _vainfo_report(uid, gid, node, on_wsl)
     with SERVICE.lock:
         pool_error, tuner_states = SERVICE.pool_error, [t.state for t in SERVICE.tuners]
@@ -1675,7 +1693,7 @@ class Session:
                 except Exception as e:
                     logger.warning('[capture] reload failed: %s', e)
 
-    def _ffmpeg_errors(self, limit: int = 5) -> str:
+    def _ffmpeg_errors(self, limit: int = 15) -> list[str]:
         """The last lines the current ffmpeg wrote to its log."""
         try:
             with open(os.path.join(RUN_DIR, f'ffmpeg{self.tuner.index}.log'), 'rb') as fp:
@@ -1683,15 +1701,17 @@ class Session:
                 fp.seek(max(self._ff_log_start, size - 4096))
                 text = fp.read().decode('utf-8', 'replace')
         except OSError:
-            return ''
-        return ' | '.join([l.strip()[:200] for l in text.splitlines() if l.strip()][-limit:])
+            return []
+        return [l.strip()[:200] for l in text.splitlines() if l.strip()][-limit:]
 
     def _fall_back_to_cpu(self, why: str) -> None:
         """Switch every new capture to x264 until the next pool start and restart
         this session's ffmpeg on it, keeping the session (and its tuner) alive."""
         _kill(self.ffmpeg)
+        errors = self._ffmpeg_errors()
+        _LAST_GPU_FAILURE.update(when=time.strftime('%Y-%m-%d %H:%M:%S'), why=why, lines=errors)
         logger.warning('[capture] %s on session %s — switching to CPU encoding. ffmpeg: %s',
-                       why, self.id, self._ffmpeg_errors() or 'no output')
+                       why, self.id, ' | '.join(errors[-5:]) or 'no output')
         ENCODER.clear()
         ENCODER.update(kind='x264', reason=f'{why}; see {RUN_DIR}/ffmpeg{self.tuner.index}.log')
         shutil.rmtree(self.dir, ignore_errors=True)
