@@ -192,7 +192,7 @@ def run_sling_browser_login():
                         set_status('running', 'Solve the captcha below if shown.', page.url)
                     except Exception as exc:  # noqa: BLE001
                         # Not fatal - the human can still fill the form manually from here.
-                        logger.info('[sling-login] credential autofill failed, falling back to manual: %s', exc)
+                        logger.info('[sling-login] credential autofill failed, falling back to manual: %s', type(exc).__name__)
                         set_status('running', 'Sign in below, including the captcha if shown.', page.url)
                 else:
                     set_status('running', 'Sign in below, including the captcha if shown.', page.url)

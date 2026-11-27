@@ -28,18 +28,36 @@ _FORMATTER = _TimezoneFormatter('%(asctime)s %(levelname)-8s %(name)s: %(message
 
 
 # What a debug line must not carry into a log someone pastes into a forum.
-_SECRET_PATTERNS = tuple((re.compile(pattern), repl) for pattern, repl in (
-    (r"""(https?://)[^/\s'"@]+@""", r'\1[redacted]@'),                       # user:password@host
-    (r"""(https?://[^\s'"?#]*)[?#][^\s'"]+""", r'\1?[redacted]'),            # query and fragment
+# A playlist or custom stream can keep its key anywhere in a URL, so every URL is
+# cut to scheme, host and file type.
+_URL_RE = re.compile(r"""(https?://)(?:[^/\s'"@]+@)?([^/\s'"?#]*)([/?#][^\s'"]*)?""")
+_FILE_TYPE_RE = re.compile(r'\.(m3u8|m3u|mpd|ts|m4s|mp4|aac|vtt|json|xml|key|jpg|png)$', re.IGNORECASE)
+_SECRET_PATTERNS = tuple((re.compile(pattern, re.IGNORECASE), repl) for pattern, repl in (
+    (r"""(with url: )/[^\s'"]*""", r'\1/…'),                                 # requests' error text
     (r"""\?[\w.%\[\]~-]+=[^\s'"]*""", '?[redacted]'),                        # relative URL's query
     (r"""/(live|movie|series|timeshift)/[^/\s'"]+/[^/\s'"]+/""", r'/\1/[redacted]/[redacted]/'),  # Xtream
     (r"""\b(hdnts|hdntl|hdnea)=[^/\s'"]+""", r'\1=[redacted]'),              # Akamai token in a path
     (r'\beyJ[\w-]{8,}\.[\w-]+\.[\w-]*', '[redacted-token]'),                 # JWT
     (r'\b(Bearer)\s+[\w.~+/=-]{8,}', r'\1 [redacted]'),
+    # token=..., csrf=..., 'password': '...' and the like
+    (r"""((?:token|csrf|passw(?:or)?d|secret|cookie|authorization|api[_-]?key|session[_-]?id)"""
+     r"""(?:["']?\s*=\s*["']?|["']\s*:\s*["']))(?!\[redacted)[^\s'",}&;]{6,}""", r'\1[redacted]'),
 ))
 
 
+def _short_url(match) -> str:
+    scheme, host, rest = match.group(1), match.group(2), match.group(3) or ''
+    # Punctuation that belongs to the sentence around the URL.
+    tail = rest[len(rest.rstrip(').,:;]')):]
+    rest = rest[:len(rest) - len(tail)]
+    if rest in ('', '/'):
+        return scheme + host + rest + tail
+    file_type = _FILE_TYPE_RE.search(rest.split('?')[0].split('#')[0])
+    return f"{scheme}{host}/…{file_type.group(0) if file_type else ''}{tail}"
+
+
 def redact(text: str) -> str:
+    text = _URL_RE.sub(_short_url, text)
     for pattern, repl in _SECRET_PATTERNS:
         text = pattern.sub(repl, text)
     return text

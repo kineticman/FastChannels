@@ -61,8 +61,8 @@ _DBG = {'at': 0.0, 'on': False}
 
 def _dbg() -> bool:
     """Settings -> Advanced "debug logging" (or FC_HULU_LIVE_DEBUG / FC_DEBUG).
-    The root logger is capped at INFO, so debug lines are logged at INFO under a
-    [hulu_live][debug] tag when this is on. Cached 30 s: the MPD is polled every
+    These lines also have their own FC_HULU_LIVE_DEBUG switch, so they are logged
+    at INFO under a [hulu_live][debug] tag when on. Cached 30 s: the MPD is polled every
     few seconds and the setting is a DB read."""
     now = time.time()
     if now - _DBG['at'] > 30:

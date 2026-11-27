@@ -47,8 +47,8 @@
             tracks offered and picked, plus everything ?debug=1 sends
           - Access-log lines for successful /m3u, /epg.xml, player reports, DASH
             manifests and Roku license requests (gunicorn.conf.py _DEBUG_ONLY_RE)
-          - Every logger.debug() in app.* (logfile.py _DebugGate, URL queries and
-            tokens stripped)
+          - Every logger.debug() in app.* (logfile.py _DebugGate, URLs cut to
+            host and file type, tokens stripped)
         Off by default because page text can show account names/emails and the
         log is mirrored into the UI activity feed that users screenshot. Have
         them turn it back off afterwards. Update this list when adding a consumer.

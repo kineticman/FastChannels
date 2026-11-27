@@ -3484,6 +3484,7 @@ def play(source_name: str, channel_id: str):
     if source_name == 'nbc_tve' or (source_name == 'pbs' and (channel.stream_type or '').lower() == 'dash'):
         from urllib.parse import quote as _quote
         encoded_id = _quote(channel.source_channel_id, safe='')
+        _new_dash_tune(source_name, channel.source_channel_id, client_ip)    # logged above
         return redirect(
             f"{request.host_url.rstrip('/')}/play/{source_name}/{encoded_id}/dash.mpd",
             302,

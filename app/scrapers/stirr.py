@@ -386,7 +386,7 @@ class StirrScraper(BaseScraper):
                 if body.get('error') == 'CON':
                     logger.debug("[stirr] audit_resolve dead for %s at stage=ssai status=422 error=CON", videoid)
                     raise StreamDeadError(format_http_reason(f"Stirr channel {videoid} aniview config deleted", 422, "CON"))
-                logger.debug("[stirr] audit_resolve transient 422 for %s: body=%s", videoid, body)
+                logger.debug("[stirr] audit_resolve transient 422 for %s: error=%s", videoid, body.get('error'))
             except StreamDeadError:
                 raise
             except Exception:

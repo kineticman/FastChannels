@@ -167,9 +167,8 @@ _debug_state = {'settings_checked': False}  # populated once per run, while
 
 
 def _spectrum_debug_enabled() -> bool:
-    """See app/debug_flag.py for the general mechanism (root logger is
-    hard-capped at INFO, so this is an opt-in-at-INFO pattern, not true
-    DEBUG level). Checks FC_SPECTRUM_DEBUG (safe from anywhere, including
+    """See app/debug_flag.py. These diagnostics have their own env switch, so
+    they are opt-in at INFO rather than plain logger.debug. Checks FC_SPECTRUM_DEBUG (safe from anywhere, including
     inside the Camoufox browser session) OR AppSettings.debug_logging_enabled
     — the latter via _debug_state, cached once near the top of
     run_spectrum_signin while the app context is still live, since a DB

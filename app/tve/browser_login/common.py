@@ -748,7 +748,8 @@ def _try_autofill_credentials(
         logger.info('[%s] autofill: gave up — could not get a stable filled form url=%s', log_tag, _safe_page_url(page))
         return False
     except Exception as exc:  # noqa: BLE001
-        logger.info('[%s] autofill: exception mid-fill: %s', log_tag, exc)
+        # The type only: Playwright's message can quote what was being typed.
+        logger.info('[%s] autofill: exception mid-fill: %s', log_tag, type(exc).__name__)
         return False
 
 
@@ -916,7 +917,7 @@ def _autofill_xfinity_credentials(
     except _XfinityAutofillCancelled:
         return False
     except Exception as exc:  # noqa: BLE001
-        logger.info('[mvpd-login] xfinity autofill: exception mid-fill: %s', exc)
+        logger.info('[mvpd-login] xfinity autofill: exception mid-fill: %s', type(exc).__name__)
         return False
 
     for _ in range(8):

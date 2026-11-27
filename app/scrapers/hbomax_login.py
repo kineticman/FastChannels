@@ -175,8 +175,10 @@ def run_hbomax_login(source_id: int) -> None:
                 page = ctx.pages[0] if ctx.pages else ctx.new_page()
                 session = _drive_login(page, ctx, email, password)
         except Exception as exc:  # noqa: BLE001
-            logger.warning('[hbomax] sign-in failed: %s', exc)
-            set_status('error', str(exc)[:300])
+            # Playwright's message can quote what was being typed: its type only.
+            why = type(exc).__name__ if type(exc).__module__.startswith('playwright') else str(exc)[:300]
+            logger.warning('[hbomax] sign-in failed: %s', why)
+            set_status('error', why)
             return
         finally:
             shutil.rmtree(profile_dir, ignore_errors=True)

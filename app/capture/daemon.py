@@ -1175,6 +1175,38 @@ def _leftover_pids(uid: int, display: int, profile: str) -> list[int]:
     return pids
 
 
+def _leftover_av_pids(uid: int) -> list[int]:
+    """The capture user's PulseAudio and screen-grabbing FFmpeg."""
+    pids = []
+    for proc in glob.glob('/proc/[0-9]*'):
+        try:
+            if os.stat(proc).st_uid != uid:
+                continue
+            with open(f'{proc}/cmdline', 'rb') as f:
+                args = f.read().decode('utf-8', 'replace').split('\0')
+        except OSError:
+            continue
+        name = os.path.basename(args[0])
+        if name == 'pulseaudio' or (name == 'ffmpeg' and 'x11grab' in args):
+            pids.append(int(os.path.basename(proc)))
+    return pids
+
+
+def _kill_found(find) -> None:
+    """SIGTERM, then SIGKILL, whatever find() keeps returning."""
+    for sig in (signal.SIGTERM, signal.SIGKILL):
+        for pid in find():
+            try:
+                os.kill(pid, sig)
+            except OSError:
+                pass
+        deadline = time.monotonic() + 3
+        while time.monotonic() < deadline:
+            if not find():
+                return
+            time.sleep(0.1)
+
+
 class Tuner:
     def __init__(self, index: int, quality: str, uid: int, gid: int):
         self.index = index
@@ -1300,18 +1332,7 @@ class Tuner:
             return
         logger.warning('[capture] tuner %d: stopping %d leftover process(es) from an earlier run',
                        self.index, len(pids))
-        for sig in (signal.SIGTERM, signal.SIGKILL):
-            for pid in pids:
-                try:
-                    os.kill(pid, sig)
-                except OSError:
-                    pass
-            deadline = time.monotonic() + 3
-            while time.monotonic() < deadline:
-                pids = _leftover_pids(self.uid, self.display, self.profile)
-                if not pids:
-                    return
-                time.sleep(0.1)
+        _kill_found(lambda: _leftover_pids(self.uid, self.display, self.profile))
 
     def _xvfb_failure(self, xvfb: subprocess.Popen, log: str) -> str:
         code = xvfb.poll()
@@ -1930,6 +1951,12 @@ class CaptureService:
 
     def _start_pulse(self, tuners: int) -> None:
         _kill(self.pulse)
+        # No pool is running here, so any of these outlived a crashed service.
+        leftover = _leftover_av_pids(self.uid)
+        if leftover:
+            logger.warning('[capture] stopping %d leftover audio/encoder process(es) from an earlier run',
+                           len(leftover))
+            _kill_found(lambda: _leftover_av_pids(self.uid))
         try:
             os.unlink(PULSE_SOCKET)
         except OSError:

@@ -920,7 +920,7 @@ class RokuScraper(BaseScraper):
             self._csrf_token   = csrf
             self._session_born = time.time()
             self._persist_session()
-            logger.debug("[roku] session refreshed, csrf=%s…", csrf[:12])
+            logger.debug("[roku] session refreshed")
             return True
 
         except Exception as exc:
