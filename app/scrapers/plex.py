@@ -482,11 +482,7 @@ class PlexScraper(BaseScraper):
             r.raise_for_status()
             self._auth_token = r.json()["authToken"]
             self._update_config("auth_token", self._auth_token)
-            logger.info(
-                "[plex] anonymous auth OK in %.1fs, token=%s…",
-                time.monotonic() - t0,
-                self._auth_token[:8],
-            )
+            logger.debug("[plex] anonymous auth OK in %.1fs", time.monotonic() - t0)
             return True
         except Exception as exc:
             logger.warning("[plex] anonymous auth failed (%s) — provider API calls may fail", exc)
@@ -528,7 +524,7 @@ class PlexScraper(BaseScraper):
             logger.error("[plex] live-tv RSC returned %d", r.status_code)
             return ""
         self._rsc_cache = r.text
-        logger.info(
+        logger.debug(
             "[plex] live-tv RSC fetched in %.1fs (%d bytes)",
             time.monotonic() - t0,
             len(self._rsc_cache),
@@ -614,7 +610,7 @@ class PlexScraper(BaseScraper):
                     if label not in tags_map.get(cid, []):
                         tags_map.setdefault(cid, []).append(label)
 
-        logger.info(
+        logger.debug(
             "[plex] genre map: %d categorised, %d with tags, %d Spanish",
             len(cat_map), len(tags_map), len(spanish_ids),
         )
@@ -814,7 +810,7 @@ class PlexScraper(BaseScraper):
         headers = self._provider_headers(accept="application/xml", provider_version="7.2")
         today = datetime.now(timezone.utc).date()
         results: list[ProgramData] = []
-        logger.info(
+        logger.debug(
             "[plex] targeted guide fetch starting: channels=%d days=%d workers=%d",
             len(guide_channels),
             _PLEX_EXTRA_DAYS + 1,
@@ -892,7 +888,9 @@ class PlexScraper(BaseScraper):
         else:
             avg_d = p95_d = max_d = 0.0
 
-        logger.info(
+        # Routine numbers unless something timed out or failed.
+        logger.log(
+            logging.INFO if timeout_count or error_count else logging.DEBUG,
             "[plex] targeted guide fetch complete: channels=%d days=%d programs=%d ok=%d timeouts=%d errors=%d "
             "latency avg=%.2fs p95=%.2fs max=%.2fs in %.1fs",
             len(guide_channels),
@@ -1010,7 +1008,7 @@ class PlexScraper(BaseScraper):
         if not gapped:
             return []
 
-        logger.info("[plex] luma gap-fill: %d channels have schedule gaps", len(gapped))
+        logger.debug("[plex] luma gap-fill: %d channels have schedule gaps", len(gapped))
 
         import threading
         extras: list[ProgramData] = []
@@ -1045,7 +1043,7 @@ class PlexScraper(BaseScraper):
                     logger.debug("[plex] luma gap-fill future failed", exc_info=True)
 
         if extras:
-            logger.info("[plex] luma gap-fill total: +%d programs", len(extras))
+            logger.debug("[plex] luma gap-fill total: +%d programs", len(extras))
         return extras
 
     # ── fetch_epg ──────────────────────────────────────────────────────────────
@@ -1073,7 +1071,7 @@ class PlexScraper(BaseScraper):
         luma_extras = self._luma_gap_fill(channels, enabled_ids, programs)
         if luma_extras:
             programs.extend(luma_extras)
-            logger.info("[plex] %d total EPG entries after luma gap-fill", len(programs))
+            logger.debug("[plex] %d total EPG entries after luma gap-fill", len(programs))
 
         null_placeholder_season_episode(programs)
         return programs
