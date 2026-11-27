@@ -11,8 +11,8 @@ pytz==2026.2
 beautifulsoup4==4.15.0
 apscheduler==3.10.4
 playwright
-# Pinned: an unpinned upgrade changed the browser bundle layout silently. The browser
-# itself still floats (camoufox fetch = latest for this package) so anti-detect stays current.
+# Pinned: an unpinned upgrade changed the browser bundle layout silently. This also pins the
+# browser: `camoufox fetch` installs the build named in the package's browser-pin.json.
 camoufox==0.5.8
 gpsoauth
 Pillow==12.3.0
