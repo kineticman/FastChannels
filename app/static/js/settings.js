@@ -2201,18 +2201,33 @@ function formatPrismcastDiagnostics(data) {
   return lines.join('\n');
 }
 
+// Copy a multi-line report. navigator.clipboard only exists on https/localhost, and
+// window.prompt is a one-line box that loses the line breaks, so it's the last resort.
+async function copyReport(text, promptTitle) {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch (_) { /* plain http, or permission refused */ }
+  const box = document.createElement('textarea');
+  box.value = text;
+  box.setAttribute('readonly', '');
+  box.style.cssText = 'position:fixed;top:0;left:0;opacity:0';
+  document.body.appendChild(box);
+  box.select();
+  let ok = false;
+  try { ok = document.execCommand('copy'); } catch (_) { /* not supported */ }
+  box.remove();
+  if (!ok) window.prompt(promptTitle, text);
+  return ok;
+}
+
 async function copyPrismcastDiagnostics() {
   if (!_lastPrismcastDiagnostics) return;
   const btn = document.getElementById('prismcast-copy-diagnostics');
-  try {
-    await navigator.clipboard.writeText(_lastPrismcastDiagnostics);
-    if (btn) {
-      const old = btn.textContent;
-      btn.textContent = 'Copied';
-      setTimeout(() => { btn.textContent = old; }, 1200);
-    }
-  } catch (_) {
-    window.prompt('Copy diagnostics', _lastPrismcastDiagnostics);
+  if (await copyReport(_lastPrismcastDiagnostics, 'Copy diagnostics') && btn) {
+    const old = btn.textContent;
+    btn.textContent = 'Copied';
+    setTimeout(() => { btn.textContent = old; }, 1200);
   }
 }
 
@@ -2466,11 +2481,7 @@ async function runBridgeHealthcheck() {
 
 async function copyBridgeHealthcheck() {
   if (!_lastBridgeHealthcheckReport) return;
-  try {
-    await navigator.clipboard.writeText(_lastBridgeHealthcheckReport);
-  } catch (_) {
-    window.prompt('Copy forum report', _lastBridgeHealthcheckReport);
-  }
+  await copyReport(_lastBridgeHealthcheckReport, 'Copy forum report');
 }
 
 let _bridgeLiveTestChannels = [];

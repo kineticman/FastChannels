@@ -639,8 +639,7 @@ environment:
       $('capture-gpu-copy').disabled = false;
     };
     window.captureGpuCopy = async function () {
-      try { await navigator.clipboard.writeText(gpuReportText); $('capture-gpu-copy').textContent = 'Copied'; }
-      catch (e) { window.prompt('Copy this report:', gpuReportText); }
+      if (await copyReport(gpuReportText, 'Copy this report:')) $('capture-gpu-copy').textContent = 'Copied';
       setTimeout(() => { $('capture-gpu-copy').textContent = 'Copy report'; }, 2000);
     };
 

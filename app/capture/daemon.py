@@ -278,6 +278,21 @@ def _vaapi_reason(stderr: str) -> str:
     return _last_line(stderr)
 
 
+def _vaapi_rate_args(kbps: int) -> list[str]:
+    return ['-b:v', f'{kbps}k', '-maxrate', f'{kbps}k', '-bufsize', f'{kbps * 2}k']
+
+
+def _vaapi_test_args(device: str, low_power: bool) -> list[str]:
+    """A test encode that asks the GPU for what a real capture does: colour
+    conversion on the GPU, capped bitrate, fixed GOP and BT.709 tags. A simpler
+    test passed drivers that then failed seconds into a capture, which skips the
+    automatic non-free driver (forum #4042, i5-6500, ffmpeg exit 251)."""
+    return ['-vaapi_device', device, '-vf', f'format=bgr0,{_VAAPI_GPU_CONVERT}', '-c:v', 'h264_vaapi',
+            *(['-low_power', '1'] if low_power else []), *_vaapi_rate_args(6000),
+            '-g', '60', '-keyint_min', '60', '-colorspace', 'bt709', '-color_primaries', 'bt709',
+            '-color_trc', 'bt709', '-color_range', 'tv']
+
+
 def detect_encoder(uid: int, gid: int, setting: str) -> dict:
     """GPU encoding when a GPU was passed into the container and it really works for
     the capture user, else x264 with the reason shown on the Bridge page:
@@ -313,9 +328,7 @@ def detect_encoder(uid: int, gid: int, setting: str) -> dict:
         first_err = ''
         for env in drivers:
             for low_power in ((True, False) if not env else (False,)):
-                ok, err = _try_encoder(uid, gid, [dgid], [
-                    '-vaapi_device', device, '-vf', 'format=nv12,hwupload', '-c:v', 'h264_vaapi',
-                    *(['-low_power', '1'] if low_power else []), '-b:v', '4000k'], extra_env=env)
+                ok, err = _try_encoder(uid, gid, [dgid], _vaapi_test_args(device, low_power), extra_env=env)
                 if ok:
                     driver = _driver_name(err)
                     enc = {'kind': 'vaapi', 'device': device, 'gid': dgid, 'low_power': low_power,
@@ -805,9 +818,8 @@ def diagnose_gpu(uid: int, gid: int) -> dict:
                     if other == node or _nvenc_only(other):
                         continue
                     for low_power in (True, False):
-                        ok, _ = _try_encoder(uid, gid, sorted({os.stat(other).st_gid}), [
-                            '-vaapi_device', other, '-vf', 'format=nv12,hwupload', '-c:v', 'h264_vaapi',
-                            *(['-low_power', '1'] if low_power else []), '-b:v', '4000k'])
+                        ok, _ = _try_encoder(uid, gid, sorted({os.stat(other).st_gid}),
+                                             _vaapi_test_args(other, low_power))
                         if ok:
                             break
         finally:
@@ -1140,8 +1152,7 @@ def _video_encoder_args(t: 'Tuner', enc: dict) -> tuple[list[str], list[str]]:
                 # Colour conversion on the GPU too: CPU-side format=nv12 cost ~2x the CPU.
                 ['-vf', vf,
                  '-c:v', 'h264_vaapi', *(['-low_power', '1'] if enc.get('low_power') else []),
-                 '-b:v', f'{kbps}k', '-maxrate', f'{kbps}k', '-bufsize', f'{kbps * 2}k',
-                 *gop_args, *color_args])
+                 *_vaapi_rate_args(kbps), *gop_args, *color_args])
     # No -tune zerolatency: it drops B-frames and lookahead (~0.6 dB at the same
     # bitrate in the 2026-11-19 A/B) and buys nothing with 2 s HLS segments.
     return ([], ['-c:v', 'libx264', '-preset', 'veryfast', '-pix_fmt', 'yuv420p',
@@ -1606,6 +1617,8 @@ class Session:
             os.path.join(self.dir, 'index.m3u8'),
         ]
         self.ffmpeg_started = time.monotonic()
+        log = os.path.join(RUN_DIR, f'ffmpeg{t.index}.log')
+        self._ff_log_start = os.path.getsize(log) if os.path.exists(log) else 0
         self._ff_samples.clear()
         self._encoder_proven = False
         # enc['env']: Docker on Windows needs Mesa's d3d12 driver selected for ffmpeg.
@@ -1662,11 +1675,23 @@ class Session:
                 except Exception as e:
                     logger.warning('[capture] reload failed: %s', e)
 
+    def _ffmpeg_errors(self, limit: int = 5) -> str:
+        """The last lines the current ffmpeg wrote to its log."""
+        try:
+            with open(os.path.join(RUN_DIR, f'ffmpeg{self.tuner.index}.log'), 'rb') as fp:
+                size = fp.seek(0, os.SEEK_END)
+                fp.seek(max(self._ff_log_start, size - 4096))
+                text = fp.read().decode('utf-8', 'replace')
+        except OSError:
+            return ''
+        return ' | '.join([l.strip()[:200] for l in text.splitlines() if l.strip()][-limit:])
+
     def _fall_back_to_cpu(self, why: str) -> None:
         """Switch every new capture to x264 until the next pool start and restart
         this session's ffmpeg on it, keeping the session (and its tuner) alive."""
-        logger.warning('[capture] %s on session %s — switching to CPU encoding', why, self.id)
         _kill(self.ffmpeg)
+        logger.warning('[capture] %s on session %s — switching to CPU encoding. ffmpeg: %s',
+                       why, self.id, self._ffmpeg_errors() or 'no output')
         ENCODER.clear()
         ENCODER.update(kind='x264', reason=f'{why}; see {RUN_DIR}/ffmpeg{self.tuner.index}.log')
         shutil.rmtree(self.dir, ignore_errors=True)
