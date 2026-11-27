@@ -147,13 +147,13 @@ LIVE_PAGE_URL = 'https://www.nbc.com/live'
 GEOLOCATION_URL = 'https://geolocation.digitalsvc.apps.nbcuni.com/geolocation/live/'
 GRAPHQL_URL = 'https://friendship.nbc.com/v3/graphql'
 # Apollo persisted-query hash for the componentsForPlaceholders(_cached) guide
-# query. NBC rotates this on deploy (went stale 2026-08-28 and again
-# 2026-10-14) — the API returns a 200 with
+# query. NBC rotates this on deploy (went stale 2026-08-28, 2026-10-14
+# and again by 2026-11-26) — the API returns a 200 with
 # {"errors":[{"code":"PERSISTED_QUERY_NOT_FOUND"}]} rather than a 4xx. This is
 # only the fallback: on that error _fetch_guide() re-discovers the current hash
 # from nbc.com/live's generetic.*.js bundles (_find_guide_query_hash) and caches
 # it as 'nbc_guide_query'.
-GUIDE_QUERY_HASH = '3ae37d05dd19d4223c9e139f7360704837b59a5251777a01f699df96a3157f61'
+GUIDE_QUERY_HASH = '77968072061d9178eb70d19c0c796275885aa06f70bed8170abf06482ec90551'
 # base64 of {"type":"TvGuide","implementation":"liveGuideTvGuide","name":"","app":""} — fixed constant.
 GUIDE_COMPONENT_CONFIG_B64 = 'eyJ0eXBlIjoiVHZHdWlkZSIsImltcGxlbWVudGF0aW9uIjoibGl2ZUd1aWRlVHZHdWlkZSIsIm5hbWUiOiIiLCJhcHAiOiIifQ=='
 LEMONADE_LINEAR_URL = 'https://lemonade.nbc.com/v2/linear/'

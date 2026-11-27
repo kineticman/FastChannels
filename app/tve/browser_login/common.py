@@ -122,6 +122,19 @@ def _same_page_url(actual: str, expected: str) -> bool:
 
 
 _MVPD_TRANSITIONAL_URL_MARKERS = ('/saml/module.php/', '/api/v2/authenticate/')
+# Under /saml/module.php/ but a real login form a human has to fill in, not a
+# hop: Dish's is identity1.dishnetwork.com/saml/module.php/authSynacor/login.php.
+_MVPD_LOGIN_FORM_URL_MARKERS = ('/saml/module.php/authSynacor/login',)
+
+
+def _is_transitional_mvpd_url(url: str | None) -> bool:
+    if not url:
+        return False
+    # Path only: a relay's query string can name the login page it will return to.
+    path = _urlsplit(url).path
+    if any(marker in path for marker in _MVPD_LOGIN_FORM_URL_MARKERS):
+        return False
+    return any(marker in path for marker in _MVPD_TRANSITIONAL_URL_MARKERS)
 
 
 def _settle_after_mvpd_navigation(
@@ -242,13 +255,10 @@ def _settle_after_mvpd_navigation(
         if current_url != last_url:
             last_url = current_url
             stable_since = now
-        is_known_transitional = bool(current_url) and any(
-            marker in current_url for marker in _MVPD_TRANSITIONAL_URL_MARKERS
-        )
-        if not is_known_transitional and stable_since is not None and now - stable_since >= 1.5:
+        if not _is_transitional_mvpd_url(current_url) and stable_since is not None and now - stable_since >= 1.5:
             return True
         page.wait_for_timeout(200)
-    still_stuck = bool(last_url) and any(marker in last_url for marker in _MVPD_TRANSITIONAL_URL_MARKERS)
+    still_stuck = _is_transitional_mvpd_url(last_url)
     if still_stuck:
         # Confirm the known soft-block signature (an empty <body></body> —
         # the page never actually rendered its real interstitial at all,
