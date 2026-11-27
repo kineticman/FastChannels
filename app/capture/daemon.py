@@ -1151,6 +1151,30 @@ def _video_encoder_args(t: 'Tuner', enc: dict) -> tuple[list[str], list[str]]:
 
 # ── tuners ────────────────────────────────────────────────────────────────────
 
+class _TunerRetired(Exception):
+    """The pool was stopped while this tuner was still starting."""
+
+
+def _leftover_pids(uid: int, display: int, profile: str) -> list[int]:
+    """The capture user's Xvfb on this display and Chrome on this profile."""
+    # Chrome rewrites its command line into one space-separated string.
+    on_profile = re.compile(rf'--user-data-dir={re.escape(profile)}(?=[\0 ]|$)')
+    pids = []
+    for proc in glob.glob('/proc/[0-9]*'):
+        try:
+            if os.stat(proc).st_uid != uid:
+                continue
+            with open(f'{proc}/cmdline', 'rb') as f:
+                cmdline = f.read().decode('utf-8', 'replace')
+        except OSError:
+            continue
+        args = cmdline.split('\0')
+        is_xvfb = os.path.basename(args[0]) == 'Xvfb' and f':{display}' in args[1:]
+        if is_xvfb or on_profile.search(cmdline):
+            pids.append(int(os.path.basename(proc)))
+    return pids
+
+
 class Tuner:
     def __init__(self, index: int, quality: str, uid: int, gid: int):
         self.index = index
@@ -1167,6 +1191,8 @@ class Tuner:
         self.error = ''
         self.idle_since = time.monotonic()   # for cold mode (keep_warm off)
         self.session: 'Session | None' = None
+        self.retired = threading.Event()
+        self._spawn_lock = threading.Lock()   # orders a spawn against retire()
 
     @property
     def env(self) -> dict:
@@ -1176,6 +1202,11 @@ class Tuner:
 
     def start(self) -> None:
         self.state, self.error = 'starting', ''
+        # Under the lock: a retired tuner must not kill its replacement's processes.
+        with self._spawn_lock:
+            if self.retired.is_set():
+                raise _TunerRetired
+            self._kill_leftovers()
         os.makedirs(self.profile, exist_ok=True)
         os.chown(self.profile, self.uid, self.gid)
         # Drop the HTTP/code caches: the profile persists for Widevine, and a cached
@@ -1200,16 +1231,21 @@ class Tuner:
         # window that exactly fills the screen to (w-1)x(h-1), so every frame would be
         # resampled (soft picture, 1 px black edge). A w x h window on a (w+1)x(h+1)
         # screen gets an exact w x h viewport at 0,0, which is all x11grab reads.
-        self.xvfb = _spawn(['Xvfb', f':{self.display}', '-screen', '0',
-                            f'{self.width + 1}x{self.height + 1}x24', '-nolisten', 'tcp', '-ac'],
-                           uid=self.uid, gid=self.gid, env=self.env, log_name=f'xvfb{self.index}')
+        log = os.path.join(RUN_DIR, f'xvfb{self.index}.log')
+        try:
+            os.unlink(log)    # only this attempt's output
+        except OSError:
+            pass
+        xvfb = self._spawn_part('xvfb', ['Xvfb', f':{self.display}', '-screen', '0',
+                                         f'{self.width + 1}x{self.height + 1}x24', '-nolisten', 'tcp', '-ac'],
+                                log_name=f'xvfb{self.index}')
         for _ in range(50):
-            if os.path.exists(sock):
+            if os.path.exists(sock) or xvfb.poll() is not None:
                 break
-            time.sleep(0.1)
-        else:
-            raise RuntimeError(f'Xvfb :{self.display} did not start')
-        self.chrome = _spawn([
+            self._pause(0.1)
+        if not os.path.exists(sock):
+            raise RuntimeError(self._xvfb_failure(xvfb, log))
+        chrome = self._spawn_part('chrome', [
             CHROME_BIN,
             '--no-sandbox',                     # no user namespaces inside Docker
             '--disable-dev-shm-usage',          # Docker's default /dev/shm is 64 MB
@@ -1223,25 +1259,80 @@ class Tuner:
             '--hide-scrollbars', '--disable-notifications',
             f'--remote-debugging-port={self.cdp_port}', '--remote-debugging-address=127.0.0.1',
             'about:blank',
-        ], uid=self.uid, gid=self.gid, env=self.env, nice=NICE_CHROME, log_name=f'chrome{self.index}')
+        ], nice=NICE_CHROME, log_name=f'chrome{self.index}')
         deadline = time.monotonic() + 30
         while time.monotonic() < deadline:
-            if self.chrome.poll() is not None:
-                raise RuntimeError(f'Chrome exited during startup (code {self.chrome.returncode}); '
+            if chrome.poll() is not None:
+                raise RuntimeError(f'Chrome exited during startup (code {chrome.returncode}); '
                                    f'see {RUN_DIR}/chrome{self.index}.log')
             try:
                 requests.get(f'http://127.0.0.1:{self.cdp_port}/json/version', timeout=1)
                 break
             except requests.RequestException:
-                time.sleep(0.3)
+                self._pause(0.3)
         else:
             raise RuntimeError('Chrome DevTools endpoint did not come up')
         # Widevine registers asynchronously after launch; a /watch load before that
         # fails Shaka's support check ("browser-unsupported").
-        time.sleep(WIDEVINE_SETTLE_SECONDS)
+        self._pause(WIDEVINE_SETTLE_SECONDS)
         self.idle_since = time.monotonic()
         self.state = 'idle'
         logger.info('[capture] tuner %d ready (:%d, %s)', self.index, self.display, self.quality)
+
+    def _spawn_part(self, name: str, cmd: list[str], **kwargs) -> subprocess.Popen:
+        """Start Xvfb or Chrome and record it as self.<name>, unless retired."""
+        with self._spawn_lock:
+            if self.retired.is_set():
+                raise _TunerRetired
+            proc = _spawn(cmd, uid=self.uid, gid=self.gid, env=self.env, **kwargs)
+            setattr(self, name, proc)
+        return proc
+
+    def _pause(self, seconds: float) -> None:
+        if self.retired.wait(seconds):
+            raise _TunerRetired
+
+    def _kill_leftovers(self) -> None:
+        """An Xvfb or Chrome that outlived its tuner (a crashed capture service,
+        say) holds the display or the profile, so every later start fails."""
+        pids = _leftover_pids(self.uid, self.display, self.profile)
+        if not pids:
+            return
+        logger.warning('[capture] tuner %d: stopping %d leftover process(es) from an earlier run',
+                       self.index, len(pids))
+        for sig in (signal.SIGTERM, signal.SIGKILL):
+            for pid in pids:
+                try:
+                    os.kill(pid, sig)
+                except OSError:
+                    pass
+            deadline = time.monotonic() + 3
+            while time.monotonic() < deadline:
+                pids = _leftover_pids(self.uid, self.display, self.profile)
+                if not pids:
+                    return
+                time.sleep(0.1)
+
+    def _xvfb_failure(self, xvfb: subprocess.Popen, log: str) -> str:
+        code = xvfb.poll()
+        how = f'exited with code {code}' if code is not None else 'not ready after 5 s'
+        try:
+            with open(log, errors='replace') as f:
+                lines = [ln.replace('(EE)', '').strip() for ln in f]
+        except OSError:
+            lines = []
+        tail = [ln for ln in lines if ln][-6:]
+        for line in tail:
+            logger.error('[capture] Xvfb :%d: %s', self.display, line)
+        return (f'Xvfb :{self.display} did not start ({how})'
+                + (f': {tail[-1]}' if tail else ', with no output'))
+
+    def retire(self) -> None:
+        """Stop for good (the pool is going away). A start still running in another
+        thread gives up and cannot spawn anything after this."""
+        with self._spawn_lock:
+            self.retired.set()
+        self.stop()
 
     def alive(self) -> bool:
         return (self.xvfb is not None and self.xvfb.poll() is None
@@ -1712,6 +1803,9 @@ class CaptureService:
         try:
             t.start()
         except Exception as e:
+            if t.retired.is_set():
+                t.stop()
+                return
             t.state, t.error = 'error', str(e)[:300]
             logger.error('[capture] tuner %d failed to start: %s', t.index, e)
             t.stop()
@@ -1870,7 +1964,7 @@ class CaptureService:
         for s in sessions:
             s.stop()
         for t in tuners:
-            t.stop()
+            t.retire()
         _kill(self.pulse)
         with self.lock:
             self.pulse = None
