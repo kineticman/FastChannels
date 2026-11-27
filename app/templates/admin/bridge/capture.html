@@ -106,6 +106,14 @@ environment:
             </select>
             <div class="help" id="capture-warm-help"></div>
           </div>
+          <div class="field">
+            <label for="capture-startup">Startup buffer</label>
+            <select id="capture-startup" onchange="captureSaveConfig()">
+              <option value="fast">Faster start</option>
+              <option value="standard">Standard (recommended)</option>
+            </select>
+            <div class="help" id="capture-startup-help"></div>
+          </div>
           <div class="field field-full" id="capture-gpu-tip" hidden>
             <details class="help">
               <summary>Use much less CPU by giving FastChannels your GPU. How?</summary>
@@ -257,7 +265,12 @@ environment:
         $('capture-quality').value = cfg.quality || '720p60';
         $('capture-encoder').value = cfg.encoder || 'auto';
         $('capture-warm').value = cfg.keep_warm === false ? '0' : '1';
+        $('capture-startup').value = cfg.startup || 'standard';
       }
+      $('capture-startup-help').textContent = {
+        fast: 'A picture about 3 seconds sooner, with less video held in reserve: more likely to pause on a weak network or a busy machine.',
+        standard: 'Takes effect the next time a channel starts.',
+      }[$('capture-startup').value];
       $('capture-warm-help').textContent = $('capture-warm').value === '1'
         ? 'Channels start in about 10 seconds. Each tuner keeps about 0.6 GB of memory in use.'
         : 'Frees that memory after 5 minutes with nothing playing. The next channel then takes a few seconds longer to start.';
@@ -647,6 +660,7 @@ environment:
         quality: $('capture-quality').value,
         encoder: $('capture-encoder').value,
         keep_warm: $('capture-warm').value === '1',
+        startup: $('capture-startup').value,
       };
       const r = await fetch('/api/capture/config', {method: 'POST', headers: {'Content-Type': 'application/json'},
                                                     body: JSON.stringify(body)});

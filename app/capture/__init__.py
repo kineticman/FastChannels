@@ -81,6 +81,15 @@ QUALITY_PRESETS = {
     '1080p60': (1920, 1080, 60, 10000),
 }
 
+# How many 1 s segments a session starts with before the usual 2 s ones. A tune waits
+# for three segments and players start about three from the live edge, so 'fast' is
+# ready ~3 s sooner and leaves the player ~3 s behind instead of ~6. (Longer segments
+# for more buffer made a channel change take 19.7 s, past Channels DVR's limit.)
+STARTUP_PRESETS = {
+    'fast': 8,
+    'standard': 0,
+}
+
 DEFAULT_CONFIG = {
     'enabled': True,
     'max_tuners': 2,
@@ -90,6 +99,7 @@ DEFAULT_CONFIG = {
     # playing). Cold: Chrome closes after COLD_IDLE_SECONDS without a tune and the
     # next tune starts it first.
     'keep_warm': True,
+    'startup': 'standard',  # a STARTUP_PRESETS name; applies from the next tune
 }
 COLD_IDLE_SECONDS = int(os.environ.get('FC_CAPTURE_COLD_IDLE_SECONDS', '300'))  # env: testing only
 ENCODERS = ('auto', 'cpu')
@@ -228,6 +238,8 @@ def normalize_config(cfg: dict) -> dict:
     encoder = cfg.get('encoder')
     out['encoder'] = encoder if encoder in ENCODERS else out['encoder']
     out['keep_warm'] = bool(cfg.get('keep_warm', out['keep_warm']))
+    startup = cfg.get('startup')
+    out['startup'] = startup if startup in STARTUP_PRESETS else out['startup']
     return out
 
 

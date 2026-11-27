@@ -10,7 +10,7 @@ Public (DVR clients can't sign in):
 Admin:
     GET  /api/capture/status
     POST /api/capture/install | uninstall | update-chrome
-    POST /api/capture/config             {enabled, max_tuners, quality, encoder}
+    POST /api/capture/config             {enabled, max_tuners, quality, encoder, keep_warm, startup}
     POST /api/capture/sessions/<id>/stop end a capture (a client still watching retunes)
 
 The playlist route is the session's keep-alive: the daemon stops a capture once
@@ -46,9 +46,13 @@ _BUSY_WAIT_SECONDS = 10
 # fewer segments than that they start AT the edge and rebuffer before every new
 # segment — VLC logged a stall per 2 s segment for the first ~45 s with 2 here.
 _MIN_SEGMENTS = 3
+# Channels DVR gives an HLS request 15 s in all (its developer's figure; they won't
+# raise it), and sending the headers early doesn't extend that. Past this long, send
+# what there is, even one segment; a thinner start beats a failed tune.
+_SERVE_BY_SECONDS = 12
+# Marks a session served that way, so its next polls aren't held for three segments.
+_SERVED_MARK = '.served'
 _HLS_HEADERS = {'Cache-Control': 'no-cache, no-store'}
-_HLS_MIMETYPE = 'application/vnd.apple.mpegurl'
-_M3U_HEADER = '#EXTM3U\n'
 
 
 _last_warn: dict[int, float] = {}
@@ -188,7 +192,11 @@ def _segment_count(playlist: str) -> int:
 def _rewrite(playlist: str, session_id: str) -> str:
     out = []
     for line in playlist.splitlines():
-        if line and not line.startswith('#'):
+        if line.startswith('#EXT-X-TARGETDURATION:'):
+            # With short startup segments ffmpeg says 1 while only those are listed,
+            # then 2. The target may not change during a stream: it is 2 from the start.
+            line = '#EXT-X-TARGETDURATION:2'
+        elif line and not line.startswith('#'):
             line = f'/play/capture/s/{session_id}/{os.path.basename(line)}'
         out.append(line)
     return '\n'.join(out) + '\n'
@@ -205,38 +213,6 @@ def capture_playlist(channel_id: int):
         return _text(f'{channel.name} is only allowed on hardware players (its license keys are '
                      'restricted), so Built-in Capture skips it. Use FastChannels Player for it.', 422)
 
-    steps = _tune(channel.id, channel.name)
-    first = next(steps)
-    if first is not None:
-        # Settled without waiting: an already-running capture, or a refusal.
-        status, text, retry_after = first
-        if status == 200:
-            return Response(text, mimetype=_HLS_MIMETYPE, headers=_HLS_HEADERS)
-        return _text(text, status, retry_after=retry_after)
-
-    # A new tune takes 10 s or more to produce video, and Channels DVR gives up on a
-    # playlist whose response headers haven't arrived by then ("timeout awaiting
-    # response headers"). Send them and the first line now, the rest when it exists.
-    # The status is already 200, so a tune that fails from here ends in a comment.
-    def body():
-        yield _M3U_HEADER
-        for step in steps:
-            if step is not None:
-                status, text, _ = step
-                yield text.removeprefix(_M3U_HEADER) if status == 200 else f'# {" ".join(text.split())}\n'
-
-    return Response(body(), mimetype=_HLS_MIMETYPE,
-                    headers={**_HLS_HEADERS, 'X-Accel-Buffering': 'no'})
-
-
-def _tune(channel_id: int, name: str):
-    """Start or keep alive this channel's capture. Yields None for each second spent
-    waiting on a tune (or a waking tuner), then one (status, text, retry_after): the
-    playlist when status is 200, otherwise why there isn't one. Waiting for a busy
-    tuner yields nothing, so that refusal still goes out with its own status.
-
-    Runs partly after the request has ended, so it must not touch the database or
-    anything else tied to the app context."""
     deadline = time.monotonic() + _TUNE_WAIT_SECONDS
     started = time.monotonic()
     busy_since = None
@@ -256,39 +232,44 @@ def _tune(channel_id: int, name: str):
             else:
                 wait_until = deadline
             if body.get('retry_after') and now + 1 < wait_until:
-                if body.get('reason') == 'starting':
-                    yield None
                 time.sleep(1)
                 continue
-            _warn_limited(channel_id, '[capture] channel %s (%s): %s', channel_id, name, msg)
-            yield 503, msg, body.get('retry_after') or 10
-            return
+            _warn_limited(channel_id, '[capture] channel %s (%s): %s', channel_id, channel.name, msg)
+            return _text(msg, 503, retry_after=body.get('retry_after') or 10)
         if not logged and body.get('state') == 'tuning':
             # Only new tunes: the playlist is re-polled every ~2s while someone watches.
-            logger.info('[capture] channel %s (%s) tuning, session %s', channel_id, name,
+            logger.info('[capture] channel %s (%s) tuning, session %s', channel_id, channel.name,
                         body.get('session'))
             logged = True
         if body.get('state') == 'failed':
-            yield 502, f"Capture failed: {body.get('error') or 'unknown error'}", None
-            return
+            return _text(f"Capture failed: {body.get('error') or 'unknown error'}", 502)
         session_id = body.get('session') or ''
         if body.get('state') == 'live' and _SESSION_RE.match(session_id):
-            path = os.path.join(capture.SESSION_ROOT, session_id, 'index.m3u8')
+            session_dir = os.path.join(capture.SESSION_ROOT, session_id)
+            path = os.path.join(session_dir, 'index.m3u8')
+            mark = os.path.join(session_dir, _SERVED_MARK)
             try:
                 with open(path, encoding='utf-8') as fp:
                     playlist = fp.read()
             except OSError:
                 playlist = ''
-            if _segment_count(playlist) >= _MIN_SEGMENTS:
-                if time.monotonic() - started > 1:
-                    logger.info('[capture] channel %s ready after %.1fs (source video %s)',
-                                channel_id, time.monotonic() - started, body.get('video_size'))
-                yield 200, _rewrite(playlist, session_id), None
-                return
+            count = _segment_count(playlist)
+            waited = time.monotonic() - started
+            short = 0 < count < _MIN_SEGMENTS and (waited >= _SERVE_BY_SECONDS or os.path.exists(mark))
+            if count >= _MIN_SEGMENTS or short:
+                if waited > 1:
+                    logger.info('[capture] channel %s ready after %.1fs (source video %s)%s',
+                                channel_id, waited, body.get('video_size'),
+                                f', starting with {count} segment(s)' if short else '')
+                if short:
+                    try:
+                        open(mark, 'a').close()
+                    except OSError:
+                        pass
+                return Response(_rewrite(playlist, session_id),
+                                mimetype='application/vnd.apple.mpegurl', headers=_HLS_HEADERS)
         if time.monotonic() > deadline:
-            yield 504, f'Capture did not produce video within {_TUNE_WAIT_SECONDS}s.', 5
-            return
-        yield None
+            return _text(f'Capture did not produce video within {_TUNE_WAIT_SECONDS}s.', 504, retry_after=5)
         time.sleep(1)
 
 
@@ -399,7 +380,7 @@ def capture_action(action: str):
         data = request.get_json(silent=True) or {}
         was_active = capture.is_active()
         cfg = capture.read_config()
-        cfg.update({k: data[k] for k in ('enabled', 'max_tuners', 'quality', 'encoder', 'keep_warm') if k in data})
+        cfg.update({k: data[k] for k in ('enabled', 'max_tuners', 'quality', 'encoder', 'keep_warm', 'startup') if k in data})
         cfg = capture.write_config(cfg)
         capture.daemon_request('POST', '/reconcile', timeout=3)
         if capture.is_active() != was_active:

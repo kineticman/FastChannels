@@ -43,6 +43,7 @@ from . import (CHROME_BIN, DAEMON_HOST, DAEMON_PORT, PROFILES_DIR, HOME_DIR,
                INCOMPATIBLE_SOURCES, QUALITY_PRESETS, SESSION_ROOT, WATCH_BASE,
                GPU_BITRATE_FACTOR, is_restricted_error, mark_restricted, read_config, read_status,
                render_node, gpu_choices, supported_platform, COLD_IDLE_SECONDS,
+               STARTUP_PRESETS,
                WSL_MESA_MIN_MAJOR, WSL_VAAPI_ENV, wsl_gpu, wsl_libs_present)
 from . import installer
 
@@ -1289,6 +1290,7 @@ class Session:
         self.reloads = 0
         self.video_size = ''
         self.encoder: dict = {}
+        self.short_segments = STARTUP_PRESETS[read_config()['startup']]
         self.ffmpeg_started = 0.0
         self._stop = threading.Event()
         # Health samples for the Bridge page: ffmpeg -progress blocks (every 2 s)
@@ -1467,6 +1469,11 @@ class Session:
         t = self.tuner
         self.encoder = enc = dict(enc or ENCODER)
         pre, video = _video_encoder_args(t, enc)
+        short_keys, short_hls = [], []
+        if self.short_segments:
+            # Segments can only be cut on keyframes: force one a second while short.
+            short_keys = ['-force_key_frames', f'expr:lt(n_forced,{self.short_segments + 1})*gte(t,n_forced)']
+            short_hls = ['-hls_init_time', '1']
         cmd = [
             'ffmpeg', '-hide_banner', '-loglevel', 'warning', '-nostdin', *pre,
             '-thread_queue_size', '1024', '-f', 'x11grab', '-draw_mouse', '0',
@@ -1478,10 +1485,10 @@ class Session:
             # grabbed, the rest duplicated). Both inputs are wallclock-stamped, so
             # isync lines audio up with video and the offset can't happen.
             '-thread_queue_size', '1024', '-isync', '0', '-f', 'pulse', '-i', f'{t.sink}.monitor',
-            '-map', '0:v', '-map', '1:a', *video,
+            '-map', '0:v', '-map', '1:a', *video, *short_keys,
             '-c:a', 'aac', '-b:a', '160k', '-ar', '48000', '-ac', '2',
             '-progress', 'pipe:1', '-stats_period', '2',
-            '-f', 'hls', '-hls_time', '2', '-hls_list_size', '8',
+            '-f', 'hls', *short_hls, '-hls_time', '2', '-hls_list_size', '8',
             '-hls_flags', 'delete_segments+independent_segments+omit_endlist',
             '-hls_segment_filename', os.path.join(self.dir, 'seg_%06d.ts'),
             os.path.join(self.dir, 'index.m3u8'),

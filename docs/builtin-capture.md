@@ -89,6 +89,11 @@ Then choose:
   idle* frees that memory after 5 minutes with nothing playing, and the next
   channel takes about 8 seconds longer to start while Chrome opens.
 
+- **Startup buffer:** *Standard* is the default. *Faster start* shows a picture
+  about 3 seconds sooner, but holds less video in reserve, so it is more likely
+  to pause on a weak network or a busy machine. Applies from the next channel
+  that starts.
+
 Changes to tuners, quality or encoder wait until nothing is playing, so they
 never cut off someone who's watching.
 
