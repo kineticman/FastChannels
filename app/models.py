@@ -536,9 +536,8 @@ class AppSettings(db.Model):
     # user's own values instead of guessing what “normal” means for their device.
     fc_player_device_settings_backup = db.Column(db.Text, nullable=True)
     # UI-editable twin of the various FC_*_DEBUG env vars (see app/debug_flag.py) —
-    # the root logger is hard-capped at INFO (app/logfile.py), so this is what lets
-    # someone who can't add an environment variable and rebuild (most real users)
-    # turn on a module's opt-in diagnostic logging from Settings instead. Off by
+    # it lets someone who can't add an environment variable and rebuild (most real
+    # users) turn on logger.debug lines and opt-in diagnostics from Settings. Off by
     # default: this is meant to be flipped on briefly while reproducing a specific
     # issue, not left running.
     debug_logging_enabled = db.Column(db.Boolean, nullable=False, default=False, server_default=db.text('0'))

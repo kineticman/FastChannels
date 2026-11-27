@@ -16,7 +16,7 @@ import secrets
 import threading
 import time as _time
 from datetime import datetime, timedelta, timezone
-from urllib.parse import quote as _url_quote, urljoin, urlsplit, urlunsplit, parse_qs as _parse_qs
+from urllib.parse import quote as _url_quote, unquote, urljoin, urlsplit, urlunsplit, parse_qs as _parse_qs
 
 import requests as _requests
 from werkzeug.exceptions import HTTPException
@@ -280,6 +280,54 @@ def get_recent_proxy_failures(since: float | None = None) -> list[dict]:
         return events
     except Exception:
         return []
+
+
+# DASH manifest requests can repeat for as long as someone watches, so their [play]
+# line is written once per start. These routes resolve on their own instead of
+# going through play(), which writes it for the rest.
+_UNLOGGED_DASH_ENDPOINTS = frozenset('play.' + name for name in (
+    'amazon_dash_proxy', 'roku_dash_proxy', 'spectrum_dash_proxy', 'hulu_live_dash',
+    'dazn_tve_dash', 'fubo_dash_proxy', 'philo_dash_proxy', 'sling_dash_proxy',
+    'vidaa_dash_proxy', 'pbs_dash_proxy', 'nbc_tve_dash_proxy',
+))
+_DASH_TUNE_QUIET_SECONDS = 30
+
+
+def _new_dash_tune(source_name: str, raw_id: str, client_ip: str) -> bool:
+    """True when this client hasn't asked for this manifest in the last 30 s."""
+    rdb = _watch_debug_redis()
+    if not rdb:
+        return True    # no Redis: better a repeated line than none
+    key = f'play_tune:{source_name}:{raw_id}:{client_ip}'
+    try:
+        if rdb.set(key, 1, nx=True, ex=_DASH_TUNE_QUIET_SECONDS):
+            return True
+        rdb.expire(key, _DASH_TUNE_QUIET_SECONDS)
+        return False
+    except Exception:
+        return True
+
+
+@play_bp.before_request
+def _log_dash_tune() -> None:
+    """The [play] line for those routes: once when a client starts a channel, then
+    nothing while its requests keep coming."""
+    if request.endpoint not in _UNLOGGED_DASH_ENDPOINTS:
+        return
+    source_name = request.path.split('/')[2]
+    raw_id = unquote(request.view_args['channel_id'])
+    client_ip = _client_ip()
+    if not _new_dash_tune(source_name, raw_id, client_ip):
+        return
+    channel = (
+        Channel.query
+        .join(Source)
+        .filter(Source.name == source_name, Channel.source_channel_id == raw_id)
+        .first()
+    )
+    if channel:    # an unknown channel is the route's 404
+        logger.info('[play] request_id=%s ip=%s source=%s channel_id=%s channel_name=%s',
+                    getattr(g, 'request_id', '-'), client_ip, source_name, raw_id, channel.name)
 
 
 def _client_ip() -> str:
@@ -3336,6 +3384,8 @@ def play(source_name: str, channel_id: str):
     # (cnn_manifest_response); the tune itself is logged by the bridge trigger or the
     # watch page, and a new CNN stream session by cnn_tve.resolve().
     _quiet = source_name == 'custom' or (source_name == 'cnn_tve' and request.path.endswith('/dash.mpd'))
+    if not _quiet and request.path.endswith('/dash.mpd'):
+        _quiet = not _new_dash_tune(source_name, channel_id, client_ip)
     _log_play_req = logger.debug if _quiet else logger.info
     _log_play_req(
         '[play] request_id=%s ip=%s source=%s channel_id=%s channel_name=%s',
@@ -3434,6 +3484,7 @@ def play(source_name: str, channel_id: str):
     if source_name == 'nbc_tve' or (source_name == 'pbs' and (channel.stream_type or '').lower() == 'dash'):
         from urllib.parse import quote as _quote
         encoded_id = _quote(channel.source_channel_id, safe='')
+        _new_dash_tune(source_name, channel.source_channel_id, client_ip)    # logged above
         return redirect(
             f"{request.host_url.rstrip('/')}/play/{source_name}/{encoded_id}/dash.mpd",
             302,
@@ -3753,7 +3804,9 @@ def play(source_name: str, channel_id: str):
 
     logger.debug(
         '[play] redirect request_id=%s ip=%s source=%s channel_id=%s channel_name=%s → %s',
-        getattr(g, 'request_id', '-'), client_ip, source_name, channel_id, channel.name, resolved_url[:80],
+        getattr(g, 'request_id', '-'), client_ip, source_name, channel_id, channel.name,
+        # A playlist URL can carry its key in the path.
+        _redact_url(resolved_url) if source_name == 'custom' or is_playlist_source(source_name) else resolved_url[:80],
     )
     if source_name == 'custom':
         _log_custom_play_path(
@@ -4090,6 +4143,11 @@ def watch_debug(channel_id):
     compact_state = {k: v for k, v in state.items() if v is not None}
     compact_extra = {str(k)[:40]: str(v)[:800] for k, v in extra.items()}
     _record_watch_debug_snapshot(debug_request_id, channel, event, compact_state, extra)
+    # Logged only with debug logging on (Settings → Advanced), ?debug=1 or not. The
+    # snapshot above is kept either way: the bridge diagnostics test reads it.
+    from ..debug_flag import debug_logging_enabled
+    if not debug_logging_enabled():
+        return Response(status=204)
     logger.info(
         '[watch-debug] request_id=%s event=%s ip=%s channel_id=%s source=%s source_channel_id=%s channel_name=%s state=%s extra=%s',
         debug_request_id,

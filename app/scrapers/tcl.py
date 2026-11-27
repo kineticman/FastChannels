@@ -217,7 +217,8 @@ class TCLScraper(BaseScraper):
 
                 is_spanish_cat = (cat_name or "").lower() in _SPANISH_CAT_NAMES
 
-                for ch in payload.get("channels", []):
+                # TCL answers some rows ("Recommended for You") with a bare JSON null.
+                for ch in (payload or {}).get("channels") or []:
                     bundle_id = str(ch.get("bundle_id") or ch.get("id"))
                     name = ch.get("name", "")
 
@@ -282,7 +283,7 @@ class TCLScraper(BaseScraper):
                 except Exception:
                     continue
 
-                for ch in payload.get("channels", []):
+                for ch in (payload or {}).get("channels") or []:
                     bundle_id = str(ch.get("bundle_id") or ch.get("id"))
                     ch_poster = ch.get("poster_h_small") or ch.get("poster_h_medium") or ch.get("poster_v_small")
                     ch_poster_url = self._fix_url(ch_poster)

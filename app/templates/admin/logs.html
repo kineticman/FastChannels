@@ -160,8 +160,8 @@
     // so a traceback line that mentions ERROR isn't read as one.
     const LEVEL_RE = /^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d,\d{3}\s+(INFO|WARNING|ERROR|CRITICAL|DEBUG)\s/;
 
-    // The root logger is capped at INFO (app/logfile.py), so opt-in debug
-    // logging (app/debug_flag.py) is written at INFO under a tag such as
+    // Besides DEBUG-level lines, some opt-in diagnostics (app/debug_flag.py) are
+    // written at INFO under a tag such as
     // [amazon-sports debug] or [audit-debug]; count those as Debug.
     const DEBUG_TAG_RE = /\[[^\]]*\bdebug\]/i;
 

@@ -544,7 +544,7 @@ def run_nbc_browser_login(mso_id: str, _attempt: int = 1, _deadline: float | Non
                         try:
                             _apply_sling_browser_login_input(page, _json_login.loads(raw))
                         except Exception as exc:  # noqa: BLE001
-                            logger.debug('[nbc-mvpd-login] input apply failed: %s', exc)
+                            logger.debug('[nbc-mvpd-login] input apply failed: %s', type(exc).__name__)
 
                     now = time.monotonic()
                     if current_job and now - last_heartbeat > 60:

@@ -6,11 +6,12 @@ Public (DVR clients can't sign in):
     /feeds/<slug>/m3u/combined/capture   whole feed in one playlist (auto routing)
     /play/capture/<id>.m3u8              start/keep alive a capture, return its HLS playlist
     /play/capture/s/<session>/<segment>  HLS segments, read straight from disk
+    /play/capture/<id>.ts                the same capture as one MPEG-TS stream (experimental)
 
 Admin:
     GET  /api/capture/status
     POST /api/capture/install | uninstall | update-chrome
-    POST /api/capture/config             {enabled, max_tuners, quality, encoder}
+    POST /api/capture/config             {enabled, max_tuners, quality, encoder, keep_warm, startup, stream_format}
     POST /api/capture/sessions/<id>/stop end a capture (a client still watching retunes)
 
 The playlist route is the session's keep-alive: the daemon stops a capture once
@@ -42,10 +43,20 @@ _TUNE_WAIT_SECONDS = 50
 # is handed over once unpolled for ~6 s) but turns a real overflow away quickly, so
 # a single-playlist source with no stream limit fails fast instead of hanging.
 _BUSY_WAIT_SECONDS = 10
+# POST /sessions can take this long to answer: taking over an abandoned tuner, the
+# daemon first waits up to 10 s for the old session to shut down. A shorter timeout
+# here turned a slow shutdown into a 503 (2026-11-26).
+_SESSION_CALL_TIMEOUT = 15
 # Players start ~3 target durations back from the live edge (HLS spec 6.3.3). With
 # fewer segments than that they start AT the edge and rebuffer before every new
 # segment — VLC logged a stall per 2 s segment for the first ~45 s with 2 here.
 _MIN_SEGMENTS = 3
+# Channels DVR gives an HLS request 15 s in all (its developer's figure; they won't
+# raise it), and sending the headers early doesn't extend that. Past this long, send
+# what there is, even one segment; a thinner start beats a failed tune.
+_SERVE_BY_SECONDS = 12
+# Marks a session served that way, so its next polls aren't held for three segments.
+_SERVED_MARK = '.served'
 _HLS_HEADERS = {'Cache-Control': 'no-cache, no-store'}
 
 
@@ -186,7 +197,11 @@ def _segment_count(playlist: str) -> int:
 def _rewrite(playlist: str, session_id: str) -> str:
     out = []
     for line in playlist.splitlines():
-        if line and not line.startswith('#'):
+        if line.startswith('#EXT-X-TARGETDURATION:'):
+            # With short startup segments ffmpeg says 1 while only those are listed,
+            # then 2. The target may not change during a stream: it is 2 from the start.
+            line = '#EXT-X-TARGETDURATION:2'
+        elif line and not line.startswith('#'):
             line = f'/play/capture/s/{session_id}/{os.path.basename(line)}'
         out.append(line)
     return '\n'.join(out) + '\n'
@@ -208,7 +223,8 @@ def capture_playlist(channel_id: int):
     busy_since = None
     logged = False
     while True:
-        code, body = capture.daemon_request('POST', '/sessions', json={'channel_id': channel_id}, timeout=5)
+        code, body = capture.daemon_request('POST', '/sessions', json={'channel_id': channel_id},
+                                              timeout=_SESSION_CALL_TIMEOUT)
         if code != 200:
             msg = body.get('error') or f'capture service returned HTTP {code}'
             # Busy/starting are usually seconds from clearing: a channel change leaves
@@ -235,16 +251,27 @@ def capture_playlist(channel_id: int):
             return _text(f"Capture failed: {body.get('error') or 'unknown error'}", 502)
         session_id = body.get('session') or ''
         if body.get('state') == 'live' and _SESSION_RE.match(session_id):
-            path = os.path.join(capture.SESSION_ROOT, session_id, 'index.m3u8')
+            session_dir = os.path.join(capture.SESSION_ROOT, session_id)
+            path = os.path.join(session_dir, 'index.m3u8')
+            mark = os.path.join(session_dir, _SERVED_MARK)
             try:
                 with open(path, encoding='utf-8') as fp:
                     playlist = fp.read()
             except OSError:
                 playlist = ''
-            if _segment_count(playlist) >= _MIN_SEGMENTS:
-                if time.monotonic() - started > 1:
-                    logger.info('[capture] channel %s ready after %.1fs (source video %s)',
-                                channel_id, time.monotonic() - started, body.get('video_size'))
+            count = _segment_count(playlist)
+            waited = time.monotonic() - started
+            short = 0 < count < _MIN_SEGMENTS and (waited >= _SERVE_BY_SECONDS or os.path.exists(mark))
+            if count >= _MIN_SEGMENTS or short:
+                if waited > 1:
+                    logger.info('[capture] channel %s ready after %.1fs (source video %s)%s',
+                                channel_id, waited, body.get('video_size'),
+                                f', starting with {count} segment(s)' if short else '')
+                if short:
+                    try:
+                        open(mark, 'a').close()
+                    except OSError:
+                        pass
                 return Response(_rewrite(playlist, session_id),
                                 mimetype='application/vnd.apple.mpegurl', headers=_HLS_HEADERS)
         if time.monotonic() > deadline:
@@ -262,6 +289,146 @@ def capture_segment(session_id: str, segment: str):
     resp = send_file(path, mimetype='video/mp2t', conditional=False, etag=False)
     resp.headers['Cache-Control'] = 'no-cache'
     return resp
+
+
+# ── one MPEG-TS stream (experimental) ─────────────────────────────────────────
+# Channels DVR gives an HLS request 15 s, but an MPEG-TS stream that answers at once
+# and sends NULL packets was still accepted with video at 28 s (measured 2026-11-26).
+# The video is the HLS session's own segments, passed along as they appear.
+# One long request per viewer: gunicorn.conf.py keeps that worker from recycling.
+
+_TS_NULL = (b'\x47\x1f\xff\x10' + b'\xff' * 184) * 7
+_TS_STALL_SECONDS = 45      # no new segment for this long (tune or mid-stream): give up
+_TS_GAP_SECONDS = 4         # mid-stream, longer than segments (2 s) normally leave
+_TS_JOIN_SEGMENTS = 2       # joining a capture already running: start this far back
+# How long a busy tune stays silent (so a real "all tuners busy" can still be a 503)
+# before starting the filler for a tuner that is being freed.
+_TS_QUIET_SECONDS = 4
+# Not polled for this long, in whole seconds: its viewer has left (a watched capture
+# is polled every second or so).
+_TS_ABANDONED_IDLE = 3
+_SEGMENT_LINE_RE = re.compile(r'^(?:.*/)?(seg_(\d{6})\.ts)$', re.M)
+
+
+def _ts_stream(channel_id: int, name: str):
+    started = last_data = last_poll = time.monotonic()
+    session_id, state, sent_upto, total, video_at = '', '', None, 0, None
+    busy_since = None
+    try:
+        yield _TS_NULL
+        while True:
+            now = time.monotonic()
+            if now - last_poll >= 1 or not session_id:
+                # Also the session's keep-alive.
+                code, body = capture.daemon_request('POST', '/sessions', json={'channel_id': channel_id},
+                                              timeout=_SESSION_CALL_TIMEOUT)
+                last_poll = now
+                if code == 200:
+                    state = body.get('state')
+                    if state == 'failed':
+                        logger.warning('[capture-ts] channel %s (%s): capture failed: %s',
+                                       channel_id, name, body.get('error'))
+                        return
+                    new_id = body.get('session') or ''
+                    if new_id != session_id and _SESSION_RE.match(new_id):
+                        session_id, sent_upto = new_id, None
+                    busy_since = None
+                elif body.get('reason') == 'busy':
+                    # Also when our session is gone and its tuner went to someone else.
+                    session_id, state = '', ''
+                    busy_since = busy_since or now
+                    if now - busy_since > _BUSY_WAIT_SECONDS:
+                        logger.warning('[capture-ts] channel %s (%s): %s', channel_id, name, body.get('error'))
+                        return
+                elif code and not body.get('retry_after'):
+                    logger.warning('[capture-ts] channel %s (%s): %s', channel_id, name, body.get('error'))
+                    return
+            wrote = False
+            if state == 'live' and session_id:
+                session_dir = os.path.join(capture.SESSION_ROOT, session_id)
+                try:
+                    with open(os.path.join(session_dir, 'index.m3u8'), encoding='utf-8') as fp:
+                        segments = [(int(n), f) for f, n in _SEGMENT_LINE_RE.findall(fp.read())]
+                except OSError:
+                    segments = []
+                if segments:
+                    if sent_upto is None:
+                        sent_upto = segments[max(0, len(segments) - _TS_JOIN_SEGMENTS)][0] - 1
+                    elif segments[-1][0] < sent_upto:
+                        sent_upto = -1      # FFmpeg was restarted (GPU fallback)
+                for number, filename in segments:
+                    if number <= sent_upto:
+                        continue
+                    try:
+                        with open(os.path.join(session_dir, filename), 'rb') as fp:
+                            data = fp.read()
+                    except OSError:
+                        data = b''          # already deleted: we fell behind
+                    sent_upto = number
+                    if not data:
+                        continue
+                    if video_at is None:
+                        video_at = time.monotonic()
+                        logger.info('[capture-ts] channel %s (%s): video after %.1fs',
+                                    channel_id, name, video_at - started)
+                    yield data
+                    total += len(data)
+                    last_data, wrote = time.monotonic(), True
+            if time.monotonic() - last_data > _TS_STALL_SECONDS:
+                logger.warning('[capture-ts] channel %s (%s): no video for %ds', channel_id, name,
+                               _TS_STALL_SECONDS)
+                return
+            if not wrote:
+                if video_at is None or time.monotonic() - last_data > _TS_GAP_SECONDS:
+                    yield _TS_NULL          # keeps the DVR waiting through a tune or retune
+                time.sleep(0.25)
+    finally:
+        # Also reached when the client goes away, which only a write notices.
+        logger.info('[capture-ts] channel %s (%s): stream closed after %.0fs, %.1f MB',
+                    channel_id, name, time.monotonic() - started, total / 1e6)
+
+
+def _tuner_being_freed() -> bool:
+    code, health = capture.daemon_request('GET', '/health', timeout=5)
+    return code == 200 and any(
+        x.get('state') in ('tuning', 'live') and (x.get('idle_s') or 0) >= _TS_ABANDONED_IDLE
+        for x in health.get('sessions') or [])
+
+
+@capture_bp.route('/play/capture/<int:channel_id>.ts')
+def capture_ts(channel_id: int):
+    if not capture.is_active():
+        return _text('Built-in capture is not installed or is turned off.', 503)
+    channel = Channel.query.get_or_404(channel_id)
+    if channel.source and channel.source.name in capture.INCOMPATIBLE_SOURCES:
+        return _text(f'{channel.source.display_name} refuses Linux Chrome; it cannot be captured.', 422)
+    if channel.id in capture.restricted_channel_ids():
+        return _text(f'{channel.name} is only allowed on hardware players (its license keys are '
+                     'restricted), so Built-in Capture skips it. Use FastChannels Player for it.', 422)
+    name = channel.name
+    # A busy or unavailable tuner is refused with a status before the stream starts.
+    # But a channel change must not stay silent while the old capture is freed
+    # (headers took 12.5 s once; Channels allows about 20): once a tuner's viewer
+    # is clearly gone, start the filler and wait inside the stream.
+    started = time.monotonic()
+    deadline = started + _BUSY_WAIT_SECONDS
+    while True:
+        code, body = capture.daemon_request('POST', '/sessions', json={'channel_id': channel_id},
+                                              timeout=_SESSION_CALL_TIMEOUT)
+        if code == 200 and body.get('state') == 'failed':
+            return _text(f"Capture failed: {body.get('error') or 'unknown error'}", 502)
+        if code == 200 or body.get('reason') == 'starting':
+            break
+        if (body.get('reason') == 'busy' and time.monotonic() - started >= _TS_QUIET_SECONDS
+                and _tuner_being_freed()):
+            break
+        if body.get('reason') != 'busy' or time.monotonic() + 1 >= deadline:
+            msg = body.get('error') or f'capture service returned HTTP {code}'
+            _warn_limited(channel_id, '[capture-ts] channel %s (%s): %s', channel_id, name, msg)
+            return _text(msg, 503, retry_after=body.get('retry_after') or 10)
+        time.sleep(1)
+    return Response(_ts_stream(channel_id, name), mimetype='video/mp2t',
+                    headers={**_HLS_HEADERS, 'X-Accel-Buffering': 'no'})
 
 
 # ── admin API ─────────────────────────────────────────────────────────────────
@@ -311,17 +478,22 @@ def capture_status():
         })
     health['incompatible_names'] = _source_names(capture.INCOMPATIBLE_SOURCES)
     health['gpu'] = capture.gpu_info()
-    health['channel_names'] = _channel_names(
+    health['channel_names'], health['channel_sources'] = _channel_labels(
         {x.get('channel_id') for x in health.get('sessions') or [] if x.get('channel_id')})
     return jsonify(health)
 
 
-def _channel_names(ids) -> dict:
+def _channel_labels(ids) -> tuple[dict, dict]:
+    """({channel id: channel name}, {channel id: source's display name})."""
     if not ids:
-        return {}
-    from ..models import Channel
-    rows = Channel.query.with_entities(Channel.id, Channel.name).filter(Channel.id.in_(ids)).all()
-    return {str(cid): name for cid, name in rows}
+        return {}, {}
+    from ..models import Channel, Source
+    # Named columns only: Source.config can be megabytes.
+    rows = (Channel.query.join(Source)
+            .with_entities(Channel.id, Channel.name, Source.name, Source.display_name)
+            .filter(Channel.id.in_(ids)).all())
+    return ({str(cid): name for cid, name, _, _ in rows},
+            {str(cid): display or source for cid, _, source, display in rows})
 
 
 @capture_bp.get('/api/capture/gpu-diagnostics')
@@ -354,15 +526,19 @@ def capture_action(action: str):
         data = request.get_json(silent=True) or {}
         was_active = capture.is_active()
         cfg = capture.read_config()
-        cfg.update({k: data[k] for k in ('enabled', 'max_tuners', 'quality', 'encoder', 'keep_warm') if k in data})
+        was_format = cfg['stream_format']
+        cfg.update({k: data[k] for k in ('enabled', 'max_tuners', 'quality', 'encoder', 'keep_warm', 'startup', 'stream_format') if k in data})
         cfg = capture.write_config(cfg)
         capture.daemon_request('POST', '/reconcile', timeout=3)
         if capture.is_active() != was_active:
             global _last_active
             _last_active = capture.is_active()
             _apply_capture_change()
+        elif cfg['stream_format'] != was_format:
+            from .tasks import trigger_xml_refresh
+            trigger_xml_refresh()           # the capture playlists' links change
         return jsonify({'ok': True, 'config': cfg})
-    if action not in ('install', 'uninstall', 'update-chrome'):
+    if action not in ('install', 'uninstall', 'update-chrome', 'intel-newer', 'intel-standard'):
         abort(404)
     code, body = capture.daemon_request('POST', f'/{action}', timeout=5)
     if code == 0:

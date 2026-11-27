@@ -4,9 +4,11 @@ Both processes write to the same file so /admin/logs can show everything.
 """
 import logging
 import os
+import re
 from collections import deque
 from datetime import datetime
 from logging.handlers import RotatingFileHandler
+from .debug_flag import debug_logging_cached
 from .timezone_utils import current_zoneinfo
 
 LOG_PATH = os.environ.get('LOG_FILE', '/tmp/fastchannels.log')
@@ -25,6 +27,65 @@ class _TimezoneFormatter(logging.Formatter):
 _FORMATTER = _TimezoneFormatter('%(asctime)s %(levelname)-8s %(name)s: %(message)s')
 
 
+# What a debug line must not carry into a log someone pastes into a forum.
+# A playlist or custom stream can keep its key anywhere in a URL, so every URL is
+# cut to scheme, host and file type.
+_URL_RE = re.compile(r"""(https?://)(?:[^/\s'"@]+@)?([^/\s'"?#]*)([/?#][^\s'"]*)?""")
+_FILE_TYPE_RE = re.compile(r'\.(m3u8|m3u|mpd|ts|m4s|mp4|aac|vtt|json|xml|key|jpg|png)$', re.IGNORECASE)
+_SECRET_PATTERNS = tuple((re.compile(pattern, re.IGNORECASE), repl) for pattern, repl in (
+    (r"""(with url: )/[^\s'"]*""", r'\1/…'),                                 # requests' error text
+    (r"""\?[\w.%\[\]~-]+=[^\s'"]*""", '?[redacted]'),                        # relative URL's query
+    (r"""/(live|movie|series|timeshift)/[^/\s'"]+/[^/\s'"]+/""", r'/\1/[redacted]/[redacted]/'),  # Xtream
+    (r"""\b(hdnts|hdntl|hdnea)=[^/\s'"]+""", r'\1=[redacted]'),              # Akamai token in a path
+    (r'\beyJ[\w-]{8,}\.[\w-]+\.[\w-]*', '[redacted-token]'),                 # JWT
+    (r'\b(Bearer)\s+[\w.~+/=-]{8,}', r'\1 [redacted]'),
+    # token=..., csrf=..., 'password': '...' and the like
+    (r"""((?:token|csrf|passw(?:or)?d|secret|cookie|authorization|api[_-]?key|session[_-]?id)"""
+     r"""(?:["']?\s*=\s*["']?|["']\s*:\s*["']))(?!\[redacted)[^\s'",}&;]{6,}""", r'\1[redacted]'),
+))
+
+
+def _short_url(match) -> str:
+    scheme, host, rest = match.group(1), match.group(2), match.group(3) or ''
+    # Punctuation that belongs to the sentence around the URL.
+    tail = rest[len(rest.rstrip(').,:;]')):]
+    rest = rest[:len(rest) - len(tail)]
+    if rest in ('', '/'):
+        return scheme + host + rest + tail
+    file_type = _FILE_TYPE_RE.search(rest.split('?')[0].split('#')[0])
+    return f"{scheme}{host}/…{file_type.group(0) if file_type else ''}{tail}"
+
+
+def redact(text: str) -> str:
+    text = _URL_RE.sub(_short_url, text)
+    for pattern, repl in _SECRET_PATTERNS:
+        text = pattern.sub(repl, text)
+    return text
+
+
+class _DebugGate(logging.Filter):
+    """On every output: drops debug lines unless debug logging is on
+    (Settings → Advanced, or FC_DEBUG), and strips secrets from those it lets
+    through. INFO and above pass untouched."""
+
+    def filter(self, record):
+        if record.levelno >= logging.INFO:
+            return True
+        if not debug_logging_cached():
+            return False
+        try:
+            record.msg, record.args = redact(record.getMessage()), ()
+            if record.exc_info:
+                record.exc_text = redact(logging.Formatter().formatException(record.exc_info))
+                record.exc_info = None
+        except Exception:    # a line we can't clean is a line we don't write
+            return False
+        return True
+
+
+_DEBUG_GATE = _DebugGate()
+
+
 def setup():
     """Attach a FileHandler to the root logger (idempotent)."""
     root = logging.getLogger()
@@ -39,7 +100,6 @@ def setup():
     has_stream = any(isinstance(h, logging.StreamHandler) for h in root.handlers)
     if not has_stream:
         sh = logging.StreamHandler()
-        sh.setLevel(logging.INFO)
         sh.setFormatter(_FORMATTER)
         root.addHandler(sh)
 
@@ -47,9 +107,16 @@ def setup():
         if isinstance(h, (logging.StreamHandler, logging.FileHandler)):
             h.setFormatter(_FORMATTER)
 
-    for h in root.handlers:
-        if isinstance(h, logging.FileHandler) and getattr(h, 'baseFilename', '') == LOG_PATH:
-            return
+    # Our own loggers make debug records all the time; the gate on each output
+    # decides, so the setting works without a restart. Libraries stay at INFO.
+    for name in ('app', '__main__'):
+        logging.getLogger(name).setLevel(logging.DEBUG)
+
+    has_file = any(isinstance(h, logging.FileHandler) and getattr(h, 'baseFilename', '') == LOG_PATH
+                   for h in root.handlers)
+    if has_file:
+        _gate(root)
+        return
 
     parent = os.path.dirname(LOG_PATH)
     if parent:
@@ -63,6 +130,13 @@ def setup():
     fh.setLevel(logging.DEBUG)
     fh.setFormatter(_FORMATTER)
     root.addHandler(fh)
+    _gate(root)
+
+
+def _gate(root: logging.Logger) -> None:
+    for h in root.handlers:
+        h.setLevel(logging.DEBUG)
+        h.addFilter(_DEBUG_GATE)    # a no-op if it already has it
 
 
 def tail(n: int = 2500) -> list[str]:

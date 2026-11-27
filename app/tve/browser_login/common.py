@@ -79,6 +79,7 @@ def install_browser_login_activity_log(redis_conn):
     except Exception:  # noqa: BLE001
         pass
     handler = _BrowserLoginActivityLogHandler(redis_conn)
+    handler.setLevel(logging.INFO)    # the sign-in window never shows debug lines
     logging.getLogger('app.tve.browser_login').addHandler(handler)
     return handler
 
@@ -122,6 +123,19 @@ def _same_page_url(actual: str, expected: str) -> bool:
 
 
 _MVPD_TRANSITIONAL_URL_MARKERS = ('/saml/module.php/', '/api/v2/authenticate/')
+# Under /saml/module.php/ but a real login form a human has to fill in, not a
+# hop: Dish's is identity1.dishnetwork.com/saml/module.php/authSynacor/login.php.
+_MVPD_LOGIN_FORM_URL_MARKERS = ('/saml/module.php/authSynacor/login',)
+
+
+def _is_transitional_mvpd_url(url: str | None) -> bool:
+    if not url:
+        return False
+    # Path only: a relay's query string can name the login page it will return to.
+    path = _urlsplit(url).path
+    if any(marker in path for marker in _MVPD_LOGIN_FORM_URL_MARKERS):
+        return False
+    return any(marker in path for marker in _MVPD_TRANSITIONAL_URL_MARKERS)
 
 
 def _settle_after_mvpd_navigation(
@@ -242,13 +256,10 @@ def _settle_after_mvpd_navigation(
         if current_url != last_url:
             last_url = current_url
             stable_since = now
-        is_known_transitional = bool(current_url) and any(
-            marker in current_url for marker in _MVPD_TRANSITIONAL_URL_MARKERS
-        )
-        if not is_known_transitional and stable_since is not None and now - stable_since >= 1.5:
+        if not _is_transitional_mvpd_url(current_url) and stable_since is not None and now - stable_since >= 1.5:
             return True
         page.wait_for_timeout(200)
-    still_stuck = bool(last_url) and any(marker in last_url for marker in _MVPD_TRANSITIONAL_URL_MARKERS)
+    still_stuck = _is_transitional_mvpd_url(last_url)
     if still_stuck:
         # Confirm the known soft-block signature (an empty <body></body> —
         # the page never actually rendered its real interstitial at all,
@@ -737,7 +748,8 @@ def _try_autofill_credentials(
         logger.info('[%s] autofill: gave up — could not get a stable filled form url=%s', log_tag, _safe_page_url(page))
         return False
     except Exception as exc:  # noqa: BLE001
-        logger.info('[%s] autofill: exception mid-fill: %s', log_tag, exc)
+        # The type only: Playwright's message can quote what was being typed.
+        logger.info('[%s] autofill: exception mid-fill: %s', log_tag, type(exc).__name__)
         return False
 
 
@@ -905,7 +917,7 @@ def _autofill_xfinity_credentials(
     except _XfinityAutofillCancelled:
         return False
     except Exception as exc:  # noqa: BLE001
-        logger.info('[mvpd-login] xfinity autofill: exception mid-fill: %s', exc)
+        logger.info('[mvpd-login] xfinity autofill: exception mid-fill: %s', type(exc).__name__)
         return False
 
     for _ in range(8):
@@ -1337,7 +1349,7 @@ def _autofill_spectrum_sso_confirm(page) -> bool:
             page.wait_for_timeout(150)
         return True
     except Exception as exc:  # noqa: BLE001
-        logger.debug('[mvpd-login] spectrum SSO-confirm autofill failed: %s', exc)
+        logger.debug('[mvpd-login] spectrum SSO-confirm autofill failed: %s', type(exc).__name__)
         return False
 
 

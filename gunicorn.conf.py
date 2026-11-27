@@ -1,5 +1,6 @@
 import logging
 import re
+import sys
 
 
 # Suppress high-frequency / low-signal endpoints from the access log.
@@ -132,6 +133,15 @@ _FREE_NETWORKS_PROXY_QUERY_RE = re.compile(
 _RELAY_QUERY_RE = re.compile(r'("(?:GET|HEAD) /play/[^/ ]+/[^/ ]+/relay)\?[^ ]+')
 
 
+# Successful requests that say nothing the app's own log doesn't: shown only with
+# debug logging on (Settings → Advanced). Failures always show.
+_DEBUG_ONLY_RE = re.compile(
+    r'"POST /watch/\d+/debug[ ?]'                   # the app logs the report itself
+    r'|"(?:GET|HEAD) /(?:m3u|epg\.xml)[ ?]'          # healthy DVR polling, like /feeds/
+    r'|"(?:GET|HEAD) /play/[^/ ]+/[^/ ]+/dash\.mpd[ ?]'  # the [play] line covers it
+    r'|"POST /play/roku/license\?')
+
+
 class _AccessFilter(logging.Filter):
     def filter(self, record):
         msg = record.getMessage()
@@ -144,6 +154,10 @@ class _AccessFilter(logging.Filter):
             return False
         if is_success and _LICENSE_RE.search(msg):
             return False
+        if is_success and _DEBUG_ONLY_RE.search(msg):
+            from app.debug_flag import debug_logging_cached
+            if not debug_logging_cached():
+                return False
         if any(p in msg for p in _SUPPRESS_PATTERNS):
             return False
         if _SUPPRESS_RE.search(msg):
@@ -204,3 +218,24 @@ def on_starting(server):
 
     logging.getLogger('gunicorn.access').addFilter(_AccessFilter())
     logging.getLogger('gunicorn.error').addFilter(_TLSHandshakeFilter())
+
+
+# A capture MPEG-TS stream is one request that lasts as long as the viewing, and a
+# worker recycled by --max-requests kills open requests after 30 s. A worker
+# serving one therefore doesn't recycle until its last stream ends.
+_LONG_STREAM_RE = re.compile(r'^/play/capture/\d+\.ts$')
+
+
+def pre_request(worker, req):
+    if _LONG_STREAM_RE.match(req.path):
+        if not getattr(worker, 'fc_streams', 0):
+            worker.fc_streams, worker.fc_max_requests = 0, worker.max_requests
+            worker.max_requests = sys.maxsize
+        worker.fc_streams += 1
+
+
+def post_request(worker, req, environ, resp):
+    if _LONG_STREAM_RE.match(req.path) and getattr(worker, 'fc_streams', 0):
+        worker.fc_streams -= 1
+        if not worker.fc_streams:
+            worker.max_requests = worker.fc_max_requests

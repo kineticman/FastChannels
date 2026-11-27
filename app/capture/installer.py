@@ -50,6 +50,21 @@ GPU_TOOLS = ('vainfo', 'i965-va-driver')
 NONFREE_FOR = {'intel-media-va-driver': 'intel-media-va-driver-non-free',
                'i965-va-driver': 'i965-va-driver-shaders'}
 INTEL_STATE_PATH = os.path.join(ADDON_DIR, 'intel_driver.json')
+# Panther Lake (PCI ids from the kernel's INTEL_PTL_IDS) needs a newer iHD than
+# trixie's 25.2.3, which predates its H.264 encoder (upstream added PTL encoding
+# in 25.2.6). Only these chips get the driver, and the libraries it requires, from
+# Debian testing, and only when the standard driver's test encode fails.
+PANTHER_LAKE_IDS = frozenset(f'8086:{d}' for d in (
+    'B080', 'B081', 'B082', 'B083', 'B084', 'B085', 'B086', 'B087', 'B08F', 'B090', 'B0A0', 'B0A1', 'B0B0'))
+NEWER_FROM = {'trixie': 'forky'}       # image's Debian release -> where the newer driver is
+NEWER_PACKAGES = ('intel-media-va-driver', 'libva2', 'libigdgmm12')
+# The libva front ends must all match libva2's version exactly: leave one behind
+# (FFmpeg uses libva-x11-2) and apt removes FFmpeg to upgrade libva2. Whichever
+# of these are installed move with it.
+LIBVA_FRONTENDS = ('libva-drm2', 'libva-x11-2', 'libva-wayland2', 'libva-glx2')
+NEWER_MIN_MAJOR = 26
+NEWER_LIST = '/etc/apt/sources.list.d/fastchannels-capture-newer.list'
+NEWER_PIN = '/etc/apt/preferences.d/fastchannels-capture-newer'
 NONFREE_LIST = '/etc/apt/sources.list.d/fastchannels-capture-nonfree.list'
 BACKPORTS_LIST = '/etc/apt/sources.list.d/fastchannels-capture-backports.list'
 CAPTURE_USER = 'fccapture'
@@ -119,7 +134,8 @@ def gpu_drivers_present() -> bool:
 
 def intel_state() -> dict:
     """{'nonfree': True} when this server needs Intel's non-free drivers,
-    {'failed_on': <FastChannels version>} when they didn't help either, else {}.
+    {'newer': True} when it needs the newer driver (Panther Lake),
+    {'failed_on': <FastChannels version>} when the other driver didn't help either, else {}.
     'restore': True means an attempt didn't finish: put the free drivers back."""
     try:
         with open(INTEL_STATE_PATH, encoding='utf-8') as fp:
@@ -138,6 +154,41 @@ def _save_intel_state(state: dict) -> None:
 
 def nonfree_intel_installed() -> bool:
     return _deb_installed(NONFREE_FOR['intel-media-va-driver'])
+
+
+INTEL_LAST_PATH = os.path.join(ADDON_DIR, 'intel_last.json')
+
+
+def record_intel_attempt(variant: str, result: str, detail: str = '') -> None:
+    """What the last try of another Intel driver did, for GPU diagnostics."""
+    from ..config import VERSION
+    try:
+        os.makedirs(ADDON_DIR, exist_ok=True)
+        with open(INTEL_LAST_PATH, 'w', encoding='utf-8') as fp:
+            json.dump({'at': time.strftime('%Y-%m-%d %H:%M UTC', time.gmtime()), 'version': VERSION,
+                       'variant': variant, 'result': result, 'detail': detail[:300]}, fp)
+    except OSError as e:
+        logger.warning('[capture] could not record the Intel driver attempt: %s', e)
+
+
+def intel_last_attempt() -> dict:
+    try:
+        with open(INTEL_LAST_PATH, encoding='utf-8') as fp:
+            data = json.load(fp)
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def newer_intel_installed() -> bool:
+    try:
+        return int(_deb_version('intel-media-va-driver').split(':')[-1].split('.', 1)[0]) >= NEWER_MIN_MAJOR
+    except ValueError:
+        return False
+
+
+def newer_intel_available() -> bool:
+    return _debian_codename() in NEWER_FROM
 
 
 def _driver_names(packages: tuple, nonfree: bool) -> tuple:
@@ -164,17 +215,62 @@ def _drop_apt_lists() -> None:
     os.makedirs('/var/lib/apt/lists/partial', exist_ok=True)
 
 
+def _newer_set() -> tuple:
+    return NEWER_PACKAGES + tuple(p for p in LIBVA_FRONTENDS if _deb_installed(p))
+
+
+def _remove_newer_source() -> None:
+    for path in (NEWER_LIST, NEWER_PIN):
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+
+
+def _install_newer_intel(cache: str) -> None:
+    """The newer iHD from Debian testing. The pin keeps everything else on the
+    image's release; the source only exists while apt runs."""
+    suite = NEWER_FROM.get(_debian_codename())
+    if not suite:
+        raise RuntimeError('no newer Intel driver for this Debian release')
+    try:
+        with open(NEWER_LIST, 'w') as fp:
+            fp.write(f'deb http://deb.debian.org/debian {suite} main\n')
+        with open(NEWER_PIN, 'w') as fp:
+            fp.write(f'Package: *\nPin: release n={suite}\nPin-Priority: 100\n')
+        _run(['apt-get', 'update', '-q'], timeout=300)
+        # --no-remove: fail (and stay on the CPU) rather than take FFmpeg or Chrome out.
+        _run(['apt-get', 'install', '-y', '-q', '--no-install-recommends', '--no-remove', '-o', cache,
+              *(f'{p}/{suite}' for p in _newer_set())], timeout=900)
+    finally:
+        _remove_newer_source()
+
+
+def switch_to_newer_intel() -> None:
+    os.makedirs(os.path.join(DEBS_DIR, 'partial'), exist_ok=True)
+    try:
+        _install_newer_intel(f'Dir::Cache::archives={DEBS_DIR}')
+    finally:
+        _drop_apt_lists()
+
+
 def switch_intel_drivers(nonfree: bool) -> None:
     """Swap between the free and non-free Intel drivers (each replaces the other).
+    nonfree=False also puts the image's own release back after the newer driver.
     Raises if apt can't. The non-free source only exists while apt runs."""
     os.makedirs(os.path.join(DEBS_DIR, 'partial'), exist_ok=True)
     try:
         if nonfree:
             _add_nonfree_source()
         _run(['apt-get', 'update', '-q'], timeout=300)
-        _run(['apt-get', 'install', '-y', '-q', '--no-install-recommends',
-              '-o', f'Dir::Cache::archives={DEBS_DIR}',
-              *_driver_names(('intel-media-va-driver', 'i965-va-driver'), nonfree)], timeout=900)
+        packages = _driver_names(('intel-media-va-driver', 'i965-va-driver'), nonfree)
+        extra = []
+        if not nonfree and newer_intel_installed():
+            codename = _debian_codename()
+            packages = tuple(f'{p}/{codename}' for p in _newer_set())
+            extra = ['--allow-downgrades', '--no-remove']
+        _run(['apt-get', 'install', '-y', '-q', '--no-install-recommends', *extra,
+              '-o', f'Dir::Cache::archives={DEBS_DIR}', *packages], timeout=900)
     finally:
         _remove_nonfree_source()
         _drop_apt_lists()
@@ -185,12 +281,13 @@ def begin_intel_nonfree() -> None:
     _save_intel_state({'restore': True})
 
 
-def keep_intel_nonfree() -> None:
-    _save_intel_state({'nonfree': True})
+def keep_intel_driver(variant: str) -> None:
+    """variant: 'nonfree' or 'newer'."""
+    _save_intel_state({variant: True})
 
 
 def restore_free_intel(failed: bool | None = None) -> bool:
-    """Undo an attempt that didn't prove the non-free drivers. failed=True records
+    """Undo an attempt that didn't prove the other driver. failed=True records
     that they were tested and didn't encode; None keeps what an earlier attempt
     recorded. False if apt couldn't do it yet (the 'restore' flag stays set)."""
     from ..config import VERSION
@@ -198,7 +295,7 @@ def restore_free_intel(failed: bool | None = None) -> bool:
     if failed is not None:
         state = {'failed_on': VERSION} if failed else {}
     state.pop('restore', None)
-    if nonfree_intel_installed() or _deb_installed(NONFREE_FOR['i965-va-driver']):
+    if nonfree_intel_installed() or _deb_installed(NONFREE_FOR['i965-va-driver']) or newer_intel_installed():
         try:
             switch_intel_drivers(False)
         except Exception as e:
@@ -309,6 +406,7 @@ def _apt_install(progress) -> None:
         # Keep the cache (that's the point of DEBS_DIR) but drop the package lists from
         # the container layer, like the Dockerfile does.
         _remove_nonfree_source()
+        _remove_newer_source()
         _drop_apt_lists()
 
 
@@ -335,6 +433,13 @@ def _apt_install_packages(progress) -> None:
     if wsl:
         progress('Installing GPU drivers for Docker on Windows', 'packages')
         _install_wsl_mesa(cache)
+    elif gpu and intel_state().get('newer'):
+        progress('Installing the newer Intel GPU driver', 'packages')
+        try:
+            _install_newer_intel(cache)
+        except Exception as e:
+            # CPU for now; the next tuner start tries again.
+            logger.warning('[capture-install] newer Intel driver failed: %s', e)
 
 
 def install(*, refresh_chrome: bool = False) -> None:
@@ -400,6 +505,15 @@ def reinstall() -> bool:
         return False
 
 
+# First version of each package that came from testing, not trixie.
+_TESTING_VERSIONS = {'intel-media-va-driver': '26', 'libigdgmm12': '22.8',
+                     **{p: '2.23' for p in ('libva2', *LIBVA_FRONTENDS)}}
+
+
+def _is_testing_version(pkg: str, version: str) -> bool:
+    return subprocess.run(['dpkg', '--compare-versions', version, 'ge', _TESTING_VERSIONS[pkg]]).returncode == 0
+
+
 def _offline_dpkg() -> None:
     debs = []
     # The cache can hold both builds of the Intel drivers; they conflict.
@@ -408,6 +522,13 @@ def _offline_dpkg() -> None:
         try:
             pkg = subprocess.run(['dpkg-deb', '-f', path, 'Package'], capture_output=True,
                                  text=True, timeout=30).stdout.strip()
+            # The newer Intel driver and its libraries are cached beside the image's
+            # own versions and need each other: offline, stick to the image's release.
+            if pkg in _TESTING_VERSIONS:
+                version = subprocess.run(['dpkg-deb', '-f', path, 'Version'], capture_output=True,
+                                         text=True, timeout=30).stdout.strip()
+                if _is_testing_version(pkg, version):
+                    continue
         except Exception:
             continue
         installed = subprocess.run(['dpkg-query', '-W', '-f=${Status}', pkg],

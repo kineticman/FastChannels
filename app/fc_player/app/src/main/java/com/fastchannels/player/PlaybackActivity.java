@@ -482,6 +482,9 @@ public class PlaybackActivity extends Activity {
                 .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, !captions)
                 .setPreferredTextLanguage(captions ? "en" : null)
                 .setSelectUndeterminedTextLanguage(captions)
+                // With no preference a feed that lists a second language first, or marks it
+                // as default, plays in that language. No English track: what it has plays.
+                .setPreferredAudioLanguage("en")
                 .setMaxAudioChannelCount(stereoAudio ? 2 : Integer.MAX_VALUE)
                 .setPreferredAudioMimeTypes(stereoAudio ? new String[]{MimeTypes.AUDIO_AAC} : new String[0]));
         Log.i(AudioDiagnostics.TAG, "audio mode channel_key=" + intent.getStringExtra(EXTRA_CHANNEL_KEY)

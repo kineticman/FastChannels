@@ -42,7 +42,8 @@ import requests
 from . import (CHROME_BIN, DAEMON_HOST, DAEMON_PORT, PROFILES_DIR, HOME_DIR,
                INCOMPATIBLE_SOURCES, QUALITY_PRESETS, SESSION_ROOT, WATCH_BASE,
                GPU_BITRATE_FACTOR, is_restricted_error, mark_restricted, read_config, read_status,
-               render_node, supported_platform, COLD_IDLE_SECONDS,
+               render_node, gpu_choices, supported_platform, COLD_IDLE_SECONDS,
+               STARTUP_PRESETS,
                WSL_MESA_MIN_MAJOR, WSL_VAAPI_ENV, wsl_gpu, wsl_libs_present)
 from . import installer
 
@@ -56,6 +57,8 @@ WIDEVINE_SETTLE_SECONDS = 6
 TUNE_TIMEOUT_SECONDS = 40
 SESSION_IDLE_SECONDS = 45
 TUNER_RETRY_SECONDS = 30
+PULSE_START_SECONDS = 30   # generous: a 2-core NAS is slow right after an install
+POOL_RETRY_SECONDS = 60    # after a failed pool start, doubling up to 10 minutes
 PREEMPT_IDLE_SECONDS = 6   # unpolled this long + another channel wants the tuner = client is gone
 STALL_RELOAD_SECONDS = 20
 GPU_STALL_SECONDS = 15      # GPU ffmpeg alive but no frame out this long = driver hang
@@ -182,17 +185,33 @@ def _nvidia_gids() -> list[int]:
     return sorted(gids)
 
 
+def _nvenc_only(node: str | None) -> bool:
+    """A render node on NVIDIA's own driver, with the container toolkit set up:
+    it encodes through NVENC and has no VA-API driver, so testing VA-API on it
+    only produces failures that look like a broken GPU."""
+    if not node or not nvidia_present():
+        return False
+    link = f'/sys/class/drm/{os.path.basename(node)}/device/driver'
+    return os.path.basename(os.path.realpath(link)) == 'nvidia'
+
+
 # The GPU diagnostics modal reruns detect_encoder with this set, so every test
 # encode's raw FFmpeg output is kept for the report. None outside a diagnosis.
 _trace: list | None = None
 _trace_lock = threading.Lock()
 
 
-def _trace_add(video_args: list[str], ok: bool, stderr: str) -> None:
+def _pulse_log(limit: int) -> list[str]:
+    return [l.strip()[:300] for l in _read(os.path.join(RUN_DIR, 'pulse.log')).splitlines() if l.strip()][-limit:]
+
+
+def _trace_add(video_args: list[str], ok: bool, stderr: str, env: dict | None = None) -> None:
     if _trace is None:
         return
     lines = [l for l in (stderr or '').splitlines() if l.strip()]
-    _trace.append({'test': ' '.join(video_args), 'ok': ok, 'output': '\n'.join(lines[-25:])[-3000:]})
+    # The driver override goes last: callers match tests by how they start.
+    driver = (env or {}).get('LIBVA_DRIVER_NAME')
+    _trace.append({'test': ' '.join(video_args) + (f'  [LIBVA_DRIVER_NAME={driver}]' if driver else ''), 'ok': ok, 'output': '\n'.join(lines[-25:])[-3000:]})
 
 
 def _try_encoder(uid: int, gid: int, groups: list[int], video_args: list[str],
@@ -208,10 +227,10 @@ def _try_encoder(uid: int, gid: int, groups: list[int], video_args: list[str],
                               capture_output=True, text=True, timeout=30)
     except Exception as e:
         if record:
-            _trace_add(video_args, False, str(e))
+            _trace_add(video_args, False, str(e), extra_env)
         return False, str(e)
     if record:
-        _trace_add(video_args, proc.returncode == 0, proc.stderr)
+        _trace_add(video_args, proc.returncode == 0, proc.stderr, extra_env)
     return proc.returncode == 0, proc.stderr
 
 
@@ -250,7 +269,8 @@ def _vaapi_reason(stderr: str) -> str:
     # libva also logs "va_openDriver() returns 0" when the driver loaded fine: not a cause.
     lines = [l.strip() for l in (stderr or '').splitlines() if 'va_openDriver() returns 0' not in l]
     for key in ('va_openDriver', 'vaInitialize', 'Failed to initialise VAAPI', 'No VA display',
-                'Failed to open', 'Permission denied', 'driver init failed', 'Error',
+                'Failed to open', 'Permission denied', 'driver init failed',
+                'does not support any RC mode', 'No usable encoding', 'Assertion', 'Error',
                 'Failed to create', 'not supported', 'No usable encoding'):
         hit = next((l for l in lines if key in l), None)
         if hit:
@@ -274,6 +294,8 @@ def detect_encoder(uid: int, gid: int, setting: str) -> dict:
         return {'kind': 'x264', 'reason': 'CPU only (set on the Bridge page)'}
     reasons = []
     device = render_node()
+    if _nvenc_only(device):
+        device = None
     if device and not installer.gpu_drivers_present():
         reasons.append('GPU drivers not installed yet (Reinstall the add-on)')
     elif device and wsl_gpu():
@@ -300,6 +322,8 @@ def detect_encoder(uid: int, gid: int, setting: str) -> dict:
                            'driver': driver or 'VA-API', 'reason': '', 'env': dict(env)}
                     if installer.intel_state().get('nonfree') and installer.nonfree_intel_installed():
                         enc['nonfree'] = True
+                    if installer.intel_state().get('newer') and installer.newer_intel_installed():
+                        enc['newer'] = True
                     logger.info('[capture] GPU encoding on %s (%s%s)', device, enc['driver'],
                                 ', low-power' if low_power else '')
                     return enc
@@ -324,17 +348,38 @@ def detect_encoder(uid: int, gid: int, setting: str) -> dict:
     return {'kind': 'x264', 'reason': '; '.join(reasons)}
 
 
-def _wants_intel_nonfree(uid: int, gid: int, setting: str, enc: dict) -> bool:
+def _intel_variant(device: str) -> str:
+    """Which other driver to try on this chip: Panther Lake needs a newer one,
+    anything else the non-free build."""
+    pci = re.search(r'8086:[0-9A-F]{4}', _node_gpu(device).upper())
+    if pci and pci.group(0) in installer.PANTHER_LAKE_IDS and installer.newer_intel_available():
+        return 'newer'
+    return 'nonfree'
+
+
+def _intel_gpu_failed(uid: int, gid: int, setting: str, enc: dict) -> bool:
     """An Intel GPU the capture user can open, whose test encode failed with the
-    free driver, and the non-free one hasn't been tried by this version."""
-    from ..config import VERSION
+    standard driver."""
     device = render_node()
-    state = installer.intel_state()
     return bool(setting != 'cpu' and enc.get('kind') == 'x264' and device and not wsl_gpu()
                 and installer.gpu_drivers_present() and not installer.nonfree_intel_installed()
-                and state.get('failed_on') != VERSION
+                and not installer.newer_intel_installed()
                 and _node_gpu(device).startswith('Intel')
                 and _can_open(uid, gid, [os.stat(device).st_gid], device))
+
+
+def _wants_intel_nonfree(uid: int, gid: int, setting: str, enc: dict) -> bool:
+    """Try the non-free driver automatically: it's from the image's own Debian
+    release. Once per FastChannels version if it doesn't help."""
+    from ..config import VERSION
+    return (_intel_gpu_failed(uid, gid, setting, enc) and _intel_variant(render_node()) == 'nonfree'
+            and installer.intel_state().get('failed_on') != VERSION)
+
+
+def _offers_newer_intel(uid: int, gid: int, setting: str, enc: dict) -> bool:
+    """Offer the newer driver on the Bridge page. It comes from Debian testing, so
+    it's only installed when the user asks."""
+    return _intel_gpu_failed(uid, gid, setting, enc) and _intel_variant(render_node()) == 'newer'
 
 
 # x11grab delivers bgr0; this is how sessions upload it and convert on the GPU.
@@ -583,6 +628,62 @@ _INTEL_NO_H264 = ('the installed driver offers no H.264 encoder for this GPU. It
                   'and not the hardware')
 
 
+_VARIANT_NAMES = {'nonfree': "Intel's non-free driver", 'newer': 'the newer driver from Debian testing'}
+
+
+def _intel_driver_fact(uid: int, gid: int, node: str, setting: str) -> dict:
+    """Which Intel driver is installed, what the last attempt at another one did,
+    and if there was none, why: the question otherwise answered from the logs."""
+    if installer.nonfree_intel_installed():
+        using = "non-free build"
+    elif installer.newer_intel_installed():
+        using = "newer build from Debian testing"
+    else:
+        using = "standard build"
+    last = installer.intel_last_attempt()
+    if last:
+        what = _VARIANT_NAMES.get(last.get('variant'), last.get('variant'))
+        tail = (f"last tried {what} on {last.get('at')} (FastChannels {last.get('version')}): {last.get('result')}"
+                + (f" ({last['detail']})" if last.get('detail') else ''))
+    elif setting == 'cpu':
+        tail = 'no other driver tried: Encoder is set to CPU only'
+    elif not installer.gpu_drivers_present():
+        tail = 'no other driver tried: GPU drivers are not installed'
+    elif not _can_open(uid, gid, [os.stat(node).st_gid], node):
+        tail = "no other driver tried: the capture user can't open the GPU"
+    elif ENCODER.get('kind') == 'vaapi':
+        tail = 'no other driver needed'
+    elif _intel_variant(node) == 'newer':
+        tail = 'the newer driver is offered on the Bridge page but has not been tried'
+    else:
+        tail = ('no other driver tried yet: that happens when the tuners start and the GPU test fails '
+                '(turn Built-in Capture off and on)')
+    return _fact('Intel driver', 'info', f'{using} · {tail}')
+
+
+def _recent_gpu_log(limit: int = 15) -> list[str]:
+    """The latest capture log lines about drivers and encoding, so a pasted report
+    carries them. A message repeated in a row shows once, with a count."""
+    from ..logfile import LOG_PATH
+    words = ('driver', 'gpu', 'encod', 'va-api', 'nvenc', 'apt-get', 'capture-install] failed',
+             'audio', 'could not start', 'failed to start')
+    found = deque(maxlen=limit)     # [message without its timestamp, latest line, count]
+    try:
+        with open(LOG_PATH, encoding='utf-8', errors='replace') as fp:
+            for line in fp:
+                low = line.lower()
+                if '[capture' in low and '] $ ' not in low and any(w in low for w in words):
+                    line = line.rstrip()[:300]
+                    message = line[line.find('[capture'):]
+                    if found and found[-1][0] == message:
+                        found[-1][1:] = [line, found[-1][2] + 1]
+                    else:
+                        found.append([message, line, 1])
+    except OSError:
+        pass
+    return [line + (f'  (x{n} in a row, latest shown)' if n > 1 else '') for _, line, n in found]
+
+
 def _vainfo_report(uid: int, gid: int, node: str | None, on_wsl: bool) -> tuple[dict, dict] | None:
     """What the VA-API driver says the GPU can encode, as a fact plus the raw output.
     The H.264 encode entrypoints are the answer to "can this GPU do it at all"."""
@@ -682,11 +783,7 @@ def diagnose_gpu(uid: int, gid: int) -> dict:
         facts.append(_fact('Mesa', 'ok' if (mesa and (not on_wsl or mesa >= WSL_MESA_MIN_MAJOR)) else ('warn' if on_wsl else 'info'),
                            f'{mesa or "not installed"}' + (f' (Windows needs {WSL_MESA_MIN_MAJOR}+)' if on_wsl else '')))
     if not on_wsl and node and _node_gpu(node).startswith('Intel'):
-        if installer.nonfree_intel_installed() and installer.intel_state().get('nonfree'):
-            facts.append(_fact('Intel driver', 'info', "Intel's non-free build (the free one couldn't encode on this chip)"))
-        elif 'failed_on' in installer.intel_state():
-            facts.append(_fact('Intel driver', 'info', "free build; Intel's non-free build was tried and didn't "
-                               'encode either (Reinstall tries again)'))
+        facts.append(_intel_driver_fact(uid, gid, node, setting))
     stray = {k: os.environ[k] for k in ('LIBVA_DRIVER_NAME', 'LIBVA_DRIVERS_PATH', 'GALLIUM_DRIVER',
                                         'MESA_LOADER_DRIVER_OVERRIDE') if os.environ.get(k)}
     if stray and not on_wsl:
@@ -705,7 +802,7 @@ def diagnose_gpu(uid: int, gid: int) -> dict:
             # is used, so say whether the others would have worked.
             if setting != 'cpu' and not on_wsl and len(nodes) > 1 and installer.gpu_drivers_present():
                 for other in nodes:
-                    if other == node:
+                    if other == node or _nvenc_only(other):
                         continue
                     for low_power in (True, False):
                         ok, _ = _try_encoder(uid, gid, sorted({os.stat(other).st_gid}), [
@@ -730,13 +827,33 @@ def diagnose_gpu(uid: int, gid: int) -> dict:
                          if '-low_power' in t['test'] else
                          'Did not work, but a later test passed and is used instead. Nothing to fix.')
 
-    vainfo = _vainfo_report(uid, gid, node, on_wsl)
+    # One line per failed encode, for the top of the report: forum pastes get cut.
+    for t in trace:
+        if not t['ok']:
+            t['why'] = _vaapi_reason(t.get('output') or '')
+
+    vainfo = None if _nvenc_only(node) else _vainfo_report(uid, gid, node, on_wsl)
+    with SERVICE.lock:
+        pool_error, tuner_states = SERVICE.pool_error, [t.state for t in SERVICE.tuners]
+    if pool_error:
+        facts.append(_fact('Tuners', 'fail', f"couldn't start: {pool_error}"))
+        trace.append({'test': 'PulseAudio log', 'ok': False, 'show': True,
+                      'output': '\n'.join(_pulse_log(20)) or '(PulseAudio wrote nothing)'})
+    else:
+        facts.append(_fact('Tuners', 'ok' if tuner_states else 'info',
+                           ', '.join(tuner_states) or 'none running (Built-in Capture is off or still starting)'))
     if vainfo:
         facts.append(vainfo[0])
         trace.append(vainfo[1])
+    elif _nvenc_only(node):
+        facts.append(_fact('VA-API', 'info', 'not tested: it is for Intel and AMD; NVIDIA encodes through NVENC'))
     elif node:
         facts.append(_fact('vainfo', 'info', 'not installed (Reinstall the add-on to add it); '
                            'it lists what encoders the GPU offers'))
+
+    choices = gpu_choices()
+    if len(choices) > 1:
+        facts.append(_gpu_list_fact(enc, choices))
 
     # Speed test: how many times faster than real time each encoder runs 720p60.
     with SERVICE.lock:
@@ -756,15 +873,55 @@ def diagnose_gpu(uid: int, gid: int) -> dict:
     facts += speeds
 
     in_use = {k: v for k, v in ENCODER.items() if k not in ('gid', 'gids', 'groups', 'env')}
-    hint = _gpu_hint(enc, in_use, setting, on_wsl, node, nv, len(nodes))
+    hint = _gpu_hint(enc, in_use, setting, on_wsl, node, nv)
     vi = next((f for f in facts if f['label'] == 'vainfo' and f['status'] == 'fail'), None)
     if vi and enc.get('kind') not in ('vaapi', 'nvenc'):
         hint = vi['detail'][0].upper() + vi['detail'][1:] + '. Copy this report when asking for help.'
+    if pool_error:
+        # Nothing about the GPU matters until the tuners run.
+        hint = f"The tuners couldn't start: {pool_error}. Copy this report when asking for help."
     return {'facts': facts, 'tests': trace,
+            'tuners_running': bool(tuner_states) and not pool_error,
             'result': {k: v for k, v in enc.items() if k not in ('gid', 'gids', 'groups', 'env')},
             'in_use': in_use,
             'hint': hint,
-            'help': _self_help(facts, enc, setting, on_wsl, node, nv, nodes)}
+            'log': _recent_gpu_log(),
+            'choose': _gpu_choice_help(enc, choices),
+            'choose_intro': _gpu_choice_intro(enc, choices),
+            'help': (_self_help(facts, enc, setting, on_wsl, node, nv, nodes)
+                     + _rate_control_help(enc, trace, node))}
+
+
+def _huc_may_help(enc: dict, trace: list[dict], node: str | None) -> bool:
+    """An Intel GPU on the i915 driver that failed its encode test with the host
+    not asked to load HuC. Not Panther Lake, which needs a newer driver instead."""
+    if not node or enc.get('kind') in ('vaapi', 'nvenc') or not _node_gpu(node).startswith('Intel'):
+        return False
+    if not any(not t['ok'] and t['test'].startswith(f'-vaapi_device {node} ') for t in trace):
+        return False
+    driver = os.path.realpath(f'/sys/class/drm/{os.path.basename(node)}/device/driver')
+    guc = _read('/sys/module/i915/parameters/enable_guc').strip()
+    return os.path.basename(driver) == 'i915' and guc not in ('', '2', '3') and _intel_variant(node) != 'newer'
+
+
+def _rate_control_help(enc: dict, trace: list[dict], node: str | None) -> list[dict]:
+    """The HuC firmware tip: certain when a low-power encoder only offers constant
+    quality, otherwise only a maybe."""
+    if enc.get('kind') in ('vaapi', 'nvenc'):
+        return []
+    if any('supported modes: CQP' in (t.get('output') or '') for t in trace):
+        title = 'Intel low-power encoder needs HuC firmware'
+        why = "This chip's low-power encoder can't encode at a set bitrate until the host loads Intel's HuC firmware."
+    elif _huc_may_help(enc, trace, node):
+        title = 'Intel HuC firmware might help'
+        why = ("Some older Intel chips can't encode until the host loads Intel's HuC firmware. "
+               "It isn't certain that's the problem here.")
+    else:
+        return []
+    return [{'title': title,
+             'steps': [why + ' On a Debian or Ubuntu host (not Synology and similar), run these and reboot:'],
+             'snippet': 'echo "options i915 enable_guc=2" | sudo tee /etc/modprobe.d/i915-guc.conf\n'
+                        'sudo update-initramfs -u'}]
 
 
 _NVIDIA_COMPOSE_WSL = '''    deploy:
@@ -846,7 +1003,10 @@ def _self_help(facts: list[dict], enc: dict, setting: str, on_wsl: bool, node: s
                  'to the service.'], _NVIDIA_COMPOSE_WSL if on_wsl else _NVIDIA_COMPOSE_LINUX)
     if node and not installer.gpu_drivers_present():
         add('GPU drivers are not installed', ['Use Reinstall on this page, wait for it to finish, then run this again.'])
-    if (by.get('vainfo') or {}).get('detail') == _INTEL_NO_H264:
+    if ENCODER.get('offer_newer'):      # the same test as the button itself
+        add('Panther Lake: a newer Intel driver is available (experimental)',
+            ['Close this window and use "Try a newer Intel driver" under Encoder on the Bridge page.'])
+    elif (by.get('vainfo') or {}).get('detail') == _INTEL_NO_H264:
         add('The driver offers no H.264 encoder for this GPU',
             ['It may be the driver and not the hardware. Use Copy report and post it so it can be looked into. '
              'The CPU is used meanwhile.'])
@@ -859,15 +1019,63 @@ def _self_help(facts: list[dict], enc: dict, setting: str, on_wsl: bool, node: s
     return out
 
 
+def _gpu_choice_help(enc: dict, choices: list[dict]) -> list[dict]:
+    """With two or more GPUs: for each one not in use, the compose lines that make
+    FastChannels use it. There is no setting; it's whichever GPU is passed in."""
+    if len(choices) < 2:
+        return []
+    out = []
+    for gpu in choices:
+        if _gpu_in_use(enc, gpu):
+            continue
+        if gpu['vendor'] == 'NVIDIA':
+            out.append({'title': 'To use the NVIDIA GPU',
+                        'steps': ['Remove the /dev/dri lines from the FastChannels service, add these (they need the '
+                                  'NVIDIA Container Toolkit on the host) and recreate the container:'],
+                        'snippet': _NVIDIA_COMPOSE_LINUX})
+        else:
+            name = os.path.basename(gpu['node'])
+            nvidia_too = any(g['vendor'] == 'NVIDIA' for g in choices)
+            out.append({'title': f"To use the {gpu['vendor']} GPU ({name})",
+                        'steps': ['In the FastChannels service, pass in only this device instead of all of /dev/dri'
+                                  + (', remove the NVIDIA settings' if nvidia_too else '')
+                                  + ' and recreate the container:'],
+                        'snippet': f"    devices:\n      - {gpu['node']}:{gpu['node']}"})
+    return out
+
+
+def _gpu_choice_intro(enc: dict, choices: list[dict]) -> str:
+    """Says first that switching is optional, so it doesn't read as a fix."""
+    if len(choices) < 2:
+        return ''
+    used = next((g for g in choices if _gpu_in_use(enc, g)), None)
+    if not used:
+        return 'No GPU is being used right now. You can try passing in just one of them:'
+    node = f" ({os.path.basename(used['node'])})" if used['node'] else ''
+    other = 'the other one' if len(choices) == 2 else 'another one'
+    return f"Your {used['vendor']} GPU{node} is in use and nothing needs changing. To use {other} instead:"
+
+
+def _gpu_in_use(enc: dict, gpu: dict) -> bool:
+    if enc.get('kind') == 'nvenc':
+        return gpu['vendor'] == 'NVIDIA'
+    return enc.get('kind') == 'vaapi' and gpu['node'] == enc.get('device')
+
+
+def _gpu_list_fact(enc: dict, choices: list[dict]) -> dict:
+    names = [gpu['vendor'] + (f" ({os.path.basename(gpu['node'])})" if gpu['node'] else '')
+             + (' in use' if _gpu_in_use(enc, gpu) else '') for gpu in choices]
+    return _fact('GPUs found', 'info', ', '.join(names))
+
+
 def _gpu_hint(enc: dict, in_use: dict, setting: str, on_wsl: bool, node: str | None,
-              nvidia: bool, n_nodes: int) -> str:
+              nvidia: bool) -> str:
     """What to do next, in plain words, for the most common ways this goes wrong."""
     if enc.get('kind') in ('vaapi', 'nvenc'):
-        extra = (' Only the first GPU is used; the others are listed above.' if n_nodes > 1 else '')
         if in_use.get('kind') not in ('vaapi', 'nvenc'):
             return ('GPU encoding works now, but the running tuners are on the CPU. Turn Built-in Capture off and on '
-                    'to pick it up.' + extra)
-        return 'GPU encoding works.' + extra
+                    'to pick it up.')
+        return 'GPU encoding works.'
     if setting == 'cpu':
         return 'Encoder is set to CPU only. Set it to Auto to try the GPU.'
     if on_wsl and not node and not nvidia and os.environ.get('NVIDIA_DRIVER_CAPABILITIES') is None \
@@ -943,6 +1151,62 @@ def _video_encoder_args(t: 'Tuner', enc: dict) -> tuple[list[str], list[str]]:
 
 # ── tuners ────────────────────────────────────────────────────────────────────
 
+class _TunerRetired(Exception):
+    """The pool was stopped while this tuner was still starting."""
+
+
+def _leftover_pids(uid: int, display: int, profile: str) -> list[int]:
+    """The capture user's Xvfb on this display and Chrome on this profile."""
+    # Chrome rewrites its command line into one space-separated string.
+    on_profile = re.compile(rf'--user-data-dir={re.escape(profile)}(?=[\0 ]|$)')
+    pids = []
+    for proc in glob.glob('/proc/[0-9]*'):
+        try:
+            if os.stat(proc).st_uid != uid:
+                continue
+            with open(f'{proc}/cmdline', 'rb') as f:
+                cmdline = f.read().decode('utf-8', 'replace')
+        except OSError:
+            continue
+        args = cmdline.split('\0')
+        is_xvfb = os.path.basename(args[0]) == 'Xvfb' and f':{display}' in args[1:]
+        if is_xvfb or on_profile.search(cmdline):
+            pids.append(int(os.path.basename(proc)))
+    return pids
+
+
+def _leftover_av_pids(uid: int) -> list[int]:
+    """The capture user's PulseAudio and screen-grabbing FFmpeg."""
+    pids = []
+    for proc in glob.glob('/proc/[0-9]*'):
+        try:
+            if os.stat(proc).st_uid != uid:
+                continue
+            with open(f'{proc}/cmdline', 'rb') as f:
+                args = f.read().decode('utf-8', 'replace').split('\0')
+        except OSError:
+            continue
+        name = os.path.basename(args[0])
+        if name == 'pulseaudio' or (name == 'ffmpeg' and 'x11grab' in args):
+            pids.append(int(os.path.basename(proc)))
+    return pids
+
+
+def _kill_found(find) -> None:
+    """SIGTERM, then SIGKILL, whatever find() keeps returning."""
+    for sig in (signal.SIGTERM, signal.SIGKILL):
+        for pid in find():
+            try:
+                os.kill(pid, sig)
+            except OSError:
+                pass
+        deadline = time.monotonic() + 3
+        while time.monotonic() < deadline:
+            if not find():
+                return
+            time.sleep(0.1)
+
+
 class Tuner:
     def __init__(self, index: int, quality: str, uid: int, gid: int):
         self.index = index
@@ -959,6 +1223,8 @@ class Tuner:
         self.error = ''
         self.idle_since = time.monotonic()   # for cold mode (keep_warm off)
         self.session: 'Session | None' = None
+        self.retired = threading.Event()
+        self._spawn_lock = threading.Lock()   # orders a spawn against retire()
 
     @property
     def env(self) -> dict:
@@ -968,6 +1234,11 @@ class Tuner:
 
     def start(self) -> None:
         self.state, self.error = 'starting', ''
+        # Under the lock: a retired tuner must not kill its replacement's processes.
+        with self._spawn_lock:
+            if self.retired.is_set():
+                raise _TunerRetired
+            self._kill_leftovers()
         os.makedirs(self.profile, exist_ok=True)
         os.chown(self.profile, self.uid, self.gid)
         # Drop the HTTP/code caches: the profile persists for Widevine, and a cached
@@ -992,16 +1263,21 @@ class Tuner:
         # window that exactly fills the screen to (w-1)x(h-1), so every frame would be
         # resampled (soft picture, 1 px black edge). A w x h window on a (w+1)x(h+1)
         # screen gets an exact w x h viewport at 0,0, which is all x11grab reads.
-        self.xvfb = _spawn(['Xvfb', f':{self.display}', '-screen', '0',
-                            f'{self.width + 1}x{self.height + 1}x24', '-nolisten', 'tcp', '-ac'],
-                           uid=self.uid, gid=self.gid, env=self.env, log_name=f'xvfb{self.index}')
+        log = os.path.join(RUN_DIR, f'xvfb{self.index}.log')
+        try:
+            os.unlink(log)    # only this attempt's output
+        except OSError:
+            pass
+        xvfb = self._spawn_part('xvfb', ['Xvfb', f':{self.display}', '-screen', '0',
+                                         f'{self.width + 1}x{self.height + 1}x24', '-nolisten', 'tcp', '-ac'],
+                                log_name=f'xvfb{self.index}')
         for _ in range(50):
-            if os.path.exists(sock):
+            if os.path.exists(sock) or xvfb.poll() is not None:
                 break
-            time.sleep(0.1)
-        else:
-            raise RuntimeError(f'Xvfb :{self.display} did not start')
-        self.chrome = _spawn([
+            self._pause(0.1)
+        if not os.path.exists(sock):
+            raise RuntimeError(self._xvfb_failure(xvfb, log))
+        chrome = self._spawn_part('chrome', [
             CHROME_BIN,
             '--no-sandbox',                     # no user namespaces inside Docker
             '--disable-dev-shm-usage',          # Docker's default /dev/shm is 64 MB
@@ -1015,25 +1291,69 @@ class Tuner:
             '--hide-scrollbars', '--disable-notifications',
             f'--remote-debugging-port={self.cdp_port}', '--remote-debugging-address=127.0.0.1',
             'about:blank',
-        ], uid=self.uid, gid=self.gid, env=self.env, nice=NICE_CHROME, log_name=f'chrome{self.index}')
+        ], nice=NICE_CHROME, log_name=f'chrome{self.index}')
         deadline = time.monotonic() + 30
         while time.monotonic() < deadline:
-            if self.chrome.poll() is not None:
-                raise RuntimeError(f'Chrome exited during startup (code {self.chrome.returncode}); '
+            if chrome.poll() is not None:
+                raise RuntimeError(f'Chrome exited during startup (code {chrome.returncode}); '
                                    f'see {RUN_DIR}/chrome{self.index}.log')
             try:
                 requests.get(f'http://127.0.0.1:{self.cdp_port}/json/version', timeout=1)
                 break
             except requests.RequestException:
-                time.sleep(0.3)
+                self._pause(0.3)
         else:
             raise RuntimeError('Chrome DevTools endpoint did not come up')
         # Widevine registers asynchronously after launch; a /watch load before that
         # fails Shaka's support check ("browser-unsupported").
-        time.sleep(WIDEVINE_SETTLE_SECONDS)
+        self._pause(WIDEVINE_SETTLE_SECONDS)
         self.idle_since = time.monotonic()
         self.state = 'idle'
         logger.info('[capture] tuner %d ready (:%d, %s)', self.index, self.display, self.quality)
+
+    def _spawn_part(self, name: str, cmd: list[str], **kwargs) -> subprocess.Popen:
+        """Start Xvfb or Chrome and record it as self.<name>, unless retired."""
+        with self._spawn_lock:
+            if self.retired.is_set():
+                raise _TunerRetired
+            proc = _spawn(cmd, uid=self.uid, gid=self.gid, env=self.env, **kwargs)
+            setattr(self, name, proc)
+        return proc
+
+    def _pause(self, seconds: float) -> None:
+        if self.retired.wait(seconds):
+            raise _TunerRetired
+
+    def _kill_leftovers(self) -> None:
+        """An Xvfb or Chrome that outlived its tuner (a crashed capture service,
+        say) holds the display or the profile, so every later start fails."""
+        pids = _leftover_pids(self.uid, self.display, self.profile)
+        if not pids:
+            return
+        logger.warning('[capture] tuner %d: stopping %d leftover process(es) from an earlier run',
+                       self.index, len(pids))
+        _kill_found(lambda: _leftover_pids(self.uid, self.display, self.profile))
+
+    def _xvfb_failure(self, xvfb: subprocess.Popen, log: str) -> str:
+        code = xvfb.poll()
+        how = f'exited with code {code}' if code is not None else 'not ready after 5 s'
+        try:
+            with open(log, errors='replace') as f:
+                lines = [ln.replace('(EE)', '').strip() for ln in f]
+        except OSError:
+            lines = []
+        tail = [ln for ln in lines if ln][-6:]
+        for line in tail:
+            logger.error('[capture] Xvfb :%d: %s', self.display, line)
+        return (f'Xvfb :{self.display} did not start ({how})'
+                + (f': {tail[-1]}' if tail else ', with no output'))
+
+    def retire(self) -> None:
+        """Stop for good (the pool is going away). A start still running in another
+        thread gives up and cannot spawn anything after this."""
+        with self._spawn_lock:
+            self.retired.set()
+        self.stop()
 
     def alive(self) -> bool:
         return (self.xvfb is not None and self.xvfb.poll() is None
@@ -1082,6 +1402,7 @@ class Session:
         self.reloads = 0
         self.video_size = ''
         self.encoder: dict = {}
+        self.short_segments = STARTUP_PRESETS[read_config()['startup']]
         self.ffmpeg_started = 0.0
         self._stop = threading.Event()
         # Health samples for the Bridge page: ffmpeg -progress blocks (every 2 s)
@@ -1260,6 +1581,11 @@ class Session:
         t = self.tuner
         self.encoder = enc = dict(enc or ENCODER)
         pre, video = _video_encoder_args(t, enc)
+        short_keys, short_hls = [], []
+        if self.short_segments:
+            # Segments can only be cut on keyframes: force one a second while short.
+            short_keys = ['-force_key_frames', f'expr:lt(n_forced,{self.short_segments + 1})*gte(t,n_forced)']
+            short_hls = ['-hls_init_time', '1']
         cmd = [
             'ffmpeg', '-hide_banner', '-loglevel', 'warning', '-nostdin', *pre,
             '-thread_queue_size', '1024', '-f', 'x11grab', '-draw_mouse', '0',
@@ -1271,10 +1597,10 @@ class Session:
             # grabbed, the rest duplicated). Both inputs are wallclock-stamped, so
             # isync lines audio up with video and the offset can't happen.
             '-thread_queue_size', '1024', '-isync', '0', '-f', 'pulse', '-i', f'{t.sink}.monitor',
-            '-map', '0:v', '-map', '1:a', *video,
+            '-map', '0:v', '-map', '1:a', *video, *short_keys,
             '-c:a', 'aac', '-b:a', '160k', '-ar', '48000', '-ac', '2',
             '-progress', 'pipe:1', '-stats_period', '2',
-            '-f', 'hls', '-hls_time', '2', '-hls_list_size', '8',
+            '-f', 'hls', *short_hls, '-hls_time', '2', '-hls_list_size', '8',
             '-hls_flags', 'delete_segments+independent_segments+omit_endlist',
             '-hls_segment_filename', os.path.join(self.dir, 'seg_%06d.ts'),
             os.path.join(self.dir, 'index.m3u8'),
@@ -1366,11 +1692,14 @@ class Session:
 class CaptureService:
     def __init__(self):
         self.lock = threading.RLock()
+        self.pool_lock = threading.Lock()   # one thread stops/starts the pool at a time
         self.tuners: list[Tuner] = []
         self.sessions: dict[str, Session] = {}
         self.pulse: subprocess.Popen | None = None
         self.pool_key: tuple | None = None
         self.pool_error = ''
+        self.pool_fails = 0
+        self.pool_retry_at = 0.0
         self.busy_action = ''          # 'install' | 'uninstall' | 'update-chrome' | 'reinstall'
         self.uid = self.gid = None
 
@@ -1379,6 +1708,10 @@ class CaptureService:
         with self.lock:
             if self.busy_action:
                 return False, f'{self.busy_action} already running'
+            if action == 'intel-newer' and not ENCODER.get('offer_newer'):
+                return False, "The newer Intel driver isn't offered on this server."
+            if action == 'intel-standard' and not installer.intel_state().get('newer'):
+                return False, 'The standard driver is already in use.'
             if action in ('install', 'update-chrome') and not supported_platform():
                 return False, 'Google Chrome for Linux is only available on amd64 (x86_64).'
             self.busy_action = action
@@ -1387,8 +1720,9 @@ class CaptureService:
 
     def _run_action(self, action: str) -> None:
         try:
-            if action in ('uninstall', 'update-chrome', 'install'):
-                self.stop_pool()
+            if action in ('uninstall', 'update-chrome', 'install', 'intel-newer', 'intel-standard'):
+                with self.pool_lock:      # waits out a start already running
+                    self.stop_pool()
             if action == 'install':
                 installer.install()
             elif action == 'update-chrome':
@@ -1397,6 +1731,13 @@ class CaptureService:
                 installer.reinstall()
             elif action == 'uninstall':
                 installer.uninstall()
+            elif action == 'intel-newer':
+                uid, gid = installer.ensure_capture_user()
+                self.uid, self.gid = uid, gid
+                self._swap_intel_driver('newer', read_config()['encoder'],
+                                        {'kind': 'x264', 'reason': 'GPU encode test failed'})
+            elif action == 'intel-standard':
+                installer.restore_free_intel(failed=False)
         finally:
             with self.lock:
                 self.busy_action = ''
@@ -1412,6 +1753,16 @@ class CaptureService:
         return (cfg['max_tuners'], cfg['quality'], cfg['encoder'])
 
     def reconcile(self) -> None:
+        # The loop and POST /reconcile both call this. Starting the pool takes a while,
+        # so a second caller leaves it to the first; the loop comes round again.
+        if not self.pool_lock.acquire(blocking=False):
+            return
+        try:
+            self._reconcile()
+        finally:
+            self.pool_lock.release()
+
+    def _reconcile(self) -> None:
         if self.busy_action:
             return
         status = read_status()
@@ -1422,9 +1773,14 @@ class CaptureService:
         with self.lock:
             if desired == self.pool_key and all(t.alive() or t.state in ('starting', 'error', 'asleep')
                                                 for t in self.tuners):
-                self._restart_dead_tuners()
-                self._apply_warmth()
-                return
+                if not (desired and self.pool_error and time.monotonic() >= self.pool_retry_at):
+                    self._restart_dead_tuners()
+                    self._apply_warmth()
+                    return
+                # The last start failed: try again.
+                logger.info('[capture] retrying after: %s', self.pool_error)
+            elif desired != self.pool_key:
+                self.pool_fails = 0
             if self.sessions and desired is not None and self.pool_key is not None:
                 # Settings changed while someone is watching: apply when the pool is idle.
                 if any(s.state in ('tuning', 'live') for s in self.sessions.values()):
@@ -1468,6 +1824,9 @@ class CaptureService:
         try:
             t.start()
         except Exception as e:
+            if t.retired.is_set():
+                t.stop()
+                return
             t.state, t.error = 'error', str(e)[:300]
             logger.error('[capture] tuner %d failed to start: %s', t.index, e)
             t.stop()
@@ -1487,19 +1846,27 @@ class CaptureService:
             self._start_pulse(tuners)
             if installer.intel_state().get('restore'):
                 installer.restore_free_intel()
+            self._reinstall_newer_intel(encoder_setting)
             enc = detect_encoder(self.uid, self.gid, encoder_setting)
             if _wants_intel_nonfree(self.uid, self.gid, encoder_setting, enc):
                 enc = self._try_intel_nonfree(encoder_setting, enc)
+            elif _offers_newer_intel(self.uid, self.gid, encoder_setting, enc):
+                enc = {**enc, 'offer_newer': True}
             ENCODER.clear()
             ENCODER.update(enc)
         except Exception as e:
-            self.pool_error = f'could not start audio: {e}'
-            logger.error('[capture] %s', self.pool_error)
+            what = 'could not start audio' if 'pulseaudio' in str(e) else 'could not start'
+            self.pool_error = f'{what}: {e}'
+            self.pool_fails += 1
+            delay = min(POOL_RETRY_SECONDS * 2 ** (self.pool_fails - 1), 600)
+            self.pool_retry_at = time.monotonic() + delay
+            logger.error('[capture] %s (trying again in %d s)', self.pool_error, delay)
             self.pool_key = key
             return
         keep_warm = read_config().get('keep_warm', True)
         with self.lock:
             self.pool_error = ''
+            self.pool_fails = 0
             self.tuners = [Tuner(i, quality, self.uid, self.gid) for i in range(tuners)]
             self.pool_key = key
         if not keep_warm:
@@ -1512,42 +1879,84 @@ class CaptureService:
             threading.Thread(target=self._start_tuner, args=(t,), daemon=True).start()
         logger.info('[capture] starting %d tuner(s) at %s', tuners, quality)
 
+    def _reinstall_newer_intel(self, setting: str) -> None:
+        """The user chose the newer driver but it is gone: a container update, with
+        the install from Debian testing failing then. Try again; the choice is kept
+        either way."""
+        if (setting == 'cpu' or not installer.intel_state().get('newer')
+                or installer.newer_intel_installed() or not installer.newer_intel_available()
+                or not render_node() or wsl_gpu() or not installer.gpu_drivers_present()):
+            return
+        with self.lock:
+            if self.busy_action:
+                return
+            self.busy_action = 'gpu-driver-newer'
+        try:
+            logger.info('[capture] installing the newer Intel driver again')
+            installer.switch_to_newer_intel()
+        except Exception as e:
+            logger.warning('[capture] could not install the newer Intel driver yet: %s', e)
+        finally:
+            with self.lock:
+                self.busy_action = ''
+
     def _try_intel_nonfree(self, setting: str, enc: dict) -> dict:
-        """Install Intel's non-free drivers and test again; keep them only if the GPU
-        then encodes. Holds busy_action so no install/uninstall runs apt meanwhile."""
+        """The automatic fallback at pool start. Holds busy_action so no
+        install/uninstall runs apt meanwhile."""
         with self.lock:
             if self.busy_action:
                 return enc
             self.busy_action = 'gpu-driver'
         try:
-            logger.info("[capture] the Intel GPU test failed; trying Intel's non-free driver")
+            return self._swap_intel_driver('nonfree', setting, enc)
+        finally:
+            with self.lock:
+                self.busy_action = ''
+
+    def _swap_intel_driver(self, variant: str, setting: str, enc: dict) -> dict:
+        """Install the other Intel driver ('nonfree' or 'newer') and test again; keep
+        it only if the GPU then encodes. The caller holds busy_action."""
+        try:
+            what = "a newer Intel driver" if variant == 'newer' else "Intel's non-free driver"
+            logger.info("[capture] the Intel GPU test failed; trying %s", what)
             ENCODER.clear()
-            ENCODER.update(kind='x264', reason="trying Intel's non-free GPU driver")
+            ENCODER.update(kind='x264', reason=f'trying {what}')
             tested = False
             try:
+                installer.record_intel_attempt(variant, 'started')
                 installer.begin_intel_nonfree()
-                installer.switch_intel_drivers(True)
+                if variant == 'newer':
+                    installer.switch_to_newer_intel()
+                else:
+                    installer.switch_intel_drivers(True)
                 new = detect_encoder(self.uid, self.gid, setting)
                 tested = True
                 if new.get('kind') == 'vaapi':
-                    installer.keep_intel_nonfree()
-                    logger.info("[capture] Intel's non-free driver works (%s); keeping it", new.get('driver'))
-                    return {**new, 'nonfree': True}
-                logger.warning("[capture] Intel's non-free driver didn't encode either; restoring the free one")
+                    installer.keep_intel_driver(variant)
+                    installer.record_intel_attempt(variant, 'works', new.get('driver') or '')
+                    logger.info('[capture] %s works (%s); keeping it', what, new.get('driver'))
+                    return {**new, variant: True}
+                logger.warning("[capture] %s didn't encode either; restoring the standard one", what)
+                installer.record_intel_attempt(variant, 'did not encode', new.get('reason') or '')
             except Exception as e:
                 # Usually no network: not remembered as failed, so a later start tries again.
-                logger.warning("[capture] could not set up Intel's non-free driver: %s", e)
+                logger.warning('[capture] could not set up %s: %s', what, e)
+                installer.record_intel_attempt(variant, 'could not be tested' if tested else 'could not be installed',
+                                               str(e))
             installer.restore_free_intel(failed=tested)
             return enc
         except Exception as e:
             logger.warning("[capture] Intel driver fallback failed: %s", e)
             return enc
-        finally:
-            with self.lock:
-                self.busy_action = ''
 
     def _start_pulse(self, tuners: int) -> None:
         _kill(self.pulse)
+        # No pool is running here, so any of these outlived a crashed service.
+        leftover = _leftover_av_pids(self.uid)
+        if leftover:
+            logger.warning('[capture] stopping %d leftover audio/encoder process(es) from an earlier run',
+                           len(leftover))
+            _kill_found(lambda: _leftover_av_pids(self.uid))
         try:
             os.unlink(PULSE_SOCKET)
         except OSError:
@@ -1557,14 +1966,23 @@ class CaptureService:
                '-L', f'module-native-protocol-unix socket={PULSE_SOCKET} auth-anonymous=1']
         for i in range(tuners):
             cmd += ['-L', f'module-null-sink sink_name=fct{i} rate=48000 channels=2']
+        try:
+            os.unlink(os.path.join(RUN_DIR, 'pulse.log'))    # only this attempt's output
+        except OSError:
+            pass
         self.pulse = _spawn(cmd, uid=self.uid, gid=self.gid, env=_base_env(HOME_DIR), log_name='pulse')
-        for _ in range(50):
+        for _ in range(PULSE_START_SECONDS * 10):
             if os.path.exists(PULSE_SOCKET):
                 return
             if self.pulse.poll() is not None:
                 break
             time.sleep(0.1)
-        raise RuntimeError(f'pulseaudio did not start; see {RUN_DIR}/pulse.log')
+        code = self.pulse.poll()
+        how = f'exited with code {code}' if code is not None else f'not ready after {PULSE_START_SECONDS} s'
+        tail = _pulse_log(6)
+        for line in tail:
+            logger.error('[capture] pulseaudio: %s', line)
+        raise RuntimeError(f'pulseaudio did not start ({how})' + (f': {tail[-1]}' if tail else ', with no output'))
 
     def stop_pool(self) -> None:
         with self.lock:
@@ -1573,7 +1991,7 @@ class CaptureService:
         for s in sessions:
             s.stop()
         for t in tuners:
-            t.stop()
+            t.retire()
         _kill(self.pulse)
         with self.lock:
             self.pulse = None
@@ -1672,18 +2090,32 @@ class CaptureService:
 
     def health(self) -> dict:
         status = read_status()
+        intel = installer.intel_state()
+        last = installer.intel_last_attempt()
+        from ..config import VERSION
+        newer_error = (last.get('detail') or last.get('result') if
+                       last.get('variant') == 'newer' and last.get('version') == VERSION
+                       and last.get('result') in ('could not be installed', 'could not be tested') else '')
+        # Slow parts first: tunes and channel changes wait on the lock, and the
+        # memory measurement is a subprocess allowed up to 10 s.
+        platform_supported, config, gpus = supported_platform(), read_config(), len(gpu_choices())
+        memory = capture_memory(self.uid, self.gid) if self.tuners else None
         with self.lock:
             return {
-                'platform_supported': supported_platform(),
+                'platform_supported': platform_supported,
                 'install': status,
                 'action': self.busy_action,
-                'config': read_config(),
+                'intel_newer': {'chosen': bool(intel.get('newer')),
+                                'failed': intel.get('failed_on') == VERSION,
+                                'error': newer_error},
+                'config': config,
                 'pool_error': self.pool_error,
                 'encoder': {k: v for k, v in ENCODER.items() if k not in ('gid', 'gids', 'groups', 'env')},
+                'gpus': gpus,
                 'tuners': [t.describe() for t in self.tuners],
                 'sessions': [s.describe() for s in self.sessions.values()],
                 'incompatible_sources': sorted(INCOMPATIBLE_SOURCES),
-                'memory': capture_memory(self.uid, self.gid) if self.tuners else None,
+                'memory': memory,
             }
 
 
@@ -1742,11 +2174,14 @@ class Handler(BaseHTTPRequestHandler):
 
     def _json(self, code: int, body: dict) -> None:
         data = json.dumps(body).encode()
-        self.send_response(code)
-        self.send_header('Content-Type', 'application/json')
-        self.send_header('Content-Length', str(len(data)))
-        self.end_headers()
-        self.wfile.write(data)
+        try:
+            self.send_response(code)
+            self.send_header('Content-Type', 'application/json')
+            self.send_header('Content-Length', str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+        except (BrokenPipeError, ConnectionResetError):
+            pass    # the caller gave up waiting; nothing to tell it
 
     def _body(self) -> dict:
         try:
@@ -1772,7 +2207,7 @@ class Handler(BaseHTTPRequestHandler):
             sid = self.path[len('/sessions/'):-len('/stop')]
             ok = SERVICE.stop_session(sid)
             return self._json(200 if ok else 404, {'ok': ok})
-        if self.path in ('/install', '/uninstall', '/update-chrome'):
+        if self.path in ('/install', '/uninstall', '/update-chrome', '/intel-newer', '/intel-standard'):
             ok, msg = SERVICE.start_action(self.path.strip('/'))
             return self._json(202 if ok else 409, {'ok': ok, 'message': msg})
         if self.path == '/gpu-diagnose':

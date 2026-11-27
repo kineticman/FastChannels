@@ -90,6 +90,14 @@ environment:
             </select>
             <div class="help"><span id="capture-encoder-status"></span>
               <a href="#" onclick="captureGpuDiagnostics();return false" style="margin-left:0.4rem">GPU diagnostics</a></div>
+            <div class="help" id="capture-gpu-choice" hidden><span id="capture-gpu-count"></span> GPUs found.
+              <a href="#" onclick="captureGpuDiagnostics();return false">How to switch (optional)</a></div>
+            <div class="help" id="capture-intel-newer" hidden>
+              <span id="capture-intel-newer-failed" hidden>The newer Intel driver didn't work here, so the standard one was put back.</span>
+              <span id="capture-intel-newer-error" hidden></span>
+              <button type="button" class="btn btn-secondary btn-sm" id="capture-intel-newer-try" onclick="captureIntelNewer()" hidden>Try a newer Intel driver (experimental)</button>
+              <a href="#" id="capture-intel-newer-undo" onclick="captureIntelStandard();return false" hidden>Go back to the standard Intel driver</a>
+            </div>
           </div>
           <div class="field">
             <label for="capture-warm">Between channels</label>
@@ -98,6 +106,22 @@ environment:
               <option value="0">Close Chrome when idle</option>
             </select>
             <div class="help" id="capture-warm-help"></div>
+          </div>
+          <div class="field">
+            <label for="capture-startup">Startup buffer</label>
+            <select id="capture-startup" onchange="captureSaveConfig()">
+              <option value="fast">Faster start</option>
+              <option value="standard">Standard (recommended)</option>
+            </select>
+            <div class="help" id="capture-startup-help"></div>
+          </div>
+          <div class="field">
+            <label for="capture-format">Stream format</label>
+            <select id="capture-format" onchange="captureSaveConfig()">
+              <option value="hls">HLS (recommended)</option>
+              <option value="ts">MPEG-TS (experimental)</option>
+            </select>
+            <div class="help" id="capture-format-help"></div>
           </div>
           <div class="field field-full" id="capture-gpu-tip" hidden>
             <details class="help">
@@ -250,7 +274,16 @@ environment:
         $('capture-quality').value = cfg.quality || '720p60';
         $('capture-encoder').value = cfg.encoder || 'auto';
         $('capture-warm').value = cfg.keep_warm === false ? '0' : '1';
+        $('capture-startup').value = cfg.startup || 'standard';
+        $('capture-format').value = cfg.stream_format || 'hls';
       }
+      $('capture-startup-help').textContent = {
+        fast: 'A picture about 3 seconds sooner, with less video held in reserve: more likely to pause on a weak network or a busy machine.',
+        standard: 'Takes effect the next time a channel starts.',
+      }[$('capture-startup').value];
+      $('capture-format-help').textContent = $('capture-format').value === 'ts'
+        ? 'Try this if Channels DVR times out starting a channel. Add the playlists to Channels DVR again after changing it (or set the source to MPEG-TS yourself). The single whole-feed playlist stays HLS.'
+        : 'MPEG-TS can help if Channels DVR times out starting a channel.';
       $('capture-warm-help').textContent = $('capture-warm').value === '1'
         ? 'Channels start in about 10 seconds. Each tuner keeps about 0.6 GB of memory in use.'
         : 'Frees that memory after 5 minutes with nothing playing. The next channel then takes a few seconds longer to start.';
@@ -265,6 +298,21 @@ environment:
       if (onGpu && enc.nonfree && tunersRunning(s)) {
         $('capture-encoder-status').textContent += ' with Intel\'s non-free driver (the free one couldn\'t encode on this chip)';
       }
+      if (onGpu && enc.newer && tunersRunning(s)) {
+        $('capture-encoder-status').textContent += ' with a newer Intel driver (the standard one is too old for this chip)';
+      }
+      $('capture-gpu-count').textContent = s.gpus || '';
+      show('capture-gpu-choice', (s.gpus || 0) > 1);
+      const intel = s.intel_newer || {};
+      const offer = Boolean(enc.offer_newer) && !s.action;
+      show('capture-intel-newer', offer || (Boolean(intel.chosen) && !s.action));
+      show('capture-intel-newer-try', offer);
+      show('capture-intel-newer-failed', offer && Boolean(intel.failed));
+      show('capture-intel-newer-undo', Boolean(intel.chosen));
+      const newerError = offer && !intel.failed ? intel.error : '';
+      $('capture-intel-newer-error').textContent = newerError
+        ? `The newer Intel driver couldn't be set up: ${newerError}` : '';
+      show('capture-intel-newer-error', Boolean(newerError));
       // The full reason (e.g. which driver piece is missing) on hover.
       $('capture-encoder-status').title = onGpu ? '' : (enc.reason || '');
       show('capture-gpu-tip', tunersRunning(s) && !onGpu && !gpuFailed && (cfg.encoder || 'auto') === 'auto');
@@ -273,6 +321,9 @@ environment:
       renderNowPlaying(s, enc, onGpu);
       $('capture-tuner-status').textContent = tuners.length ? ''
         : s.action === 'gpu-driver' ? 'Your Intel GPU couldn\'t encode with the free driver. Trying Intel\'s non-free one (about a minute)…'
+        : s.action === 'gpu-driver-newer' ? 'Installing the newer Intel driver again…'
+        : s.action === 'intel-newer' ? 'Installing and testing the newer Intel driver (about a minute)…'
+        : s.action === 'intel-standard' ? 'Putting the standard Intel driver back…'
         : (s.pool_error ? 'Tuners couldn\'t start: ' + s.pool_error : (cfg.enabled ? 'Tuners starting…' : ''));
       const playing = (s.sessions || []).some((x) => x.state === 'tuning' || x.state === 'live');
 
@@ -324,6 +375,7 @@ environment:
       const tuners = s.tuners || [];
       const sessions = Object.fromEntries((s.sessions || []).map((x) => [x.session, x]));
       const names = s.channel_names || {};
+      const sources = s.channel_sources || {};
       const list = $('capture-now-list');
       show('capture-now', tuners.length > 0);
       list.textContent = '';
@@ -345,6 +397,8 @@ environment:
         const name = names[String(sess.channel_id)] || `Channel ${sess.channel_id}`;
         const what = el('span', 'capture-now-what');
         what.appendChild(el('strong', null, name));
+        const source = sources[String(sess.channel_id)];
+        if (source) what.appendChild(el('span', 'capture-now-age', ' · ' + source));
         if (sess.state === 'live') what.appendChild(el('span', 'capture-now-age', ' · ' + duration(sess.live_s || 0)));
         main.appendChild(what);
         const health = sess.state === 'tuning' ? 'tuning' : (st.health || 'starting');
@@ -483,10 +537,15 @@ environment:
       body.appendChild(head);
 
       const helpLines = [];
-      if ((d.help || []).length) {
-        body.appendChild(el('strong', null, 'Things to try'));
-        helpLines.push('', 'Things to try');
-        (d.help || []).forEach((h, i) => {
+      const addHelp = (title, items, intro) => {
+        if (!(items || []).length) return;
+        body.appendChild(el('strong', null, title));
+        helpLines.push('', title);
+        if (intro) {
+          body.appendChild(el('div', 'help', intro));
+          helpLines.push(intro);
+        }
+        items.forEach((h, i) => {
           const box = el('div', null, null);
           box.style.cssText = 'margin:0.5rem 0 0.9rem;line-height:1.5';
           box.appendChild(el('div', null, (i + 1) + '. ' + h.title)).style.fontWeight = '600';
@@ -503,13 +562,24 @@ environment:
           }
           body.appendChild(box);
         });
-      }
+      };
+      addHelp('Things to try', d.help);
+      addHelp('Switching GPUs (optional)', d.choose, d.choose_intro);
 
       const used = (d.in_use || {}).kind;
       const lines = [`GPU diagnostics, ${new Date().toISOString()}`,
                      `Test result: ${good ? 'GPU works (' + (res.driver || res.kind) + ')' : 'CPU'}`
-                     + ` · running tuners use: ${used === 'vaapi' || used === 'nvenc' ? 'GPU' : 'CPU'}`];
+                     + (d.tuners_running === false ? ' · no tuners running'
+                        : ` · running tuners use: ${used === 'vaapi' || used === 'nvenc' ? 'GPU' : 'CPU'}`)];
       if (!good && res.reason) lines.push('Reason: ' + res.reason);
+      // The short answers first: a long paste often gets cut in the middle.
+      const key = (d.facts || []).filter((f) => ['Tuners', 'Versions', 'Driver packages', 'Intel driver', 'Intel firmware', 'GPUs found'].includes(f.label)
+        || f.label.includes('(used)'));
+      if (key.length) lines.push('', 'Summary', ...key.map((f) => `${f.label.trim()}: ${f.detail}`));
+      (d.tests || []).filter((t) => t.why).forEach((t) => {
+        const opts = (t.test.match(/-low_power 1|LIBVA_DRIVER_NAME=\w+/g) || []).join(' ');
+        lines.push(`Test ${t.superseded ? 'skipped' : 'failed'}${opts ? ' (' + opts + ')' : ''}: ${t.why}`);
+      });
       lines.push(...helpLines);
       lines.push('', 'Checks');
       const table = el('table', null, null);
@@ -522,10 +592,17 @@ environment:
         const label = el('td', null, f.label); label.style.cssText = 'white-space:nowrap;padding-right:0.8rem;vertical-align:top';
         const det = el('td', null, f.detail); det.style.cssText = 'word-break:break-word;color:var(--text-subtle)';
         tr.append(mark, label, det); table.appendChild(tr);
-        lines.push(`${STATUS_MARK[f.status] || '·'} ${f.label}: ${f.detail}`);
+        if (!key.includes(f)) lines.push(`${STATUS_MARK[f.status] || '·'} ${f.label}: ${f.detail}`);
       });
       body.appendChild(table);
 
+      // A working vainfo lists dozens of profiles; only the H.264 ones matter in a paste.
+      // The window still shows everything.
+      const copied = (t) => {
+        const out = t.output || '(no output)';
+        if (!t.ok || !t.test.startsWith('vainfo')) return out;
+        return out.split('\n').filter((l) => /Driver version|H264|error/i.test(l)).join('\n') || out;
+      };
       lines.push('', 'Test encodes');
       body.appendChild(el('strong', null, 'Test encodes'));
       if (!(d.tests || []).length) {
@@ -543,10 +620,21 @@ environment:
         det.appendChild(pre); body.appendChild(det);
         lines.push(`${t.ok ? 'OK  ' : t.superseded ? 'SKIP' : 'FAIL'} ${t.test}`,
           ...(t.note ? [t.note] : []),
-          ...((t.ok || t.superseded) && !t.show ? [] : [t.output || '(no output)']));
+          ...((t.ok || t.superseded) && !t.show ? [] : [copied(t)]));
       });
+      if ((d.log || []).length) {
+        const det = el('details', null, null);
+        det.style.cssText = 'margin:0.6rem 0';
+        det.appendChild(el('summary', null, 'Recent capture log'));
+        const pre = el('pre', null, d.log.join('\n'));
+        pre.style.cssText = 'font-size:0.75rem;max-height:14rem;overflow:auto;white-space:pre-wrap;margin:0.4rem 0';
+        det.appendChild(pre); body.appendChild(det);
+        lines.push('', 'Recent capture log', ...d.log);
+      }
+      const windows = (d.facts || []).some((f) => f.label === 'Host' && f.detail.startsWith('Windows'));
       lines.push('', 'When asking for help, also say: how you run FastChannels (compose, Portainer or docker run), '
-        + 'your Docker Desktop and Windows versions, and your GPU model. This report cannot see those.');
+        + (windows ? 'your Docker Desktop and Windows versions, and your GPU model.' : 'and your server or NAS model and OS.')
+        + ' This report cannot see those.');
       gpuReportText = lines.join('\n');
       $('capture-gpu-copy').disabled = false;
     };
@@ -554,6 +642,26 @@ environment:
       try { await navigator.clipboard.writeText(gpuReportText); $('capture-gpu-copy').textContent = 'Copied'; }
       catch (e) { window.prompt('Copy this report:', gpuReportText); }
       setTimeout(() => { $('capture-gpu-copy').textContent = 'Copy report'; }, 2000);
+    };
+
+    async function captureIntelAction(action) {
+      const r = await fetch(`/api/capture/${action}`, {method: 'POST'}).catch(() => null);
+      const body = r ? await r.json().catch(() => ({})) : {};
+      if (!r || !r.ok) alert(body.message || 'Could not reach the capture service.');
+      setTimeout(refresh, 800);
+    }
+    window.captureIntelNewer = function () {
+      if (confirm('Try a newer Intel driver? (experimental)\n\n'
+          + 'Your Intel chip is newer than the video driver FastChannels includes. This installs a newer driver '
+          + 'and a few supporting libraries from Debian testing, which is not a finished release.\n\n'
+          + '\u2022 It has not been confirmed to work on Panther Lake with this setup.\n'
+          + '\u2022 A future change in Debian testing could stop it installing after an update. You would be back on the CPU.\n'
+          + '\u2022 It is kept only if the GPU then encodes. Otherwise the standard driver is put back.\n'
+          + '\u2022 The capture tuners restart, so anything playing stops.')) captureIntelAction('intel-newer');
+    };
+    window.captureIntelStandard = function () {
+      if (confirm('Go back to the standard Intel driver?\n\nBuilt-in Capture will use the CPU on this chip. '
+          + 'The capture tuners restart, so anything playing stops.')) captureIntelAction('intel-standard');
     };
 
     window.captureUninstall = function () {
@@ -570,6 +678,8 @@ environment:
         quality: $('capture-quality').value,
         encoder: $('capture-encoder').value,
         keep_warm: $('capture-warm').value === '1',
+        startup: $('capture-startup').value,
+        stream_format: $('capture-format').value,
       };
       const r = await fetch('/api/capture/config', {method: 'POST', headers: {'Content-Type': 'application/json'},
                                                     body: JSON.stringify(body)});

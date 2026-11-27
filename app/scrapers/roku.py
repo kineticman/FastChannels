@@ -920,7 +920,7 @@ class RokuScraper(BaseScraper):
             self._csrf_token   = csrf
             self._session_born = time.time()
             self._persist_session()
-            logger.debug("[roku] session refreshed, csrf=%s…", csrf[:12])
+            logger.debug("[roku] session refreshed")
             return True
 
         except Exception as exc:
@@ -1933,7 +1933,8 @@ class RokuScraper(BaseScraper):
         if allow_cached:
             cached = self._cached_dash(station_id)
             if cached:
-                logger.info("[roku] resolve_dash %s via dash cache", station_id)
+                # Every manifest refresh of a running stream lands here.
+                logger.debug("[roku] resolve_dash %s via dash cache", station_id)
                 return {"mpd_url": cached["mpd_url"], "license_url": cached.get("license_url")}
 
         if self._cooldown_active():

@@ -81,6 +81,15 @@ QUALITY_PRESETS = {
     '1080p60': (1920, 1080, 60, 10000),
 }
 
+# How many 1 s segments a session starts with before the usual 2 s ones. A tune waits
+# for three segments and players start about three from the live edge, so 'fast' is
+# ready ~3 s sooner and leaves the player ~3 s behind instead of ~6. (Longer segments
+# for more buffer made a channel change take 19.7 s, past Channels DVR's limit.)
+STARTUP_PRESETS = {
+    'fast': 8,
+    'standard': 0,
+}
+
 DEFAULT_CONFIG = {
     'enabled': True,
     'max_tuners': 2,
@@ -90,6 +99,10 @@ DEFAULT_CONFIG = {
     # playing). Cold: Chrome closes after COLD_IDLE_SECONDS without a tune and the
     # next tune starts it first.
     'keep_warm': True,
+    'startup': 'standard',  # a STARTUP_PRESETS name; applies from the next tune
+    # What the bridge-only capture playlists point to: 'hls', or 'ts' (experimental,
+    # /play/capture/<id>.ts: one MPEG-TS stream that can wait out a slow tune).
+    'stream_format': 'hls',
 }
 COLD_IDLE_SECONDS = int(os.environ.get('FC_CAPTURE_COLD_IDLE_SECONDS', '300'))  # env: testing only
 ENCODERS = ('auto', 'cpu')
@@ -154,6 +167,33 @@ def gpu_info() -> dict:
     return {'vendor': '', 'via': ''}
 
 
+def gpu_choices() -> list[dict]:
+    """The GPUs the container could encode on, {'vendor', 'node'}: each real
+    /dev/dri render node, plus NVIDIA handed over by the toolkit without one
+    (node None). NVIDIA appears at most once. Virtual display adapters (VMs) aren't GPUs and are left out.
+    Empty on Windows, where the vendor is hidden behind D3D12."""
+    if wsl_gpu():
+        return []
+    try:
+        nodes = sorted(n for n in os.listdir('/dev/dri') if n.startswith('renderD'))
+    except OSError:
+        nodes = []
+    out = []
+    for name in nodes:
+        try:
+            with open(f'/sys/class/drm/{name}/device/vendor') as fp:
+                vendor = _PCI_VENDORS.get(fp.read().strip().lower())
+        except OSError:
+            vendor = None
+        # NVENC can't be pointed at one of several NVIDIA cards, so they count once.
+        if vendor and not (vendor == 'NVIDIA' and any(g['vendor'] == 'NVIDIA' for g in out)):
+            out.append({'vendor': vendor, 'node': f'/dev/dri/{name}'})
+    # The device, not NVIDIA_VISIBLE_DEVICES: that can be set with no card behind it.
+    if os.path.exists('/dev/nvidiactl') and not any(g['vendor'] == 'NVIDIA' for g in out):
+        out.append({'vendor': 'NVIDIA', 'node': None})
+    return out
+
+
 def supported_platform() -> bool:
     return platform.machine().lower() in ('x86_64', 'amd64')
 
@@ -201,6 +241,9 @@ def normalize_config(cfg: dict) -> dict:
     encoder = cfg.get('encoder')
     out['encoder'] = encoder if encoder in ENCODERS else out['encoder']
     out['keep_warm'] = bool(cfg.get('keep_warm', out['keep_warm']))
+    startup = cfg.get('startup')
+    out['startup'] = startup if startup in STARTUP_PRESETS else out['startup']
+    out['stream_format'] = 'ts' if cfg.get('stream_format') == 'ts' else 'hls'
     return out
 
 

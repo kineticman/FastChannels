@@ -23,6 +23,7 @@ would on a desktop, and FastChannels only records the picture and sound.
 Optional: [pass in your GPU](#use-your-gpu) to cut CPU use roughly in half.
 
 **On this page:** [Before you start](#before-you-start) ·
+[Recommended hardware](#recommended-hardware) ·
 [Turn it on](#turn-it-on) · [Add it to Channels DVR](#add-it-to-channels-dvr) ·
 [Use your GPU](#use-your-gpu) · [Windows](#windows) · [ARM and Mac](#arm-and-mac) ·
 [What works](#what-works) · [Which method to use](#which-method-to-use) ·
@@ -51,6 +52,25 @@ Optional: [pass in your GPU](#use-your-gpu) to cut CPU use roughly in half.
   that). **Settings → System** shows what Built-in Capture is using right now.
   Capture runs at a lower priority than the rest of FastChannels, so scrapes
   and the admin pages stay responsive while it works.
+
+## Recommended hardware
+
+If you're buying a mini PC for this, **run Linux on it**: capture works best
+there, and Ubuntu is a good choice. Windows works through Docker, with more
+setup and memory needs (see [Windows](#windows)).
+
+| | 1–2 tuners | 3–4 or more, or 1080p |
+|---|---|---|
+| Processor | Intel N95, N100 or N150 class | AMD Ryzen 7 with Radeon 680M (6800H, 7735HS) or faster |
+| Memory | 8 GB, 16 GB for headroom | 16 GB or more |
+| Storage | 256 GB SSD | 256 GB SSD or larger |
+| Network | wired Ethernet | wired Ethernet |
+
+These are starting points, not guarantees. We have measured the N95 and the
+Ryzen 7 7735HS (table above); the N100 and N150 are similar to the N95 but not
+tested. On a 4-core mini PC, keep 1080p to one tuner. Many mini PCs have
+soldered memory, so buy what you need up front. Recordings are stored by your
+DVR, so size its disk separately.
 
 ## Turn it on
 
@@ -88,6 +108,18 @@ Then choose:
   0.6 GB of memory in use, even when nothing is playing. *Close Chrome when
   idle* frees that memory after 5 minutes with nothing playing, and the next
   channel takes about 8 seconds longer to start while Chrome opens.
+
+- **Startup buffer:** *Standard* is the default. *Faster start* shows a picture
+  about 3 seconds sooner, but holds less video in reserve, so it is more likely
+  to pause on a weak network or a busy machine. Applies from the next channel
+  that starts.
+
+- **Stream format:** *HLS* is the default. *MPEG-TS* is experimental: try it if
+  Channels DVR times out when a channel starts (it waits only about 15 seconds
+  for HLS, but longer for an MPEG-TS stream that has already answered). It
+  changes the links in the Built-in Capture playlists, so add them to Channels
+  DVR again afterwards, or set the source's stream format to MPEG-TS yourself.
+  The single whole-feed playlist stays HLS.
 
 Changes to tuners, quality or encoder wait until nothing is playing, so they
 never cut off someone who's watching.
@@ -209,6 +241,21 @@ Intel's non-free driver from Debian's own repository and tests again. It keeps
 that driver only if the GPU then encodes, and puts the free one back if not. The
 Encoder line and **GPU diagnostics** say when it's in use.
 
+**Intel HuC firmware.** Some older Intel chips, such as a 6th-generation Core
+i5-6500, also need the host to load Intel's HuC firmware before they can encode.
+If the Encoder line still says the GPU didn't work, run these on a Debian or
+Ubuntu **host** (not inside the container), then reboot:
+
+```bash
+echo "options i915 enable_guc=2" | sudo tee /etc/modprobe.d/i915-guc.conf
+sudo update-initramfs -u
+```
+
+After the reboot, `sudo dmesg | grep -i huc` should include a line saying HuC is
+`authenticated`. Lines saying GuC submission is disabled are normal with this
+setting. To undo it, delete that file, run `sudo update-initramfs -u` again and
+reboot. NAS systems such as Synology usually don't let you change this.
+
 ### NVIDIA (experimental)
 
 NVIDIA cards encode through NVENC. This has been confirmed on Windows with
@@ -240,6 +287,24 @@ Linux, so please report how it goes there.
 3. The **Encoder** line should then say *Using your GPU (NVIDIA)*. If it says
    the NVIDIA encode test failed, the Logs page has the reason (look for
    `[capture]` lines).
+
+### More than one GPU
+
+FastChannels uses one GPU. There is no setting to pick it: it uses what you pass
+into the container. With both an Intel or AMD GPU and an NVIDIA card passed in,
+the first one in `/dev/dri` is tried first. To choose, pass in only the one you
+want, then recreate the container:
+
+| To use | Pass in |
+|---|---|
+| NVIDIA instead of Intel or AMD | The [NVIDIA](#nvidia-experimental) settings, with the `/dev/dri` lines removed |
+| Intel or AMD instead of NVIDIA | `/dev/dri`, with the NVIDIA settings removed. If `/dev/dri` also lists the NVIDIA card, pass only the other device |
+| One of two Intel or AMD GPUs | Only that device, for example `- /dev/dri/renderD129:/dev/dri/renderD129` |
+
+**GPU diagnostics** shows which chip each `renderD` number is, and when it finds
+two GPUs, **Switching GPUs (optional)** gives you the lines to use. If the GPU in
+use works, nothing needs changing. The numbers can change after a hardware
+change or sometimes a reboot, so run it again if the wrong GPU is picked.
 
 ### Other platforms
 
@@ -317,7 +382,9 @@ Capture needs.
   doesn't hand these GPUs to containers the way Linux does, so the Intel/AMD
   setup above doesn't apply. **First, update WSL**: open PowerShell, run
   `wsl --update`, then restart Docker Desktop. An old WSL is a known reason for
-  the GPU not showing up. Then check that Docker's VM has a GPU render node:
+  the GPU not showing up. (If the update itself fails, see
+  [`wsl --update` fails on Windows](#wsl---update-fails-on-windows).) Then check
+  that Docker's VM has a GPU render node:
 
   ```powershell
   docker run --rm --privileged alpine ls /dev/dri
@@ -529,18 +596,19 @@ Hover over the line to see the reason.
 
 ### A very new Intel chip shows no H.264 encoder
 
-**GPU diagnostics** may say *the installed driver offers no H.264 encoder for
-this GPU*. This has been seen on a Core Ultra 7 356H (Panther Lake): the GPU
-reaches the container, but the Intel driver FastChannels installs is older than
-the chip needs. FastChannels also tries Intel's non-free driver (see
-[Use your GPU](#use-your-gpu)), which hasn't been tested on this chip. A newer
-Intel driver did encode on that machine, but it comes from Debian's unstable
-release, so FastChannels doesn't install it. Without a working driver Built-in
-Capture uses the CPU, which is usually plenty on a chip this new.
+**Panther Lake** (Core Ultra series 3) needs a newer Intel driver than the one
+in FastChannels' Debian release. When the test encode fails on one of these
+chips, the Bridge page shows **Try a newer Intel driver (experimental)** under
+**Encoder**. It installs that driver and a few supporting libraries from Debian
+testing, which is not a finished release, so it only happens if you click it.
+It hasn't been confirmed on Panther Lake with this setup. The driver is kept
+only if the GPU then encodes, and **Go back to the standard Intel driver** on the
+same page undoes it. A future change in Debian testing could stop it installing
+after an update, which would leave you on the CPU.
 
-Installing the driver by hand isn't recommended: it can pull other unstable
-packages into the container, and recreating the container (which every update
-does) removes it.
+On other very new Intel chips, **GPU diagnostics** may say *the installed driver
+offers no H.264 encoder for this GPU*. Built-in Capture uses the CPU; please post
+the diagnostics report.
 
 ### The video is choppy
 
@@ -555,3 +623,26 @@ does) removes it.
 The panel shows *Tuners couldn't start* with a reason, and the Logs page has
 the details. A failed tuner retries on its own every 30 seconds. Restarting the
 FastChannels container clears anything left over from an unclean shutdown.
+
+### `wsl --update` fails on Windows
+
+An error such as `1921. Service 'WSL Service' (WSLService) could not be
+stopped`, often ending in `1603`, means Windows couldn't stop WSL to replace it,
+usually because Docker Desktop is using it.
+
+1. Quit Docker Desktop (right-click the whale icon by the clock, then **Quit**),
+   or reboot and don't open it.
+2. Right-click Start and choose **Terminal (Admin)**.
+3. Run `wsl --shutdown`, then `wsl --update`.
+
+If it fails the same way, run `taskkill /F /IM wslservice.exe` in the same admin
+window, then `wsl --update` again.
+
+If you downloaded the installer file yourself, run it from that admin window,
+with the full path to your file:
+
+```powershell
+msiexec /i "C:\path\to\wsl.msi"
+```
+
+Then start Docker Desktop again.

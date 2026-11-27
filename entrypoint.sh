@@ -130,27 +130,33 @@ PY
 wait_for_network
 
 # Start isolated worker roles with watchdogs.
+# Each watchdog starts with `set +e`: under the script's `set -e`, a crashed
+# process would end its loop instead of being restarted.
 # Conservative design:
 # - scheduler process only enqueues work and runs periodic maintenance
 # - scraper process handles scrapes + stream audits (single concurrency)
 # - fast process handles immediate short-lived jobs
 # - maintenance process handles heavier non-urgent background jobs
-(while true; do
+(set +e
+while true; do
     FC_WORKER_ROLE=scheduler python -m app.worker
     echo "⚠ Scheduler worker exited (code $?) — restarting in 5s"
     sleep 5
 done) &
-(while true; do
+(set +e
+while true; do
     FC_WORKER_ROLE=scraper python -m app.worker
     echo "⚠ Scraper worker exited (code $?) — restarting in 5s"
     sleep 5
 done) &
-(while true; do
+(set +e
+while true; do
     FC_WORKER_ROLE=fast python -m app.worker
     echo "⚠ Fast worker exited (code $?) — restarting in 5s"
     sleep 5
 done) &
-(while true; do
+(set +e
+while true; do
     FC_WORKER_ROLE=maintenance python -m app.worker
     echo "⚠ Maintenance worker exited (code $?) — restarting in 5s"
     sleep 5
@@ -159,7 +165,8 @@ echo "✅ Worker roles started (scheduler, scraper, fast, maintenance)"
 
 # Built-in capture add-on (app/capture). Idles until someone installs it from the
 # Bridge page; reinstalls its cached packages itself after a container recreate.
-(while true; do
+(set +e
+while true; do
     python -m app.capture.daemon
     echo "⚠ Capture service exited (code $?) — restarting in 5s"
     sleep 5
