@@ -1939,21 +1939,25 @@ class CaptureService:
         status = read_status()
         intel = installer.intel_state()
         from ..config import VERSION
+        # Slow parts first: tunes and channel changes wait on the lock, and the
+        # memory measurement is a subprocess allowed up to 10 s.
+        platform_supported, config, gpus = supported_platform(), read_config(), len(gpu_choices())
+        memory = capture_memory(self.uid, self.gid) if self.tuners else None
         with self.lock:
             return {
-                'platform_supported': supported_platform(),
+                'platform_supported': platform_supported,
                 'install': status,
                 'action': self.busy_action,
                 'intel_newer': {'chosen': bool(intel.get('newer')),
                                 'failed': intel.get('failed_on') == VERSION},
-                'config': read_config(),
+                'config': config,
                 'pool_error': self.pool_error,
                 'encoder': {k: v for k, v in ENCODER.items() if k not in ('gid', 'gids', 'groups', 'env')},
-                'gpus': len(gpu_choices()),
+                'gpus': gpus,
                 'tuners': [t.describe() for t in self.tuners],
                 'sessions': [s.describe() for s in self.sessions.values()],
                 'incompatible_sources': sorted(INCOMPATIBLE_SOURCES),
-                'memory': capture_memory(self.uid, self.gid) if self.tuners else None,
+                'memory': memory,
             }
 
 
@@ -2012,11 +2016,14 @@ class Handler(BaseHTTPRequestHandler):
 
     def _json(self, code: int, body: dict) -> None:
         data = json.dumps(body).encode()
-        self.send_response(code)
-        self.send_header('Content-Type', 'application/json')
-        self.send_header('Content-Length', str(len(data)))
-        self.end_headers()
-        self.wfile.write(data)
+        try:
+            self.send_response(code)
+            self.send_header('Content-Type', 'application/json')
+            self.send_header('Content-Length', str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+        except (BrokenPipeError, ConnectionResetError):
+            pass    # the caller gave up waiting; nothing to tell it
 
     def _body(self) -> dict:
         try:
