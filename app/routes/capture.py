@@ -42,6 +42,10 @@ _TUNE_WAIT_SECONDS = 50
 # is handed over once unpolled for ~6 s) but turns a real overflow away quickly, so
 # a single-playlist source with no stream limit fails fast instead of hanging.
 _BUSY_WAIT_SECONDS = 10
+# POST /sessions can take this long to answer: taking over an abandoned tuner, the
+# daemon first waits up to 10 s for the old session to shut down. A shorter timeout
+# here turned a slow shutdown into a 503 (2026-11-26).
+_SESSION_CALL_TIMEOUT = 15
 # Players start ~3 target durations back from the live edge (HLS spec 6.3.3). With
 # fewer segments than that they start AT the edge and rebuffer before every new
 # segment — VLC logged a stall per 2 s segment for the first ~45 s with 2 here.
@@ -218,7 +222,8 @@ def capture_playlist(channel_id: int):
     busy_since = None
     logged = False
     while True:
-        code, body = capture.daemon_request('POST', '/sessions', json={'channel_id': channel_id}, timeout=5)
+        code, body = capture.daemon_request('POST', '/sessions', json={'channel_id': channel_id},
+                                              timeout=_SESSION_CALL_TIMEOUT)
         if code != 200:
             msg = body.get('error') or f'capture service returned HTTP {code}'
             # Busy/starting are usually seconds from clearing: a channel change leaves
