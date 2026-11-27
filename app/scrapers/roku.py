@@ -25,6 +25,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 from urllib.parse import parse_qs, quote, urlparse
 
+from ..debug_flag import debug_logging_cached
 from .base import BaseScraper, ChannelData, ProgramData, StreamDeadError, ScrapeSkipError, format_http_reason, infer_language_from_metadata, is_transient_network_error, null_placeholder_season_episode
 from .category_utils import infer_category_from_name
 from ..gracenote_map import resolve_gracenote
@@ -1933,7 +1934,9 @@ class RokuScraper(BaseScraper):
         if allow_cached:
             cached = self._cached_dash(station_id)
             if cached:
-                logger.info("[roku] resolve_dash %s via dash cache", station_id)
+                # Every manifest refresh of a running stream lands here.
+                if debug_logging_cached():
+                    logger.info("[roku] resolve_dash %s via dash cache", station_id)
                 return {"mpd_url": cached["mpd_url"], "license_url": cached.get("license_url")}
 
         if self._cooldown_active():

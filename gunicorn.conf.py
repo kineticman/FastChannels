@@ -138,7 +138,7 @@ _RELAY_QUERY_RE = re.compile(r'("(?:GET|HEAD) /play/[^/ ]+/[^/ ]+/relay)\?[^ ]+'
 _DEBUG_ONLY_RE = re.compile(
     r'"POST /watch/\d+/debug[ ?]'                   # the app logs the report itself
     r'|"(?:GET|HEAD) /(?:m3u|epg\.xml)[ ?]'          # healthy DVR polling, like /feeds/
-    r'|"(?:GET|HEAD) /play/roku/[^/ ]+/dash\.mpd[ ?]'  # the resolve is logged already
+    r'|"(?:GET|HEAD) /play/[^/ ]+/[^/ ]+/dash\.mpd[ ?]'  # the [play] line covers it
     r'|"POST /play/roku/license\?')
 
 
