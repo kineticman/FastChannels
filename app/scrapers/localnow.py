@@ -31,10 +31,17 @@ _LOCALNOW_INVALID_PROGRAM_IDS = {'epg-feed-not-available'}
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import quote, urljoin
 
+from ..debug_flag import debug_logging_cached
 from .base import BaseScraper, ChannelData, ConfigField, ProgramData, ScrapeSkipError, infer_language_from_metadata, dedupe_dominant_episode_id
 from .category_utils import infer_category_from_name
 
 logger = logging.getLogger(__name__)
+
+
+def _log_detail(msg: str, *args) -> None:
+    """Step-by-step lines, shown only with debug logging on (Settings → Advanced)."""
+    if debug_logging_cached():
+        logger.info(msg, *args)
 
 
 def _parse_localnow_title(
@@ -241,7 +248,8 @@ class LocalNowScraper(BaseScraper):
             logger.debug("[localnow] skipped %d duplicate-ID channels: %s", len(skipped_dupes), ", ".join(skipped_dupes))
         if skipped_locked:
             logger.debug("[localnow] skipped %d subscription-locked channels: %s", len(skipped_locked), ", ".join(skipped_locked))
-        logger.info("[localnow] %d channels fetched", len(channels))
+        logger.info("[localnow] %d channels fetched (market %s, DMA %s)",
+                    len(channels), self._market, self._dma)
         return channels
 
     def fetch_epg(self, channels: list[ChannelData], **kwargs) -> list[ProgramData]:
@@ -299,7 +307,7 @@ class LocalNowScraper(BaseScraper):
                 )
 
         dedupe_dominant_episode_id(programs)
-        logger.info("[localnow] %d EPG entries fetched", len(programs))
+        _log_detail("[localnow] %d EPG entries fetched", len(programs))
         return programs
 
     def audit_resolve(self, raw_url: str) -> str:
@@ -346,7 +354,7 @@ class LocalNowScraper(BaseScraper):
         ):
             return
 
-        logger.info("[localnow] bootstrapping runtime config from homepage")
+        _log_detail("[localnow] bootstrapping runtime config from homepage")
         resp = self.session.get(self.HOME_URL, timeout=20)
         # Non-US visitors are blocked at the edge (403) or served a region page
         # (200 without the Next.js payload). Treat both as a skippable geo-block
@@ -405,7 +413,7 @@ class LocalNowScraper(BaseScraper):
         self._runtime_bootstrapped = True
         self._channels_payload_cache = None
 
-        logger.info(
+        _log_detail(
             "[localnow] runtime bootstrapped host=%s dma=%s market=%s token_exp=%s",
             self._dsp_host,
             self._dma,
@@ -571,7 +579,7 @@ class LocalNowScraper(BaseScraper):
             if ch.get("video_id") or ch.get("_id")
         }
 
-        logger.info("[localnow] fetched %d channels from live EPG", len(channels))
+        _log_detail("[localnow] fetched %d channels from live EPG", len(channels))
         return channels
 
     def _fetch_playback(self, source_channel_id: str, slug: Optional[str] = None) -> Dict[str, Any]:
