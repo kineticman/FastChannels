@@ -23,6 +23,7 @@ would on a desktop, and FastChannels only records the picture and sound.
 Optional: [pass in your GPU](#use-your-gpu) to cut CPU use roughly in half.
 
 **On this page:** [Before you start](#before-you-start) ·
+[Recommended hardware](#recommended-hardware) ·
 [Turn it on](#turn-it-on) · [Add it to Channels DVR](#add-it-to-channels-dvr) ·
 [Use your GPU](#use-your-gpu) · [Windows](#windows) · [ARM and Mac](#arm-and-mac) ·
 [What works](#what-works) · [Which method to use](#which-method-to-use) ·
@@ -51,6 +52,25 @@ Optional: [pass in your GPU](#use-your-gpu) to cut CPU use roughly in half.
   that). **Settings → System** shows what Built-in Capture is using right now.
   Capture runs at a lower priority than the rest of FastChannels, so scrapes
   and the admin pages stay responsive while it works.
+
+## Recommended hardware
+
+If you're buying a mini PC for this, **run Linux on it**: capture works best
+there, and Ubuntu is a good choice. Windows works through Docker, with more
+setup and memory needs (see [Windows](#windows)).
+
+| | 1–2 tuners | 3–4 or more, or 1080p |
+|---|---|---|
+| Processor | Intel N95, N100 or N150 class | AMD Ryzen 7 with Radeon 680M (6800H, 7735HS) or faster |
+| Memory | 8 GB, 16 GB for headroom | 16 GB or more |
+| Storage | 256 GB SSD | 256 GB SSD or larger |
+| Network | wired Ethernet | wired Ethernet |
+
+These are starting points, not guarantees. We have measured the N95 and the
+Ryzen 7 7735HS (table above); the N100 and N150 are similar to the N95 but not
+tested. On a 4-core mini PC, keep 1080p to one tuner. Many mini PCs have
+soldered memory, so buy what you need up front. Recordings are stored by your
+DVR, so size its disk separately.
 
 ## Turn it on
 
