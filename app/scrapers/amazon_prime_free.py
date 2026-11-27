@@ -822,7 +822,7 @@ class AmazonPrimeFreeScraper(BaseScraper):
             if station_id:
                 stations[station_id] = station
 
-        logger.info("[%s] extracted %d stations from initial HTML", self.source_name, len(stations))
+        logger.debug("[%s] extracted %d stations from initial HTML", self.source_name, len(stations))
         return stations
 
     # ------------------------------------------------------------------
@@ -970,7 +970,7 @@ class AmazonPrimeFreeScraper(BaseScraper):
                         break
             page_no += 1
 
-        logger.info("[%s] extracted %d stations from pagination (%d pages)", self.source_name, len(stations), page_no)
+        logger.debug("[%s] extracted %d stations from pagination (%d pages)", self.source_name, len(stations), page_no)
         return stations
 
     @staticmethod

@@ -216,7 +216,7 @@ def _enqueue_xml_refresh_job() -> None:
         except Exception:
             pass
         q.enqueue('app.worker.run_xml_refresh', job_timeout=1800, job_id=job_id)
-        logger.info('[xml-cache] enqueued refresh job')
+        logger.debug('[xml-cache] enqueued refresh job')
     except Exception:
         logger.exception('[xml-cache] could not enqueue refresh job')
 

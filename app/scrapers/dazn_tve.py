@@ -401,20 +401,23 @@ class DaznTVEScraper(BaseScraper):
                 guide_key=f'DAZN:{asset}',
                 gracenote_id=resolve_gracenote('dazn_tve', lookup_key=asset),
             ))
-        if rsn_status(token) != 'ActivePaid':
-            logger.info('[dazn_tve] no YES/MSG entitlement on the token (no TV provider linked?)')
-        # What the token itself carries, so a log from an account we can't
-        # sign in to (e.g. a direct DAZN YES subscriber, issue #97) shows
-        # which entitlements and regional zones DAZN gave it.
+        # One line at INFO that still shows what DAZN gave the account, since a
+        # log is all we get from one we can't sign in to (issue #97). Nearly
+        # every product reads "Partial", so only the others are named.
         tok = claims(token)
-        logger.info('[dazn_tve] token: productStatus=%s entitlements=%s geo=%s',
-                    json.dumps(tok.get('productStatus') or {}, sort_keys=True),
+        products = tok.get('productStatus') or {}
+        notable = ' '.join(f'{k}={v}' for k, v in sorted(products.items()) if v != 'Partial')
+        logger.info('[dazn_tve] %d channels, %d not entitled; YES/MSG %s; zones %s; entitlements %s%s',
+                    len(out), sum(map(len, skipped.values())),
+                    'yes' if rsn_status(token) == 'ActivePaid' else 'no',
+                    ','.join(zones(token)) or '-',
                     ','.join(sorted(entitlements(token))) or '-',
-                    json.dumps(tok.get('geo') or {}, sort_keys=True))
-        logger.info('[dazn_tve] %d channels (zones %s)', len(out), ','.join(zones(token)) or '-')
+                    f'; products {notable}' if notable else '')
+        logger.debug('[dazn_tve] token: productStatus=%s geo=%s',
+                     json.dumps(products, sort_keys=True), json.dumps(tok.get('geo') or {}, sort_keys=True))
         if skipped:
-            logger.info('[dazn_tve] skipped %d not entitled: %s', sum(map(len, skipped.values())),
-                        '; '.join(f'needs {needs}: {", ".join(titles)}' for needs, titles in skipped.items()))
+            logger.debug('[dazn_tve] not entitled: %s',
+                         '; '.join(f'needs {needs}: {", ".join(titles)}' for needs, titles in skipped.items()))
         return out
 
     def fetch_epg(self, channels: list[ChannelData], **kwargs) -> list[ProgramData]:
