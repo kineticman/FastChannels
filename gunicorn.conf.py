@@ -133,6 +133,15 @@ _FREE_NETWORKS_PROXY_QUERY_RE = re.compile(
 _RELAY_QUERY_RE = re.compile(r'("(?:GET|HEAD) /play/[^/ ]+/[^/ ]+/relay)\?[^ ]+')
 
 
+# Successful requests that say nothing the app's own log doesn't: shown only with
+# debug logging on (Settings → Advanced). Failures always show.
+_DEBUG_ONLY_RE = re.compile(
+    r'"POST /watch/\d+/debug[ ?]'                   # the app logs the report itself
+    r'|"(?:GET|HEAD) /(?:m3u|epg\.xml)[ ?]'          # healthy DVR polling, like /feeds/
+    r'|"(?:GET|HEAD) /play/roku/[^/ ]+/dash\.mpd[ ?]'  # the resolve is logged already
+    r'|"POST /play/roku/license\?')
+
+
 class _AccessFilter(logging.Filter):
     def filter(self, record):
         msg = record.getMessage()
@@ -145,6 +154,10 @@ class _AccessFilter(logging.Filter):
             return False
         if is_success and _LICENSE_RE.search(msg):
             return False
+        if is_success and _DEBUG_ONLY_RE.search(msg):
+            from app.debug_flag import debug_logging_cached
+            if not debug_logging_cached():
+                return False
         if any(p in msg for p in _SUPPRESS_PATTERNS):
             return False
         if _SUPPRESS_RE.search(msg):

@@ -172,6 +172,7 @@
         dropped: quality ? quality.droppedVideoFrames : null,
         decoded: quality ? quality.totalVideoFrames : null,
         request_id: REQUEST_ID,
+        debug_only: !WATCH_DEBUG,
         extra,
       };
       const body = JSON.stringify(payload);
@@ -189,8 +190,9 @@
       }).catch(() => {});
     }
 
-    // Logged even without ?debug=1: a "wrong language" report needs to show what the
-    // stream offered and what was picked. Sent only when that changes, a few per tune.
+    // Sent even without ?debug=1 (the server logs it when debug logging is on): a
+    // "wrong language" report needs to show what the stream offered and what was
+    // picked. Sent only when that changes, a few per tune.
     let _lastAudioTracks = '';
     let _audioReports = 0;
     function reportAudioTracks() {

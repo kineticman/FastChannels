@@ -34,8 +34,12 @@ currently wanted anywhere.
 from __future__ import annotations
 
 import os
+import sqlite3
+import time
 
 GLOBAL_ENV_VAR = 'FC_DEBUG'
+_CACHE_SECONDS = 15
+_cache = {'checked_at': float('-inf'), 'on': False}
 
 
 def env_flag_enabled(*env_names: str) -> bool:
@@ -76,3 +80,25 @@ def debug_logging_enabled(*env_names: str, settings_checked: bool | None = None)
     if settings_checked is not None:
         return settings_checked
     return settings_flag_enabled()
+
+
+def debug_logging_cached() -> bool:
+    """The same answer for code with no app context that asks on every log line
+    (gunicorn's access-log filter): reads the setting straight from SQLite and
+    keeps it for a few seconds. Fails closed."""
+    if env_flag_enabled():
+        return True
+    now = time.monotonic()
+    if now - _cache['checked_at'] >= _CACHE_SECONDS:
+        _cache['checked_at'] = now
+        url = os.environ.get('DATABASE_URL', 'sqlite:////data/fastchannels.db')
+        try:
+            db = sqlite3.connect(f"file:{url.removeprefix('sqlite:///')}?mode=ro", uri=True, timeout=0.1)
+            try:
+                row = db.execute('SELECT debug_logging_enabled FROM app_settings LIMIT 1').fetchone()
+            finally:
+                db.close()
+            _cache['on'] = bool(row and row[0])
+        except sqlite3.Error:
+            pass    # keep the last answer
+    return _cache['on']

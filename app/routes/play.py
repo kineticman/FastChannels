@@ -4090,6 +4090,12 @@ def watch_debug(channel_id):
     compact_state = {k: v for k, v in state.items() if v is not None}
     compact_extra = {str(k)[:40]: str(v)[:800] for k, v in extra.items()}
     _record_watch_debug_snapshot(debug_request_id, channel, event, compact_state, extra)
+    # The player sends some reports without ?debug=1; those are logged only with
+    # debug logging on (Settings → Advanced).
+    if payload.get('debug_only'):
+        from ..debug_flag import debug_logging_enabled
+        if not debug_logging_enabled():
+            return Response(status=204)
     logger.info(
         '[watch-debug] request_id=%s event=%s ip=%s channel_id=%s source=%s source_channel_id=%s channel_name=%s state=%s extra=%s',
         debug_request_id,
