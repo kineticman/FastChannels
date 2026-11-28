@@ -573,7 +573,7 @@ environment:
                         : ` · running tuners use: ${used === 'vaapi' || used === 'nvenc' ? 'GPU' : 'CPU'}`)];
       if (!good && res.reason) lines.push('Reason: ' + res.reason);
       // The short answers first: a long paste often gets cut in the middle.
-      const key = (d.facts || []).filter((f) => ['Tuners', 'Versions', 'Driver packages', 'Intel driver', 'Intel firmware', 'GPUs found'].includes(f.label)
+      const key = (d.facts || []).filter((f) => ['Tuners', 'Versions', 'Driver packages', 'Intel driver', 'Intel firmware', 'GPUs found', 'Last GPU failure'].includes(f.label)
         || f.label.includes('(used)'));
       if (key.length) lines.push('', 'Summary', ...key.map((f) => `${f.label.trim()}: ${f.detail}`));
       (d.tests || []).filter((t) => t.why).forEach((t) => {
@@ -639,8 +639,7 @@ environment:
       $('capture-gpu-copy').disabled = false;
     };
     window.captureGpuCopy = async function () {
-      try { await navigator.clipboard.writeText(gpuReportText); $('capture-gpu-copy').textContent = 'Copied'; }
-      catch (e) { window.prompt('Copy this report:', gpuReportText); }
+      if (await copyReport(gpuReportText, 'Copy this report:')) $('capture-gpu-copy').textContent = 'Copied';
       setTimeout(() => { $('capture-gpu-copy').textContent = 'Copy report'; }, 2000);
     };
 
@@ -654,7 +653,7 @@ environment:
       if (confirm('Try a newer Intel driver? (experimental)\n\n'
           + 'Your Intel chip is newer than the video driver FastChannels includes. This installs a newer driver '
           + 'and a few supporting libraries from Debian testing, which is not a finished release.\n\n'
-          + '\u2022 It has not been confirmed to work on Panther Lake with this setup.\n'
+          + '\u2022 So far one user has reported the GPU test passing on a Panther Lake system (Core Ultra 7 356H).\n'
           + '\u2022 A future change in Debian testing could stop it installing after an update. You would be back on the CPU.\n'
           + '\u2022 It is kept only if the GPU then encodes. Otherwise the standard driver is put back.\n'
           + '\u2022 The capture tuners restart, so anything playing stops.')) captureIntelAction('intel-newer');

@@ -306,7 +306,7 @@ class FreeNetworksScraper(BaseScraper):
         out: list[ChannelData] = []
         disabled = self.disabled_networks(self.config)
         if disabled:
-            logger.info('[%s] skipping disabled networks: %s', self.source_name, ', '.join(sorted(disabled)))
+            logger.debug('[%s] skipping disabled networks: %s', self.source_name, ', '.join(sorted(disabled)))
         last_good = dict(self.cache.get(_LAST_GOOD_CACHE_KEY) or {})
         last_good_changed = False
         run_t0 = time.monotonic()
@@ -343,7 +343,7 @@ class FreeNetworksScraper(BaseScraper):
                              len(chans), noun, elapsed)
         if last_good_changed:
             self._update_cache(_LAST_GOOD_CACHE_KEY, last_good)
-        logger.info('[%s] %d channels from %d networks (%.1fs)', self.source_name, len(out),
+        logger.debug('[%s] %d channels from %d networks (%.1fs)', self.source_name, len(out),
                     len(NETWORKS) - len(disabled), time.monotonic() - run_t0)
         return out
 

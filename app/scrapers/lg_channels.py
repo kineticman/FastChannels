@@ -120,7 +120,7 @@ class LGChannelsScraper(BaseScraper):
                     )
                 )
 
-        logger.info("[lg-channels] %d channels fetched", len(channels))
+        logger.debug("[lg-channels] %d channels fetched", len(channels))
         return channels
 
     # ── Optional ─────────────────────────────────────────────
@@ -196,7 +196,7 @@ class LGChannelsScraper(BaseScraper):
                     )
 
         dedupe_dominant_episode_id(programs)
-        logger.info("[lg-channels] %d EPG entries fetched", len(programs))
+        logger.debug("[lg-channels] %d EPG entries fetched", len(programs))
         return programs
 
     def resolve(self, raw_url: str) -> str:

@@ -199,7 +199,9 @@
       // function with a genuinely stale `from` after a real stall (the live
       // seek range can slide past the old playhead on segment eviction), and
       // that's exactly the case chaseLive exists to recover from.
-      if (opts && opts.isInitialLoad && from < (range.start || 0)) return;
+      // DASH only: HLS can't be trusted to start at live. DirecTV's HLS keeps a one-hour
+      // window and Shaka starts at its oldest end, behind range.start, so it must seek.
+      if (opts && opts.isInitialLoad && opts.isDash && from < (range.start || 0)) return;
       const delta = target - from;
       if (Number.isFinite(target) && Math.abs(delta) > minSeek) {
         video.currentTime = target;
@@ -334,8 +336,11 @@
       // Ask for English too: with no preference a feed that lists a second language
       // first, or marks it as the main one, plays in that language. A stream with no
       // English track still plays what it has.
+      // The codec list is a hard filter Shaka applies BEFORE language: tracks that
+      // miss the first matching entry are dropped. So it must not tell AAC variants
+      // apart, or an HE-AAC English track loses to an AAC-LC Spanish one.
       const shakaConfig = {
-        preferredAudioCodecs: ['mp4a.40.2', 'mp4a.40.5', 'aac'],
+        preferredAudioCodecs: ['mp4a.40', 'aac'],
         preferredAudioLanguage: 'en',
       };
       if (license) {
@@ -431,6 +436,7 @@
         liveDelay: 3,
         minSeek: liveEdgeSync ? 3 : 5,
         isInitialLoad: true,
+        isDash,
         onSeek: (info) => {
           if (typeof opts.onLiveEdgeSeek === 'function') {
             opts.onLiveEdgeSeek(Object.assign({ reason: 'load' }, info));

@@ -379,7 +379,7 @@ class WhaleScraper(BaseScraper):
                 number            = number,
             ))
 
-        logger.info("[whale] %d channels", len(channels))
+        logger.debug("[whale] %d channels", len(channels))
         return channels
 
     def _fetch_detail(self, prgch_id: str, token: str) -> tuple[str, dict | None]:
@@ -436,7 +436,7 @@ class WhaleScraper(BaseScraper):
                 elif st == "error":
                     errors += 1
         con.commit()
-        logger.info("[whale] airing-now detail: %d fetched, %d errors, %d not attempted",
+        logger.log(logging.INFO if enriched < len(airing) else logging.DEBUG, "[whale] airing-now detail: %d fetched, %d errors, %d not attempted",
                     enriched, errors, len(airing) - enriched - errors)
         return got
 
@@ -547,12 +547,12 @@ class WhaleScraper(BaseScraper):
             _debug("cache pruned %d stale entries; throttle waited %.1fs; epg phase %.1fs",
                    len(old) if live_ids else 0, _throttle_waited[0], time.monotonic() - _t_epg)
             con.close()
-            logger.info("[whale] detail cache: %d programs applied, %d queued for background fill",
+            logger.debug("[whale] detail cache: %d programs applied, %d queued for background fill",
                         len(cached), n_pending)
         except Exception as exc:
             logger.warning("[whale] detail cache unavailable (%s); continuing without detail", exc)
 
-        logger.info("[whale] %d EPG entries", len(programs))
+        logger.debug("[whale] %d EPG entries", len(programs))
         return programs
 
     def resolve(self, raw_url: str) -> str:

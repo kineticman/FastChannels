@@ -87,7 +87,7 @@ class VizioScraper(BaseScraper):
     # ── fetch_channels ────────────────────────────────────────────────────────
 
     def fetch_channels(self) -> list[ChannelData]:
-        logger.info('[vizio] fetching channel list')
+        logger.debug('[vizio] fetching channel list')
         r = self.session.get(_CHANNELS_URL, timeout=30)
         r.raise_for_status()
         channels_raw = r.json().get('channels') or []
@@ -147,7 +147,7 @@ class VizioScraper(BaseScraper):
                 tags              = tags,
             ))
 
-        logger.info('[vizio] %d channels', len(channels))
+        logger.debug('[vizio] %d channels', len(channels))
         return channels
 
     # ── fetch_epg ─────────────────────────────────────────────────────────────
@@ -160,7 +160,7 @@ class VizioScraper(BaseScraper):
         start = now.strftime('%Y-%m-%dT%H:%M:%S.000Z')
         end   = (now + timedelta(hours=_EPG_LOOKAHEAD_HOURS)).strftime('%Y-%m-%dT%H:%M:%S.000Z')
 
-        logger.info('[vizio] fetching EPG for %d channels (%s → +%dh)',
+        logger.debug('[vizio] fetching EPG for %d channels (%s → +%dh)',
                     len(channels), start, _EPG_LOOKAHEAD_HOURS)
 
         # stationId in airings (e.g. "93VZFAF") matches airingsKey stored as guide_key,
@@ -172,7 +172,7 @@ class VizioScraper(BaseScraper):
             programs = self._fetch_airings_per_channel(channels, start, end, station_map)
 
         null_placeholder_season_episode(programs)
-        logger.info('[vizio] %d EPG entries', len(programs))
+        logger.debug('[vizio] %d EPG entries', len(programs))
         return programs
 
     def _fetch_airings_bulk(

@@ -193,7 +193,7 @@ class ReelzTVEScraper(BaseScraper):
                     episode_title=episode,
                     description=desc,
                 ))
-        logger.info('[reelz_tve] %d guide entries', len(programs))
+        logger.debug('[reelz_tve] %d guide entries', len(programs))
         return programs
 
     # ── session ──────────────────────────────────────────────────────────────

@@ -424,8 +424,8 @@ def prewarm_logo_cache(urls: list[str], progress_cb=None) -> tuple[int, int]:
             if (cached + failed) % 100 == 0:
                 logger.info('[images] pre-warm progress: %d/%d fetched (cached=%d failed=%d)',
                             cached + failed, len(stale), cached, failed)
-    # Most scrapes find every logo already cached; only report real work.
-    logger.log(logging.INFO if stale else logging.DEBUG,
+    # Routine caching is debug detail; only failures are worth reporting.
+    logger.log(logging.INFO if failed else logging.DEBUG,
                '[images] pre-warm done: %d cached, %d already fresh, %d failed (of %d total)',
                cached, skipped, failed, total)
     return cached, failed

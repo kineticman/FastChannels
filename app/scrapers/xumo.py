@@ -174,7 +174,7 @@ class XumoScraper(BaseScraper):
                 )
             )
 
-        logger.info("[xumo] %d channels", len(channels))
+        logger.debug("[xumo] %d channels", len(channels))
         return channels
 
     def fetch_epg(self, channels: list[ChannelData], **kwargs) -> list[ProgramData]:
@@ -317,7 +317,7 @@ class XumoScraper(BaseScraper):
                     break
 
         dedupe_dominant_episode_id(programmes)
-        logger.info("[xumo] %d EPG entries", len(programmes))
+        logger.debug("[xumo] %d EPG entries", len(programmes))
         return programmes
 
     def audit_resolve(self, raw_url: str) -> str:

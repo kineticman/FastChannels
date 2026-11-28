@@ -36,6 +36,7 @@ import threading
 import time
 from collections import deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from types import SimpleNamespace
 
 import requests
 
@@ -278,6 +279,32 @@ def _vaapi_reason(stderr: str) -> str:
     return _last_line(stderr)
 
 
+def _vaapi_rate_args(kbps: int) -> list[str]:
+    return ['-b:v', f'{kbps}k', '-maxrate', f'{kbps}k', '-bufsize', f'{kbps * 2}k']
+
+
+def _session_test_args(enc: dict) -> list[str]:
+    """_try_encoder arguments that ask an encoder for exactly what a real 720p60
+    capture does: same filters, bitrate caps, GOP and colour tags. Simpler tests
+    passed drivers that then failed seconds into a capture, which skips the
+    automatic non-free driver (forum #4042, i5-6500, ffmpeg exit 251)."""
+    _, height, fps, kbps = QUALITY_PRESETS['720p60']
+    before, video = _video_encoder_args(SimpleNamespace(height=height, fps=fps, kbps=kbps), enc)
+    # A capture's input is x11grab's bgr0; the test pattern has to be made into it.
+    if enc.get('kind') == 'vaapi':
+        i = video.index('-vf') + 1
+        video[i] = f'format=bgr0,{video[i]}'
+    elif enc.get('kind') == 'nvenc':
+        video = ['-pix_fmt', 'bgr0', *video]
+    else:
+        video = ['-vf', 'format=bgr0', *video]   # so the CPU speed test compares fairly
+    return before + video
+
+
+def _vaapi_test_args(device: str, low_power: bool) -> list[str]:
+    return _session_test_args({'kind': 'vaapi', 'device': device, 'low_power': low_power})
+
+
 def detect_encoder(uid: int, gid: int, setting: str) -> dict:
     """GPU encoding when a GPU was passed into the container and it really works for
     the capture user, else x264 with the reason shown on the Bridge page:
@@ -313,9 +340,7 @@ def detect_encoder(uid: int, gid: int, setting: str) -> dict:
         first_err = ''
         for env in drivers:
             for low_power in ((True, False) if not env else (False,)):
-                ok, err = _try_encoder(uid, gid, [dgid], [
-                    '-vaapi_device', device, '-vf', 'format=nv12,hwupload', '-c:v', 'h264_vaapi',
-                    *(['-low_power', '1'] if low_power else []), '-b:v', '4000k'], extra_env=env)
+                ok, err = _try_encoder(uid, gid, [dgid], _vaapi_test_args(device, low_power), extra_env=env)
                 if ok:
                     driver = _driver_name(err)
                     enc = {'kind': 'vaapi', 'device': device, 'gid': dgid, 'low_power': low_power,
@@ -335,7 +360,7 @@ def detect_encoder(uid: int, gid: int, setting: str) -> dict:
         logger.debug('[capture] VA-API encode test ffmpeg output:\n%s', err)
     if nvidia_present():
         groups = _nvidia_gids()
-        ok, err = _try_encoder(uid, gid, groups, ['-pix_fmt', 'bgr0', '-c:v', 'h264_nvenc', '-b:v', '4000k'])
+        ok, err = _try_encoder(uid, gid, groups, _session_test_args({'kind': 'nvenc'}))
         if ok:
             logger.info('[capture] GPU encoding on NVIDIA (NVENC, experimental)')
             return {'kind': 'nvenc', 'driver': 'NVIDIA NVENC', 'groups': groups, 'reason': ''}
@@ -388,7 +413,7 @@ _VAAPI_GPU_CONVERT = 'hwupload,scale_vaapi=format=nv12:out_color_matrix=bt709:ou
 
 def _detect_wsl_vaapi(uid: int, gid: int, device: str) -> tuple[dict | None, str]:
     """(encoder, '') when the Windows GPU encodes through Mesa's d3d12 driver, else
-    (None, reason). The test mirrors the session filter chain (bgr0 upload + GPU
+    (None, reason). The test is the session's own command (bgr0 upload + GPU
     colour conversion); if d3d12 can't do that, it retries with the conversion on
     the CPU (format=nv12 before the upload), which costs more CPU but still beats x264."""
     if not wsl_libs_present():
@@ -414,10 +439,8 @@ def _detect_wsl_vaapi(uid: int, gid: int, device: str) -> tuple[dict | None, str
     gids = sorted({os.stat(p).st_gid for p in (device, '/dev/dxg')})
     err = ''
     for upload in ('gpu', 'cpu'):
-        vf = f'format=bgr0,{_VAAPI_GPU_CONVERT}' if upload == 'gpu' else 'format=nv12,hwupload'
-        ok, err = _try_encoder(uid, gid, gids, ['-vaapi_device', device, '-vf', vf,
-                                                '-c:v', 'h264_vaapi', '-b:v', '4000k'],
-                               extra_env=WSL_VAAPI_ENV)
+        args = _session_test_args({'kind': 'vaapi', 'device': device, 'upload': upload})
+        ok, err = _try_encoder(uid, gid, gids, args, extra_env=WSL_VAAPI_ENV)
         if ok:
             driver = _driver_name(err)
             logger.info('[capture] GPU encoding on Windows GPU via D3D12 (%s, %s colour conversion)',
@@ -579,15 +602,9 @@ def _speed(stderr: str) -> float:
 
 
 def _bench_gpu_args(enc: dict) -> tuple[list[str], dict, list[int]] | None:
-    if enc.get('kind') == 'nvenc':
-        return ['-pix_fmt', 'bgr0', '-c:v', 'h264_nvenc', '-b:v', '6000k'], {}, list(enc.get('groups') or [])
-    if enc.get('kind') == 'vaapi':
-        vf = (f'format=bgr0,{_VAAPI_GPU_CONVERT}' if enc.get('upload') == 'gpu'
-              else 'format=nv12,hwupload')
-        return (['-vaapi_device', enc['device'], '-vf', vf, '-c:v', 'h264_vaapi',
-                 *(['-low_power', '1'] if enc.get('low_power') else []), '-b:v', '6000k'],
-                dict(enc.get('env') or {}), _encoder_groups(enc))
-    return None
+    if enc.get('kind') not in ('vaapi', 'nvenc'):
+        return None
+    return _session_test_args(enc), dict(enc.get('env') or {}), _encoder_groups(enc)
 
 
 def _environment_facts(kernel: str) -> list[dict]:
@@ -659,6 +676,27 @@ def _intel_driver_fact(uid: int, gid: int, node: str, setting: str) -> dict:
         tail = ('no other driver tried yet: that happens when the tuners start and the GPU test fails '
                 '(turn Built-in Capture off and on)')
     return _fact('Intel driver', 'info', f'{using} · {tail}')
+
+
+# The last time a running capture dropped from GPU to CPU, kept for GPU diagnostics
+# until the capture service restarts. Saved at the time: ffmpeg's log is appended
+# to by later runs, CPU ones included.
+_LAST_GPU_FAILURE: dict = {}
+_FFMPEG_ERROR = re.compile(r'error|fail|cannot|no capable|not supported|denied|assert', re.I)
+
+
+def _add_gpu_failure(facts: list[dict], trace: list[dict]) -> None:
+    if not _LAST_GPU_FAILURE:
+        return
+    f = dict(_LAST_GPU_FAILURE)
+    # FFmpeg closes with a generic "Conversion failed!"; the cause is the first
+    # error before it, and unrelated warnings can come before that.
+    lines = [l for l in f['lines'] if 'Conversion failed' not in l]
+    cause = next((l for l in lines if _FFMPEG_ERROR.search(l)),
+                 lines[-1] if lines else 'no ffmpeg output')
+    facts.append(_fact('Last GPU failure', 'warn', f"{f['when']} · {f['why']} · {cause}"))
+    trace.append({'test': 'Last GPU capture failure (ffmpeg)', 'ok': False, 'show': True,
+                  'output': '\n'.join(f['lines']) or '(ffmpeg wrote nothing)'})
 
 
 def _recent_gpu_log(limit: int = 15) -> list[str]:
@@ -805,9 +843,8 @@ def diagnose_gpu(uid: int, gid: int) -> dict:
                     if other == node or _nvenc_only(other):
                         continue
                     for low_power in (True, False):
-                        ok, _ = _try_encoder(uid, gid, sorted({os.stat(other).st_gid}), [
-                            '-vaapi_device', other, '-vf', 'format=nv12,hwupload', '-c:v', 'h264_vaapi',
-                            *(['-low_power', '1'] if low_power else []), '-b:v', '4000k'])
+                        ok, _ = _try_encoder(uid, gid, sorted({os.stat(other).st_gid}),
+                                             _vaapi_test_args(other, low_power))
                         if ok:
                             break
         finally:
@@ -832,6 +869,7 @@ def diagnose_gpu(uid: int, gid: int) -> dict:
         if not t['ok']:
             t['why'] = _vaapi_reason(t.get('output') or '')
 
+    _add_gpu_failure(facts, trace)
     vainfo = None if _nvenc_only(node) else _vainfo_report(uid, gid, node, on_wsl)
     with SERVICE.lock:
         pool_error, tuner_states = SERVICE.pool_error, [t.state for t in SERVICE.tuners]
@@ -860,8 +898,8 @@ def diagnose_gpu(uid: int, gid: int) -> dict:
         playing = sum(1 for x in SERVICE.sessions.values() if x.state in ('tuning', 'live'))
     note = f' (measured with {playing} channel{"s" if playing != 1 else ""} playing, so it reads low)' if playing else ''
     speeds = []
-    ok, err = _try_encoder(uid, gid, [], ['-c:v', 'libx264', '-preset', 'veryfast', '-pix_fmt', 'yuv420p',
-                                          '-b:v', '4000k'], frames=180, rate=60, record=False)
+    ok, err = _try_encoder(uid, gid, [], _session_test_args({'kind': 'x264'}),
+                           frames=180, rate=60, record=False)
     if ok and _speed(err):
         speeds.append(_fact('Speed: CPU', 'info', f'{_speed(err):.1f}x real time at 720p60 (x264){note}'))
     gpu_args = _bench_gpu_args(enc)
@@ -1140,8 +1178,7 @@ def _video_encoder_args(t: 'Tuner', enc: dict) -> tuple[list[str], list[str]]:
                 # Colour conversion on the GPU too: CPU-side format=nv12 cost ~2x the CPU.
                 ['-vf', vf,
                  '-c:v', 'h264_vaapi', *(['-low_power', '1'] if enc.get('low_power') else []),
-                 '-b:v', f'{kbps}k', '-maxrate', f'{kbps}k', '-bufsize', f'{kbps * 2}k',
-                 *gop_args, *color_args])
+                 *_vaapi_rate_args(kbps), *gop_args, *color_args])
     # No -tune zerolatency: it drops B-frames and lookahead (~0.6 dB at the same
     # bitrate in the 2026-11-19 A/B) and buys nothing with 2 s HLS segments.
     return ([], ['-c:v', 'libx264', '-preset', 'veryfast', '-pix_fmt', 'yuv420p',
@@ -1224,6 +1261,7 @@ class Tuner:
         self.idle_since = time.monotonic()   # for cold mode (keep_warm off)
         self.session: 'Session | None' = None
         self.retired = threading.Event()
+        self.in_pool_start = False   # the pool logs one summary for these
         self._spawn_lock = threading.Lock()   # orders a spawn against retire()
 
     @property
@@ -1309,7 +1347,9 @@ class Tuner:
         self._pause(WIDEVINE_SETTLE_SECONDS)
         self.idle_since = time.monotonic()
         self.state = 'idle'
-        logger.info('[capture] tuner %d ready (:%d, %s)', self.index, self.display, self.quality)
+        logger.log(logging.DEBUG if self.in_pool_start else logging.INFO,
+                   '[capture] tuner %d ready (:%d, %s)', self.index, self.display, self.quality)
+        self.in_pool_start = False
 
     def _spawn_part(self, name: str, cmd: list[str], **kwargs) -> subprocess.Popen:
         """Start Xvfb or Chrome and record it as self.<name>, unless retired."""
@@ -1606,6 +1646,8 @@ class Session:
             os.path.join(self.dir, 'index.m3u8'),
         ]
         self.ffmpeg_started = time.monotonic()
+        log = os.path.join(RUN_DIR, f'ffmpeg{t.index}.log')
+        self._ff_log_start = os.path.getsize(log) if os.path.exists(log) else 0
         self._ff_samples.clear()
         self._encoder_proven = False
         # enc['env']: Docker on Windows needs Mesa's d3d12 driver selected for ffmpeg.
@@ -1662,11 +1704,28 @@ class Session:
                 except Exception as e:
                     logger.warning('[capture] reload failed: %s', e)
 
+    def _ffmpeg_errors(self, limit: int = 15) -> list[str]:
+        """The last lines the current ffmpeg wrote to its log."""
+        try:
+            with open(os.path.join(RUN_DIR, f'ffmpeg{self.tuner.index}.log'), 'rb') as fp:
+                size = fp.seek(0, os.SEEK_END)
+                start = max(self._ff_log_start, size - 4096)
+                fp.seek(start)
+                lines = fp.read().decode('utf-8', 'replace').splitlines()
+        except OSError:
+            return []
+        if start > self._ff_log_start:
+            lines = lines[1:]   # the window can open mid-line
+        return [l.strip()[:200] for l in lines if l.strip()][-limit:]
+
     def _fall_back_to_cpu(self, why: str) -> None:
         """Switch every new capture to x264 until the next pool start and restart
         this session's ffmpeg on it, keeping the session (and its tuner) alive."""
-        logger.warning('[capture] %s on session %s — switching to CPU encoding', why, self.id)
         _kill(self.ffmpeg)
+        errors = self._ffmpeg_errors()
+        _LAST_GPU_FAILURE.update(when=time.strftime('%Y-%m-%d %H:%M:%S'), why=why, lines=errors)
+        logger.warning('[capture] %s on session %s — switching to CPU encoding. ffmpeg: %s',
+                       why, self.id, ' | '.join(errors[-5:]) or 'no output')
         ENCODER.clear()
         ENCODER.update(kind='x264', reason=f'{why}; see {RUN_DIR}/ffmpeg{self.tuner.index}.log')
         shutil.rmtree(self.dir, ignore_errors=True)
@@ -1828,6 +1887,7 @@ class CaptureService:
                 t.stop()
                 return
             t.state, t.error = 'error', str(e)[:300]
+            t.in_pool_start = False   # so a later successful retry is logged
             logger.error('[capture] tuner %d failed to start: %s', t.index, e)
             t.stop()
             t.state = 'error'
@@ -1875,9 +1935,24 @@ class CaptureService:
                 t.state = 'asleep'
             logger.info('[capture] %d tuner(s) at %s, started on demand (keep warm is off)', tuners, quality)
             return
-        for t in self.tuners:
-            threading.Thread(target=self._start_tuner, args=(t,), daemon=True).start()
+        pool = list(self.tuners)
+        threads = []
+        for t in pool:
+            t.in_pool_start = True
+            threads.append(threading.Thread(target=self._start_tuner, args=(t,), daemon=True))
+            threads[-1].start()
         logger.info('[capture] starting %d tuner(s) at %s', tuners, quality)
+        threading.Thread(target=self._log_pool_ready, args=(pool, threads, quality), daemon=True).start()
+
+    def _log_pool_ready(self, pool: list, threads: list, quality: str) -> None:
+        started = time.monotonic()
+        for thread in threads:
+            thread.join()
+        if any(t.retired.is_set() for t in pool):
+            return   # replaced while starting; the new pool reports itself
+        ready = sum(t.state in ('idle', 'busy') for t in pool)
+        logger.info('[capture] %d/%d tuner(s) ready at %s after %.0fs',
+                    ready, len(pool), quality, time.monotonic() - started)
 
     def _reinstall_newer_intel(self, setting: str) -> None:
         """The user chose the newer driver but it is gone: a container update, with

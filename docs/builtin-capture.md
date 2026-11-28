@@ -601,10 +601,10 @@ in FastChannels' Debian release. When the test encode fails on one of these
 chips, the Bridge page shows **Try a newer Intel driver (experimental)** under
 **Encoder**. It installs that driver and a few supporting libraries from Debian
 testing, which is not a finished release, so it only happens if you click it.
-It hasn't been confirmed on Panther Lake with this setup. The driver is kept
-only if the GPU then encodes, and **Go back to the standard Intel driver** on the
-same page undoes it. A future change in Debian testing could stop it installing
-after an update, which would leave you on the CPU.
+One user has reported the GPU test passing this way on a Core Ultra 7 356H. The
+driver is kept only if the GPU then encodes, and **Go back to the standard Intel
+driver** on the same page undoes it. A future change in Debian testing could stop
+it installing after an update, which would leave you on the CPU.
 
 On other very new Intel chips, **GPU diagnostics** may say *the installed driver
 offers no H.264 encoder for this GPU*. Built-in Capture uses the CPU; please post

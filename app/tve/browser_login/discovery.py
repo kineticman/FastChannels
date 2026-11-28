@@ -163,7 +163,7 @@ def _run_discovery_browser_assisted_login(r, set_status, source, account, scrape
             _watch_spectrum_auth_results(page, 'discovery-mvpd-login')
             _prime_google_session(context, mso_id, source_name=_SOURCE_NAME)
             page.on('crash', lambda p: logger.warning('[discovery-mvpd-login] page CRASH event fired (url was %s)', _safe_page_url(p)))
-            page.on('close', lambda p: logger.warning('[discovery-mvpd-login] page CLOSE event fired'))
+            page.on('close', lambda p: logger.debug('[discovery-mvpd-login] page CLOSE event fired'))
             page.on('pageerror', lambda exc: logger.warning('[discovery-mvpd-login] page JS error: %s', str(exc)[:500]))
 
             youtube_gateway_responses = []

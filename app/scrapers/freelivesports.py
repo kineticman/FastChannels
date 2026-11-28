@@ -217,7 +217,7 @@ class FreeLiveSportsScraper(BaseScraper):
                 description       = description,
             ))
 
-        logger.info("[freelivesports] %d channels", len(channels))
+        logger.debug("[freelivesports] %d channels", len(channels))
         return channels
 
     # ── Optional: EPG ─────────────────────────────────────────────────────────
@@ -272,7 +272,7 @@ class FreeLiveSportsScraper(BaseScraper):
                     episode           = episode,
                 ))
 
-        logger.info("[freelivesports] %d EPG entries", len(programs))
+        logger.debug("[freelivesports] %d EPG entries", len(programs))
         return programs
 
     # ── Optional: resolve ─────────────────────────────────────────────────────

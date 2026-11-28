@@ -106,7 +106,7 @@ class ViXScraper(BaseScraper):
                 description=desc if desc and desc.lower() != (n.get('title') or '').strip().lower() else None,
                 gracenote_id=resolve_gracenote('vix', lookup_key=_short(cid)),
             ))
-        logger.info('[%s] %d channels', self.source_name, len(out))
+        logger.debug('[%s] %d channels', self.source_name, len(out))
         return out
 
     def fetch_epg(self, channels: list[ChannelData], **kwargs) -> list[ProgramData]:
@@ -122,7 +122,7 @@ class ViXScraper(BaseScraper):
                     source_channel_id=ch.source_channel_id, title=title, start_time=start, end_time=end,
                     episode_title=(row.get('subtitle') or '').strip() or None,
                 ))
-        logger.info('[%s] %d EPG entries', self.source_name, len(out))
+        logger.debug('[%s] %d EPG entries', self.source_name, len(out))
         return out
 
     def audit_resolve(self, raw_url: str) -> str:

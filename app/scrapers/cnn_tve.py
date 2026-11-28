@@ -165,7 +165,7 @@ class CNNTVEScraper(MvpdCooldownMixin, BaseScraper):
             )
             for cid, c in CHANNELS.items()
         ]
-        logger.info('[cnn_tve] %d channels', len(out))
+        logger.debug('[cnn_tve] %d channels', len(out))
         return out
 
     def fetch_epg(self, channels: list[ChannelData], **kwargs) -> list[ProgramData]:
@@ -186,7 +186,7 @@ class CNNTVEScraper(MvpdCooldownMixin, BaseScraper):
             if not rows and ch.gracenote_id:
                 rows = station_programs(ch.source_channel_id, ch.gracenote_id, 'cnn_tve')
             programs.extend(rows or WarnerTVEScraper._placeholder_epg(like))
-        logger.info('[cnn_tve] %d guide entries', len(programs))
+        logger.debug('[cnn_tve] %d guide entries', len(programs))
         return programs
 
     # ── playback ─────────────────────────────────────────────────────────────

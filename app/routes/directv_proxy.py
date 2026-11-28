@@ -320,7 +320,9 @@ def directv_browser_manifest(channel_id: str):
         resolved_url = scraper.resolve(channel.stream_url)
         r = _requests.get(resolved_url, timeout=12)
     except Exception as exc:
-        logger.warning('[directv-browser] manifest fetch failed for channel=%s: %s', channel_id, exc)
+        # A failed playback lookup was already warned about by the scraper.
+        level = logging.DEBUG if 'could not resolve playback' in str(exc) else logging.WARNING
+        logger.log(level, '[directv-browser] manifest fetch failed for channel=%s: %s', channel_id, exc)
         return _unavailable_response()
     finally:
         # Without this, the fresh play_token/license_content_id this resolve()

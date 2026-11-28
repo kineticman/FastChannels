@@ -308,7 +308,7 @@ class FreecastScraper(BaseScraper):
             ))
 
         channels.sort(key=lambda c: c.name.lower())
-        logger.info('[freecast] %d channels', len(channels))
+        logger.debug('[freecast] %d channels', len(channels))
         return channels
 
     # ── fetch_epg ─────────────────────────────────────────────────────────────
@@ -352,7 +352,7 @@ class FreecastScraper(BaseScraper):
                 if self._progress_cb:
                     self._progress_cb('epg', done, len(chunks))
 
-        logger.info('[freecast] %d EPG entries across %d channels', len(programs), len(slugs))
+        logger.debug('[freecast] %d EPG entries across %d channels', len(programs), len(slugs))
         return programs
 
     @staticmethod

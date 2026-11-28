@@ -689,7 +689,7 @@ class PlexScraper(BaseScraper):
             )
 
         result = sorted(channels.values(), key=lambda c: (c.name or "").lower())
-        logger.info(
+        logger.debug(
             "[plex] %d channels fetched in %.1fs",
             len(result),
             time.monotonic() - t0,

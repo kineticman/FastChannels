@@ -191,7 +191,7 @@ class SlingScraper(BaseScraper):
         # Paid entitlement wins when the same channel appears in both lists.
         self.excluded_channel_ids.difference_update(channels)
         result = sorted(channels.values(), key=lambda c: (c.name or "", c.source_channel_id))
-        logger.info("[%s] %d channels", self.source_name, len(result))
+        logger.debug("[%s] %d channels", self.source_name, len(result))
         return result
 
     def fetch_epg(self, channels: list[ChannelData], **kwargs) -> list[ProgramData]:
@@ -237,7 +237,7 @@ class SlingScraper(BaseScraper):
 
         programs.sort(key=lambda p: (p.source_channel_id, p.start_time, p.title))
         null_placeholder_season_episode(programs)
-        logger.info("[%s] %d EPG entries", self.source_name, len(programs))
+        logger.debug("[%s] %d EPG entries", self.source_name, len(programs))
         return programs
 
     def resolve(self, raw_url: str) -> str:

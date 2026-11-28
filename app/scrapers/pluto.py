@@ -334,7 +334,7 @@ class PlutoScraper(BaseScraper):
                 if ch.source_channel_id not in seen_ids:
                     seen_ids.add(ch.source_channel_id)
                     all_channels.append(ch)
-        logger.info("[pluto] total %d channels across %s", len(all_channels), self.country_codes)
+        logger.debug("[pluto] total %d channels across %s", len(all_channels), self.country_codes)
         return all_channels
 
     def _fetch_country_channels(self, country_code: str) -> list[ChannelData]:
@@ -410,7 +410,7 @@ class PlutoScraper(BaseScraper):
                 description       = (elem.get('summary') or elem.get('description') or '').strip() or None,
             ))
 
-        logger.info("[pluto] %s: %d channels", country_code, len(channels))
+        logger.debug("[pluto] %s: %d channels", country_code, len(channels))
         return channels
 
     def fetch_epg(self, channels: list[ChannelData], **kwargs) -> list[ProgramData]:
@@ -490,7 +490,7 @@ class PlutoScraper(BaseScraper):
                 seen.add(key)
                 unique.append(p)
 
-        logger.info("[pluto] %s: %d EPG entries total (%d dupes dropped)",
+        logger.debug("[pluto] %s: %d EPG entries total (%d dupes dropped)",
                     country_code, len(unique), len(programs) - len(unique))
         dedupe_dominant_episode_id(unique)
         null_placeholder_season_episode(unique)

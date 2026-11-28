@@ -361,7 +361,7 @@ class DisneyTVEScraper(MvpdCooldownMixin, BaseScraper):
                 if prog:
                     programs.append(prog)
         programs.sort(key=lambda p: (p.source_channel_id, p.start_time))
-        logger.info('[disney_tve] %d guide entries', len(programs))
+        logger.debug('[disney_tve] %d guide entries', len(programs))
         return programs
 
     # ── playback ─────────────────────────────────────────────────────────────

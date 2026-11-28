@@ -22,7 +22,7 @@ Sources are grouped the same way as on the **Sources** page. A handful of free s
 
 - **Feeds**: named, filtered slices of your channels (by source, category, language, Gracenote coverage or hand-picked), each with stable M3U and EPG URLs and one-click **Add to Channels DVR**.
 - **Fresh streams**: playlist entries point at FastChannels, which resolves a live stream URL each time a channel is tuned, so nothing goes stale.
-- **DRM playback**: Widevine-protected channels play through a real DRM bridge, either browser-based [PrismCast](https://github.com/hjdhjd/prismcast) or FastChannels' own Fire TV / Android TV player app, instead of being dropped.
+- **DRM playback**: Widevine-protected channels play through a real DRM bridge (your choice of browser-based [PrismCast](https://github.com/hjdhjd/prismcast), FastChannels' own Fire TV / Android TV player app, or [Built-in Capture](#built-in-capture-beta)) instead of being dropped.
 - **Guide data**: each source's own guide, plus Gracenote station IDs (native or from a community map) for Channels DVR's guide.
 - **Event channels**: ESPN+, NFL, CBS, Paramount+, Amazon Prime Video, HBO Max, MLB.TV, B1G+, NCAA championship and Northeast Sports Network games show up as temporary channels, titled with full team names, and leave when they're over.
 - **Lineup cleanup**: Stream Audit flags dead and DRM channels, and the duplicate resolver picks one copy of a channel carried by several sources.
@@ -61,6 +61,18 @@ volumes:
 
 ## Deploy with Docker
 
+We recommend Docker Compose with the published image. Optional settings, such
+as a GPU for Built-in Capture, are a line or two in a file instead of flags you
+have to remember. Make a folder, download the compose file into it and start it:
+
+```bash
+mkdir fastchannels && cd fastchannels
+curl -o docker-compose.yml https://raw.githubusercontent.com/kineticman/FastChannels/main/docker-compose.ghcr.yml
+docker compose up -d
+```
+
+Or use a single `docker run` command:
+
 ```bash
 docker run -d \
   --name fastchannels \
@@ -71,15 +83,7 @@ docker run -d \
   ghcr.io/kineticman/fastchannels:latest
 ```
 
-Then open `http://localhost:5523/admin/`.
-
-We recommend Docker Compose with the published image. Optional settings, such
-as a GPU for Built-in Capture, are a line or two in a file instead of flags you
-have to remember:
-
-```bash
-docker compose -f docker-compose.ghcr.yml up -d
-```
+Either way, then open `http://localhost:5523/admin/`.
 
 ### Moving from `docker run` to Docker Compose
 
@@ -149,7 +153,7 @@ Only free sources that need nothing from you start enabled: The Roku Channel, Sa
 **Lite and Advanced mode.** New installs start in **Lite** mode, which shows only the free sources. Subscription, TV Everywhere and DRM sources, the **Bridge** page and **Settings → TV Everywhere** are hidden until you switch to **Advanced** with the **Lite mode / Advanced mode** menu at the top right of every admin page (or **Settings → Interface**). The mode only changes what the admin UI shows: no source, channel, feed or playlist changes, and anything you already use stays visible in Lite. Existing installs start in Advanced mode when they update.
 
 **4. Run Stream Audits.**
-Once channels are populated, run a Stream Audit on each source (see [Stream Audit](#stream-audit) below). This identifies dead and DRM-protected channels and disables them automatically — highly recommended before building your feeds.
+Once channels are populated, run a Stream Audit on each source that has an **Audit** button (see [Stream Audit](#stream-audit) below). This identifies dead and DRM-protected channels and disables them automatically — highly recommended before building your feeds.
 
 **5. Clean up duplicates.**
 If you have multiple sources enabled, you'll likely have the same channel appearing more than once. Go to **Admin → Channels**, filter by **Duplicates**, and click **⚡ Resolve Duplicates** to sort them out in bulk.
@@ -167,7 +171,7 @@ Go to **Admin → Feeds** and build filtered channel lists for your players (see
 | `/admin/feeds` | Create and manage named output feeds |
 | `/admin/guide` | Preview the EPG grid as your players will see it |
 | `/admin/settings` | Server URLs, Gracenote options, TV Everywhere sign-in, and system stats |
-| `/admin/bridge` | DRM bridge setup (Advanced mode) — Single-port HDMI Capture, ah4c Capture, PrismCast, post-install healthcheck, tuner authorization checks |
+| `/admin/bridge` | DRM bridge setup (Advanced mode) — Single-port HDMI Capture, ah4c Capture, Built-in Capture, PrismCast, post-install healthcheck, tuner authorization checks |
 | `/admin/logs` | Live log tail |
 | `/admin/reports/channel-changes` | Inferred New / Now Inactive / At Risk channels (BETA) |
 | `/admin/help` | In-app help and source gotchas |
@@ -193,7 +197,7 @@ The Channels page is where you fine-tune your lineup after scraping.
 
 **Bulk actions:** Check any rows (or use "select all") and a bulk action bar appears at the bottom — enable or disable everything selected at once.
 
-**Duplicate resolution:** The Duplicates filter shows channels whose name appears in more than one source. Hit **⚡ Resolve Duplicates** to sort them out in bulk — it lets you drag-to-reorder sources by priority (recommending the one with the best Gracenote coverage), then disables all lower-priority duplicates at once.
+**Duplicate resolution:** The Duplicates filter shows channels whose name appears in more than one source. Hit **⚡ Resolve Duplicates** to sort them out in bulk — it lets you drag-to-reorder sources by priority (recommending the one with the best Gracenote coverage), then keeps one copy of each channel and disables the rest (see [Duplicate resolution](#duplicate-resolution) for how it picks).
 
 ## Feeds
 
@@ -240,7 +244,7 @@ As you set filters, the feed modal shows a live count of matching channels.
 - **Add to Channels DVR** — registers the feed as a custom M3U source in Channels DVR with one click. Configure the DVR server URL in **Settings** first. Re-adding keeps settings you made in the DVR, such as a stream limit.
 - **Guide Mode** (Beta) — *Separate* (the default) gives a standard playlist and a Gracenote playlist, added to Channels DVR as two sources. *Mixed* puts both in one playlist, so the feed is one source. Mixed needs Channels DVR 2026.08.25 or newer; switching doesn't change channel numbers.
 - **Add Native to Channels DVR** — adds the feed's native output as its own source: every channel in the feed, all using FastChannels' scraped guide instead of Gracenote.
-- **Add whole feed as one source** (Beta, mixed feeds with [ah4c](#fastchannels-player)) — one Channels DVR source carrying the feed's regular channels and its ah4c-bridged DRM channels. Each channel is routed when it's tuned, so it keeps its URL if it starts or stops needing the bridge.
+- **Add whole feed as one source** (Beta, mixed feeds with [ah4c](#fastchannels-player) or [Built-in Capture](#built-in-capture-beta)) — one Channels DVR source carrying the feed's regular channels and its bridged DRM channels. Each channel is routed when it's tuned, so it keeps its URL if it starts or stops needing the bridge.
 - **Max Channels** — Channels DVR works best with 750 or fewer channels per source. The feed modal warns you if you're over.
 
 ### Using with Plex (unsupported)
@@ -253,9 +257,10 @@ who want to make Plex work anyway, **[docs/plex.md](docs/plex.md)** covers both 
 
 ### FastChannels Player
 
-DRM channels that need real Widevine playback (Sling, PBS, Amazon Prime Free, Vidaa,
+DRM channels that need real Widevine playback (Sling, PBS, Amazon Prime Free, Amazon Sports, Vidaa,
 Philo, Roku, Fubo, DirecTV Stream, Spectrum, Hulu + Live TV, ESPN, Paramount+, HBO Max, ViX, and the NBCUniversal,
-Versant, Disney, CNN, Tennis Channel, DAZN and NESN TV Everywhere sources) can be routed through a real Fire TV /
+Versant, Disney, CNN, Tennis Channel, DAZN, NESN, SportsNet Pittsburgh, Monumental and
+Altitude TV Everywhere sources) can be routed through a real Fire TV /
 Android TV device running FastChannels' own player app, captured back off its HDMI
 output and re-published as a normal channel — no browser/PrismCast bridge needed for
 these sources. An alternate HDMI-capture front end, [ah4c](https://github.com/sullrich/ah4c),
@@ -281,8 +286,8 @@ No Android device or capture hardware? **Built-in Capture** plays DRM channels i
 of Google Chrome inside the FastChannels container and records them into a normal HLS
 channel. Turn it on from the **Bridge** page; FastChannels downloads Chrome from Google
 the first time. It needs a 64-bit Intel/AMD Linux server and uses roughly one to two CPU
-cores per channel playing (less with an Intel or AMD GPU passed in). CNN, HBO Max and DAZN
-don't work with it, and Amazon plays in SD. Full guide:
+cores per channel playing (less with an Intel or AMD GPU passed in). Amazon, CNN and HBO Max
+play in SD. Full guide:
 **[docs/builtin-capture.md](docs/builtin-capture.md)**.
 
 ## Configuration
@@ -301,7 +306,7 @@ Values saved in **Settings** override environment variables. If a DB value is cl
 
 ### Admin login
 
-An optional password for the admin UI and its API, under **Settings → Advanced**. It's off until a password is saved. Playlists, guides, `/play`, `/watch`, images and the player heartbeat stay open so DVRs, IPTV players and the bridges keep working. If you forget the password, set `FC_AUTH_DISABLED=1` in the container's environment, restart, and set a new one.
+An optional password for the admin UI and its API, under **Settings → Admin Access**. It's off until a password is saved. Playlists, guides, `/play`, `/watch`, images and the player heartbeat stay open so DVRs, IPTV players and the bridges keep working. If you forget the password, set `FC_AUTH_DISABLED=1` in the container's environment, restart, and set a new one.
 
 ## Architecture
 
@@ -325,11 +330,11 @@ Streams never go stale — every play request gets a fresh URL.
 
 M3U and EPG XML outputs are cached to disk and served as fast file reads. The cache is invalidated automatically after each scrape. Cold builds of the full EPG can take a few seconds; subsequent requests are near-instant.
 
-Validate a saved XMLTV artifact against the upstream XMLTV DTD with `scripts/validate_xmltv.sh /path/to/epg.xml`. The Docker image includes `xmllint` via `libxml2-utils` for this check. Note: output intentionally includes two non-DTD elements, so expect both to fail strict validation: `<series-id>`, which Channels DVR requires for stable series/recording-pass identity, and `<live/>` on event-channel programmes, which Channels DVR shows as a Live badge (widely used, though undocumented by Channels).
+Validate a saved XMLTV artifact against the upstream XMLTV DTD with `scripts/validate_xmltv.sh /path/to/epg.xml`. The Docker image includes `xmllint` via `libxml2-utils` for this check. Strict validation is expected to fail, because the output intentionally includes two elements that aren't in the DTD: `<series-id>`, which Channels DVR requires for stable series/recording-pass identity, and `<live/>` on event-channel programmes, which Channels DVR shows as a Live badge (widely used, though undocumented by Channels).
 
 ### Stream Audit
 
-Every scraped source has a **📋 Stream Audit** button on the Sources page that health-checks every channel's stream URL and automatically marks dead or DRM-protected channels inactive. (Custom Channels and Custom Playlists have no audit: FastChannels never probes streams you supply yourself.)
+Most sources have an **Audit** button on the Sources page that runs a Stream Audit: it health-checks each channel's stream URL and automatically marks dead or DRM-protected channels inactive. Event channels are skipped unless you include them in the audit window. Some sources have no audit, including Custom Playlists. [Custom Channels](#custom-channels) has its own, more limited one.
 
 Running a Stream Audit after your initial scrape is strongly recommended. It shows a live progress bar and a running count of DRM and dead channels found as it works through the list. Depending on channel count it may take several minutes.
 
@@ -346,7 +351,7 @@ The **Inspect** button on the Channels page tests a single channel's full resolv
 The **Resolve Duplicates** helper on the Channels page works on enabled channels with matching names across sources. It:
 
 - prefers healthy channels over channels flagged `DRM`, `Dead`, or inactive
-- uses source priority as a tie-breaker between otherwise healthy matches
+- between healthy matches, prefers one with a Gracenote ID, then fuller guide data, then your source priority
 - disables the whole group if every duplicate is unhealthy
 
 ### Custom Channels
@@ -476,15 +481,15 @@ If one source should sign in with a different TV provider than the rest, choose 
 
 | Source | Channels | Notes |
 |--------|----------|-------|
-| A+E Networks TVE | A&E, Lifetime, History, FYI and sister networks | **Default off.** PrismCast bridge only |
-| AMC Networks TVE | AMC, BBC America, IFC, WE tv | **Default off.** PrismCast bridge only |
+| A+E Networks TVE | A&E, Lifetime, History, FYI and sister networks | **Default off.** No DRM bridge needed |
+| AMC Networks TVE | AMC, BBC America, IFC, WE tv | **Default off.** No DRM bridge needed |
 | SundanceTV | SundanceTV (24/7) | **Default off.** Needs a Sundance account as well as your provider. Clear HLS, no DRM bridge |
 | CNN TVE | CNN, CNN International, HLN | **Default off.** One sign-in covers all three. DRM bridge |
 | C-SPAN TVE | C-SPAN, C-SPAN2, C-SPAN3 (24/7) | **Default off.** Clear HLS, no DRM bridge |
 | DAZN | DAZN 1, Rally TV, Red Bull TV, Unbeaten, Fubo Sports; YES and MSG | **Default off.** The free channels need a free DAZN account (signed in with a phone link); YES and MSG need a provider that carries them. DRM bridge |
-| Discovery TVE | Discovery, HGTV, Food Network, TLC and sister networks | **Default off.** PrismCast bridge only |
+| Discovery TVE | Discovery, HGTV, Food Network, TLC and sister networks | **Default off.** No DRM bridge needed |
 | Disney TVE | Your local ABC station, Freeform, FX, FXX, FXM, Nat Geo, Nat Geo Wild, Disney Channel, Disney Junior, Disney XD; free ABC News Live | **Default off.** Two provider sign-ins (ABC/FX/Nat Geo and the Disney channels). DRM bridge |
-| FOX TVE | FOX broadcast plus FS1/FS2 | **Default off.** PrismCast bridge only |
+| FOX TVE | FOX broadcast plus FS1/FS2 | **Default off.** No DRM bridge needed |
 | NBCUniversal TVE | Local NBC/Telemundo affiliate (auto-detected by IP, overridable), Bravo, NBC News NOW, NBC Sports Now, Telemundo and Universo channels; NBC Sports Bay Area, Boston, California and Philadelphia in their markets | **Default off.** DRM bridge |
 | Versant TVE | USA, E!, Syfy, Oxygen (East and West), CNBC, MS NOW, Golf Channel | **Default off.** One sign-in covers all 11. DRM bridge |
 | Warner Bros. Discovery TVE | TBS, TNT, truTV, TCM East/West | **Default off.** Clear HLS, no DRM bridge |
@@ -498,7 +503,7 @@ If one source should sign in with a different TV provider than the rest, choose 
 | MyOutdoorTV TVE | WhitetailStream, Seasons, HuntStream, The Bass Channel | **Default off.** Needs a free MyOutdoorTV account as well as your provider. Clear HLS, no DRM bridge |
 | REELZ | REELZ | **Default off.** Its own sign-in, not the shared one: on the source card, run Log In → Sign In with TV Provider on reelzplus.com in a browser, pass its "Verify that you are human" page, and paste the link it lands on. REELZ+ subscribers can use email and password instead. Clear HLS |
 
-"DRM bridge" means PrismCast or [FastChannels Player](#fastchannels-player); "PrismCast bridge only" sources can't use FastChannels Player yet. The sign-in has been verified with **Cox**, **Spectrum**, **Sling TV**, **Xfinity/Comcast** and **Hulu + Live TV** (one Hulu code at hulu.com/activate signs in every network, and Discovery renews it on its own). Adobe Pass lists many more providers, but not every provider carries every network, and some may fail to sign in.
+"DRM bridge" means PrismCast, [Built-in Capture](#built-in-capture-beta) or [FastChannels Player](#fastchannels-player). The sign-in has been verified with **Cox**, **Spectrum**, **Sling TV**, **Xfinity/Comcast** and **Hulu + Live TV** (one Hulu code at hulu.com/activate signs in every network, and Discovery renews it on its own). Adobe Pass lists many more providers, but not every provider carries every network, and some may fail to sign in.
 
 ### Local and Custom
 
@@ -526,4 +531,4 @@ services:
       SCRAPE_EPG_TIMEOUT: "1800"
 ```
 
-The value is in seconds and applies to all sources. Individual sources that need a higher ceiling (Roku, Vidaa) already override it internally — this env var only raises the floor for everything else.
+The value is in seconds and applies to all sources. It can raise a source's limit but never lower it: a source with a longer built-in limit (Vidaa, custom playlists) keeps it.

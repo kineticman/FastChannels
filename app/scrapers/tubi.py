@@ -292,7 +292,7 @@ class TubiScraper(BaseScraper):
                 description       = (row.get('description') or row.get('summary') or '').strip() or None,
             ))
 
-        logger.info('[tubi] %d channels (anonymous)', len(channels))
+        logger.debug('[tubi] %d channels (anonymous)', len(channels))
         return channels
 
     def _parse_live_page(self) -> tuple[list, dict, Optional[str]]:
@@ -450,7 +450,7 @@ class TubiScraper(BaseScraper):
                 description       = (elem.get('description') or elem.get('summary') or '').strip() or None,
             ))
 
-        logger.info('[tubi] %d channels (authenticated)', len(channels))
+        logger.debug('[tubi] %d channels (authenticated)', len(channels))
         return channels
 
     # ── EPG ──────────────────────────────────────────────────────────────────
@@ -536,7 +536,7 @@ class TubiScraper(BaseScraper):
                     program_type      = "episode" if (_season or _episode) else None,
                 ))
 
-        logger.info('[tubi] %d EPG entries', len(programs))
+        logger.debug('[tubi] %d EPG entries', len(programs))
         return programs
 
     # ── Token management ─────────────────────────────────────────────────────

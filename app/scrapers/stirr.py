@@ -170,7 +170,7 @@ class StirrScraper(BaseScraper):
                 )
             )
 
-        logger.info("[%s] %d channels fetched", self.source_name, len(channels))
+        logger.debug("[%s] %d channels fetched", self.source_name, len(channels))
         return channels
 
     # ── Optional ─────────────────────────────────────────────
@@ -286,10 +286,11 @@ class StirrScraper(BaseScraper):
                 continue
             kept.append(prog)
 
-        logger.info("[%s] %d total programs fetched", self.source_name, len(kept))
+        logger.debug("[%s] %d total programs fetched", self.source_name, len(kept))
         if stale:
-            logger.info("[%s] dropped %d program(s) more than a week old: %s",
-                        self.source_name, sum(stale.values()),
+            logger.info("[%s] dropped %d program(s) more than a week old from %d channel(s)",
+                        self.source_name, sum(stale.values()), len(stale))
+            logger.debug("[%s] week-old programs by channel: %s", self.source_name,
                         ", ".join(f"{name} ({count})" for name, count in sorted(stale.items())))
         return kept
 
@@ -597,7 +598,7 @@ class StirrScraper(BaseScraper):
                 _write_desc_cache(cache)
 
             if enriched:
-                logger.info(
+                logger.debug(
                     "[%s] enriched %d truncated descriptions (%d fetched)",
                     self.source_name, len(enriched), len(misses),
                 )

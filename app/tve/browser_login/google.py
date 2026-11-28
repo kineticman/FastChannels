@@ -121,7 +121,7 @@ def run_google_signin():
             ) as context:
                 page = context.pages[0] if context.pages else context.new_page()
                 page.on('crash', lambda p: logger.warning('[google-signin] page CRASH event fired (url was %s)', _safe_page_url(p)))
-                page.on('close', lambda p: logger.warning('[google-signin] page CLOSE event fired'))
+                page.on('close', lambda p: logger.debug('[google-signin] page CLOSE event fired'))
                 page.on('pageerror', lambda exc: logger.warning('[google-signin] page JS error: %s', str(exc)[:500]))
 
                 page.goto(_GOOGLE_SETUP_URL, wait_until='domcontentloaded', timeout=30000)
