@@ -62,6 +62,8 @@ PULSE_START_SECONDS = 30   # generous: a 2-core NAS is slow right after an insta
 POOL_RETRY_SECONDS = 60    # after a failed pool start, doubling up to 10 minutes
 PREEMPT_IDLE_SECONDS = 6   # unpolled this long + another channel wants the tuner = client is gone
 STALL_RELOAD_SECONDS = 20
+_STALL_STATE_KEYS = ('current_time', 'decoded', 'dropped', 'ready_state', 'paused', 'muted', 'buffer_s',
+                     'video_size', 'keys')
 GPU_STALL_SECONDS = 15      # GPU ffmpeg alive but no frame out this long = driver hang
 FAILED_SESSION_TTL = 60
 NICE_CHROME = 5
@@ -1660,6 +1662,7 @@ class Session:
     def _watch(self) -> None:
         """Keep the session healthy until it's stopped or goes idle."""
         last_time, last_progress, last_reload = None, time.monotonic(), 0.0
+        last_decoded, last_frame_at = None, time.monotonic()
         while not self._stop.wait(5):
             on_gpu = self.encoder.get('kind') in ('vaapi', 'nvenc')
             if self.ffmpeg and self.ffmpeg.poll() is not None:
@@ -1690,15 +1693,28 @@ class Session:
             now = time.monotonic()
             if ct is not None and ct != last_time:
                 last_time, last_progress = ct, now
-            stalled = now - last_progress > STALL_RELOAD_SECONDS
-            if (st.get('state') == 'error' or stalled) and now - last_reload > 60:
+            # Experimental: the clock can keep running while no new video is decoded
+            # (an Amazon channel sat on one silent frame for 41 min, 2026-11-28; not
+            # yet known whether its frame count stopped too).
+            decoded = st.get('decoded')
+            if decoded is None or decoded != last_decoded:
+                last_decoded, last_frame_at = decoded, now
+            if st.get('state') == 'error':
+                problem = 'page error: ' + str(st.get('error'))
+            elif now - last_progress > STALL_RELOAD_SECONDS:
+                problem = 'video stalled'
+            elif now - last_frame_at > STALL_RELOAD_SECONDS:
+                problem = 'video frames stopped while the clock kept running'
+            else:
+                problem = None
+            if problem and now - last_reload > 60:
                 self.reloads += 1
-                last_reload = last_progress = self._last_reload_at = now
+                last_reload = last_progress = last_frame_at = self._last_reload_at = now
                 self._page_samples.clear()
                 logger.warning('[capture] session %s channel %s %s — reloading page (reload #%d)',
-                               self.id, self.channel_id,
-                               'page error: ' + str(st.get('error')) if st.get('state') == 'error' else 'video stalled',
-                               self.reloads)
+                               self.id, self.channel_id, problem, self.reloads)
+                logger.warning('[capture] session %s page state before reload: %s', self.id,
+                               ' '.join(f'{k}={st.get(k)}' for k in _STALL_STATE_KEYS) if st else 'no answer')
                 try:
                     _navigate(self.tuner.cdp_port, self.watch_url)
                 except Exception as e:

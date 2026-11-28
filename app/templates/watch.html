@@ -248,6 +248,7 @@
         try {
           const b = video.buffered;
           st.buffer_s = b && b.length ? Number((b.end(b.length - 1) - video.currentTime).toFixed(1)) : null;
+          st.keys = _shaka && _shaka.getKeyStatuses ? Object.values(_shaka.getKeyStatuses() || {}).join(',') : null;
           const tr = _shaka && _shaka.getVariantTracks ? _shaka.getVariantTracks().find((t) => t.active) : null;
           st.source = tr ? { width: tr.width, height: tr.height, fps: tr.frameRate ? Number(tr.frameRate.toFixed(2)) : null,
                              kbps: tr.bandwidth ? Math.round(tr.bandwidth / 1000) : null } : null;
