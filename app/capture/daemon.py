@@ -678,14 +678,18 @@ def _intel_driver_fact(uid: int, gid: int, node: str, setting: str) -> dict:
 # until the capture service restarts. Saved at the time: ffmpeg's log is appended
 # to by later runs, CPU ones included.
 _LAST_GPU_FAILURE: dict = {}
+_FFMPEG_ERROR = re.compile(r'error|fail|cannot|no capable|not supported|denied|assert', re.I)
 
 
 def _add_gpu_failure(facts: list[dict], trace: list[dict]) -> None:
     if not _LAST_GPU_FAILURE:
         return
     f = dict(_LAST_GPU_FAILURE)
-    # FFmpeg closes with a generic "Conversion failed!"; the cause comes before it.
-    cause = next((l for l in f['lines'] if 'Conversion failed' not in l), 'no ffmpeg output')
+    # FFmpeg closes with a generic "Conversion failed!"; the cause is the first
+    # error before it, and unrelated warnings can come before that.
+    lines = [l for l in f['lines'] if 'Conversion failed' not in l]
+    cause = next((l for l in lines if _FFMPEG_ERROR.search(l)),
+                 lines[-1] if lines else 'no ffmpeg output')
     facts.append(_fact('Last GPU failure', 'warn', f"{f['when']} · {f['why']} · {cause}"))
     trace.append({'test': 'Last GPU capture failure (ffmpeg)', 'ok': False, 'show': True,
                   'output': '\n'.join(f['lines']) or '(ffmpeg wrote nothing)'})
@@ -1701,11 +1705,14 @@ class Session:
         try:
             with open(os.path.join(RUN_DIR, f'ffmpeg{self.tuner.index}.log'), 'rb') as fp:
                 size = fp.seek(0, os.SEEK_END)
-                fp.seek(max(self._ff_log_start, size - 4096))
-                text = fp.read().decode('utf-8', 'replace')
+                start = max(self._ff_log_start, size - 4096)
+                fp.seek(start)
+                lines = fp.read().decode('utf-8', 'replace').splitlines()
         except OSError:
             return []
-        return [l.strip()[:200] for l in text.splitlines() if l.strip()][-limit:]
+        if start > self._ff_log_start:
+            lines = lines[1:]   # the window can open mid-line
+        return [l.strip()[:200] for l in lines if l.strip()][-limit:]
 
     def _fall_back_to_cpu(self, why: str) -> None:
         """Switch every new capture to x264 until the next pool start and restart
@@ -1876,6 +1883,7 @@ class CaptureService:
                 t.stop()
                 return
             t.state, t.error = 'error', str(e)[:300]
+            t.in_pool_start = False   # so a later successful retry is logged
             logger.error('[capture] tuner %d failed to start: %s', t.index, e)
             t.stop()
             t.state = 'error'
@@ -1938,7 +1946,7 @@ class CaptureService:
             thread.join()
         if any(t.retired.is_set() for t in pool):
             return   # replaced while starting; the new pool reports itself
-        ready = sum(t.state != 'error' for t in pool)
+        ready = sum(t.state in ('idle', 'busy') for t in pool)
         logger.info('[capture] %d/%d tuner(s) ready at %s after %.0fs',
                     ready, len(pool), quality, time.monotonic() - started)
 

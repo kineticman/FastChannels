@@ -436,7 +436,7 @@ class WhaleScraper(BaseScraper):
                 elif st == "error":
                     errors += 1
         con.commit()
-        logger.log(logging.INFO if errors else logging.DEBUG, "[whale] airing-now detail: %d fetched, %d errors, %d not attempted",
+        logger.log(logging.INFO if enriched < len(airing) else logging.DEBUG, "[whale] airing-now detail: %d fetched, %d errors, %d not attempted",
                     enriched, errors, len(airing) - enriched - errors)
         return got
 

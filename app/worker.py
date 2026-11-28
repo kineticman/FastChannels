@@ -4500,6 +4500,8 @@ if __name__ == '__main__':
         )
 
     def _run_scheduler():
+        # First, so a startup crash loop still shows which version it is.
+        logger.info('Scheduler v%s starting', _VERSION)
         # Resolve the scheduler's default timezone through our guarded path BEFORE
         # constructing it. APScheduler defaults to tzlocal.get_localzone(), which
         # HARD-RAISES on a legacy/invalid container TZ (e.g. TZ=US/Eastern) — that

@@ -653,7 +653,7 @@ environment:
       if (confirm('Try a newer Intel driver? (experimental)\n\n'
           + 'Your Intel chip is newer than the video driver FastChannels includes. This installs a newer driver '
           + 'and a few supporting libraries from Debian testing, which is not a finished release.\n\n'
-          + '\u2022 So far it has been reported working on one Panther Lake system (Core Ultra 7 356H).\n'
+          + '\u2022 So far one user has reported the GPU test passing on a Panther Lake system (Core Ultra 7 356H).\n'
           + '\u2022 A future change in Debian testing could stop it installing after an update. You would be back on the CPU.\n'
           + '\u2022 It is kept only if the GPU then encodes. Otherwise the standard driver is put back.\n'
           + '\u2022 The capture tuners restart, so anything playing stops.')) captureIntelAction('intel-newer');
