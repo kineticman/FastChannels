@@ -129,6 +129,11 @@ def _fox_tve_live_sequence(media_text: str) -> int:
 def _fox_tve_rewrite_media_playlist(media_text: str, media_url: str, auth_query: str = '') -> str:
     from urllib.parse import quote as _quote
     base_url = request.host_url.rstrip('/')
+    # Only Fox Weather's VOD-tagged playlist (sequence stuck at 0) needs a made-up
+    # sequence number. A live playlist already has a correct one, and replacing it
+    # with timestamp / 4.096 advances it 2-3x too fast on Fox News/Business's 10 s
+    # segments, so players replay video they have already shown (#106).
+    synthesize = '#EXT-X-PLAYLIST-TYPE:VOD' in media_text or '#EXT-X-ENDLIST' in media_text
     live_sequence = _fox_tve_live_sequence(media_text)
     saw_sequence = False
     out: list[str] = []
@@ -140,7 +145,7 @@ def _fox_tve_rewrite_media_playlist(media_text: str, media_url: str, auth_query:
             continue
         if line.startswith('#UPLYNK-KEY:'):
             continue
-        if line.startswith('#EXT-X-MEDIA-SEQUENCE:'):
+        if synthesize and line.startswith('#EXT-X-MEDIA-SEQUENCE:'):
             out.append(f'#EXT-X-MEDIA-SEQUENCE:{live_sequence}')
             saw_sequence = True
             continue
@@ -157,7 +162,7 @@ def _fox_tve_rewrite_media_playlist(media_text: str, media_url: str, auth_query:
             continue
         out.append(raw_line)
 
-    if not saw_sequence:
+    if synthesize and not saw_sequence:
         for idx, line in enumerate(out):
             if line.startswith('#EXT-X-TARGETDURATION:'):
                 out.insert(idx + 1, f'#EXT-X-MEDIA-SEQUENCE:{live_sequence}')
