@@ -36,6 +36,7 @@ import threading
 import time
 from collections import deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from types import SimpleNamespace
 
 import requests
 
@@ -282,15 +283,26 @@ def _vaapi_rate_args(kbps: int) -> list[str]:
     return ['-b:v', f'{kbps}k', '-maxrate', f'{kbps}k', '-bufsize', f'{kbps * 2}k']
 
 
-def _vaapi_test_args(device: str, low_power: bool) -> list[str]:
-    """A test encode that asks the GPU for what a real capture does: colour
-    conversion on the GPU, capped bitrate, fixed GOP and BT.709 tags. A simpler
-    test passed drivers that then failed seconds into a capture, which skips the
+def _session_test_args(enc: dict) -> list[str]:
+    """_try_encoder arguments that ask an encoder for exactly what a real 720p60
+    capture does: same filters, bitrate caps, GOP and colour tags. Simpler tests
+    passed drivers that then failed seconds into a capture, which skips the
     automatic non-free driver (forum #4042, i5-6500, ffmpeg exit 251)."""
-    return ['-vaapi_device', device, '-vf', f'format=bgr0,{_VAAPI_GPU_CONVERT}', '-c:v', 'h264_vaapi',
-            *(['-low_power', '1'] if low_power else []), *_vaapi_rate_args(6000),
-            '-g', '60', '-keyint_min', '60', '-colorspace', 'bt709', '-color_primaries', 'bt709',
-            '-color_trc', 'bt709', '-color_range', 'tv']
+    _, height, fps, kbps = QUALITY_PRESETS['720p60']
+    before, video = _video_encoder_args(SimpleNamespace(height=height, fps=fps, kbps=kbps), enc)
+    # A capture's input is x11grab's bgr0; the test pattern has to be made into it.
+    if enc.get('kind') == 'vaapi':
+        i = video.index('-vf') + 1
+        video[i] = f'format=bgr0,{video[i]}'
+    elif enc.get('kind') == 'nvenc':
+        video = ['-pix_fmt', 'bgr0', *video]
+    else:
+        video = ['-vf', 'format=bgr0', *video]   # so the CPU speed test compares fairly
+    return before + video
+
+
+def _vaapi_test_args(device: str, low_power: bool) -> list[str]:
+    return _session_test_args({'kind': 'vaapi', 'device': device, 'low_power': low_power})
 
 
 def detect_encoder(uid: int, gid: int, setting: str) -> dict:
@@ -348,7 +360,7 @@ def detect_encoder(uid: int, gid: int, setting: str) -> dict:
         logger.debug('[capture] VA-API encode test ffmpeg output:\n%s', err)
     if nvidia_present():
         groups = _nvidia_gids()
-        ok, err = _try_encoder(uid, gid, groups, ['-pix_fmt', 'bgr0', '-c:v', 'h264_nvenc', '-b:v', '4000k'])
+        ok, err = _try_encoder(uid, gid, groups, _session_test_args({'kind': 'nvenc'}))
         if ok:
             logger.info('[capture] GPU encoding on NVIDIA (NVENC, experimental)')
             return {'kind': 'nvenc', 'driver': 'NVIDIA NVENC', 'groups': groups, 'reason': ''}
@@ -401,7 +413,7 @@ _VAAPI_GPU_CONVERT = 'hwupload,scale_vaapi=format=nv12:out_color_matrix=bt709:ou
 
 def _detect_wsl_vaapi(uid: int, gid: int, device: str) -> tuple[dict | None, str]:
     """(encoder, '') when the Windows GPU encodes through Mesa's d3d12 driver, else
-    (None, reason). The test mirrors the session filter chain (bgr0 upload + GPU
+    (None, reason). The test is the session's own command (bgr0 upload + GPU
     colour conversion); if d3d12 can't do that, it retries with the conversion on
     the CPU (format=nv12 before the upload), which costs more CPU but still beats x264."""
     if not wsl_libs_present():
@@ -427,10 +439,8 @@ def _detect_wsl_vaapi(uid: int, gid: int, device: str) -> tuple[dict | None, str
     gids = sorted({os.stat(p).st_gid for p in (device, '/dev/dxg')})
     err = ''
     for upload in ('gpu', 'cpu'):
-        vf = f'format=bgr0,{_VAAPI_GPU_CONVERT}' if upload == 'gpu' else 'format=nv12,hwupload'
-        ok, err = _try_encoder(uid, gid, gids, ['-vaapi_device', device, '-vf', vf,
-                                                '-c:v', 'h264_vaapi', '-b:v', '4000k'],
-                               extra_env=WSL_VAAPI_ENV)
+        args = _session_test_args({'kind': 'vaapi', 'device': device, 'upload': upload})
+        ok, err = _try_encoder(uid, gid, gids, args, extra_env=WSL_VAAPI_ENV)
         if ok:
             driver = _driver_name(err)
             logger.info('[capture] GPU encoding on Windows GPU via D3D12 (%s, %s colour conversion)',
@@ -592,15 +602,9 @@ def _speed(stderr: str) -> float:
 
 
 def _bench_gpu_args(enc: dict) -> tuple[list[str], dict, list[int]] | None:
-    if enc.get('kind') == 'nvenc':
-        return ['-pix_fmt', 'bgr0', '-c:v', 'h264_nvenc', '-b:v', '6000k'], {}, list(enc.get('groups') or [])
-    if enc.get('kind') == 'vaapi':
-        vf = (f'format=bgr0,{_VAAPI_GPU_CONVERT}' if enc.get('upload') == 'gpu'
-              else 'format=nv12,hwupload')
-        return (['-vaapi_device', enc['device'], '-vf', vf, '-c:v', 'h264_vaapi',
-                 *(['-low_power', '1'] if enc.get('low_power') else []), '-b:v', '6000k'],
-                dict(enc.get('env') or {}), _encoder_groups(enc))
-    return None
+    if enc.get('kind') not in ('vaapi', 'nvenc'):
+        return None
+    return _session_test_args(enc), dict(enc.get('env') or {}), _encoder_groups(enc)
 
 
 def _environment_facts(kernel: str) -> list[dict]:
@@ -894,8 +898,8 @@ def diagnose_gpu(uid: int, gid: int) -> dict:
         playing = sum(1 for x in SERVICE.sessions.values() if x.state in ('tuning', 'live'))
     note = f' (measured with {playing} channel{"s" if playing != 1 else ""} playing, so it reads low)' if playing else ''
     speeds = []
-    ok, err = _try_encoder(uid, gid, [], ['-c:v', 'libx264', '-preset', 'veryfast', '-pix_fmt', 'yuv420p',
-                                          '-b:v', '4000k'], frames=180, rate=60, record=False)
+    ok, err = _try_encoder(uid, gid, [], _session_test_args({'kind': 'x264'}),
+                           frames=180, rate=60, record=False)
     if ok and _speed(err):
         speeds.append(_fact('Speed: CPU', 'info', f'{_speed(err):.1f}x real time at 720p60 (x264){note}'))
     gpu_args = _bench_gpu_args(enc)
